@@ -1,12 +1,18 @@
 import express from 'express';
+import { config } from './config.js';
 
 const app = express();
-const PORT = process.env.PORT ?? 3000;
+const PORT = config.port;
 
 app.use(express.json());
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'callora-backend' });
+  res.json({
+    status: 'ok',
+    service: 'callora-backend',
+    network: config.network,
+    horizon: config.horizonUrl
+  });
 });
 
 app.get('/api/apis', (_req, res) => {

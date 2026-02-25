@@ -49,5 +49,21 @@ callora-backend/
 ## Environment
 
 - `PORT` — HTTP port (default: 3000). Optional for local dev.
+- `STELLAR_NETWORK` — Target network (`testnet` or `mainnet`). Default: `testnet`.
+- `SOROBAN_NETWORK` — Alias for `STELLAR_NETWORK`.
+
+### Network-specific variables (Optional, defaults provided)
+
+#### Testnet
+- `TESTNET_HORIZON_URL` — Horizon URL for testnet.
+- `TESTNET_RPC_URL` — Soroban RPC URL for testnet.
+- `TESTNET_VAULT_CONTRACT_ID` — Vault contract ID on testnet.
+- `TESTNET_SETTLEMENT_CONTRACT_ID` — Settlement contract ID on testnet.
+
+#### Mainnet
+- `MAINNET_HORIZON_URL` — Horizon URL for mainnet.
+- `MAINNET_RPC_URL` — Soroban RPC URL for mainnet.
+- `MAINNET_VAULT_CONTRACT_ID` — Vault contract ID on mainnet.
+- `MAINNET_SETTLEMENT_CONTRACT_ID` — Settlement contract ID on mainnet.
 
 This repo is part of [Callora](https://github.com/your-org/callora). Frontend: `callora-frontend`. Contracts: `callora-contracts`.
