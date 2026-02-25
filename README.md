@@ -51,3 +51,12 @@ callora-backend/
 - `PORT` — HTTP port (default: 3000). Optional for local dev.
 
 This repo is part of [Callora](https://github.com/your-org/callora). Frontend: `callora-frontend`. Contracts: `callora-contracts`.
+
+### Observability (Prometheus Metrics)
+
+The application exposes a standard Prometheus text-format metrics endpoint at `GET /api/metrics`.
+It automatically tracks `http_requests_total`, `http_request_duration_seconds`, and default Node.js system metrics.
+
+**Production Security:**
+In production (`NODE_ENV=production`), this endpoint is protected. You must configure the `METRICS_API_KEY` environment variable and scrape the endpoint using an authorization header:
+`Authorization: Bearer <YOUR_METRICS_API_KEY>`
