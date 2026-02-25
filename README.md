@@ -30,11 +30,20 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 
 ## Scripts
 
-| Command        | Description                    |
-|----------------|--------------------------------|
-| `npm run dev`  | Run with tsx watch (no build)  |
-| `npm run build`| Compile TypeScript to `dist/`  |
-| `npm start`    | Run compiled `dist/index.js`   |
+| Command            | Description                          |
+| ------------------ | ------------------------------------ |
+| `npm run dev`      | Run with tsx watch (no build)        |
+| `npm run build`    | Compile TypeScript to `dist/`        |
+| `npm start`        | Run compiled `dist/index.js`         |
+| `npm run lint`     | Run ESLint on `src/`                 |
+| `npm run lint:fix` | Auto-fix ESLint issues               |
+| `npm run format`   | Format `src/` + README with Prettier |
+
+## Linting and formatting
+
+- `npm run lint` runs ESLint on `src/`
+- `npm run lint:fix` applies ESLint auto-fixes
+- `npm run format` formats files with Prettier
 
 ## Project layout
 
