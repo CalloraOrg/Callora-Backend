@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SettlementStatus {
+  pending
+  completed
+  failed
+}
+
+model Settlement {
+  id             String           @id @default(uuid())
+  developerId    String
+  amountUsdc     Decimal          @db.Decimal(20, 6)
+  status         SettlementStatus @default(pending)
+  stellarTxHash  String?
+  completedAt    DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([developerId])
+  @@index([status])
+  @@map("settlements")
+}
