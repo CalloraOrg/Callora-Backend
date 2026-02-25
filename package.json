@@ -11,6 +11,8 @@
     "db:studio": "drizzle-kit studio"
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
+    "test": "jest --runInBand",
+    "validate:issue-9": "node scripts/validate-issue-9.mjs"
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {

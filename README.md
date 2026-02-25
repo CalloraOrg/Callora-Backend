@@ -86,6 +86,32 @@ The API will be available at http://localhost:3000, and the PostgreSQL database 
 | `npm start` | Run compiled `dist/index.js` |
 | `npm test` | Run unit/integration tests |
 
+## Database migrations
+
+This repository includes SQL migrations for `api_keys` and `vaults` in `migrations/`.
+
+- `api_keys` stores only `key_hash` (never the raw API key).
+- `api_keys` enforces unique `(user_id, api_id)` and has an index on `(user_id, prefix)` for key lookup.
+- `vaults` stores per-user per-network snapshots with unique `(user_id, network)`.
+
+Run migrations with PostgreSQL:
+
+```bash
+psql "$DATABASE_URL" -f migrations/0001_create_api_keys_and_vaults.up.sql
+```
+
+Rollback:
+
+```bash
+psql "$DATABASE_URL" -f migrations/0001_create_api_keys_and_vaults.down.sql
+```
+
+Validate issue #9 requirements locally:
+
+```bash
+npm run validate:issue-9
+```
+
 ## Project layout
 
 ```text
