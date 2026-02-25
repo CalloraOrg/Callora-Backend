@@ -5,3 +5,8 @@ dist
 .env
 .env.*
 *.log
+
+# Database
+database.db
+database.db-*
+coverage/
