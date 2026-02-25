@@ -6,7 +6,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "lint": "eslint . --ext .ts",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "npm run lint -- --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"README.md\"",
     "typecheck": "tsc --noEmit",
     "test": "jest --runInBand"
   },
@@ -14,6 +16,7 @@
     "express": "^4.18.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@types/express": "^4.17.21",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.10.0",
@@ -21,7 +24,10 @@
     "@typescript-eslint/eslint-plugin": "^8.56.1",
     "@typescript-eslint/parser": "^8.56.1",
     "eslint": "^10.0.2",
+    "eslint-config-prettier": "^10.0.0",
+    "eslint-plugin-prettier": "^5.2.1",
     "jest": "^30.2.0",
+    "prettier": "^3.5.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.6",
     "tsx": "^4.7.0",
