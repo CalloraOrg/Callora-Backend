@@ -36,6 +36,30 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 | `npm run build`| Compile TypeScript to `dist/`  |
 | `npm start`    | Run compiled `dist/index.js`   |
 
+## Database Migrations
+
+This project uses [Knex.js](https://knexjs.org/) for database migrations. By default, it is configured to use a local SQLite3 database for development.
+
+### Running Migrations
+
+To apply pending migrations and update your database schema, run:
+```bash
+npm run migrate:up
+```
+
+To rollback the last batch of migrations, run:
+```bash
+npm run migrate:down
+```
+
+### Creating a New Migration
+
+To generate a new migration file, run:
+```bash
+npm run migrate:make migration_name
+```
+This will create a new TypeScript file in the `migrations/` directory where you can define `up` and `down` schema changes.
+
 ## Project layout
 
 ```
