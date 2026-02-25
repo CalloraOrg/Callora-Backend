@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
-import { validateWebhookUrl, WebhookValidationError } from './webhook.validator';
-import { WebhookStore } from './webhook.store';
-import { WebhookEventType } from './webhook.types';
+import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
+import { WebhookStore } from './webhook.store.js';
+import { WebhookEventType } from './webhook.types.js';
 
 const router = Router();
 
@@ -17,14 +17,14 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!developerId || !url || !Array.isArray(events) || events.length === 0) {
         return res.status(400).json({
-        error: 'developerId, url, and a non-empty events array are required.',
+            error: 'developerId, url, and a non-empty events array are required.',
         });
     }
 
     const invalidEvents = events.filter((e: string) => !VALID_EVENTS.includes(e as WebhookEventType));
     if (invalidEvents.length > 0) {
         return res.status(400).json({
-        error: `Invalid event types: ${invalidEvents.join(', ')}. Valid: ${VALID_EVENTS.join(', ')}`,
+            error: `Invalid event types: ${invalidEvents.join(', ')}. Valid: ${VALID_EVENTS.join(', ')}`,
         });
     }
 
@@ -32,7 +32,7 @@ router.post('/', async (req: Request, res: Response) => {
         await validateWebhookUrl(url);
     } catch (err) {
         if (err instanceof WebhookValidationError) {
-        return res.status(400).json({ error: err.message });
+            return res.status(400).json({ error: err.message });
         }
         return res.status(500).json({ error: 'URL validation failed.' });
     }

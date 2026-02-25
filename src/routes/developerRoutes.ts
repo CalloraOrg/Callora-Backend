@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
-import { requireAuth } from '../middleware/requireAuth.js';
+import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { getSettlements, getRevenueSummary } from '../data/developerData.js';
 import { DeveloperRevenueResponse } from '../types/developer.js';
+import { UnauthorizedError } from '../errors/index.js';
 
 const router = Router();
 
@@ -15,8 +16,10 @@ const router = Router();
  *   limit  – number of settlements to return (default 20, max 100)
  *   offset – pagination offset (default 0)
  */
-router.get('/revenue', requireAuth, (req: Request, res: Response) => {
-  const developerId = req.developerId!;
+router.get('/revenue', requireAuth, (req: Request, res: Response<unknown, AuthenticatedLocals>) => {
+  const user = res.locals.authenticatedUser;
+  if (!user) throw new UnauthorizedError();
+  const developerId = user.id;
 
   // Parse & clamp query params
   let limit = parseInt(req.query.limit as string, 10);

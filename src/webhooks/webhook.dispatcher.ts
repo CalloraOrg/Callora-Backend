@@ -1,6 +1,6 @@
-import axios from 'axios';
+
 import crypto from 'crypto';
-import { WebhookConfig, WebhookPayload } from './webhook.types';
+import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 1000;
@@ -33,34 +33,35 @@ export async function dispatchWebhook(
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
-        const response = await axios.post(config.url, body, {
-            headers,
-            timeout: 10_000, // 10s timeout per attempt
-            maxRedirects: 3,
-        });
+            const response = await fetch(config.url, {
+                method: 'POST',
+                body,
+                headers,
+                signal: AbortSignal.timeout(10_000), // 10s timeout per attempt
+            });
 
-        if (response.status >= 200 && response.status < 300) {
-            console.log(
-            `[webhook] ✓ Delivered ${payload.event} to ${config.url} (attempt ${attempt + 1})`
+            if (response.ok) {
+                console.log(
+                    `[webhook] ✓ Delivered ${payload.event} to ${config.url} (attempt ${attempt + 1})`
+                );
+                return; // success — stop retrying
+            }
+
+            console.warn(
+                `[webhook] Non-2xx response (${response.status}) for ${config.url}, attempt ${attempt + 1}`
             );
-            return; // success — stop retrying
-        }
-
-        console.warn(
-            `[webhook] Non-2xx response (${response.status}) for ${config.url}, attempt ${attempt + 1}`
-        );
         } catch (err) {
-        lastError = err;
-        console.warn(
-            `[webhook] Error delivering to ${config.url}, attempt ${attempt + 1}:`,
-            (err as Error).message
-        );
+            lastError = err;
+            console.warn(
+                `[webhook] Error delivering to ${config.url}, attempt ${attempt + 1}:`,
+                (err as Error).message
+            );
         }
 
         if (attempt < MAX_RETRIES - 1) {
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt); // exponential backoff
-        console.log(`[webhook] Retrying in ${delay}ms...`);
-        await sleep(delay);
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt); // exponential backoff
+            console.log(`[webhook] Retrying in ${delay}ms...`);
+            await sleep(delay);
         }
     }
 
