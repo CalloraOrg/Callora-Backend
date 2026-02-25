@@ -7,6 +7,13 @@ export interface AuthenticatedLocals {
   authenticatedUser?: AuthenticatedUser;
 }
 
+// Extend Express Request to carry the authenticated developer id
+declare module 'express-serve-static-core' {
+  interface Request {
+    developerId?: string;
+  }
+}
+
 export const requireAuth = (
   req: Request,
   res: Response<unknown, AuthenticatedLocals>,

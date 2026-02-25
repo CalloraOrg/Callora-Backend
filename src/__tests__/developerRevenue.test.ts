@@ -13,7 +13,6 @@ function buildApp() {
   return app;
 }
 
-const BASE = 'http://localhost:0'; // replaced at runtime
 let server: Server;
 let baseUrl: string;
 

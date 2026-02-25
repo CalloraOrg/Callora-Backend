@@ -18,6 +18,7 @@ const PORT = process.env.PORT ?? 3000;
 
 export default app;
 
+// @ts-ignore - ES module
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 
   const innerApp = express();
