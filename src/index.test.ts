@@ -1,6 +1,5 @@
 import request from 'supertest';
-import express from 'express';
-import app from './index';
+import app from './index.js';
 
 describe('Health API', () => {
   it('should return ok status', async () => {
