@@ -12,6 +12,8 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 
 - Health check: `GET /api/health`
 - Placeholder routes: `GET /api/apis`, `GET /api/usage`
+- OpenAPI spec: `GET /api/openapi.json`
+- Swagger UI: `GET /api/docs`
 - JSON body parsing; ready to add auth, metering, and contract calls
 
 ## Local setup
