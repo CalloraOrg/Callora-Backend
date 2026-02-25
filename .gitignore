@@ -9,3 +9,4 @@ dist
 # Database
 database.db
 database.db-*
+coverage/

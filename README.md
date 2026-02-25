@@ -26,6 +26,16 @@ API gateway, usage metering, and billing services for the Callora API marketplac
    npm run dev
    ```
 
+### Docker Setup
+
+You can run the entire stack (API and PostgreSQL) locally using Docker Compose:
+
+```bash
+docker compose up --build
+```
+The API will be available at http://localhost:3000, and the PostgreSQL database will be mapped to local port 5432.
+
+
 3. API base: [http://localhost:3000](http://localhost:3000). Example: [http://localhost:3000/api/health](http://localhost:3000/api/health).
 
 ## Scripts
