@@ -1,5 +1,6 @@
 export interface Settlement {
   id: string;
+  developerId: string; // the dev receiving the payout
   amount: number;
   status: 'pending' | 'completed' | 'failed';
   tx_hash: string | null;
@@ -20,4 +21,10 @@ export interface DeveloperRevenueResponse {
     offset: number;
     total: number;
   };
+}
+
+export interface SettlementStore {
+  create(settlement: Settlement): void;
+  updateStatus(id: string, status: Settlement['status'], txHash?: string): void;
+  getDeveloperSettlements(developerId: string): Settlement[];
 }

@@ -17,6 +17,7 @@ export interface UsageEvent {
   amountUsdc: number;     // endpoint price charged
   statusCode: number;
   timestamp: string;      // ISO-8601
+  settlementId?: string;  // ID of the settlement batch if paid out
 }
 
 /** Result of a billing deduction attempt. */
@@ -57,6 +58,8 @@ export interface UsageStore {
   record(event: UsageEvent): boolean;
   hasEvent(requestId: string): boolean;
   getEvents(apiKey?: string): UsageEvent[];
+  getUnsettledEvents(): UsageEvent[];
+  markAsSettled(eventIds: string[], settlementId: string): void;
 }
 
 /** A registered API with its upstream base URL and endpoint pricing. */

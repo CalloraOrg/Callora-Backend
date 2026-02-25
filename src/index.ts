@@ -11,11 +11,12 @@ import * as developerRepository from './repositories/developerRepository.js';
 import type { Response } from 'express';
 import { fileURLToPath } from 'node:url';
 
-import developerRoutes from './routes/developerRoutes.js';
+import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
 import { createBillingService } from './services/billingService.js';
 import { createUsageStore } from './services/usageStore.js';
+import { createSettlementStore } from './services/settlementStore.js';
 import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
 
@@ -38,13 +39,28 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }
 
   // Shared services
-  const billing = createBillingService({ dev_001: 1000 });
+  const MOCK_DEVELOPER_BALANCES: Record<string, number> = {
+    dev_001: 50.0,
+    dev_002: 120.5,
+  };
+
+  const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
   const rateLimiter = { check: () => ({ allowed: true }) };
   const usageStore = createUsageStore();
+  const settlementStore = createSettlementStore();
+  const registry = createApiRegistry();
 
   const apiKeys = new Map<string, ApiKey>([
     ['test-key-1', { key: 'test-key-1', developerId: 'dev_001', apiId: 'api_001' }],
+    ['test-key-2', { key: 'test-key-2', developerId: 'dev_002', apiId: 'api_002' }],
   ]);
+
+  // 1. Developer Dashboard Routes (Auth required)
+  const developerRouter = createDeveloperRouter({
+    settlementStore,
+    usageStore,
+  });
+  innerApp.use('/api/developers', developerRouter);
 
   // Legacy gateway route (existing)
   const gatewayRouter = createGatewayRouter({
