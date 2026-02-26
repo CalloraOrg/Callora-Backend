@@ -1,4 +1,5 @@
 import express from 'express';
+import type { Pool } from 'pg';
 import cors from 'cors';
 
 import {
@@ -13,6 +14,11 @@ import type { ApiRepository } from './repositories/apiRepository.js';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { performHealthCheck, type HealthCheckConfig } from './services/healthCheck.js';
+
+interface AppDependencies {
+  usageEventsRepository: UsageEventsRepository;
+  healthCheckConfig?: HealthCheckConfig;
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
 import { DepositController } from './controllers/depositController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
@@ -105,8 +111,28 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
   app.use(express.json());
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'callora-backend' });
+  app.get('/api/health', async (_req, res) => {
+    // If no health check config provided, return simple health check
+    if (!dependencies?.healthCheckConfig) {
+      res.json({ status: 'ok', service: 'callora-backend' });
+      return;
+    }
+
+    try {
+      const healthStatus = await performHealthCheck(dependencies.healthCheckConfig);
+      const statusCode = healthStatus.status === 'down' ? 503 : 200;
+      res.status(statusCode).json(healthStatus);
+    } catch (error) {
+      // Never expose internal errors in health check
+      res.status(503).json({
+        status: 'down',
+        timestamp: new Date().toISOString(),
+        checks: {
+          api: 'ok',
+          database: 'down',
+        },
+      });
+    }
   });
 
   app.get('/api/apis', (_req, res) => {

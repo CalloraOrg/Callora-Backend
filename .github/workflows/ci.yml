@@ -33,5 +33,26 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Run Tests
-        run: NODE_ENV=test npm test
+      - name: Run Unit Tests
+        run: NODE_ENV=test npm run test:unit
+
+      - name: Run Integration Tests
+        run: NODE_ENV=test npm run test:integration
+
+      - name: Generate Coverage Report
+        run: NODE_ENV=test npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify Build Artifacts
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "Build failed: dist directory not found"
+            exit 1
+          fi
+          if [ ! -f "dist/index.js" ]; then
+            echo "Build failed: dist/index.js not found"
+            exit 1
+          fi
+          echo "✅ Build artifacts verified"
