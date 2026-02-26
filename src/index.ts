@@ -6,6 +6,7 @@ const app = express();
 import 'dotenv/config';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
+import { logger } from './logger.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 
 app.use(express.json());
@@ -23,7 +24,7 @@ app.get('/api/metrics', metricsEndpoint);
 // Execute the server only if this file is run directly
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   app.listen(PORT, () => {
-    console.log(`Callora backend listening on http://localhost:${PORT}`);
+    logger.info(`Callora backend listening on http://localhost:${PORT}`);
   });
 }
 

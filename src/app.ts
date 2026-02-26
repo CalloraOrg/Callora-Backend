@@ -10,6 +10,7 @@ import type { ApiRepository } from './repositories/apiRepository.js';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { requestIdMiddleware } from './middleware/requestId.js';
 import { requestLogger } from './middleware/logging.js';
 
 interface AppDependencies {
@@ -37,6 +38,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
 
+  app.use(requestIdMiddleware);
   // Lazy singleton for production Drizzle repo; injected repo is used in tests.
   const _injectedApiRepo = dependencies?.apiRepository;
   let _drizzleApiRepo: ApiRepository | undefined;
