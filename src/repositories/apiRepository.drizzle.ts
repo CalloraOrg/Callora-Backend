@@ -1,6 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import type { ApiDetails, ApiEndpointInfo, ApiRepository } from './apiRepository.js';
+import type { Api } from '../db/schema.js';
+import type { ApiDetails, ApiEndpointInfo, ApiRepository, ApiListFilters } from './apiRepository.js';
 
 export class DrizzleApiRepository implements ApiRepository {
   async findById(id: number): Promise<ApiDetails | null> {
@@ -58,5 +59,21 @@ export class DrizzleApiRepository implements ApiRepository {
       price_per_call_usdc: r.price_per_call_usdc,
       description: r.description,
     }));
+  }
+
+  async listByDeveloper(developerId: number, filters: ApiListFilters = {}): Promise<Api[]> {
+    const conditions = [eq(schema.apis.developer_id, developerId)];
+    
+    if (filters.status) {
+      conditions.push(eq(schema.apis.status, filters.status));
+    }
+
+    const baseQuery = db.select().from(schema.apis).where(and(...conditions));
+
+    // Apply limit and offset if provided
+    const limit = filters.limit ?? 100;
+    const offset = filters.offset ?? 0;
+
+    return baseQuery.limit(limit).offset(offset);
   }
 }

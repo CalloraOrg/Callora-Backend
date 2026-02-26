@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { Api, ApiStatus } from '../db/schema.js';
 
@@ -8,29 +8,6 @@ export interface ApiListFilters {
   offset?: number;
 }
 
-export interface ApiRepository {
-  listByDeveloper(developerId: number, filters?: ApiListFilters): Promise<Api[]>;
-}
-
-export const defaultApiRepository: ApiRepository = {
-  async listByDeveloper(developerId, filters = {}) {
-    let query = db.select().from(schema.apis).where(eq(schema.apis.developer_id, developerId));
-
-    if (filters.status) {
-      query = query.where(eq(schema.apis.status, filters.status));
-    }
-
-    if (typeof filters.limit === 'number') {
-      query = query.limit(filters.limit);
-    }
-
-    if (typeof filters.offset === 'number') {
-      query = query.offset(filters.offset);
-    }
-
-    return query;
-  },
-};
 export interface ApiDeveloperInfo {
   name: string | null;
   website: string | null;
@@ -58,7 +35,34 @@ export interface ApiEndpointInfo {
 export interface ApiRepository {
   findById(id: number): Promise<ApiDetails | null>;
   getEndpoints(apiId: number): Promise<ApiEndpointInfo[]>;
+  listByDeveloper(developerId: number, filters?: ApiListFilters): Promise<Api[]>;
 }
+
+export const defaultApiRepository: ApiRepository = {
+  async findById(): Promise<ApiDetails | null> {
+    throw new Error('Not implemented in defaultApiRepository');
+  },
+  
+  async getEndpoints(): Promise<ApiEndpointInfo[]> {
+    throw new Error('Not implemented in defaultApiRepository');
+  },
+
+  async listByDeveloper(developerId, filters = {}) {
+    const conditions = [eq(schema.apis.developer_id, developerId)];
+    
+    if (filters.status) {
+      conditions.push(eq(schema.apis.status, filters.status));
+    }
+
+    const baseQuery = db.select().from(schema.apis).where(and(...conditions));
+
+    // Apply limit and offset if provided
+    const limit = filters.limit ?? 100;
+    const offset = filters.offset ?? 0;
+
+    return baseQuery.limit(limit).offset(offset);
+  },
+};
 
 // --- In-Memory implementation (for testing) ---
 
@@ -80,5 +84,9 @@ export class InMemoryApiRepository implements ApiRepository {
 
   async getEndpoints(apiId: number): Promise<ApiEndpointInfo[]> {
     return this.endpointsByApiId.get(apiId) ?? [];
+  }
+
+  async listByDeveloper(): Promise<Api[]> {
+    throw new Error('Not implemented in InMemoryApiRepository');
   }
 }

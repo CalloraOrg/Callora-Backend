@@ -6,14 +6,13 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "lint": "eslint .",
+    "lint": "eslint . --ext .ts",
     "db:generate": "drizzle-kit generate:sqlite",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage \"src/**/*.test.ts\"",
+    "test": "node --import tsx --test src/migrations.test.ts src/validators/amountValidator.test.ts src/app.test.ts src/index.test.ts src/routes/billing.test.ts src/repositories/vaultRepository.test.ts",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage src/migrations.test.ts src/validators/amountValidator.test.ts src/app.test.ts src/index.test.ts src/routes/billing.test.ts src/repositories/vaultRepository.test.ts",
     "validate:issue-9": "node scripts/validate-issue-9.mjs"
   },
   "dependencies": {

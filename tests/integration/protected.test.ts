@@ -4,18 +4,27 @@ import jwt from 'jsonwebtoken';
 import { createTestDb } from '../helpers/db.js';
 import { signTestToken, signExpiredToken, TEST_JWT_SECRET } from '../helpers/jwt.js';
 
-function buildProtectedApp(pool: any) {
+interface JwtPayload {
+  userId: string;
+  walletAddress: string;
+}
+
+interface AuthRequest extends express.Request {
+  user?: JwtPayload;
+}
+
+function buildProtectedApp(pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }) {
   const app = express();
   app.use(express.json());
 
-  const jwtGuard = (req: any, res: any, next: any) => {
+  const jwtGuard = (req: AuthRequest, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'No token provided' });
     }
     try {
       const token = authHeader.split(' ')[1];
-      const decoded = jwt.verify(token, TEST_JWT_SECRET);
+      const decoded = jwt.verify(token, TEST_JWT_SECRET) as JwtPayload;
       req.user = decoded;
       next();
     } catch {
@@ -23,18 +32,18 @@ function buildProtectedApp(pool: any) {
     }
   };
 
-  app.get('/api/usage', jwtGuard, async (req: any, res) => {
+  app.get('/api/usage', jwtGuard, async (req: AuthRequest, res) => {
     const result = await pool.query(
       `SELECT COUNT(*) as calls FROM usage_logs
        WHERE api_key_id IN (
          SELECT id FROM api_keys WHERE user_id = $1
        )`,
-      [req.user.userId]
+      [req.user?.userId]
     );
     return res.status(200).json({
       calls: parseInt(result.rows[0].calls),
       period: 'current',
-      wallet: req.user.walletAddress,
+      wallet: req.user?.walletAddress,
     });
   });
 
@@ -42,7 +51,7 @@ function buildProtectedApp(pool: any) {
 }
 
 describe('GET /api/usage - JWT protected', () => {
-  let db: any;
+  let db: { pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }; end: () => Promise<void> };
   let app: express.Express;
 
   beforeEach(() => {

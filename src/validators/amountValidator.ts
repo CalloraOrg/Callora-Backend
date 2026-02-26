@@ -18,15 +18,7 @@ export class AmountValidator {
       };
     }
 
-    // Step 2: Check format with regex (exactly 7 decimal places)
-    if (!this.AMOUNT_PATTERN.test(amount)) {
-      return {
-        valid: false,
-        error: 'Amount must have exactly 7 decimal places (e.g., "100.0000000")',
-      };
-    }
-
-    // Step 3: Parse to number
+    // Step 2: Parse to number first to check value constraints
     const numericAmount = parseFloat(amount);
 
     if (isNaN(numericAmount)) {
@@ -36,7 +28,7 @@ export class AmountValidator {
       };
     }
 
-    // Step 4: Check positive and non-zero
+    // Step 3: Check positive and non-zero (before format check)
     if (numericAmount <= 0) {
       return {
         valid: false,
@@ -44,11 +36,19 @@ export class AmountValidator {
       };
     }
 
-    // Step 5: Check maximum limit (1 billion USDC)
+    // Step 4: Check maximum limit (1 billion USDC)
     if (numericAmount > this.MAX_AMOUNT) {
       return {
         valid: false,
         error: 'Amount exceeds maximum limit of 1,000,000,000 USDC',
+      };
+    }
+
+    // Step 5: Check format with regex (exactly 7 decimal places)
+    if (!this.AMOUNT_PATTERN.test(amount)) {
+      return {
+        valid: false,
+        error: 'Amount must have exactly 7 decimal places (e.g., "100.0000000")',
       };
     }
 
