@@ -6,18 +6,19 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "lint": "eslint .",
     "db:generate": "drizzle-kit generate:sqlite",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage \"src/**/*.test.ts\"",
+    "test": "node --import tsx --test $(find src -name '*.test.ts')",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage $(find src -name '*.test.ts')",
     "validate:issue-9": "node scripts/validate-issue-9.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.4.1",
     "@prisma/client": "^7.4.1",
+    "@stellar/stellar-sdk": "^11.0.0",
     "axios": "^1.13.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^9.2.2",
@@ -29,9 +30,12 @@
     "ip-range-check": "^0.2.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.18.0",
+    "pino": "^10.3.1",
+    "prom-client": "^15.1.0",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.19",
@@ -47,11 +51,13 @@
     "@typescript-eslint/parser": "^8.56.1",
     "drizzle-kit": "^0.20.7",
     "eslint": "^10.0.2",
+    "globals": "^17.3.0",
     "jest": "^30.2.0",
     "pg-mem": "^3.0.13",
     "prisma": "^7.4.1",
     "supertest": "^7.2.2",
     "tsx": "^4.7.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
   }
 }

@@ -1,14 +1,22 @@
 import 'dotenv/config';
 import { fileURLToPath } from 'node:url';
-
 import { createApp } from './app.js';
+import { logger } from './logger.js';
+import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 
 const app = createApp();
 const PORT = process.env.PORT ?? 3000;
 
+// Inject the metrics middleware globally to track all incoming requests
+app.use(metricsMiddleware);
+
+// Register the securely guarded metrics endpoint
+app.get('/api/metrics', metricsEndpoint);
+
+// Execute the server only if this file is run directly
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   app.listen(PORT, () => {
-    console.log(`Callora backend listening on http://localhost:${PORT}`);
+    logger.info(`Callora backend listening on http://localhost:${PORT}`);
   });
 }
 
