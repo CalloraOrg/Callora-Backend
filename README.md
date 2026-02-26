@@ -20,9 +20,27 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 
 ## Vault repository behavior
 
+<<<<<<< HEAD
+Endpoint:
+
+`GET /api/developers/analytics`
+
+Authentication:
+
+- Requires `x-user-id` header (developer identity for now).
+
+Query params:
+
+- `from` (required): ISO date/time
+- `to` (required): ISO date/time
+- `groupBy` (optional): `day | week | month` (default: `day`)
+- `apiId` (optional): filters to one API (must belong to authenticated developer)
+- `includeTop` (optional): set to `true` to include `topEndpoints` and anonymized `topUsers`
+=======
 - Enforces one vault per user per network.
 - `balanceSnapshot` is stored in smallest units using non-negative integer `bigint` values.
 - `findByUserId` is network-aware and returns the vault for a specific user/network pair.
+>>>>>>> main
 
 ## Local setup
 
@@ -34,8 +52,21 @@ API gateway, usage metering, and billing services for the Callora API marketplac
    npm install
    npm run dev
    ```
+<<<<<<< HEAD
+   
+3. API base: `http://localhost:3000`
+### Docker Setup
+
+You can run the entire stack (API and PostgreSQL) locally using Docker Compose:
+
+```bash
+docker compose up --build
+```
+The API will be available at http://localhost:3000, and the PostgreSQL database will be mapped to local port 5432.
+=======
 
 3. API base: [http://localhost:3000](http://localhost:3000). Example: [http://localhost:3000/api/health](http://localhost:3000/api/health).
+>>>>>>> main
 
 ## Scripts
 
@@ -46,6 +77,15 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 | `npm start` | Run compiled `dist/index.js` |
 | `npm test` | Run unit tests |
 | `npm run test:coverage` | Run unit tests with coverage |
+
+### Observability (Prometheus Metrics)
+
+The application exposes a standard Prometheus text-format metrics endpoint at `GET /api/metrics`.
+It automatically tracks `http_requests_total`, `http_request_duration_seconds`, and default Node.js system metrics.
+
+#### Production Security:
+In production (NODE_ENV=production), this endpoint is protected. You must configure the METRICS_API_KEY environment variable and scrape the endpoint using an authorization header:
+Authorization: Bearer <YOUR_METRICS_API_KEY>
 
 ## Project layout
 
@@ -62,6 +102,12 @@ callora-backend/
 
 ## Environment
 
+<<<<<<< HEAD
+- `PORT` — HTTP port (default: 3000). Optional for local dev.
+
+This repo is part of [Callora](https://github.com/your-org/callora). Frontend: `callora-frontend`. Contracts: `callora-contracts`.
+=======
 - `PORT` - HTTP port (default: 3000). Optional for local dev.
 
 This repo is part of [Callora](https://github.com/your-org/callora). Frontend: `callora-frontend`. Contracts: `callora-contracts`.
+>>>>>>> main

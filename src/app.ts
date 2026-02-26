@@ -1,17 +1,21 @@
 import express from 'express';
+import cors from 'cors';
 
 import {
   InMemoryUsageEventsRepository,
   type GroupBy,
   type UsageEventsRepository,
 } from './repositories/usageEventsRepository.js';
+import type { ApiRepository } from './repositories/apiRepository.js';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
+import { requestLogger } from './middleware/logging.js';
 
 interface AppDependencies {
   usageEventsRepository: UsageEventsRepository;
+  apiRepository: ApiRepository;
 }
 
 const isValidGroupBy = (value: string): value is GroupBy =>
@@ -35,6 +39,37 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
 
   app.use(requestIdMiddleware);
+  // Lazy singleton for production Drizzle repo; injected repo is used in tests.
+  const _injectedApiRepo = dependencies?.apiRepository;
+  let _drizzleApiRepo: ApiRepository | undefined;
+  async function getApiRepo(): Promise<ApiRepository> {
+    if (_injectedApiRepo) return _injectedApiRepo;
+    if (!_drizzleApiRepo) {
+      const { DrizzleApiRepository } = await import('./repositories/apiRepository.drizzle.js');
+      _drizzleApiRepo = new DrizzleApiRepository();
+    }
+    return _drizzleApiRepo;
+  }
+
+  app.use(requestLogger);
+  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173')
+    .split(',')
+    .map((o) => o.trim());
+
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
+      methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+      credentials: true,
+    }),
+  );
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => {
@@ -43,6 +78,42 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   app.get('/api/apis', (_req, res) => {
     res.json({ apis: [] });
+  });
+
+  app.get('/api/apis/:id', async (req, res) => {
+    const rawId = req.params.id;
+    const id = Number(rawId);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'id must be a positive integer' });
+      return;
+    }
+
+    const apiRepo = await getApiRepo();
+    const api = await apiRepo.findById(id);
+    if (!api) {
+      res.status(404).json({ error: 'API not found or not active' });
+      return;
+    }
+
+    const endpoints = await apiRepo.getEndpoints(id);
+
+    res.json({
+      id: api.id,
+      name: api.name,
+      description: api.description,
+      base_url: api.base_url,
+      logo_url: api.logo_url,
+      category: api.category,
+      status: api.status,
+      developer: api.developer,
+      endpoints: endpoints.map((ep) => ({
+        path: ep.path,
+        method: ep.method,
+        price_per_call_usdc: ep.price_per_call_usdc,
+        description: ep.description,
+      })),
+    });
   });
 
   app.get('/api/usage', (_req, res) => {

@@ -1,0 +1,51 @@
+export interface ApiDeveloperInfo {
+  name: string | null;
+  website: string | null;
+  description: string | null;
+}
+
+export interface ApiDetails {
+  id: number;
+  name: string;
+  description: string | null;
+  base_url: string;
+  logo_url: string | null;
+  category: string | null;
+  status: string;
+  developer: ApiDeveloperInfo;
+}
+
+export interface ApiEndpointInfo {
+  path: string;
+  method: string;
+  price_per_call_usdc: string;
+  description: string | null;
+}
+
+export interface ApiRepository {
+  findById(id: number): Promise<ApiDetails | null>;
+  getEndpoints(apiId: number): Promise<ApiEndpointInfo[]>;
+}
+
+// --- In-Memory implementation (for testing) ---
+
+export class InMemoryApiRepository implements ApiRepository {
+  private readonly apis: ApiDetails[];
+  private readonly endpointsByApiId: Map<number, ApiEndpointInfo[]>;
+
+  constructor(
+    apis: ApiDetails[] = [],
+    endpointsByApiId: Map<number, ApiEndpointInfo[]> = new Map()
+  ) {
+    this.apis = [...apis];
+    this.endpointsByApiId = new Map(endpointsByApiId);
+  }
+
+  async findById(id: number): Promise<ApiDetails | null> {
+    return this.apis.find((a) => a.id === id) ?? null;
+  }
+
+  async getEndpoints(apiId: number): Promise<ApiEndpointInfo[]> {
+    return this.endpointsByApiId.get(apiId) ?? [];
+  }
+}
