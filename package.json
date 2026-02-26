@@ -16,6 +16,7 @@
     "validate:issue-9": "node scripts/validate-issue-9.mjs"
   },
   "dependencies": {
+    "@stellar/stellar-sdk": "^11.0.0",
     "axios": "^1.13.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^9.2.2",
@@ -27,6 +28,7 @@
     "ip-range-check": "^0.2.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.18.0",
+    "pino": "^10.3.1",
     "prom-client": "^15.1.0",
     "uuid": "^13.0.0"
   },

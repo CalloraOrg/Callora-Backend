@@ -1,4 +1,4 @@
-import { WebhookConfig, WebhookEventType } from './webhook.types';
+import { WebhookConfig, WebhookEventType } from './webhook.types.js';
 
 const store = new Map<string, WebhookConfig>();
 
