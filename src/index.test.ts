@@ -1,5 +1,7 @@
 import request from 'supertest';
 import app, { auditService } from './index.js';
+import assert from 'node:assert/strict';
+import { describe, it, beforeEach } from 'node:test';
 
 describe('Health API', () => {
   beforeEach(() => {
@@ -8,8 +10,8 @@ describe('Health API', () => {
 
   it('should return ok status', async () => {
     const response = await request(app).get('/api/health');
-    expect(response.status).toBe(200);
-    expect(response.body.status).toBe('ok');
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.body.status, 'ok');
   });
 
   it('logs login with actor, action, resource, timestamp, and optional IP', async () => {
@@ -18,21 +20,20 @@ describe('Health API', () => {
       .set('x-forwarded-for', '203.0.113.42')
       .send({ user_id: 123 });
 
-    expect(response.status).toBe(200);
+    assert.strictEqual(response.status, 200);
 
     const logsResponse = await request(app)
       .get('/api/audit-logs')
       .query({ user_id: 123, action: 'user.login' });
 
-    expect(logsResponse.status).toBe(200);
-    expect(logsResponse.body.logs).toHaveLength(1);
-    expect(logsResponse.body.logs[0]).toMatchObject({
-      actorUserId: 123,
-      action: 'user.login',
-      resource: 'auth/session',
-      ip: '203.0.113.42'
-    });
-    expect(logsResponse.body.logs[0].createdAt).toBeDefined();
+    assert.strictEqual(logsResponse.status, 200);
+    assert.strictEqual(logsResponse.body.logs.length, 1);
+    const log = logsResponse.body.logs[0];
+    assert.strictEqual(log.actorUserId, 123);
+    assert.strictEqual(log.action, 'user.login');
+    assert.strictEqual(log.resource, 'auth/session');
+    assert.strictEqual(log.ip, '203.0.113.42');
+    assert.ok(log.createdAt);
   });
 
   it('logs api key create/revoke without logging full secret values', async () => {
@@ -55,15 +56,15 @@ describe('Health API', () => {
       .get('/api/audit-logs')
       .query({ user_id: 9 });
 
-    expect(logsResponse.status).toBe(200);
-    expect(logsResponse.body.logs).toHaveLength(2);
+    assert.strictEqual(logsResponse.status, 200);
+    assert.strictEqual(logsResponse.body.logs.length, 2);
     const serialized = JSON.stringify(logsResponse.body.logs);
 
-    expect(serialized).toContain('api_key.create');
-    expect(serialized).toContain('api_key.revoke');
-    expect(serialized).toContain('pk_live_demo');
-    expect(serialized).not.toContain('super-secret-raw-key-value');
-    expect(serialized).not.toContain('another-secret-value');
+    assert.ok(serialized.includes('api_key.create'));
+    assert.ok(serialized.includes('api_key.revoke'));
+    assert.ok(serialized.includes('pk_live_demo'));
+    assert.ok(!serialized.includes('super-secret-raw-key-value'));
+    assert.ok(!serialized.includes('another-secret-value'));
   });
 
   it('logs API publish/update and settlement run actions', async () => {
@@ -77,12 +78,12 @@ describe('Health API', () => {
       .get('/api/audit-logs')
       .query({ user_id: 77 });
 
-    expect(logsResponse.status).toBe(200);
-    expect(logsResponse.body.logs).toHaveLength(3);
+    assert.strictEqual(logsResponse.status, 200);
+    assert.strictEqual(logsResponse.body.logs.length, 3);
 
     const actions = logsResponse.body.logs.map((log: { action: string }) => log.action);
-    expect(actions).toEqual(
-      expect.arrayContaining(['api.publish', 'api.update', 'settlement.run'])
-    );
+    assert.ok(actions.includes('api.publish'));
+    assert.ok(actions.includes('api.update'));
+    assert.ok(actions.includes('settlement.run'));
   });
 });
