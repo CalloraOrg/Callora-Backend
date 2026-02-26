@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { Api, ApiStatus } from '../db/schema.js';
 
@@ -48,11 +48,13 @@ export const defaultApiRepository: ApiRepository = {
   },
 
   async listByDeveloper(developerId, filters = {}) {
-    let query = db.select().from(schema.apis).where(eq(schema.apis.developer_id, developerId));
-
+    const conditions = [eq(schema.apis.developer_id, developerId)];
+    
     if (filters.status) {
-      query = query.where(eq(schema.apis.status, filters.status));
+      conditions.push(eq(schema.apis.status, filters.status));
     }
+
+    let query = db.select().from(schema.apis).where(and(...conditions));
 
     if (typeof filters.limit === 'number') {
       query = query.limit(filters.limit);

@@ -62,11 +62,13 @@ export class DrizzleApiRepository implements ApiRepository {
   }
 
   async listByDeveloper(developerId: number, filters: ApiListFilters = {}): Promise<Api[]> {
-    let query = db.select().from(schema.apis).where(eq(schema.apis.developer_id, developerId));
-
+    const conditions = [eq(schema.apis.developer_id, developerId)];
+    
     if (filters.status) {
-      query = query.where(eq(schema.apis.status, filters.status));
+      conditions.push(eq(schema.apis.status, filters.status));
     }
+
+    let query = db.select().from(schema.apis).where(and(...conditions));
 
     if (typeof filters.limit === 'number') {
       query = query.limit(filters.limit);
