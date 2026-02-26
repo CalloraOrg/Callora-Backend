@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
+<<<<<<< Updated upstream
 import { describe, it } from 'node:test';
+=======
+import assert from 'node:assert/strict';
+import test from 'node:test';
+>>>>>>> Stashed changes
 
 const migrationDir = path.join(process.cwd(), 'migrations');
 const upMigrationPath = path.join(
@@ -18,8 +23,7 @@ function read(filePath: string): string {
   return fs.readFileSync(filePath, 'utf8');
 }
 
-describe('Issue #9 migrations', () => {
-  it('creates api_keys table with required columns and constraints', () => {
+test('Issue #9 migrations creates api_keys table with required columns and constraints', () => {
     const sql = read(upMigrationPath);
 
     assert.match(sql, /create table api_keys/i);
@@ -39,9 +43,13 @@ describe('Issue #9 migrations', () => {
 
     assert.doesNotMatch(sql, /\bapi_key\b/i);
     assert.doesNotMatch(sql, /\braw_key\b/i);
+<<<<<<< Updated upstream
   });
+=======
+});
+>>>>>>> Stashed changes
 
-  it('creates vaults table with required columns and constraints', () => {
+test('Issue #9 migrations creates vaults table with required columns and constraints', () => {
     const sql = read(upMigrationPath);
 
     assert.match(sql, /create table vaults/i);
@@ -53,12 +61,19 @@ describe('Issue #9 migrations', () => {
     assert.match(sql, /\bcreated_at\b/i);
     assert.match(sql, /\bupdated_at\b/i);
     assert.match(sql, /unique\s*\(\s*user_id\s*,\s*network\s*\)/i);
+<<<<<<< Updated upstream
   });
+=======
+});
+>>>>>>> Stashed changes
 
-  it('includes rollback migration for both tables', () => {
+test('Issue #9 migrations includes rollback migration for both tables', () => {
     const sql = read(downMigrationPath);
 
     assert.match(sql, /drop table if exists vaults/i);
     assert.match(sql, /drop table if exists api_keys/i);
+<<<<<<< Updated upstream
   });
+=======
+>>>>>>> Stashed changes
 });
