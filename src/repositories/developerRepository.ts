@@ -2,6 +2,14 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { Developer, NewDeveloper } from '../db/schema.js';
 
+export interface DeveloperRepository {
+  findByUserId(userId: string): Promise<Developer | undefined>;
+}
+
+export const defaultDeveloperRepository: DeveloperRepository = {
+  findByUserId,
+};
+
 export async function findByUserId(userId: string): Promise<Developer | undefined> {
   const rows = await db
     .select()

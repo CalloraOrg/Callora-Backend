@@ -6,6 +6,9 @@ import {
   type GroupBy,
   type UsageEventsRepository,
 } from './repositories/usageEventsRepository.js';
+import { defaultApiRepository, type ApiRepository } from './repositories/apiRepository.js';
+import { defaultDeveloperRepository, type DeveloperRepository } from './repositories/developerRepository.js';
+import { apiStatusEnum, type ApiStatus } from './db/schema.js';
 import type { ApiRepository } from './repositories/apiRepository.js';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
@@ -16,6 +19,7 @@ import { requestLogger } from './middleware/logging.js';
 interface AppDependencies {
   usageEventsRepository: UsageEventsRepository;
   apiRepository: ApiRepository;
+  developerRepository: DeveloperRepository;
 }
 
 const isValidGroupBy = (value: string): value is GroupBy =>
@@ -33,10 +37,26 @@ const parseDate = (value: unknown): Date | null => {
   return date;
 };
 
+const parseNonNegativeIntegerParam = (
+  value: unknown
+): { value?: number; invalid: boolean } => {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { value: undefined, invalid: false };
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    return { value: undefined, invalid: true };
+  }
+  return { value: parsed, invalid: false };
+};
+
 export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
+  const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
+  const developerRepository = dependencies?.developerRepository ?? defaultDeveloperRepository;
 
   app.use(requestIdMiddleware);
   // Lazy singleton for production Drizzle repo; injected repo is used in tests.
@@ -118,6 +138,69 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   app.get('/api/usage', (_req, res) => {
     res.json({ calls: 0, period: 'current' });
+  });
+
+  app.get('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+    const user = res.locals.authenticatedUser;
+    if (!user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const developer = await developerRepository.findByUserId(user.id);
+    if (!developer) {
+      res.status(404).json({ error: 'Developer profile not found' });
+      return;
+    }
+
+    const statusParam = typeof req.query.status === 'string' ? req.query.status : undefined;
+    let statusFilter: ApiStatus | undefined;
+    if (statusParam) {
+      if (!apiStatusEnum.includes(statusParam as ApiStatus)) {
+        res
+          .status(400)
+          .json({ error: `status must be one of: ${apiStatusEnum.join(', ')}` });
+        return;
+      }
+      statusFilter = statusParam as ApiStatus;
+    }
+
+    const limitParam = parseNonNegativeIntegerParam(req.query.limit);
+    if (limitParam.invalid) {
+      res.status(400).json({ error: 'limit must be a non-negative integer' });
+      return;
+    }
+
+    const offsetParam = parseNonNegativeIntegerParam(req.query.offset);
+    if (offsetParam.invalid) {
+      res.status(400).json({ error: 'offset must be a non-negative integer' });
+      return;
+    }
+
+    const apis = await apiRepository.listByDeveloper(developer.id, {
+      status: statusFilter,
+      ...(typeof limitParam.value === 'number' ? { limit: limitParam.value } : {}),
+      ...(typeof offsetParam.value === 'number' ? { offset: offsetParam.value } : {}),
+    });
+
+    const usageStats = await usageEventsRepository.aggregateByDeveloper(user.id);
+    const statsByApi = new Map(usageStats.map((stat) => [stat.apiId, stat]));
+
+    const payload = apis.map((api) => {
+      const stats = statsByApi.get(String(api.id));
+      const entry: { id: number; name: string; status: ApiStatus; callCount: number; revenue?: string } = {
+        id: api.id,
+        name: api.name,
+        status: api.status,
+        callCount: stats?.calls ?? 0,
+      };
+      if (stats) {
+        entry.revenue = stats.revenue.toString();
+      }
+      return entry;
+    });
+
+    res.json({ data: payload });
   });
 
   app.get('/api/developers/analytics', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {

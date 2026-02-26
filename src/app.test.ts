@@ -4,6 +4,10 @@ import request from 'supertest';
 
 import { createApp } from './app.js';
 import { InMemoryUsageEventsRepository } from './repositories/usageEventsRepository.js';
+import type { Api } from './db/schema.js';
+import type { ApiRepository, ApiListFilters } from './repositories/apiRepository.js';
+import type { Developer } from './db/schema.js';
+import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
 
 const seedRepository = () =>
@@ -54,6 +58,130 @@ const seedRepository = () =>
       revenue: 999n,
     },
   ]);
+
+const developerProfile: Developer = {
+  id: 11,
+  user_id: 'dev-1',
+  name: 'Test Developer',
+  website: null,
+  description: null,
+  category: null,
+  created_at: 1,
+  updated_at: 1,
+};
+
+const sampleApis: Api[] = [
+  {
+    id: 101,
+    developer_id: 11,
+    name: 'Search API',
+    description: null,
+    base_url: 'https://search.example.com',
+    logo_url: null,
+    category: 'search',
+    status: 'active',
+    created_at: 1,
+    updated_at: 1,
+  },
+  {
+    id: 102,
+    developer_id: 11,
+    name: 'Chat API',
+    description: null,
+    base_url: 'https://chat.example.com',
+    logo_url: null,
+    category: 'chat',
+    status: 'active',
+    created_at: 1,
+    updated_at: 1,
+  },
+  {
+    id: 103,
+    developer_id: 11,
+    name: 'Archived API',
+    description: null,
+    base_url: 'https://archive.example.com',
+    logo_url: null,
+    category: 'archive',
+    status: 'archived',
+    created_at: 1,
+    updated_at: 1,
+  },
+];
+
+class FakeApiRepository implements ApiRepository {
+  constructor(private readonly apis: Api[]) {}
+
+  async listByDeveloper(developerId: number, filters: ApiListFilters = {}): Promise<Api[]> {
+    let results = this.apis.filter((api) => api.developer_id === developerId);
+    if (filters.status) {
+      results = results.filter((api) => api.status === filters.status);
+    }
+    if (typeof filters.offset === 'number') {
+      results = results.slice(filters.offset);
+    }
+    if (typeof filters.limit === 'number') {
+      results = results.slice(0, filters.limit);
+    }
+    return results;
+  }
+}
+
+const createDeveloperRepository = (profile?: Developer): DeveloperRepository => ({
+  async findByUserId(userId: string) {
+    if (profile && profile.user_id === userId) {
+      return profile;
+    }
+    return undefined;
+  },
+});
+
+const usageEventsForApis = () =>
+  new InMemoryUsageEventsRepository([
+    {
+      id: 'evt-search-1',
+      developerId: 'dev-1',
+      apiId: '101',
+      endpoint: '/v1/search',
+      userId: 'user-a',
+      occurredAt: new Date('2026-02-01T01:00:00.000Z'),
+      revenue: 100n,
+    },
+    {
+      id: 'evt-search-2',
+      developerId: 'dev-1',
+      apiId: '101',
+      endpoint: '/v1/search',
+      userId: 'user-b',
+      occurredAt: new Date('2026-02-01T02:00:00.000Z'),
+      revenue: 200n,
+    },
+    {
+      id: 'evt-chat-1',
+      developerId: 'dev-1',
+      apiId: '102',
+      endpoint: '/v1/send',
+      userId: 'user-c',
+      occurredAt: new Date('2026-02-02T01:00:00.000Z'),
+      revenue: 150n,
+    },
+    {
+      id: 'evt-other',
+      developerId: 'dev-2',
+      apiId: '101',
+      endpoint: '/v1/search',
+      userId: 'user-z',
+      occurredAt: new Date('2026-02-03T01:00:00.000Z'),
+      revenue: 999n,
+    },
+  ]);
+
+const createDeveloperApisApp = () =>
+  createApp({
+    usageEventsRepository: usageEventsForApis(),
+    developerRepository: createDeveloperRepository(developerProfile),
+    apiRepository: new FakeApiRepository(sampleApis),
+  });
 
 test('GET /api/developers/analytics returns 401 when unauthenticated', async () => {
   const app = createApp({ usageEventsRepository: seedRepository() });
@@ -136,6 +264,51 @@ test('GET /api/developers/analytics filters by apiId and blocks non-owned API', 
   assert.equal(blocked.status, 403);
 });
 
+test('GET /api/developers/apis returns 401 when unauthenticated', async () => {
+  const response = await request(createDeveloperApisApp()).get('/api/developers/apis');
+  assert.equal(response.status, 401);
+});
+
+test('GET /api/developers/apis returns 404 when developer profile is missing', async () => {
+  const app = createApp({
+    usageEventsRepository: usageEventsForApis(),
+    developerRepository: createDeveloperRepository(undefined),
+    apiRepository: new FakeApiRepository(sampleApis),
+  });
+  const response = await request(app).get('/api/developers/apis').set('x-user-id', 'dev-1');
+  assert.equal(response.status, 404);
+});
+
+test('GET /api/developers/apis validates status query parameter', async () => {
+  const response = await request(createDeveloperApisApp())
+    .get('/api/developers/apis?status=unknown')
+    .set('x-user-id', 'dev-1');
+  assert.equal(response.status, 400);
+});
+
+test('GET /api/developers/apis lists APIs with stats, filters, and pagination', async () => {
+  const app = createDeveloperApisApp();
+  const fullResponse = await request(app).get('/api/developers/apis').set('x-user-id', 'dev-1');
+  assert.equal(fullResponse.status, 200);
+  assert.deepEqual(fullResponse.body.data, [
+    { id: 101, name: 'Search API', status: 'active', callCount: 2, revenue: '300' },
+    { id: 102, name: 'Chat API', status: 'active', callCount: 1, revenue: '150' },
+    { id: 103, name: 'Archived API', status: 'archived', callCount: 0 },
+  ]);
+
+  const limited = await request(app)
+    .get('/api/developers/apis?limit=1&offset=1')
+    .set('x-user-id', 'dev-1');
+  assert.deepEqual(limited.body.data, [
+    { id: 102, name: 'Chat API', status: 'active', callCount: 1, revenue: '150' },
+  ]);
+
+  const filtered = await request(app)
+    .get('/api/developers/apis?status=archived')
+    .set('x-user-id', 'dev-1');
+  assert.deepEqual(filtered.body.data, [
+    { id: 103, name: 'Archived API', status: 'archived', callCount: 0 },
+  ]);
 // ── GET /api/apis/:id ────────────────────────────────────────────────────────
 
 const buildApiRepo = () => {
