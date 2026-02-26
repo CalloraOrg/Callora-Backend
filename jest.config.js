@@ -10,7 +10,7 @@ export default {
       useESM: true,
       tsconfig: {
         module: 'ESNext',
-        moduleResolution: 'Bundler',
+        moduleResolution: 'node',
       },
     }],
   },

@@ -13,6 +13,14 @@ const downMigrationPath = path.join(
   migrationDir,
   '0001_create_api_keys_and_vaults.down.sql'
 );
+const auditUpMigrationPath = path.join(
+  migrationDir,
+  '0002_create_audit_logs.up.sql'
+);
+const auditDownMigrationPath = path.join(
+  migrationDir,
+  '0002_create_audit_logs.down.sql'
+);
 
 function read(filePath: string): string {
   return fs.readFileSync(filePath, 'utf8');
@@ -60,5 +68,34 @@ describe('Issue #9 migrations', () => {
 
     assert.match(sql, /drop table if exists vaults/i);
     assert.match(sql, /drop table if exists api_keys/i);
+  });
+});
+
+describe('Issue #54 migrations', () => {
+  it('creates append-only audit_logs table with required fields and indexes', () => {
+    const sql = read(auditUpMigrationPath);
+
+    expect(sql).toMatch(/create table audit_logs/i);
+    expect(sql).toMatch(/\bactor_user_id\b/i);
+    expect(sql).toMatch(/\baction\b/i);
+    expect(sql).toMatch(/\bresource\b/i);
+    expect(sql).toMatch(/\bcreated_at\b/i);
+    expect(sql).toMatch(/\bip\b/i);
+
+    expect(sql).toMatch(/create index idx_audit_logs_actor_user_id_created_at/i);
+    expect(sql).toMatch(/create index idx_audit_logs_action_created_at/i);
+    expect(sql).toMatch(/create index idx_audit_logs_resource_created_at/i);
+
+    expect(sql).toMatch(/create trigger trg_prevent_audit_logs_update/i);
+    expect(sql).toMatch(/create trigger trg_prevent_audit_logs_delete/i);
+  });
+
+  it('includes rollback migration for audit_logs and append-only guards', () => {
+    const sql = read(auditDownMigrationPath);
+
+    expect(sql).toMatch(/drop trigger if exists trg_prevent_audit_logs_delete/i);
+    expect(sql).toMatch(/drop trigger if exists trg_prevent_audit_logs_update/i);
+    expect(sql).toMatch(/drop function if exists prevent_audit_logs_mutation/i);
+    expect(sql).toMatch(/drop table if exists audit_logs/i);
   });
 });

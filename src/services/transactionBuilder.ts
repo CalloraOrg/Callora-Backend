@@ -5,7 +5,6 @@ import {
   Operation,
   Address,
   nativeToScVal,
-  xdr,
   BASE_FEE,
 } from '@stellar/stellar-sdk';
 
@@ -73,8 +72,7 @@ export class TransactionBuilderService {
       sourceAccount = await server.loadAccount(sourceKey);
     } catch (error) {
       throw new NetworkError(
-        `Failed to load source account from Stellar network: ${
-          error instanceof Error ? error.message : 'Unknown error'
+        `Failed to load source account from Stellar network: ${error instanceof Error ? error.message : 'Unknown error'
         }`
       );
     }
@@ -89,7 +87,7 @@ export class TransactionBuilderService {
     try {
       contractAddress = new Address(params.vaultContractId);
       userAddress = new Address(params.userPublicKey);
-    } catch (error) {
+    } catch {
       throw new InvalidContractIdError(params.vaultContractId);
     }
 
