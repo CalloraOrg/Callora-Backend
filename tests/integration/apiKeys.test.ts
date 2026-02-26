@@ -5,7 +5,7 @@ import { createTestDb } from '../helpers/db.js';
 import { signTestToken, TEST_JWT_SECRET } from '../helpers/jwt.js';
 import { randomUUID } from 'crypto';
 
-function buildApiKeysApp(pool: any) {
+function buildApiKeysApp(pool: { query: (sql: string, params: any[]) => Promise<{ rows: any[] }> }) {
   const app = express();
   app.use(express.json());
 
@@ -63,7 +63,7 @@ function buildApiKeysApp(pool: any) {
 }
 
 describe('API Key flows', () => {
-  let db: any;
+  let db: { pool: any; end: () => Promise<void> };
   let app: express.Express;
   let token: string;
   const userId = '00000000-0000-0000-0000-000000000001';

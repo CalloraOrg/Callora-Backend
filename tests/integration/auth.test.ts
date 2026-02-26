@@ -6,7 +6,7 @@ import { TEST_JWT_SECRET } from '../helpers/jwt.js';
 
 const mockVerifySignature = jest.fn();
 
-function buildAuthApp(pool: any) {
+function buildAuthApp(pool: { query: (sql: string, params: any[]) => Promise<{ rows: any[] }> }) {
   const app = express();
   app.use(express.json());
 
@@ -44,7 +44,7 @@ function buildAuthApp(pool: any) {
 }
 
 describe('POST /auth/wallet', () => {
-  let db: any;
+  let db: { pool: any; end: () => Promise<void> };
   let app: express.Express;
 
   beforeEach(() => {
@@ -68,7 +68,7 @@ describe('POST /auth/wallet', () => {
     expect(res.body.token).toBeDefined();
     expect(res.body.user.wallet_address).toBe('GDTEST123STELLAR');
 
-    const decoded = jwt.verify(res.body.token, TEST_JWT_SECRET) as any;
+    const decoded = jwt.verify(res.body.token, TEST_JWT_SECRET) as { walletAddress: string };
     expect(decoded.walletAddress).toBe('GDTEST123STELLAR');
   });
 
