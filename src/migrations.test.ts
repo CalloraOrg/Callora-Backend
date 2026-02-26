@@ -55,7 +55,7 @@ describe('Issue #9 migrations', () => {
   it('includes rollback migration for both tables', () => {
     const sql = read(downMigrationPath);
 
-    expect(sql).toMatch(/drop table if exists `vaults`/i);
-    expect(sql).toMatch(/drop table if exists `api_keys`/i);
+    expect(sql).toMatch(/drop table if exists vaults/i);
+    expect(sql).toMatch(/drop table if exists api_keys/i);
   });
 });

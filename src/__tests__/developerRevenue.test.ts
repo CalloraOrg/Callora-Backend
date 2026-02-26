@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import { createDeveloperRouter } from '../routes/developerRoutes.js';
 import { createSettlementStore } from '../services/settlementStore.js';
 import { createUsageStore } from '../services/usageStore.js';
+import { errorHandler } from '../middleware/errorHandler.js';
 import { SettlementStore } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
 
@@ -15,6 +16,7 @@ function buildApp() {
   const app = express();
   app.use(express.json());
   app.use('/api/developers', createDeveloperRouter({ settlementStore, usageStore }));
+  app.use(errorHandler);
   return app;
 }
 
@@ -121,14 +123,14 @@ describe('GET /api/developers/revenue', () => {
 
   it('returns 401 for an invalid token', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { Authorization: 'Bearer bad-token' },
+      headers: { 'x-user-id': '' },
     });
     expect(res.status).toBe(401);
   });
 
   it('returns 200 with correct shape for a valid token', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { Authorization: 'Bearer dev-token-1' }, // implicitly mock-auths dev_001
+      headers: { 'x-user-id': 'dev_001' }, // implicitly mock-auths dev_001
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -152,7 +154,7 @@ describe('GET /api/developers/revenue', () => {
 
   it('returns correct summary values for dev_001', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { Authorization: 'Bearer dev-token-1' },
+      headers: { 'x-user-id': 'dev_001' },
     });
     const body = await res.json();
 
@@ -166,7 +168,7 @@ describe('GET /api/developers/revenue', () => {
   it('respects limit and offset query params', async () => {
     const res = await fetch(
       `${baseUrl}/api/developers/revenue?limit=2&offset=0`,
-      { headers: { Authorization: 'Bearer dev-token-1' } },
+      { headers: { 'x-user-id': 'dev_001' } },
     );
     const body = await res.json();
 
@@ -179,7 +181,7 @@ describe('GET /api/developers/revenue', () => {
   it('returns empty settlements when offset exceeds total', async () => {
     const res = await fetch(
       `${baseUrl}/api/developers/revenue?limit=20&offset=100`,
-      { headers: { Authorization: 'Bearer dev-token-1' } },
+      { headers: { 'x-user-id': 'dev_001' } },
     );
     const body = await res.json();
 
@@ -189,7 +191,7 @@ describe('GET /api/developers/revenue', () => {
 
   it('uses default limit=20 and offset=0 when params are omitted', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { Authorization: 'Bearer dev-token-1' },
+      headers: { 'x-user-id': 'dev_001' },
     });
     const body = await res.json();
 
@@ -200,7 +202,7 @@ describe('GET /api/developers/revenue', () => {
   it('clamps limit to 100 when a larger value is given', async () => {
     const res = await fetch(
       `${baseUrl}/api/developers/revenue?limit=999`,
-      { headers: { Authorization: 'Bearer dev-token-1' } },
+      { headers: { 'x-user-id': 'dev_001' } },
     );
     const body = await res.json();
 

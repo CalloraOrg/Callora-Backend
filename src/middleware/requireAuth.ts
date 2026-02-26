@@ -26,5 +26,6 @@ export const requireAuth = (
   }
 
   res.locals.authenticatedUser = { id: userId };
+  req.developerId = userId; // Keep req.developerId backwards compatibility since main branch router depends on it
   next();
 };
