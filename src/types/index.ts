@@ -1,6 +1,12 @@
+export interface DbHealthStatus {
+  status: 'ok' | 'error';
+  error?: string;
+}
+
 export interface HealthResponse {
-  status: string;
+  status: 'ok' | 'degraded';
   service: string;
+  db?: DbHealthStatus;
 }
 
 export interface ApisResponse {
