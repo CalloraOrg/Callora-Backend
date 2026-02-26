@@ -1,11 +1,11 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
 import request from 'supertest';
-import express from 'express';
-import app from './index';
 
-describe('Health API', () => {
-  it('should return ok status', async () => {
-    const response = await request(app).get('/api/health');
-    expect(response.status).toBe(200);
-    expect(response.body.status).toBe('ok');
-  });
+import app from './index.js';
+
+test('Health API returns ok status', async () => {
+  const response = await request(app).get('/api/health');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, 'ok');
 });
