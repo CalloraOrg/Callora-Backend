@@ -17,10 +17,19 @@ export interface CreateVaultInput {
   network: string;
 }
 
+export interface VaultTransaction {
+  id: string;
+  amount: string;
+  date: Date;
+  type: 'deposit' | 'withdrawal';
+  tx_hash?: string;
+}
+
 export interface VaultRepository {
   create(userId: string, contractId: string, network: string): Promise<Vault>;
   findByUserId(userId: string, network: string): Promise<Vault | null>;
   updateBalanceSnapshot(id: VaultId, balance: bigint, lastSyncedAt: Date): Promise<Vault>;
+  findTransactions(userId: string, from: Date, to: Date): Promise<VaultTransaction[]>;
 }
 
 export class DuplicateVaultError extends Error {
@@ -43,6 +52,7 @@ const createVaultKey = (userId: string, network: string): string =>
 export class InMemoryVaultRepository implements VaultRepository {
   private readonly vaultsById = new Map<VaultId, Vault>();
   private readonly vaultIdByUserAndNetwork = new Map<string, VaultId>();
+  private readonly transactions: VaultTransaction[] = [];
   private nextId = 1;
 
   async create(userId: string, contractId: string, network: string): Promise<Vault> {
@@ -104,5 +114,23 @@ export class InMemoryVaultRepository implements VaultRepository {
 
     this.vaultsById.set(id, updatedVault);
     return { ...updatedVault };
+  }
+
+  async findTransactions(userId: string, from: Date, to: Date): Promise<VaultTransaction[]> {
+    // Filter transactions by user and date range
+    const userVaults = Array.from(this.vaultsById.values()).filter(
+      (vault) => vault.userId === userId
+    );
+    const userVaultIds = new Set(userVaults.map((v) => v.id));
+
+    return this.transactions.filter((tx) => {
+      // Check if transaction belongs to user's vault
+      const belongsToUser = userVaultIds.has(tx.id.split('-')[0] || '');
+      if (!belongsToUser) {
+        return false;
+      }
+
+      return tx.date >= from && tx.date <= to;
+    });
   }
 }
