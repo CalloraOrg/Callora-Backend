@@ -1,15 +1,11 @@
+import 'dotenv/config';
 import express from "express";
+import { fileURLToPath } from 'node:url';
 import { config } from "./config/index.js";
 import routes from "./routes/index.js";
-import { AuditService } from './audit.js';
-import { fileURLToPath } from 'node:url';
+import { logger } from './logger.js';
 
 const app = express();
-import 'dotenv/config';
-import { fileURLToPath } from 'node:url';
-import { createApp } from './app.js';
-import { logger } from './logger.js';
-import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 
 app.use(express.json());
 app.use("/api", routes);

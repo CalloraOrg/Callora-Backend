@@ -36,7 +36,7 @@ function parseOptionalNumber(value: unknown): number | undefined {
   return parsed === null ? undefined : parsed;
 }
 
-function parseAction(value: unknown): any | undefined {
+function parseAction(value: unknown): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
