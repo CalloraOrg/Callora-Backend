@@ -1,6 +1,7 @@
 {
   "name": "callora-backend",
   "version": "0.0.1",
+  "description": "Backend services for the Callora API marketplace.",
   "type": "module",
   "scripts": {
     "build": "tsc",
