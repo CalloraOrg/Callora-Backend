@@ -4,6 +4,7 @@ import * as schema from './schema.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { logger } from '../logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,7 +25,7 @@ export async function initializeDb() {
     `).get();
 
     if (!tableExists) {
-      console.log('Running initial migration...');
+      logger.info('Running initial migration...');
       const migrationSQL = readFileSync(
         join(__dirname, '..', '..', 'migrations', '0000_initial_apis_tables.sql'),
         'utf8'
@@ -35,14 +36,14 @@ export async function initializeDb() {
         if (statement.trim()) sqlite.exec(statement);
       }
       sqlite.exec('COMMIT');
-      console.log('✅ Initial migration completed');
+      logger.info('✅ Initial migration completed');
     }
 
     const developersExists = sqlite.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='developers'
     `).get();
     if (!developersExists) {
-      console.log('Running developers migration...');
+      logger.info('Running developers migration...');
       const devSQL = readFileSync(
         join(__dirname, '..', '..', 'migrations', '0004_create_developers.sql'),
         'utf8'
@@ -53,10 +54,10 @@ export async function initializeDb() {
         if (statement.trim()) sqlite.exec(statement);
       }
       sqlite.exec('COMMIT');
-      console.log('✅ Developers migration completed');
+      logger.info('✅ Developers migration completed');
     }
   } catch (error) {
-    console.error('Failed to run database migrations:', error);
+    logger.error('Failed to run database migrations:', error);
     throw error;
   }
 }

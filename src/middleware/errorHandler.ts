@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { isAppError } from '../errors/index.js';
+import { logger } from '../logger.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -38,8 +39,8 @@ export function errorHandler(
 
   // Log full error server-side (including stack in dev)
   if (isProduction) {
-    console.error('[errorHandler]', statusCode, message, err instanceof Error ? err.stack : String(err));
+    logger.error('[errorHandler]', statusCode, message, err instanceof Error ? err.stack : String(err));
   } else {
-    console.error('[errorHandler]', err);
+    logger.error('[errorHandler]', err);
   }
 }
