@@ -68,16 +68,12 @@ export class DrizzleApiRepository implements ApiRepository {
       conditions.push(eq(schema.apis.status, filters.status));
     }
 
-    let query = db.select().from(schema.apis).where(and(...conditions));
+    const baseQuery = db.select().from(schema.apis).where(and(...conditions));
 
-    if (typeof filters.limit === 'number') {
-      query = query.limit(filters.limit);
-    }
+    // Apply limit and offset if provided
+    const limit = filters.limit ?? 100;
+    const offset = filters.offset ?? 0;
 
-    if (typeof filters.offset === 'number') {
-      query = query.offset(filters.offset);
-    }
-
-    return query;
+    return baseQuery.limit(limit).offset(offset);
   }
 }
