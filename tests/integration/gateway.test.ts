@@ -3,17 +3,21 @@ import express from 'express';
 import { createTestDb } from '../helpers/db.js';
 import { randomUUID } from 'crypto';
 
-function buildGatewayApp(pool: any) {
+interface AuthRequest extends express.Request {
+  apiKeyId?: string;
+}
+
+function buildGatewayApp(pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }) {
   const app = express();
   app.use(express.json());
 
-  const apiKeyGuard = async (req: any, res: any, next: any) => {
+  const apiKeyGuard = async (req: AuthRequest, res: express.Response, next: express.NextFunction) => {
     const apiKey = req.headers['x-api-key'];
     if (!apiKey) {
       return res.status(401).json({ error: 'Missing API key' });
     }
 
-    const keyHash = Buffer.from(apiKey).toString('base64');
+    const keyHash = Buffer.from(apiKey as string).toString('base64');
     const result = await pool.query(
       `SELECT id, revoked FROM api_keys WHERE key_hash = $1`,
       [keyHash]
@@ -53,7 +57,7 @@ function buildGatewayApp(pool: any) {
 }
 
 describe('Gateway X-Api-Key auth', () => {
-  let db: any;
+  let db: { pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }; end: () => Promise<void> };
   let app: express.Express;
   let validKey: string;
   let validKeyId: string;

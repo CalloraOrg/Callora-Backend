@@ -5,7 +5,6 @@ import {
   Operation,
   Address,
   nativeToScVal,
-  xdr,
   BASE_FEE,
 } from '@stellar/stellar-sdk';
 
@@ -89,7 +88,7 @@ export class TransactionBuilderService {
     try {
       contractAddress = new Address(params.vaultContractId);
       userAddress = new Address(params.userPublicKey);
-    } catch (error) {
+    } catch {
       throw new InvalidContractIdError(params.vaultContractId);
     }
 

@@ -68,7 +68,7 @@ describe('AmountValidator', () => {
     });
 
     it('should reject non-string input', () => {
-      const result = AmountValidator.validateUsdcAmount(100 as any);
+      const result = AmountValidator.validateUsdcAmount(100 as unknown as string);
       assert.strictEqual(result.valid, false);
       assert.strictEqual(result.error, 'Amount must be a string');
     });

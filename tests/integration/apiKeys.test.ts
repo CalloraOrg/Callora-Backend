@@ -5,18 +5,27 @@ import { createTestDb } from '../helpers/db.js';
 import { signTestToken, TEST_JWT_SECRET } from '../helpers/jwt.js';
 import { randomUUID } from 'crypto';
 
-function buildApiKeysApp(pool: any) {
+interface JwtPayload {
+  userId: string;
+  walletAddress: string;
+}
+
+interface AuthRequest extends express.Request {
+  user?: JwtPayload;
+}
+
+function buildApiKeysApp(pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }) {
   const app = express();
   app.use(express.json());
 
-  const jwtGuard = (req: any, res: any, next: any) => {
+  const jwtGuard = (req: AuthRequest, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'No token provided' });
     }
     try {
       const token = authHeader.split(' ')[1];
-      const decoded = jwt.verify(token, TEST_JWT_SECRET);
+      const decoded = jwt.verify(token, TEST_JWT_SECRET) as JwtPayload;
       req.user = decoded;
       next();
     } catch {
@@ -24,7 +33,7 @@ function buildApiKeysApp(pool: any) {
     }
   };
 
-  app.post('/api/apis/:id/keys', jwtGuard, async (req: any, res) => {
+  app.post('/api/apis/:id/keys', jwtGuard, async (req: AuthRequest, res) => {
     const apiId = req.params.id;
     const rawKey = randomUUID();
     const keyHash = Buffer.from(rawKey).toString('base64');
@@ -33,7 +42,7 @@ function buildApiKeysApp(pool: any) {
       `INSERT INTO api_keys (id, user_id, api_id, key_hash)
        VALUES (gen_random_uuid(), $1, $2, $3)
        RETURNING id, api_id, created_at`,
-      [req.user.userId, apiId, keyHash]
+      [req.user?.userId, apiId, keyHash]
     );
 
     return res.status(201).json({
@@ -44,12 +53,12 @@ function buildApiKeysApp(pool: any) {
     });
   });
 
-  app.delete('/api/keys/:id', jwtGuard, async (req: any, res) => {
+  app.delete('/api/keys/:id', jwtGuard, async (req: AuthRequest, res) => {
     const result = await pool.query(
       `UPDATE api_keys SET revoked = TRUE
        WHERE id = $1 AND user_id = $2
        RETURNING id`,
-      [req.params.id, req.user.userId]
+      [req.params.id, req.user?.userId]
     );
 
     if (result.rows.length === 0) {
@@ -63,7 +72,7 @@ function buildApiKeysApp(pool: any) {
 }
 
 describe('API Key flows', () => {
-  let db: any;
+  let db: { pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }; end: () => Promise<void> };
   let app: express.Express;
   let token: string;
   const userId = '00000000-0000-0000-0000-000000000001';

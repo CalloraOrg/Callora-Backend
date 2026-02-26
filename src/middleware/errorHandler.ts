@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response } from 'express';
 import { isAppError } from '../errors/index.js';
 import { logger } from '../logger.js';
 
@@ -23,8 +23,7 @@ export interface ErrorResponseBody {
 export function errorHandler(
   err: unknown,
   _req: Request,
-  res: Response<ErrorResponseBody>,
-  _next: NextFunction
+  res: Response<ErrorResponseBody>
 ): void {
   const statusCode = isAppError(err) ? err.statusCode : 500;
   const message = err instanceof Error ? err.message : 'Internal server error';
