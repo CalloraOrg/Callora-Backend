@@ -22,7 +22,7 @@ export interface DepositPrepareResponse {
   amount: string;
   operation: {
     type: 'invoke_contract';
-    function: 'deposit';
+    function: string;
     args: Array<{
       type: string;
       value: string;

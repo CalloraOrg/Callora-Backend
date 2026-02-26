@@ -30,9 +30,9 @@ router.post('/', async (req: Request, res: Response) => {
 
     try {
         await validateWebhookUrl(url);
-    } catch (err) {
+    } catch (err: unknown) {
         if (err instanceof WebhookValidationError) {
-        return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+            return res.status(400).json({ error: err.message });
         }
         return res.status(500).json({ error: 'URL validation failed.' });
     }
@@ -60,7 +60,8 @@ router.get('/:developerId', (req: Request, res: Response) => {
         return res.status(404).json({ error: 'No webhook registered for this developer.' });
     }
     // Never expose the secret
-    const { secret: _s, ...safeConfig } = config;
+    const { secret, ...safeConfig } = config;
+    void secret;
     return res.json(safeConfig);
 });
 

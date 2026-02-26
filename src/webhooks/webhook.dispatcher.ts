@@ -1,6 +1,5 @@
 import axios from 'axios';
 import crypto from 'crypto';
-import { WebhookConfig, WebhookPayload } from './webhook.types';
 import { logger } from '../logger.js';
 import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 

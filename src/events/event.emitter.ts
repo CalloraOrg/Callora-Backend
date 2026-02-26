@@ -11,6 +11,9 @@ import { dispatchToAll } from '../webhooks/webhook.dispatcher.js';
 
 export const calloraEvents = new EventEmitter();
 
+const toPayloadData = (value: unknown): Record<string, unknown> =>
+    value as Record<string, unknown>;
+
 async function handleEvent(
     event: WebhookEventType,
     developerId: string,
@@ -36,20 +39,20 @@ async function handleEvent(
 calloraEvents.on(
     'new_api_call',
     (developerId: string, data: NewApiCallData) => {
-        handleEvent('new_api_call', developerId, data as unknown as Record<string, unknown>);
+        handleEvent('new_api_call', developerId, toPayloadData(data));
     }
 );
 
 calloraEvents.on(
     'settlement_completed',
     (developerId: string, data: SettlementCompletedData) => {
-        handleEvent('settlement_completed', developerId, data as unknown as Record<string, unknown>);
+        handleEvent('settlement_completed', developerId, toPayloadData(data));
     }
 );
 
 calloraEvents.on(
     'low_balance_alert',
     (developerId: string, data: LowBalanceAlertData) => {
-        handleEvent('low_balance_alert', developerId, data as unknown as Record<string, unknown>);
+        handleEvent('low_balance_alert', developerId, toPayloadData(data));
     }
 );

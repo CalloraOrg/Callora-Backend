@@ -8,29 +8,6 @@ export interface ApiListFilters {
   offset?: number;
 }
 
-export interface ApiRepository {
-  listByDeveloper(developerId: number, filters?: ApiListFilters): Promise<Api[]>;
-}
-
-export const defaultApiRepository: ApiRepository = {
-  async listByDeveloper(developerId, filters = {}) {
-    let query = db.select().from(schema.apis).where(eq(schema.apis.developer_id, developerId));
-
-    if (filters.status) {
-      query = query.where(eq(schema.apis.status, filters.status));
-    }
-
-    if (typeof filters.limit === 'number') {
-      query = query.limit(filters.limit);
-    }
-
-    if (typeof filters.offset === 'number') {
-      query = query.offset(filters.offset);
-    }
-
-    return query;
-  },
-};
 export interface ApiDeveloperInfo {
   name: string | null;
   website: string | null;
@@ -56,9 +33,33 @@ export interface ApiEndpointInfo {
 }
 
 export interface ApiRepository {
-  findById(id: number): Promise<ApiDetails | null>;
-  getEndpoints(apiId: number): Promise<ApiEndpointInfo[]>;
+  listByDeveloper?(developerId: number, filters?: ApiListFilters): Promise<Api[]>;
+  findById?(id: number): Promise<ApiDetails | null>;
+  getEndpoints?(apiId: number): Promise<ApiEndpointInfo[]>;
 }
+
+export const defaultApiRepository: ApiRepository = {
+  async listByDeveloper(developerId, filters = {}) {
+    let results = await db
+      .select()
+      .from(schema.apis)
+      .where(eq(schema.apis.developer_id, developerId));
+
+    if (filters.status) {
+      results = results.filter((api) => api.status === filters.status);
+    }
+
+    if (typeof filters.offset === 'number') {
+      results = results.slice(filters.offset);
+    }
+
+    if (typeof filters.limit === 'number') {
+      results = results.slice(0, filters.limit);
+    }
+
+    return results;
+  },
+};
 
 // --- In-Memory implementation (for testing) ---
 

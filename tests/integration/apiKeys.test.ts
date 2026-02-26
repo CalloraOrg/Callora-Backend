@@ -1,30 +1,56 @@
 import request from 'supertest';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { createTestDb } from '../helpers/db.js';
 import { signTestToken, TEST_JWT_SECRET } from '../helpers/jwt.js';
 import { randomUUID } from 'crypto';
 
-function buildApiKeysApp(pool: any) {
+interface JwtClaims {
+  userId: string;
+  walletAddress: string;
+}
+
+interface RequestWithUser extends Request {
+  user?: JwtClaims;
+}
+
+interface QueryResultRow {
+  id: string;
+  api_id: string;
+  created_at?: string;
+}
+
+interface Queryable {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: QueryResultRow[] }>;
+}
+
+type TestDb = ReturnType<typeof createTestDb>;
+
+function buildApiKeysApp(pool: Queryable) {
   const app = express();
   app.use(express.json());
 
-  const jwtGuard = (req: any, res: any, next: any) => {
+  const jwtGuard = (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'No token provided' });
     }
     try {
       const token = authHeader.split(' ')[1];
-      const decoded = jwt.verify(token, TEST_JWT_SECRET);
-      req.user = decoded;
+      const decoded = jwt.verify(token, TEST_JWT_SECRET) as JwtClaims;
+      (req as RequestWithUser).user = decoded;
       next();
     } catch {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
   };
 
-  app.post('/api/apis/:id/keys', jwtGuard, async (req: any, res) => {
+  app.post('/api/apis/:id/keys', jwtGuard, async (req: Request, res: Response) => {
+    const authenticatedUser = (req as RequestWithUser).user;
+    if (!authenticatedUser) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
     const apiId = req.params.id;
     const rawKey = randomUUID();
     const keyHash = Buffer.from(rawKey).toString('base64');
@@ -33,7 +59,7 @@ function buildApiKeysApp(pool: any) {
       `INSERT INTO api_keys (id, user_id, api_id, key_hash)
        VALUES (gen_random_uuid(), $1, $2, $3)
        RETURNING id, api_id, created_at`,
-      [req.user.userId, apiId, keyHash]
+      [authenticatedUser.userId, apiId, keyHash]
     );
 
     return res.status(201).json({
@@ -44,12 +70,17 @@ function buildApiKeysApp(pool: any) {
     });
   });
 
-  app.delete('/api/keys/:id', jwtGuard, async (req: any, res) => {
+  app.delete('/api/keys/:id', jwtGuard, async (req: Request, res: Response) => {
+    const authenticatedUser = (req as RequestWithUser).user;
+    if (!authenticatedUser) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
     const result = await pool.query(
       `UPDATE api_keys SET revoked = TRUE
        WHERE id = $1 AND user_id = $2
        RETURNING id`,
-      [req.params.id, req.user.userId]
+      [req.params.id, authenticatedUser.userId]
     );
 
     if (result.rows.length === 0) {
@@ -63,7 +94,7 @@ function buildApiKeysApp(pool: any) {
 }
 
 describe('API Key flows', () => {
-  let db: any;
+  let db: TestDb;
   let app: express.Express;
   let token: string;
   const userId = '00000000-0000-0000-0000-000000000001';

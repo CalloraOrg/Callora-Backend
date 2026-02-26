@@ -1,16 +1,32 @@
 import request from 'supertest';
-import express from 'express';
+import express, { type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { createTestDb } from '../helpers/db.js';
 import { TEST_JWT_SECRET } from '../helpers/jwt.js';
 
 const mockVerifySignature = jest.fn();
 
-function buildAuthApp(pool: any) {
+interface UserRow {
+  id: string;
+  wallet_address: string;
+}
+
+interface Queryable {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: UserRow[] }>;
+}
+
+interface JwtClaims {
+  userId: string;
+  walletAddress: string;
+}
+
+type TestDb = ReturnType<typeof createTestDb>;
+
+function buildAuthApp(pool: Queryable) {
   const app = express();
   app.use(express.json());
 
-  app.post('/auth/wallet', async (req, res) => {
+  app.post('/auth/wallet', async (req: Request, res: Response) => {
     const { walletAddress, signature, message } = req.body;
 
     if (!walletAddress || !signature || !message) {
@@ -44,7 +60,7 @@ function buildAuthApp(pool: any) {
 }
 
 describe('POST /auth/wallet', () => {
-  let db: any;
+  let db: TestDb;
   let app: express.Express;
 
   beforeEach(() => {
@@ -68,7 +84,7 @@ describe('POST /auth/wallet', () => {
     expect(res.body.token).toBeDefined();
     expect(res.body.user.wallet_address).toBe('GDTEST123STELLAR');
 
-    const decoded = jwt.verify(res.body.token, TEST_JWT_SECRET) as any;
+    const decoded = jwt.verify(res.body.token, TEST_JWT_SECRET) as JwtClaims;
     expect(decoded.walletAddress).toBe('GDTEST123STELLAR');
   });
 

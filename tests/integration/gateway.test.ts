@@ -1,13 +1,29 @@
 import request from 'supertest';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import { createTestDb } from '../helpers/db.js';
 import { randomUUID } from 'crypto';
 
-function buildGatewayApp(pool: any) {
+interface KeyLookupRow {
+  id: string;
+  revoked: boolean;
+  count?: string;
+}
+
+interface Queryable {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: KeyLookupRow[] }>;
+}
+
+interface RequestWithApiKeyId extends Request {
+  apiKeyId?: string;
+}
+
+type TestDb = ReturnType<typeof createTestDb>;
+
+function buildGatewayApp(pool: Queryable) {
   const app = express();
   app.use(express.json());
 
-  const apiKeyGuard = async (req: any, res: any, next: any) => {
+  const apiKeyGuard = async (req: Request, res: Response, next: NextFunction) => {
     const apiKey = req.headers['x-api-key'];
     if (!apiKey) {
       return res.status(401).json({ error: 'Missing API key' });
@@ -32,7 +48,7 @@ function buildGatewayApp(pool: any) {
       [result.rows[0].id]
     );
 
-    req.apiKeyId = result.rows[0].id;
+    (req as RequestWithApiKeyId).apiKeyId = result.rows[0].id;
     next();
   };
 
@@ -53,7 +69,7 @@ function buildGatewayApp(pool: any) {
 }
 
 describe('Gateway X-Api-Key auth', () => {
-  let db: any;
+  let db: TestDb;
   let app: express.Express;
   let validKey: string;
   let validKeyId: string;

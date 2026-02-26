@@ -1,40 +1,64 @@
 import request from 'supertest';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { createTestDb } from '../helpers/db.js';
 import { signTestToken, signExpiredToken, TEST_JWT_SECRET } from '../helpers/jwt.js';
 
-function buildProtectedApp(pool: any) {
+interface JwtClaims {
+  userId: string;
+  walletAddress: string;
+}
+
+interface RequestWithUser extends Request {
+  user?: JwtClaims;
+}
+
+interface UsageRow {
+  calls: string;
+}
+
+interface Queryable {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: UsageRow[] }>;
+}
+
+type TestDb = ReturnType<typeof createTestDb>;
+
+function buildProtectedApp(pool: Queryable) {
   const app = express();
   app.use(express.json());
 
-  const jwtGuard = (req: any, res: any, next: any) => {
+  const jwtGuard = (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'No token provided' });
     }
     try {
       const token = authHeader.split(' ')[1];
-      const decoded = jwt.verify(token, TEST_JWT_SECRET);
-      req.user = decoded;
+      const decoded = jwt.verify(token, TEST_JWT_SECRET) as JwtClaims;
+      (req as RequestWithUser).user = decoded;
       next();
     } catch {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
   };
 
-  app.get('/api/usage', jwtGuard, async (req: any, res) => {
+  app.get('/api/usage', jwtGuard, async (req: Request, res: Response) => {
+    const authenticatedUser = (req as RequestWithUser).user;
+    if (!authenticatedUser) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
     const result = await pool.query(
       `SELECT COUNT(*) as calls FROM usage_logs
        WHERE api_key_id IN (
          SELECT id FROM api_keys WHERE user_id = $1
        )`,
-      [req.user.userId]
+      [authenticatedUser.userId]
     );
     return res.status(200).json({
       calls: parseInt(result.rows[0].calls),
       period: 'current',
-      wallet: req.user.walletAddress,
+      wallet: authenticatedUser.walletAddress,
     });
   });
 
@@ -42,7 +66,7 @@ function buildProtectedApp(pool: any) {
 }
 
 describe('GET /api/usage - JWT protected', () => {
-  let db: any;
+  let db: TestDb;
   let app: express.Express;
 
   beforeEach(() => {

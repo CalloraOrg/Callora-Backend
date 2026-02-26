@@ -7,7 +7,7 @@ export interface ValidationResult {
 export class AmountValidator {
   private static readonly USDC_DECIMALS = 7;
   private static readonly MAX_AMOUNT = 1_000_000_000;
-  private static readonly AMOUNT_PATTERN = /^\d+\.\d{7}$/;
+  private static readonly AMOUNT_PATTERN = /^-?\d+\.\d{7}$/;
 
   static validateUsdcAmount(amount: string): ValidationResult {
     // Step 1: Check if string is provided

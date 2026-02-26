@@ -1,32 +1,35 @@
-import express from 'express';
 import cors from 'cors';
+import express from 'express';
 
+import { DepositController } from './controllers/depositController.js';
+import { apiStatusEnum, type ApiStatus } from './db/schema.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { requestIdMiddleware } from './middleware/requestId.js';
+import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
+import {
+  defaultApiRepository,
+  type ApiEndpointInfo,
+  type ApiListFilters,
+  type ApiRepository,
+} from './repositories/apiRepository.js';
+import {
+  defaultDeveloperRepository,
+  type DeveloperRepository,
+} from './repositories/developerRepository.js';
 import {
   InMemoryUsageEventsRepository,
   type GroupBy,
   type UsageEventsRepository,
 } from './repositories/usageEventsRepository.js';
-import { defaultApiRepository, type ApiRepository } from './repositories/apiRepository.js';
-import { defaultDeveloperRepository, type DeveloperRepository } from './repositories/developerRepository.js';
-import { apiStatusEnum, type ApiStatus } from './db/schema.js';
-import type { ApiRepository } from './repositories/apiRepository.js';
-import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
-import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
-import { errorHandler } from './middleware/errorHandler.js';
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
-import { DepositController } from './controllers/depositController.js';
+import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
-
-interface AppDependencies {
-  usageEventsRepository: UsageEventsRepository;
-  vaultRepository: VaultRepository;
-import { requestIdMiddleware } from './middleware/requestId.js';
-import { requestLogger } from './middleware/logging.js';
 
 interface AppDependencies {
   usageEventsRepository: UsageEventsRepository;
   apiRepository: ApiRepository;
   developerRepository: DeveloperRepository;
+  vaultRepository: VaultRepository;
 }
 
 const isValidGroupBy = (value: string): value is GroupBy =>
@@ -45,7 +48,7 @@ const parseDate = (value: unknown): Date | null => {
 };
 
 const parseNonNegativeIntegerParam = (
-  value: unknown
+  value: unknown,
 ): { value?: number; invalid: boolean } => {
   if (typeof value !== 'string' || value.trim() === '') {
     return { value: undefined, invalid: false };
@@ -62,47 +65,36 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
+  const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
+  const developerRepository =
+    dependencies?.developerRepository ?? defaultDeveloperRepository;
   const vaultRepository =
     dependencies?.vaultRepository ?? new InMemoryVaultRepository();
 
-  // Initialize deposit controller
   const transactionBuilder = new TransactionBuilderService();
   const depositController = new DepositController(vaultRepository, transactionBuilder);
-  const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
-  const developerRepository = dependencies?.developerRepository ?? defaultDeveloperRepository;
 
   app.use(requestIdMiddleware);
-  // Lazy singleton for production Drizzle repo; injected repo is used in tests.
-  const _injectedApiRepo = dependencies?.apiRepository;
-  let _drizzleApiRepo: ApiRepository | undefined;
-  async function getApiRepo(): Promise<ApiRepository> {
-    if (_injectedApiRepo) return _injectedApiRepo;
-    if (!_drizzleApiRepo) {
-      const { DrizzleApiRepository } = await import('./repositories/apiRepository.drizzle.js');
-      _drizzleApiRepo = new DrizzleApiRepository();
-    }
-    return _drizzleApiRepo;
-  }
 
-  app.use(requestLogger);
   const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173')
     .split(',')
-    .map((o) => o.trim());
+    .map((origin) => origin.trim());
 
   app.use(
     cors({
       origin(origin, callback) {
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
+          return;
         }
+        callback(new Error('Not allowed by CORS'));
       },
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
       credentials: true,
     }),
   );
+
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => {
@@ -114,23 +106,26 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
 
   app.get('/api/apis/:id', async (req, res) => {
-    const rawId = req.params.id;
-    const id = Number(rawId);
-
+    const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: 'id must be a positive integer' });
       return;
     }
 
-    const apiRepo = await getApiRepo();
-    const api = await apiRepo.findById(id);
+    const findById = apiRepository.findById?.bind(apiRepository);
+    const getEndpoints = apiRepository.getEndpoints?.bind(apiRepository);
+    if (!findById || !getEndpoints) {
+      res.status(501).json({ error: 'API details lookup is not configured' });
+      return;
+    }
+
+    const api = await findById(id);
     if (!api) {
       res.status(404).json({ error: 'API not found or not active' });
       return;
     }
 
-    const endpoints = await apiRepo.getEndpoints(id);
-
+    const endpoints = await getEndpoints(id);
     res.json({
       id: api.id,
       name: api.name,
@@ -140,11 +135,11 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       category: api.category,
       status: api.status,
       developer: api.developer,
-      endpoints: endpoints.map((ep) => ({
-        path: ep.path,
-        method: ep.method,
-        price_per_call_usdc: ep.price_per_call_usdc,
-        description: ep.description,
+      endpoints: endpoints.map((endpoint: ApiEndpointInfo) => ({
+        path: endpoint.path,
+        method: endpoint.method,
+        price_per_call_usdc: endpoint.price_per_call_usdc,
+        description: endpoint.description,
       })),
     });
   });
@@ -153,118 +148,148 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     res.json({ calls: 0, period: 'current' });
   });
 
-  app.get('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
-    const user = res.locals.authenticatedUser;
-    if (!user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const developer = await developerRepository.findByUserId(user.id);
-    if (!developer) {
-      res.status(404).json({ error: 'Developer profile not found' });
-      return;
-    }
-
-    const statusParam = typeof req.query.status === 'string' ? req.query.status : undefined;
-    let statusFilter: ApiStatus | undefined;
-    if (statusParam) {
-      if (!apiStatusEnum.includes(statusParam as ApiStatus)) {
-        res
-          .status(400)
-          .json({ error: `status must be one of: ${apiStatusEnum.join(', ')}` });
+  app.get(
+    '/api/developers/apis',
+    requireAuth,
+    async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        res.status(401).json({ error: 'Unauthorized' });
         return;
       }
-      statusFilter = statusParam as ApiStatus;
-    }
 
-    const limitParam = parseNonNegativeIntegerParam(req.query.limit);
-    if (limitParam.invalid) {
-      res.status(400).json({ error: 'limit must be a non-negative integer' });
-      return;
-    }
+      const developer = await developerRepository.findByUserId(user.id);
+      if (!developer) {
+        res.status(404).json({ error: 'Developer profile not found' });
+        return;
+      }
 
-    const offsetParam = parseNonNegativeIntegerParam(req.query.offset);
-    if (offsetParam.invalid) {
-      res.status(400).json({ error: 'offset must be a non-negative integer' });
-      return;
-    }
+      const statusParam =
+        typeof req.query.status === 'string' ? req.query.status : undefined;
+      let statusFilter: ApiStatus | undefined;
+      if (statusParam) {
+        if (!apiStatusEnum.includes(statusParam as ApiStatus)) {
+          res
+            .status(400)
+            .json({ error: `status must be one of: ${apiStatusEnum.join(', ')}` });
+          return;
+        }
+        statusFilter = statusParam as ApiStatus;
+      }
 
-    const apis = await apiRepository.listByDeveloper(developer.id, {
-      status: statusFilter,
-      ...(typeof limitParam.value === 'number' ? { limit: limitParam.value } : {}),
-      ...(typeof offsetParam.value === 'number' ? { offset: offsetParam.value } : {}),
-    });
+      const limitParam = parseNonNegativeIntegerParam(req.query.limit);
+      if (limitParam.invalid) {
+        res.status(400).json({ error: 'limit must be a non-negative integer' });
+        return;
+      }
 
-    const usageStats = await usageEventsRepository.aggregateByDeveloper(user.id);
-    const statsByApi = new Map(usageStats.map((stat) => [stat.apiId, stat]));
+      const offsetParam = parseNonNegativeIntegerParam(req.query.offset);
+      if (offsetParam.invalid) {
+        res.status(400).json({ error: 'offset must be a non-negative integer' });
+        return;
+      }
 
-    const payload = apis.map((api) => {
-      const stats = statsByApi.get(String(api.id));
-      const entry: { id: number; name: string; status: ApiStatus; callCount: number; revenue?: string } = {
-        id: api.id,
-        name: api.name,
-        status: api.status,
-        callCount: stats?.calls ?? 0,
+      const listByDeveloper = apiRepository.listByDeveloper?.bind(apiRepository);
+      if (!listByDeveloper) {
+        res.status(501).json({ error: 'Developer API listing is not configured' });
+        return;
+      }
+
+      const filters: ApiListFilters = {
+        status: statusFilter,
+        ...(typeof limitParam.value === 'number' ? { limit: limitParam.value } : {}),
+        ...(typeof offsetParam.value === 'number' ? { offset: offsetParam.value } : {}),
       };
-      if (stats) {
-        entry.revenue = stats.revenue.toString();
-      }
-      return entry;
-    });
 
-    res.json({ data: payload });
-  });
+      const apis = await listByDeveloper(developer.id, filters);
 
-  app.get('/api/developers/analytics', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
-    const user = res.locals.authenticatedUser;
-    if (!user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+      const usageStats = await usageEventsRepository.aggregateByDeveloper(user.id);
+      const statsByApi = new Map(usageStats.map((stat) => [stat.apiId, stat]));
 
-    const groupBy = req.query.groupBy ?? 'day';
-    if (typeof groupBy !== 'string' || !isValidGroupBy(groupBy)) {
-      res.status(400).json({ error: 'groupBy must be one of: day, week, month' });
-      return;
-    }
+      const payload = apis.map((api) => {
+        const stats = statsByApi.get(String(api.id));
+        const entry: {
+          id: number;
+          name: string;
+          status: ApiStatus;
+          callCount: number;
+          revenue?: string;
+        } = {
+          id: api.id,
+          name: api.name,
+          status: api.status,
+          callCount: stats?.calls ?? 0,
+        };
 
-    const from = parseDate(req.query.from);
-    const to = parseDate(req.query.to);
-    if (!from || !to) {
-      res.status(400).json({ error: 'from and to are required ISO date values' });
-      return;
-    }
-    if (from > to) {
-      res.status(400).json({ error: 'from must be before or equal to to' });
-      return;
-    }
+        if (stats) {
+          entry.revenue = stats.revenue.toString();
+        }
 
-    const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
-    if (apiId) {
-      const ownsApi = await usageEventsRepository.developerOwnsApi(user.id, apiId);
-      if (!ownsApi) {
-        res.status(403).json({ error: 'Forbidden: API does not belong to authenticated developer' });
+        return entry;
+      });
+
+      res.json({ data: payload });
+    },
+  );
+
+  app.get(
+    '/api/developers/analytics',
+    requireAuth,
+    async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        res.status(401).json({ error: 'Unauthorized' });
         return;
       }
-    }
 
-    const includeTop = req.query.includeTop === 'true';
-    const events = await usageEventsRepository.findByDeveloper({
-      developerId: user.id,
-      from,
-      to,
-      apiId,
-    });
+      const groupBy = req.query.groupBy ?? 'day';
+      if (typeof groupBy !== 'string' || !isValidGroupBy(groupBy)) {
+        res.status(400).json({ error: 'groupBy must be one of: day, week, month' });
+        return;
+      }
 
-    const analytics = buildDeveloperAnalytics(events, groupBy, includeTop);
-    res.json(analytics);
-  });
+      const from = parseDate(req.query.from);
+      const to = parseDate(req.query.to);
+      if (!from || !to) {
+        res.status(400).json({ error: 'from and to are required ISO date values' });
+        return;
+      }
+      if (from > to) {
+        res.status(400).json({ error: 'from must be before or equal to to' });
+        return;
+      }
 
-  // Deposit transaction preparation endpoint
-  app.post('/api/vault/deposit/prepare', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>) => {
-    depositController.prepareDeposit(req, res);
-  });
+      const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
+      if (apiId) {
+        const ownsApi = await usageEventsRepository.developerOwnsApi(user.id, apiId);
+        if (!ownsApi) {
+          res
+            .status(403)
+            .json({ error: 'Forbidden: API does not belong to authenticated developer' });
+          return;
+        }
+      }
+
+      const includeTop = req.query.includeTop === 'true';
+      const events = await usageEventsRepository.findByDeveloper({
+        developerId: user.id,
+        from,
+        to,
+        apiId,
+      });
+
+      const analytics = buildDeveloperAnalytics(events, groupBy, includeTop);
+      res.json(analytics);
+    },
+  );
+
+  app.post(
+    '/api/vault/deposit/prepare',
+    requireAuth,
+    (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+      depositController.prepareDeposit(req, res);
+    },
+  );
 
   app.use(errorHandler);
   return app;

@@ -26,6 +26,8 @@ export function errorHandler(
   res: Response<ErrorResponseBody>,
   _next: NextFunction
 ): void {
+  void _req;
+  void _next;
   const statusCode = isAppError(err) ? err.statusCode : 500;
   const message = err instanceof Error ? err.message : 'Internal server error';
   const code = isAppError(err) ? err.code : undefined;
