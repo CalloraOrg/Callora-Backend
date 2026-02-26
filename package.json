@@ -12,10 +12,12 @@
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:jest": "jest --runInBand",
     "test:coverage": "node --import tsx --test --experimental-test-coverage \"src/**/*.test.ts\"",
     "validate:issue-9": "node scripts/validate-issue-9.mjs"
   },
   "dependencies": {
+    "@prisma/client": "^5.22.0",
     "axios": "^1.13.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^9.2.2",
@@ -45,8 +47,12 @@
     "@typescript-eslint/parser": "^8.56.1",
     "drizzle-kit": "^0.20.7",
     "eslint": "^10.0.2",
+    "jest": "^30.2.0",
+    "jest-mock-extended": "^4.0.0",
     "pg-mem": "^3.0.13",
+    "prisma": "^5.22.0",
     "supertest": "^7.2.2",
+    "ts-jest": "^29.4.6",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3"
   }
