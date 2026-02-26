@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { logger } from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,13 +27,13 @@ try {
   
   db.exec('COMMIT');
   
-  console.log('✅ Database migration completed successfully');
-  console.log('Tables created: apis, api_endpoints');
-  console.log('Indexes created: idx_api_endpoints_api_id, idx_apis_developer_id, idx_apis_status');
+  logger.info('✅ Database migration completed successfully');
+  logger.info('Tables created: apis, api_endpoints');
+  logger.info('Indexes created: idx_api_endpoints_api_id, idx_apis_developer_id, idx_apis_status');
   
 } catch (error) {
   db.exec('ROLLBACK');
-  console.error('❌ Migration failed:', error);
+  logger.error('❌ Migration failed:', error);
   throw error;
 } finally {
   db.close();
