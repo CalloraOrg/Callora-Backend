@@ -1,10 +1,9 @@
-import express from 'express';
-import { metricsMiddleware, metricsEndpoint } from './metrics';
+import { fileURLToPath } from 'node:url';
+import { createApp } from './app.js';
+import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 
-const app = express();
+const app = createApp();
 const PORT = process.env.PORT ?? 3000;
-
-app.use(express.json());
 
 // Inject the metrics middleware globally to track all incoming requests
 app.use(metricsMiddleware);
@@ -12,18 +11,11 @@ app.use(metricsMiddleware);
 // Register the securely guarded metrics endpoint
 app.get('/api/metrics', metricsEndpoint);
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'callora-backend' });
-});
+// Execute the server only if this file is run directly
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  app.listen(PORT, () => {
+    console.log(`Callora backend listening on http://localhost:${PORT}`);
+  });
+}
 
-app.get('/api/apis', (_req, res) => {
-  res.json({ apis: [] });
-});
-
-app.get('/api/usage', (_req, res) => {
-  res.json({ calls: 0, period: 'current' });
-});
-
-app.listen(PORT, () => {
-  console.log(`Callora backend listening on http://localhost:${PORT}`);
-});
+export default app;
