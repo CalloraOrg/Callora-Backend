@@ -1,18 +1,20 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
 import { ApiKeyRepository } from './apiKeyRepository.js';
 
-describe('ApiKeyRepository', () => {
-  it('creates a key and finds by prefix', () => {
+test('ApiKeyRepository creates a key and finds by prefix', () => {
     const repository = new ApiKeyRepository();
 
     const created = repository.create('user-1', 'api-1', 'hash-1', 'prefix01', ['read'], 100);
     const byPrefix = repository.findByKeyPrefix('prefix01');
 
-    expect(created.id).toBeTruthy();
-    expect(byPrefix).toHaveLength(1);
-    expect(byPrefix[0]?.id).toBe(created.id);
-  });
+    assert.ok(created.id);
+    assert.equal(byPrefix.length, 1);
+    assert.equal(byPrefix[0]?.id, created.id);
+});
 
-  it('finds keys by user and api', () => {
+test('ApiKeyRepository finds keys by user and api', () => {
     const repository = new ApiKeyRepository();
 
     repository.create('user-1', 'api-1', 'hash-1', 'prefix01', ['read'], 100);
@@ -21,39 +23,38 @@ describe('ApiKeyRepository', () => {
 
     const records = repository.findByUserAndApi('user-1', 'api-1');
 
-    expect(records).toHaveLength(2);
-    expect(records.every((record) => record.apiId === 'api-1')).toBe(true);
-  });
+    assert.equal(records.length, 2);
+    assert.equal(records.every((record) => record.apiId === 'api-1'), true);
+});
 
-  it('revoke sets revokedAt and excludes key from lookups', () => {
+test('ApiKeyRepository revoke sets revokedAt and excludes key from lookups', () => {
     const repository = new ApiKeyRepository();
     const created = repository.create('user-1', 'api-1', 'hash-1', 'prefix01', ['read'], 100);
 
     const revoked = repository.revoke(created.id);
 
-    expect(revoked).not.toBeNull();
-    expect(revoked?.revokedAt).not.toBeNull();
-    expect(repository.findByKeyPrefix('prefix01')).toHaveLength(0);
-    expect(repository.findByUserAndApi('user-1', 'api-1')).toHaveLength(0);
-  });
+    assert.notEqual(revoked, null);
+    assert.notEqual(revoked?.revokedAt, null);
+    assert.equal(repository.findByKeyPrefix('prefix01').length, 0);
+    assert.equal(repository.findByUserAndApi('user-1', 'api-1').length, 0);
+});
 
-  it('recordUsage increments usage and updates lastUsedAt', () => {
+test('ApiKeyRepository recordUsage increments usage and updates lastUsedAt', () => {
     const repository = new ApiKeyRepository();
     const created = repository.create('user-1', 'api-1', 'hash-1', 'prefix01', ['read'], 100);
 
     const updated = repository.recordUsage(created.id);
 
-    expect(updated).not.toBeNull();
-    expect(updated?.usageCount).toBe(1);
-    expect(updated?.lastUsedAt).not.toBeNull();
-  });
+    assert.notEqual(updated, null);
+    assert.equal(updated?.usageCount, 1);
+    assert.notEqual(updated?.lastUsedAt, null);
+});
 
-  it('recordUsage returns null for revoked key', () => {
+test('ApiKeyRepository recordUsage returns null for revoked key', () => {
     const repository = new ApiKeyRepository();
     const created = repository.create('user-1', 'api-1', 'hash-1', 'prefix01', ['read'], 100);
 
     repository.revoke(created.id);
 
-    expect(repository.recordUsage(created.id)).toBeNull();
-  });
+    assert.equal(repository.recordUsage(created.id), null);
 });
