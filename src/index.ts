@@ -15,15 +15,10 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.get('/api/apis', (_req, res) => {
-  res.json({ apis: [] });
-});
+const app = createApp();
+const PORT = process.env.PORT ?? 3000;
 
-app.get('/api/usage', (_req, res) => {
-  res.json({ calls: 0, period: 'current' });
-});
-
-if (process.env.NODE_ENV !== 'test') {
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   app.listen(PORT, () => {
     console.log(`Callora backend listening on http://localhost:${PORT}`);
   });
