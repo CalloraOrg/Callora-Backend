@@ -27,6 +27,7 @@ import { performHealthCheck, type HealthCheckConfig } from './services/healthChe
 import { parsePagination, paginatedResponse } from './lib/pagination.js';
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
 import { DepositController } from './controllers/depositController.js';
+import { VaultController } from './controllers/vaultController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { requestLogger } from './middleware/logging.js';
@@ -80,9 +81,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
   const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
 
-  // Initialize deposit controller
+  // Initialize deposit and vault controllers
   const transactionBuilder = new TransactionBuilderService();
   const depositController = new DepositController(vaultRepository, transactionBuilder);
+  const vaultController = new VaultController(vaultRepository);
   const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
   const developerRepository = dependencies?.developerRepository ?? defaultDeveloperRepository;
 
@@ -306,6 +308,11 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   // Deposit transaction preparation endpoint
   app.post('/api/vault/deposit/prepare', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>) => {
     depositController.prepareDeposit(req, res);
+  });
+
+  // Vault balance endpoint
+  app.get('/api/vault/balance', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+    vaultController.getBalance(req, res);
   });
 
   // POST /api/developers/apis — publish a new API (authenticated)
