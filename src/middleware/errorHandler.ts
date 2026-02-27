@@ -24,7 +24,7 @@ export function errorHandler(
   err: unknown,
   _req: Request,
   res: Response<ErrorResponseBody>,
-  _next: NextFunction
+  _next: NextFunction // eslint-disable-line @typescript-eslint/no-unused-vars
 ): void {
   const statusCode = isAppError(err) ? err.statusCode : 500;
   const message = err instanceof Error ? err.message : 'Internal server error';

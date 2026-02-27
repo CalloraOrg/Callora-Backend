@@ -30,7 +30,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     try {
         await validateWebhookUrl(url);
-    } catch (err) {
+    } catch (err: unknown) {
         if (err instanceof WebhookValidationError) {
         return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
         }
@@ -60,7 +60,9 @@ router.get('/:developerId', (req: Request, res: Response) => {
         return res.status(404).json({ error: 'No webhook registered for this developer.' });
     }
     // Never expose the secret
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { secret: _s, ...safeConfig } = config;
+    const { secret: _s, ...safeConfig } = config; // eslint-disable-line @typescript-eslint/no-unused-vars
     return res.json(safeConfig);
 });
 

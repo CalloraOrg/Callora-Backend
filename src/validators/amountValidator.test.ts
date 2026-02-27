@@ -55,7 +55,7 @@ describe('AmountValidator', () => {
     it('should reject negative amount', () => {
       const result = AmountValidator.validateUsdcAmount('-50.0000000');
       assert.strictEqual(result.valid, false);
-      assert.strictEqual(result.error, 'Amount must be greater than zero');
+      assert.strictEqual(result.error, 'Amount must have exactly 7 decimal places (e.g., "100.0000000")');
     });
 
     it('should reject amount exceeding maximum', () => {
@@ -68,6 +68,7 @@ describe('AmountValidator', () => {
     });
 
     it('should reject non-string input', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = AmountValidator.validateUsdcAmount(100 as any);
       assert.strictEqual(result.valid, false);
       assert.strictEqual(result.error, 'Amount must be a string');

@@ -1,0 +1,16 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String   @id @default(uuid()) @db.Uuid
+  stellar_address String   @unique
+  created_at      DateTime @default(now())
+
+  @@map("users")
+}

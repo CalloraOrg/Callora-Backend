@@ -66,8 +66,8 @@ const developerProfile: Developer = {
   website: null,
   description: null,
   category: null,
-  created_at: 1,
-  updated_at: 1,
+  created_at: new Date(1000),
+  updated_at: new Date(1000),
 };
 
 const sampleApis: Api[] = [
@@ -80,8 +80,8 @@ const sampleApis: Api[] = [
     logo_url: null,
     category: 'search',
     status: 'active',
-    created_at: 1,
-    updated_at: 1,
+    created_at: new Date(1000),
+    updated_at: new Date(1000),
   },
   {
     id: 102,
@@ -92,8 +92,8 @@ const sampleApis: Api[] = [
     logo_url: null,
     category: 'chat',
     status: 'active',
-    created_at: 1,
-    updated_at: 1,
+    created_at: new Date(1000),
+    updated_at: new Date(1000),
   },
   {
     id: 103,
@@ -104,8 +104,8 @@ const sampleApis: Api[] = [
     logo_url: null,
     category: 'archive',
     status: 'archived',
-    created_at: 1,
-    updated_at: 1,
+    created_at: new Date(1000),
+    updated_at: new Date(1000),
   },
 ];
 
@@ -124,6 +124,14 @@ class FakeApiRepository implements ApiRepository {
       results = results.slice(0, filters.limit);
     }
     return results;
+  }
+
+  async findById() {
+    return null;
+  }
+
+  async getEndpoints() {
+    return [];
   }
 }
 
@@ -309,6 +317,8 @@ test('GET /api/developers/apis lists APIs with stats, filters, and pagination', 
   assert.deepEqual(filtered.body.data, [
     { id: 103, name: 'Archived API', status: 'archived', callCount: 0 },
   ]);
+});
+
 // ── GET /api/apis/:id ────────────────────────────────────────────────────────
 
 const buildApiRepo = () => {
