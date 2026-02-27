@@ -11,6 +11,11 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:unit": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:integration": "node --import tsx --test \"tests/integration/**/*.test.ts\"",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage \"src/**/*.test.ts\" \"tests/integration/**/*.test.ts\"",
+    "test:all": "npm run test:unit && npm run test:integration",
     "test": "node --import tsx --test $(find src -name '*.test.ts')",
     "test:coverage": "node --import tsx --test --experimental-test-coverage $(find src -name '*.test.ts')",
     "validate:issue-9": "node scripts/validate-issue-9.mjs"

@@ -1,4 +1,5 @@
 import express from 'express';
+import type { Pool } from 'pg';
 import cors from 'cors';
 import adminRouter from './routes/admin.js';
 
@@ -13,6 +14,11 @@ import { apiStatusEnum, type ApiStatus } from './db/schema.js';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { performHealthCheck, type HealthCheckConfig } from './services/healthCheck.js';
+
+interface AppDependencies {
+  usageEventsRepository: UsageEventsRepository;
+  healthCheckConfig?: HealthCheckConfig;
 import adminRouter from './routes/admin.js';
 import { parsePagination, paginatedResponse } from './lib/pagination.js';
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
@@ -106,6 +112,28 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
   app.use(express.json());
 
+  app.get('/api/health', async (_req, res) => {
+    // If no health check config provided, return simple health check
+    if (!dependencies?.healthCheckConfig) {
+      res.json({ status: 'ok', service: 'callora-backend' });
+      return;
+    }
+
+    try {
+      const healthStatus = await performHealthCheck(dependencies.healthCheckConfig);
+      const statusCode = healthStatus.status === 'down' ? 503 : 200;
+      res.status(statusCode).json(healthStatus);
+    } catch (error) {
+      // Never expose internal errors in health check
+      res.status(503).json({
+        status: 'down',
+        timestamp: new Date().toISOString(),
+        checks: {
+          api: 'ok',
+          database: 'down',
+        },
+      });
+    }
   app.use('/api/admin', adminRouter);
 
   app.get('/api/health', (_req, res) => {

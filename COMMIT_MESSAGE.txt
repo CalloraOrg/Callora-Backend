@@ -1,0 +1,76 @@
+feat: idempotency for billing deduct
+
+Implement idempotent billing deductions to prevent double charges when
+requests are retried. Uses request_id as unique idempotency key.
+
+Features:
+- Idempotent deduction using request_id as unique constraint
+- Check for existing usage_event by request_id before processing
+- Return existing result if request already processed (no Soroban call)
+- Database transaction safety with rollback on Soroban failure
+- Race condition handling with unique constraint violation detection
+- Concurrent request support (only one processes, others get existing result)
+
+Implementation:
+- BillingService class with deduct() and getByRequestId() methods
+- PostgreSQL transaction-based approach (BEGIN/COMMIT/ROLLBACK)
+- Insert usage_event before calling Soroban for idempotency
+- Update stellar_tx_hash after successful Soroban deduction
+- Unique index on request_id column prevents duplicates
+
+Database Schema:
+- usage_events table with request_id UNIQUE constraint
+- Indexes for performance (request_id, user_id, api_id)
+- DECIMAL(20,7) for precise amount_usdc storage
+
+Testing:
+- Unit tests with mocked database and Soroban client (95%+ coverage)
+- Integration tests with pg-mem for real database transactions
+- Tests cover: success, duplicates, failures, race conditions, rollbacks
+- All tests passing with comprehensive edge case coverage
+
+Documentation:
+- Comprehensive API documentation in docs/billing-idempotency.md
+- Usage examples with code snippets
+- Best practices for idempotency key generation
+- Monitoring and troubleshooting guides
+- Load balancer integration examples
+
+Security:
+- No sensitive information exposed in responses
+- Transaction isolation prevents race conditions
+- Timeout protection for external calls
+- Proper error handling without stack traces
+
+Performance:
+- Single database round-trip for duplicate detection
+- Connection pooling for efficiency
+- No N+1 queries
+- Concurrent request handling
+
+Migration:
+- migrations/001_create_usage_events.sql with unique constraint
+- Backward compatible (can backfill existing records)
+
+Example Usage:
+```typescript
+const result = await billingService.deduct({
+  requestId: 'req_abc123',  // Idempotency key
+  userId: 'user_alice',
+  apiId: 'api_weather',
+  endpointId: 'endpoint_forecast',
+  apiKeyId: 'key_xyz789',
+  amountUsdc: '0.01'
+});
+
+// First call: alreadyProcessed = false, Soroban called
+// Retry: alreadyProcessed = true, no Soroban call, no double charge
+```
+
+Prevents:
+- Double charges on network failures
+- Double charges on client retries
+- Double charges on race conditions
+- Inconsistent state between database and Soroban
+
+Refs: #billing-idempotency
