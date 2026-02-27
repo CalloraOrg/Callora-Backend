@@ -1,9 +1,19 @@
-import { fileURLToPath } from 'node:url';
-import 'dotenv/config';
-import { createApp } from './app.js';
-import { buildHealthCheckConfig, closeDbPool } from './config/health.js';
-import { logger } from './logger.js';
-import { metricsMiddleware, metricsEndpoint } from './metrics.js';
+import express from 'express';
+import { config } from './config.js';
+
+const app = express();
+const PORT = config.port;
+
+app.use(express.json());
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'callora-backend',
+    network: config.network,
+    horizon: config.horizonUrl
+  });
+});
 
 const healthCheckConfig = buildHealthCheckConfig();
 const app = createApp({ healthCheckConfig });
