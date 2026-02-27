@@ -1,13 +1,14 @@
 import { EventEmitter } from 'events';
 import {
+    WebhookConfig,
     WebhookEventType,
     WebhookPayload,
     NewApiCallData,
     SettlementCompletedData,
     LowBalanceAlertData,
-} from '../webhooks/webhook.types';
-import { WebhookStore } from '../webhooks/webhook.store';
-import { dispatchToAll } from '../webhooks/webhook.dispatcher';
+} from '../webhooks/webhook.types.js';
+import { WebhookStore } from '../webhooks/webhook.store.js';
+import { dispatchToAll } from '../webhooks/webhook.dispatcher.js';
 
 export const calloraEvents = new EventEmitter();
 
@@ -24,7 +25,7 @@ async function handleEvent(
     };
 
     const configs = WebhookStore.getByEvent(event).filter(
-        (cfg) => cfg.developerId === developerId
+        (cfg: WebhookConfig) => cfg.developerId === developerId
     );
 
     if (configs.length > 0) {
@@ -36,20 +37,20 @@ async function handleEvent(
 calloraEvents.on(
     'new_api_call',
     (developerId: string, data: NewApiCallData) => {
-        handleEvent('new_api_call', developerId, data as Record<string, unknown>);
+        handleEvent('new_api_call', developerId, data as unknown as Record<string, unknown>);
     }
 );
 
 calloraEvents.on(
     'settlement_completed',
     (developerId: string, data: SettlementCompletedData) => {
-        handleEvent('settlement_completed', developerId, data as Record<string, unknown>);
+        handleEvent('settlement_completed', developerId, data as unknown as Record<string, unknown>);
     }
 );
 
 calloraEvents.on(
     'low_balance_alert',
     (developerId: string, data: LowBalanceAlertData) => {
-        handleEvent('low_balance_alert', developerId, data as Record<string, unknown>);
+        handleEvent('low_balance_alert', developerId, data as unknown as Record<string, unknown>);
     }
 );

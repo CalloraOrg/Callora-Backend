@@ -12,7 +12,15 @@ export const requireAuth = (
   res: Response<unknown, AuthenticatedLocals>,
   next: NextFunction
 ): void => {
-  const userId = req.header('x-user-id');
+  let userId: string | undefined;
+
+  const authHeader = req.header('authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    userId = authHeader.slice('Bearer '.length).trim();
+  } else {
+    userId = req.header('x-user-id');
+  }
+
   if (!userId) {
     next(new UnauthorizedError());
     return;
