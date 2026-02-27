@@ -64,6 +64,7 @@ beforeAll(async () => {
     slug: TEST_API_SLUG,
     base_url: upstreamUrl,
     developerId: TEST_DEVELOPER_ID,
+    endpoints: [{ endpointId: 'default', path: '*', priceUsdc: 1 }],
   };
   const registry = new InMemoryApiRegistry([registryEntry]);
 
@@ -269,10 +270,11 @@ describe('Proxy /v1/call', () => {
     const body = await res.json();
     expect(body.error).toMatch(/timeout/i);
 
-    // Usage still recorded with 504
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Under the new config (2xx only), a 504 is NOT recorded by default
     const events = usageStore.getEvents(TEST_API_KEY);
-    expect(events).toHaveLength(1);
-    expect(events[0].statusCode).toBe(504);
+    expect(events).toHaveLength(0);
   });
 
   it('returns 502 when upstream is unreachable', async () => {
@@ -282,6 +284,7 @@ describe('Proxy /v1/call', () => {
       slug: 'bad-api',
       base_url: 'http://localhost:1',
       developerId: TEST_DEVELOPER_ID,
+      endpoints: [{ endpointId: 'default', path: '*', priceUsdc: 1 }],
     }]);
     const badKeys = new Map<string, ApiKey>([
       ['bad-key', { key: 'bad-key', developerId: TEST_DEVELOPER_ID, apiId: 'api_bad' }],

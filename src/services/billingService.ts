@@ -23,6 +23,10 @@ export class MockSorobanBilling implements BillingService {
     return { success: true, balance: newBalance };
   }
 
+  async checkBalance(developerId: string): Promise<number> {
+    return this.balances.get(developerId) ?? 0;
+  }
+
   /** Helper for tests — set a developer's balance directly. */
   setBalance(developerId: string, amount: number): void {
     this.balances.set(developerId, amount);

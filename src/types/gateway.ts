@@ -8,10 +8,15 @@ export interface ApiKey {
 /** A single recorded usage event from a proxied request. */
 export interface UsageEvent {
   id: string;
+  requestId: string;
   apiKey: string;
+  apiKeyId: string;
   apiId: string;
+  endpointId: string;
+  userId: string;         // developerId of the caller
+  amountUsdc: number;     // endpoint price charged
   statusCode: number;
-  timestamp: string; // ISO-8601
+  timestamp: string;      // ISO-8601
 }
 
 /** Result of a billing deduction attempt. */
@@ -26,9 +31,19 @@ export interface RateLimitResult {
   retryAfterMs?: number;
 }
 
+/** Pricing for a single endpoint within an API. */
+export interface EndpointPricing {
+  endpointId: string;
+  /** Path pattern to match (e.g. "/data", "/translate"). Use "*" as default. */
+  path: string;
+  priceUsdc: number;
+}
+
 /** Interface for billing / credit deduction (e.g. Soroban). */
 export interface BillingService {
   deductCredit(developerId: string, amount: number): Promise<BillingResult>;
+  /** Check balance without deducting. */
+  checkBalance(developerId: string): Promise<number>;
 }
 
 /** Interface for rate limiting. */
@@ -38,16 +53,19 @@ export interface RateLimiter {
 
 /** Interface for recording and querying usage events. */
 export interface UsageStore {
-  record(event: UsageEvent): void;
+  /** Record an event. Returns false if requestId already exists (idempotent). */
+  record(event: UsageEvent): boolean;
+  hasEvent(requestId: string): boolean;
   getEvents(apiKey?: string): UsageEvent[];
 }
 
-/** A registered API with its upstream base URL. */
+/** A registered API with its upstream base URL and endpoint pricing. */
 export interface ApiRegistryEntry {
   id: string;
   slug: string;
   base_url: string;
   developerId: string;
+  endpoints: EndpointPricing[];
 }
 
 /** Registry for resolving API slugs / IDs to their upstream entries. */
@@ -61,6 +79,8 @@ export interface ProxyConfig {
   timeoutMs: number;
   /** Request headers to strip before forwarding to upstream. */
   stripHeaders: string[];
+  /** Status code ranges to record metering for. Default: 2xx only. */
+  recordableStatuses: (code: number) => boolean;
 }
 
 /** Dependencies injected into the gateway router factory. */

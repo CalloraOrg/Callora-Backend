@@ -80,8 +80,13 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
     // 5. Record usage event
     usageStore.record({
       id: randomUUID(),
+      requestId: randomUUID(), // legacy gateway doesn't carry request ID
       apiKey: apiKeyHeader,
+      apiKeyId: keyRecord.key,
       apiId: keyRecord.apiId,
+      endpointId: 'legacy',
+      userId: keyRecord.developerId,
+      amountUsdc: CREDIT_COST_PER_CALL,
       statusCode: upstreamStatus,
       timestamp: new Date().toISOString(),
     });

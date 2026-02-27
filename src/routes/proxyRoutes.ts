@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { ProxyDeps, ProxyConfig } from '../types/gateway.js';
+import { resolveEndpointPrice } from '../data/apiRegistry.js';
 
-const CREDIT_COST_PER_CALL = 1;
 
 /** Headers that must never be forwarded to the upstream server. */
 const DEFAULT_STRIP_HEADERS = [
@@ -24,6 +24,7 @@ function resolveConfig(partial?: Partial<ProxyConfig>): ProxyConfig {
   return {
     timeoutMs: partial?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     stripHeaders: partial?.stripHeaders ?? DEFAULT_STRIP_HEADERS,
+    recordableStatuses: partial?.recordableStatuses ?? ((code) => code >= 200 && code < 300),
   };
 }
 
@@ -36,11 +37,11 @@ function resolveConfig(partial?: Partial<ProxyConfig>): ProxyConfig {
  *   1. Resolve API from registry by slug or ID → 404 if unknown
  *   2. Validate x-api-key header → 401
  *   3. Rate-limit check → 429
- *   4. Billing deduction → 402
- *   5. Build upstream URL, forward safe headers, add X-Request-Id
+ *   4. Pre-proxy balance check → 402 if depleted
+ *   5. Build upstream URL, find price, forward safe headers, add X-Request-Id
  *   6. Proxy request with configurable timeout → 504 on timeout
  *   7. Stream upstream response back to caller
- *   8. Record usage event
+ *   8. [Non-blocking] Record usage and deduct billing if status is recordable
  */
 export function createProxyRouter(deps: ProxyDeps): Router {
   const { billing, rateLimiter, usageStore, registry, apiKeys } = deps;
@@ -88,26 +89,25 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       return;
     }
 
-    // 4. Billing deduction
-    const billingResult = await billing.deductCredit(
-      keyRecord.developerId,
-      CREDIT_COST_PER_CALL,
-    );
-    if (!billingResult.success) {
+    // 4. Pre-proxy balance check (ensure they have funds, deduct later)
+    const currentBalance = await billing.checkBalance(keyRecord.developerId);
+    if (currentBalance <= 0) {
       res.status(402).json({
         error: 'Payment Required: insufficient balance',
-        balance: billingResult.balance,
+        balance: currentBalance,
         requestId,
       });
       return;
     }
 
-    // 5. Build upstream URL
+    // 5. Build upstream URL & find price
     // req.params[0] captures the wildcard portion after the slug
     const wildcardPath = req.params[0] ?? '';
     const upstreamTarget = wildcardPath
       ? `${apiEntry.base_url}/${wildcardPath}`
       : apiEntry.base_url;
+
+    const endpoint = resolveEndpointPrice(apiEntry.endpoints, wildcardPath);
 
     // 6. Build forwarded headers
     const forwardHeaders: Record<string, string> = {};
@@ -175,14 +175,30 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       }
     }
 
-    // 8. Record usage
-    usageStore.record({
-      id: requestId,
-      apiKey: apiKeyHeader,
-      apiId: apiEntry.id,
-      statusCode: upstreamStatus,
-      timestamp: new Date().toISOString(),
-    });
+    // 8. Record usage & deduct billing (Non-blocking background task)
+    if (config.recordableStatuses(upstreamStatus)) {
+      setImmediate(() => {
+        const recorded = usageStore.record({
+          id: randomUUID(), // ID of the usage event itself
+          requestId,        // Idempotency key
+          apiKey: apiKeyHeader,
+          apiKeyId: keyRecord.key,
+          apiId: apiEntry.id,
+          endpointId: endpoint.endpointId,
+          userId: keyRecord.developerId,
+          amountUsdc: endpoint.priceUsdc,
+          statusCode: upstreamStatus,
+          timestamp: new Date().toISOString(),
+        });
+
+        // Only deduct billing if we haven't processed this requestId before
+        if (recorded && endpoint.priceUsdc > 0) {
+          billing.deductCredit(keyRecord.developerId, endpoint.priceUsdc).catch((err) => {
+            console.error('Background billing deduction failed:', err);
+          });
+        }
+      });
+    }
   }
 
   return router;
