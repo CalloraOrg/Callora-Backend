@@ -13,6 +13,8 @@ import { apiStatusEnum, type ApiStatus } from './db/schema.js';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import adminRouter from './routes/admin.js';
+import { parsePagination, paginatedResponse } from './lib/pagination.js';
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
 import { DepositController } from './controllers/depositController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
@@ -83,6 +85,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   }
 
   app.use(requestLogger);
+
   const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173')
     .split(',')
     .map((o) => o.trim());
@@ -109,8 +112,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     res.json({ status: 'ok', service: 'callora-backend' });
   });
 
-  app.get('/api/apis', (_req, res) => {
-    res.json({ apis: [] });
+  app.get('/api/apis', (req, res) => {
+    const { limit, offset } = parsePagination(req.query as { limit?: string; offset?: string });
+    res.json(paginatedResponse([], { limit, offset }));
   });
 
   app.get('/api/apis/:id', async (req, res) => {
@@ -149,8 +153,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     });
   });
 
-  app.get('/api/usage', (_req, res) => {
-    res.json({ calls: 0, period: 'current' });
+  app.get('/api/usage', (req, res) => {
+    const { limit, offset } = parsePagination(req.query as { limit?: string; offset?: string });
+    res.json(paginatedResponse([], { limit, offset }));
   });
 
   app.get('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {

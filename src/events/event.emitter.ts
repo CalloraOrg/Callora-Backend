@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import {
+    WebhookConfig,
     WebhookEventType,
     WebhookPayload,
     NewApiCallData,
@@ -24,7 +25,7 @@ async function handleEvent(
     };
 
     const configs = WebhookStore.getByEvent(event).filter(
-        (cfg) => cfg.developerId === developerId
+        (cfg: WebhookConfig) => cfg.developerId === developerId
     );
 
     if (configs.length > 0) {
