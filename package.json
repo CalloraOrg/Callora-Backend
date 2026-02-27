@@ -10,7 +10,6 @@
     "db:generate": "drizzle-kit generate:sqlite",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "validate:issue-9": "node scripts/validate-issue-9.mjs",
     "test": "jest --runInBand"
@@ -50,9 +49,11 @@
     "eslint": "^10.0.2",
     "globals": "^17.3.0",
     "jest": "^30.2.0",
+    "picomatch": "^2.3.1",
     "pg-mem": "^3.0.13",
     "picomatch": "^2.3.1",
     "supertest": "^7.2.2",
+    "ts-jest": "^29.4.6",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1"

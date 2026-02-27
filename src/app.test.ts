@@ -6,6 +6,15 @@ import type { ApiRepository, ApiListFilters } from './repositories/apiRepository
 import type { Developer } from './db/schema.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
+// Mock better-sqlite3 before any module that transitively imports it is loaded.
+// This allows unit tests for app.ts to run without a compiled native binding.
+await mock.module('better-sqlite3', {
+  defaultExport: class MockDatabase {
+    prepare() { return { get: () => null }; }
+    exec() {}
+    close() {}
+  },
+});
 
 const seedRepository = () =>
   new InMemoryUsageEventsRepository([
@@ -63,8 +72,8 @@ const developerProfile: Developer = {
   website: null,
   description: null,
   category: null,
-  created_at: 1,
-  updated_at: 1,
+  created_at: new Date(1000),
+  updated_at: new Date(1000),
 };
 
 const sampleApis: Api[] = [
@@ -77,8 +86,8 @@ const sampleApis: Api[] = [
     logo_url: null,
     category: 'search',
     status: 'active',
-    created_at: 1,
-    updated_at: 1,
+    created_at: new Date(1000),
+    updated_at: new Date(1000),
   },
   {
     id: 102,
@@ -89,8 +98,8 @@ const sampleApis: Api[] = [
     logo_url: null,
     category: 'chat',
     status: 'active',
-    created_at: 1,
-    updated_at: 1,
+    created_at: new Date(1000),
+    updated_at: new Date(1000),
   },
   {
     id: 103,
@@ -101,8 +110,8 @@ const sampleApis: Api[] = [
     logo_url: null,
     category: 'archive',
     status: 'archived',
-    created_at: 1,
-    updated_at: 1,
+    created_at: new Date(1000),
+    updated_at: new Date(1000),
   },
 ];
 
@@ -121,6 +130,14 @@ class FakeApiRepository implements ApiRepository {
       results = results.slice(0, filters.limit);
     }
     return results;
+  }
+
+  async findById() {
+    return null;
+  }
+
+  async getEndpoints() {
+    return [];
   }
 }
 
@@ -306,6 +323,8 @@ test('GET /api/developers/apis lists APIs with stats, filters, and pagination', 
   assert.deepEqual(filtered.body.data, [
     { id: 103, name: 'Archived API', status: 'archived', callCount: 0 },
   ]);
+});
+
 // ── GET /api/apis/:id ────────────────────────────────────────────────────────
 
 const buildApiRepo = () => {
@@ -427,4 +446,189 @@ test('GET /api/apis/:id returns api with empty endpoints list', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.name, 'Empty API');
   assert.deepEqual(res.body.endpoints, []);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/developers/apis — publish a new API
+// ---------------------------------------------------------------------------
+
+const mockDeveloper = { id: 42, user_id: 'dev-1', name: 'Alice', website: null, description: null, category: null, created_at: new Date(), updated_at: new Date() };
+
+const validApiBody = {
+  name: 'My Weather API',
+  description: 'Real-time weather data',
+  base_url: 'https://api.weather.example.com',
+  category: 'weather',
+  status: 'draft',
+  endpoints: [
+    {
+      path: '/forecast',
+      method: 'GET',
+      price_per_call_usdc: '0.01',
+      description: 'Get forecast',
+    },
+  ],
+};
+
+const makeApp = (hasDeveloper = true) =>
+  createApp({
+    usageEventsRepository: seedRepository(),
+    findDeveloperByUserId: async () => (hasDeveloper ? mockDeveloper : undefined),
+    createApiWithEndpoints: async (input) => ({
+      id: 1,
+      developer_id: input.developer_id,
+      name: input.name,
+      description: input.description ?? null,
+      base_url: input.base_url,
+      logo_url: null,
+      category: input.category ?? null,
+      status: input.status ?? 'draft',
+      created_at: new Date(),
+      updated_at: new Date(),
+      endpoints: input.endpoints.map((ep, idx) => ({
+        id: idx + 1,
+        api_id: 1,
+        path: ep.path,
+        method: ep.method,
+        price_per_call_usdc: ep.price_per_call_usdc,
+        description: ep.description ?? null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      })),
+    }),
+  });
+
+test('POST /api/developers/apis returns 401 when unauthenticated', async () => {
+  const app = makeApp();
+  const res = await request(app).post('/api/developers/apis').send(validApiBody);
+  assert.equal(res.status, 401);
+  assert.equal(res.body.code, 'UNAUTHORIZED');
+});
+
+test('POST /api/developers/apis returns 400 when name is missing', async () => {
+  const app = makeApp();
+  const { name: _n, ...body } = validApiBody;
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send(body);
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /name/i);
+});
+
+test('POST /api/developers/apis returns 400 when base_url is missing', async () => {
+  const app = makeApp();
+  const { base_url: _b, ...body } = validApiBody;
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send(body);
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /base_url/i);
+});
+
+test('POST /api/developers/apis returns 400 when base_url is not a valid URL', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({ ...validApiBody, base_url: 'not-a-url' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /base_url/i);
+});
+
+test('POST /api/developers/apis returns 400 when status is invalid', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({ ...validApiBody, status: 'published' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /status/i);
+});
+
+test('POST /api/developers/apis returns 400 when endpoints is not an array', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({ ...validApiBody, endpoints: 'bad' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /endpoints/i);
+});
+
+test('POST /api/developers/apis returns 400 when an endpoint path does not start with /', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({
+      ...validApiBody,
+      endpoints: [{ path: 'no-slash', method: 'GET', price_per_call_usdc: '0.01' }],
+    });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /path/i);
+});
+
+test('POST /api/developers/apis returns 400 when an endpoint method is invalid', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({
+      ...validApiBody,
+      endpoints: [{ path: '/data', method: 'FETCH', price_per_call_usdc: '0.01' }],
+    });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /method/i);
+});
+
+test('POST /api/developers/apis returns 400 when price_per_call_usdc is invalid', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({
+      ...validApiBody,
+      endpoints: [{ path: '/data', method: 'GET', price_per_call_usdc: 'free' }],
+    });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /price_per_call_usdc/i);
+});
+
+test('POST /api/developers/apis returns 400 with DEVELOPER_NOT_FOUND when no developer profile', async () => {
+  const app = makeApp(false);
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send(validApiBody);
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'DEVELOPER_NOT_FOUND');
+});
+
+test('POST /api/developers/apis returns 201 with created API and endpoints', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send(validApiBody);
+  assert.equal(res.status, 201);
+  assert.equal(res.body.name, validApiBody.name);
+  assert.equal(res.body.base_url, validApiBody.base_url);
+  assert.equal(res.body.developer_id, mockDeveloper.id);
+  assert.ok(Array.isArray(res.body.endpoints));
+  assert.equal(res.body.endpoints.length, 1);
+  assert.equal(res.body.endpoints[0].path, '/forecast');
+  assert.equal(res.body.endpoints[0].method, 'GET');
+});
+
+test('POST /api/developers/apis returns 201 when endpoints array is empty', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({ ...validApiBody, endpoints: [] });
+  assert.equal(res.status, 201);
+  assert.ok(Array.isArray(res.body.endpoints));
+  assert.equal(res.body.endpoints.length, 0);
 });

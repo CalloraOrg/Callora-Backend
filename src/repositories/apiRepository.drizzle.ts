@@ -1,8 +1,28 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, type SQL } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import type { ApiDetails, ApiEndpointInfo, ApiRepository } from './apiRepository.js';
+import type { Api } from '../db/schema.js';
+import type { ApiDetails, ApiEndpointInfo, ApiListFilters, ApiRepository } from './apiRepository.js';
 
 export class DrizzleApiRepository implements ApiRepository {
+  async listByDeveloper(developerId: number, filters: ApiListFilters = {}): Promise<Api[]> {
+    const conditions: SQL[] = [eq(schema.apis.developer_id, developerId)];
+    if (filters.status) {
+      conditions.push(eq(schema.apis.status, filters.status));
+    }
+
+    let query = db.select().from(schema.apis).where(and(...conditions));
+
+    if (typeof filters.limit === 'number') {
+      query = query.limit(filters.limit) as typeof query;
+    }
+
+    if (typeof filters.offset === 'number') {
+      query = query.offset(filters.offset) as typeof query;
+    }
+
+    return query;
+  }
+
   async findById(id: number): Promise<ApiDetails | null> {
     const rows = await db
       .select({

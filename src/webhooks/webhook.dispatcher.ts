@@ -1,6 +1,7 @@
 
 import crypto from 'crypto';
 import { WebhookConfig, WebhookPayload } from './webhook.types.js';
+import { logger } from '../logger.js';
 
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 1000;

@@ -1,11 +1,10 @@
 import {
-  Server,
+  Horizon,
   Networks,
   TransactionBuilder,
   Operation,
   Address,
   nativeToScVal,
-  xdr,
   BASE_FEE,
 } from '@stellar/stellar-sdk';
 
@@ -63,7 +62,7 @@ export class TransactionBuilderService {
     // Step 1: Initialize Stellar SDK with network
     const { networkPassphrase, horizonUrl } = this.getNetworkConfig(params.network);
 
-    const server = new Server(horizonUrl);
+    const server = new Horizon.Server(horizonUrl);
 
     // Step 2: Load source account from network
     const sourceKey = params.sourceAccount ?? params.userPublicKey;
@@ -89,7 +88,7 @@ export class TransactionBuilderService {
     try {
       contractAddress = new Address(params.vaultContractId);
       userAddress = new Address(params.userPublicKey);
-    } catch (error) {
+    } catch {
       throw new InvalidContractIdError(params.vaultContractId);
     }
 

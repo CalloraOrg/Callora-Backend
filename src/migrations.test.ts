@@ -1,7 +1,6 @@
 /// <reference types="jest" />
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, it } from 'node:test';
 
 const migrationDir = path.join(process.cwd(), 'migrations');
 const upMigrationPath = path.join(
