@@ -44,6 +44,14 @@ export const apiKeyRepository = {
 
     return { key, prefix };
   },
+  revoke(id: string, userId: string): 'success' | 'not_found' | 'forbidden' {
+    const index = apiKeys.findIndex(k => k.id === id);
+    if (index === -1) return 'not_found';
+    if (apiKeys[index].userId !== userId) return 'forbidden';
+
+    apiKeys.splice(index, 1);
+    return 'success';
+  },
   listForTesting(): ApiKeyRecord[] {
     return [...apiKeys];
   }

@@ -1,7 +1,4 @@
-import assert from 'node:assert/strict';
-import test, { mock } from 'node:test';
 import request from 'supertest';
-
 import { createApp } from './app.js';
 import { InMemoryUsageEventsRepository } from './repositories/usageEventsRepository.js';
 import type { Api } from './db/schema.js';
@@ -9,13 +6,15 @@ import type { ApiRepository, ApiListFilters } from './repositories/apiRepository
 import type { Developer } from './db/schema.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
+import assert from 'node:assert';
+import { mock } from 'node:test';
 // Mock better-sqlite3 before any module that transitively imports it is loaded.
 // This allows unit tests for app.ts to run without a compiled native binding.
 await mock.module('better-sqlite3', {
   defaultExport: class MockDatabase {
     prepare() { return { get: () => null }; }
-    exec() {}
-    close() {}
+    exec() { }
+    close() { }
   },
 });
 
@@ -119,7 +118,7 @@ const sampleApis: Api[] = [
 ];
 
 class FakeApiRepository implements ApiRepository {
-  constructor(private readonly apis: Api[]) {}
+  constructor(private readonly apis: Api[]) { }
 
   async listByDeveloper(developerId: number, filters: ApiListFilters = {}): Promise<Api[]> {
     let results = this.apis.filter((api) => api.developer_id === developerId);
@@ -203,9 +202,9 @@ const createDeveloperApisApp = () =>
 test('GET /api/developers/analytics returns 401 when unauthenticated', async () => {
   const app = createApp({ usageEventsRepository: seedRepository() });
   const response = await request(app).get('/api/developers/analytics');
-  assert.equal(response.status, 401);
-  assert.equal(typeof response.body.error, 'string');
-  assert.equal(response.body.code, 'UNAUTHORIZED');
+  expect(response.status).toBe(401);
+  expect(typeof response.body.error).toBe('string');
+  expect(response.body.code).toBe('UNAUTHORIZED');
 });
 
 test('GET /api/developers/analytics validates query params', async () => {
@@ -214,12 +213,12 @@ test('GET /api/developers/analytics validates query params', async () => {
   const missingDates = await request(app)
     .get('/api/developers/analytics')
     .set('x-user-id', 'dev-1');
-  assert.equal(missingDates.status, 400);
+  expect(missingDates.status).toBe(400);
 
   const badGroupBy = await request(app)
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-10&groupBy=year')
     .set('x-user-id', 'dev-1');
-  assert.equal(badGroupBy.status, 400);
+  expect(badGroupBy.status).toBe(400);
 });
 
 test('GET /api/developers/analytics aggregates by day', async () => {
@@ -228,8 +227,8 @@ test('GET /api/developers/analytics aggregates by day', async () => {
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&groupBy=day')
     .set('x-user-id', 'dev-1');
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.body, {
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual({
     data: [
       { period: '2026-02-01', calls: 2, revenue: '240' },
       { period: '2026-02-03', calls: 1, revenue: '200' },
@@ -246,18 +245,18 @@ test('GET /api/developers/analytics aggregates by week and supports top lists', 
     )
     .set('x-user-id', 'dev-1');
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.body.data, [
+  expect(response.status).toBe(200);
+  expect(response.body.data).toEqual([
     { period: '2026-01-26', calls: 2, revenue: '240' },
     { period: '2026-02-02', calls: 1, revenue: '200' },
     { period: '2026-02-09', calls: 1, revenue: '500' },
   ]);
-  assert.deepEqual(response.body.topEndpoints, [
+  expect(response.body.topEndpoints).toEqual([
     { endpoint: '/v1/search', calls: 2 },
     { endpoint: '/v1/pay', calls: 1 },
     { endpoint: '/v2/generate', calls: 1 },
   ]);
-  assert.deepEqual(response.body.topUsers, [
+  expect(response.body.topUsers).toEqual([
     { userId: 'user_-001', calls: 2 },
     { userId: 'user_-002', calls: 1 },
     { userId: 'user_-003', calls: 1 },
@@ -270,15 +269,15 @@ test('GET /api/developers/analytics filters by apiId and blocks non-owned API', 
   const allowed = await request(app)
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&apiId=api-1&groupBy=month')
     .set('x-user-id', 'dev-1');
-  assert.equal(allowed.status, 200);
-  assert.deepEqual(allowed.body, {
+  expect(allowed.status).toBe(200);
+  expect(allowed.body).toEqual({
     data: [{ period: '2026-02-01', calls: 3, revenue: '440' }],
   });
 
   const blocked = await request(app)
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&apiId=api-3')
     .set('x-user-id', 'dev-1');
-  assert.equal(blocked.status, 403);
+  expect(blocked.status).toBe(403);
 });
 
 test('GET /api/developers/apis returns 401 when unauthenticated', async () => {

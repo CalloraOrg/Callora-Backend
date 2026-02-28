@@ -27,10 +27,12 @@ import { performHealthCheck, type HealthCheckConfig } from './services/healthChe
 import { parsePagination, paginatedResponse } from './lib/pagination.js';
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
 import { DepositController } from './controllers/depositController.js';
+import { VaultController } from './controllers/vaultController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { requestLogger } from './middleware/logging.js';
 import { BadRequestError } from './errors/index.js';
+import { apiKeyRepository } from './repositories/apiKeyRepository.js';
 
 interface AppDependencies {
   usageEventsRepository?: UsageEventsRepository;
@@ -80,9 +82,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
   const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
 
-  // Initialize deposit controller
+  // Initialize deposit and vault controllers
   const transactionBuilder = new TransactionBuilderService();
   const depositController = new DepositController(vaultRepository, transactionBuilder);
+  const vaultController = new VaultController(vaultRepository);
   const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
   const developerRepository = dependencies?.developerRepository ?? defaultDeveloperRepository;
 
@@ -306,6 +309,30 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   // Deposit transaction preparation endpoint
   app.post('/api/vault/deposit/prepare', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>) => {
     depositController.prepareDeposit(req, res);
+  });
+
+  // Vault balance endpoint
+  app.get('/api/vault/balance', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+    vaultController.getBalance(req, res);
+  });
+
+  // Revoke API key endpoint
+  app.delete('/api/keys/:id', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+    const user = res.locals.authenticatedUser;
+    if (!user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const result = apiKeyRepository.revoke(id, user.id);
+
+    if (result === 'forbidden') {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+
+    res.status(204).send();
   });
 
   // POST /api/developers/apis — publish a new API (authenticated)

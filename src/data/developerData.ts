@@ -6,6 +6,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
   dev_001: [
     {
       id: 'stl_001',
+      developerId: 'dev_001',
       amount: 250.0,
       status: 'completed',
       tx_hash: '0xabc123def456',
@@ -13,6 +14,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     },
     {
       id: 'stl_002',
+      developerId: 'dev_001',
       amount: 175.5,
       status: 'completed',
       tx_hash: '0xdef789abc012',
@@ -20,6 +22,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     },
     {
       id: 'stl_003',
+      developerId: 'dev_001',
       amount: 320.0,
       status: 'pending',
       tx_hash: null,
@@ -27,6 +30,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     },
     {
       id: 'stl_004',
+      developerId: 'dev_001',
       amount: 90.0,
       status: 'failed',
       tx_hash: '0xfailed00001',
@@ -34,6 +38,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     },
     {
       id: 'stl_005',
+      developerId: 'dev_001',
       amount: 410.25,
       status: 'pending',
       tx_hash: null,
@@ -43,6 +48,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
   dev_002: [
     {
       id: 'stl_010',
+      developerId: 'dev_002',
       amount: 500.0,
       status: 'completed',
       tx_hash: '0x111222333aaa',

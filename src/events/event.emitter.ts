@@ -25,7 +25,7 @@ async function handleEvent(
     };
 
     const configs = WebhookStore.getByEvent(event).filter(
-        (cfg: WebhookConfig) => cfg.developerId === developerId
+        (cfg: { developerId: string }) => cfg.developerId === developerId
     );
 
     if (configs.length > 0) {

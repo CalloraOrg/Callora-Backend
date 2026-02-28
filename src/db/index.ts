@@ -2,12 +2,9 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema.js';
 import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { logger } from '../logger.js';
+import { join } from 'path';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const logger = console;
 
 // Create SQLite database instance
 const sqlite = new Database('./database.db');
@@ -20,14 +17,14 @@ export async function initializeDb() {
   try {
     // Check if migration has already been run
     const tableExists = sqlite.prepare(`
-      SELECT name FROM sqlite_master 
+      SELECT name FROM sqlite_master
       WHERE type='table' AND name='apis'
     `).get();
 
     if (!tableExists) {
       logger.info('Running initial migration...');
       const migrationSQL = readFileSync(
-        join(__dirname, '..', '..', 'migrations', '0000_initial_apis_tables.sql'),
+        join(process.cwd(), 'migrations', '0000_initial_apis_tables.sql'),
         'utf8'
       );
       const statements = migrationSQL.split(';').filter(stmt => stmt.trim());
@@ -45,7 +42,7 @@ export async function initializeDb() {
     if (!developersExists) {
       logger.info('Running developers migration...');
       const devSQL = readFileSync(
-        join(__dirname, '..', '..', 'migrations', '0004_create_developers.sql'),
+        join(process.cwd(), 'migrations', '0004_create_developers.sql'),
         'utf8'
       );
       const statements = devSQL.split(';').filter(stmt => stmt.trim());

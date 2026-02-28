@@ -33,6 +33,21 @@ export class InMemoryUsageStore implements UsageStore {
     return [...this.events];
   }
 
+  /** Retrieve all usage events that haven't been settled yet and have a non-zero price. */
+  getUnsettledEvents(): UsageEvent[] {
+    return this.events.filter((e) => !e.settlementId && e.amountUsdc > 0);
+  }
+
+  /** Mark a specific set of events as settled. */
+  markAsSettled(eventIds: string[], settlementId: string): void {
+    const ids = new Set(eventIds);
+    for (const event of this.events) {
+      if (ids.has(event.id)) {
+        event.settlementId = settlementId;
+      }
+    }
+  }
+
   /** Helper for tests — clear all events. */
   clear(): void {
     this.events = [];
