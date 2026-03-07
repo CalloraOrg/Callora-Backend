@@ -60,9 +60,8 @@ export async function initializeDb() {
 }
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+// Export close function for graceful shutdown
+export function closeDb() {
   sqlite.close();
-  process.exit(0);
-});
-
+}
 export { schema };

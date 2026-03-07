@@ -2,13 +2,14 @@ import express from 'express';
 import webhookRouter from './webhooks/webhook.routes.js';
 import { calloraEvents } from './events/event.emitter.js';
 import helmet from 'helmet';
-import { db, initializeDb, schema } from './db/index.js';
+import { db, initializeDb, schema, closeDb } from './db/index.js';
 import { eq, desc, and, type SQL } from 'drizzle-orm';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { BadRequestError, NotFoundError, UnauthorizedError, ForbiddenError } from './errors/index.js';
 import * as developerRepository from './repositories/developerRepository.js';
 import type { Response } from 'express';
+import type { Socket } from 'net';
 
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
@@ -100,9 +101,66 @@ if (isDirectExecution) {
   async function startServer() {
     try {
       await initializeDb();
-      app.listen(PORT, () => {
+      
+      const server = app.listen(PORT, () => {
         console.log(`Callora backend listening on http://localhost:${PORT}`);
       });
+
+      // Track active connections so we can wait for them to finish
+      const activeConnections = new Set<Socket>();
+
+      server.on('connection', (socket: Socket) => {
+        activeConnections.add(socket);
+        socket.once('close', () => activeConnections.delete(socket));
+      });
+
+      async function gracefulShutdown(signal: string) {
+        console.log(`\n[shutdown] Received ${signal}. Starting graceful shutdown...`);
+
+        // 1. Stop accepting new requests
+        server.close(() => {
+          console.log('[shutdown] HTTP server closed. No new requests accepted.');
+        });
+
+        // 2. Wait for in-flight requests to finish (max 30s)
+        const TIMEOUT_MS = 30_000;
+        const deadline = setTimeout(() => {
+          console.warn('[shutdown] Timeout reached. Forcing exit.');
+          process.exit(1);
+        }, TIMEOUT_MS);
+        deadline.unref();
+
+        // 3. Wait until all active connections are gone
+        await new Promise<void>((resolve) => {
+          if (activeConnections.size === 0) return resolve();
+          console.log(`[shutdown] Waiting for ${activeConnections.size} in-flight connection(s)...`);
+          const interval = setInterval(() => {
+            if (activeConnections.size === 0) {
+              clearInterval(interval);
+              resolve();
+            }
+          }, 200);
+        });
+
+        // 4. Close the database
+        console.log('[shutdown] Closing database...');
+        try {
+          closeDb();
+          console.log('[shutdown] Database closed.');
+        } catch (err) {
+          console.error('[shutdown] Error closing database:', err);
+        }
+
+        // 5. Exit cleanly
+        console.log('[shutdown] Shutdown complete. Exiting.');
+        clearTimeout(deadline);
+        process.exit(0);
+      }
+
+      // Register shutdown signals
+      process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+      process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+
     } catch (error) {
       console.error('Failed to start server:', error);
       process.exit(1);
