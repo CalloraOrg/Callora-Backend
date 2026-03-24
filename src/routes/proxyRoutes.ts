@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { ProxyDeps, ProxyConfig } from '../types/gateway.js';
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
+import { startUpstreamTimer, type UpstreamOutcome } from '../metrics.js';
 
 
 /** Headers that must never be forwarded to the upstream server. */
@@ -122,6 +123,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
 
     // 7. Proxy with timeout
     let upstreamStatus = 502;
+    const timer = startUpstreamTimer(apiEntry.id, req.method);
 
     try {
       const upstreamRes = await fetch(upstreamTarget, {
@@ -132,6 +134,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       });
 
       upstreamStatus = upstreamRes.status;
+      timer.stop(upstreamStatus, 'success');
 
       // Forward response headers (skip hop-by-hop)
       const hopByHop = new Set(['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade']);
@@ -160,12 +163,16 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         res.send(text);
       }
     } catch (err: unknown) {
+      let outcome: UpstreamOutcome = 'error';
+
       if (err instanceof DOMException && err.name === 'TimeoutError') {
         upstreamStatus = 504;
+        outcome = 'timeout';
         res.set('x-request-id', requestId);
         res.status(504).json({ error: 'Gateway Timeout', requestId });
       } else if (err instanceof TypeError && (err as NodeJS.ErrnoException).code === 'UND_ERR_CONNECT_TIMEOUT') {
         upstreamStatus = 504;
+        outcome = 'timeout';
         res.set('x-request-id', requestId);
         res.status(504).json({ error: 'Gateway Timeout', requestId });
       } else {
@@ -173,6 +180,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         res.set('x-request-id', requestId);
         res.status(502).json({ error: 'Bad Gateway: upstream unreachable', requestId });
       }
+
+      timer.stop(upstreamStatus, outcome);
     }
 
     // 8. Record usage & deduct billing (Non-blocking background task)

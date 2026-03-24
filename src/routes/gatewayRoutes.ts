@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { GatewayDeps } from '../types/gateway.js';
+import { startUpstreamTimer } from '../metrics.js';
 
 const CREDIT_COST_PER_CALL = 1; // cost per proxied request
 
@@ -62,6 +63,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
     // 4. Proxy to upstream
     let upstreamStatus = 502;
     let upstreamBody: string = '{"error":"Bad Gateway"}';
+    const timer = startUpstreamTimer(req.params.apiId, req.method);
 
     try {
       const upstreamRes = await fetch(`${upstreamUrl}${req.path}`, {
@@ -72,9 +74,11 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
 
       upstreamStatus = upstreamRes.status;
       upstreamBody = await upstreamRes.text();
+      timer.stop(upstreamStatus, 'success');
     } catch {
       upstreamStatus = 502;
       upstreamBody = JSON.stringify({ error: 'Bad Gateway: upstream unreachable' });
+      timer.stop(upstreamStatus, 'error');
     }
 
     // 5. Record usage event
