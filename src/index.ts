@@ -2,6 +2,7 @@ import express from 'express';
 import { initializeDb, closeDb } from './db/index.js';
 import { type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { createGatewayIpAllowlist } from './middleware/ipAllowlist.js';
 import type { Response } from 'express';
 import type { Socket } from 'net';
 
@@ -14,8 +15,6 @@ import { createUsageStore } from './services/usageStore.js';
 import { createSettlementStore } from './services/settlementStore.js';
 import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
-
-
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution = process.argv[1] && (process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('index.js'));
@@ -62,7 +61,7 @@ if (isDirectExecution) {
     upstreamUrl: process.env.UPSTREAM_URL ?? 'http://localhost:4000',
     apiKeys,
   });
-  app.use('/api/gateway', gatewayRouter);
+  app.use('/api/gateway', createGatewayIpAllowlist(), gatewayRouter);
 
   // New proxy route: /v1/call/:apiSlugOrId/*
   const proxyRouter = createProxyRouter({

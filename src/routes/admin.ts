@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
+import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
 import { findUsers } from '../repositories/userRepository.js';
 import { parsePagination, paginatedResponse } from '../lib/pagination.js';
 
 const router = Router();
 
+// Apply IP allowlist check before authentication
+router.use(createAdminIpAllowlist());
 router.use(adminAuth);
 
 router.get('/users', async (req, res) => {
