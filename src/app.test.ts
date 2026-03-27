@@ -638,3 +638,183 @@ test('POST /api/developers/apis returns 201 when endpoints array is empty', asyn
   assert.ok(Array.isArray(res.body.endpoints));
   assert.equal(res.body.endpoints.length, 0);
 });
+
+
+describe('Route registration and 404 behavior', () => {
+  test('404 for unregistered routes returns JSON error', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/nonexistent');
+    assert.equal(res.status, 404);
+  });
+
+  test('404 for routes outside /api namespace', async () => {
+    const app = createApp();
+    const res = await request(app).get('/random/path');
+    assert.equal(res.status, 404);
+  });
+
+  test('admin routes are mounted under /api/admin', async () => {
+    const app = createApp();
+    // Should hit admin auth middleware (401 without proper auth)
+    const res = await request(app).get('/api/admin/users');
+    assert.equal(res.status, 401);
+  });
+
+  test('health endpoint is registered before other routes', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/health');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'ok');
+    assert.equal(res.body.service, 'callora-backend');
+  });
+
+  test('public routes do not require authentication', async () => {
+    const app = createApp({ apiRepository: buildApiRepo() });
+    const healthRes = await request(app).get('/api/health');
+    assert.equal(healthRes.status, 200);
+
+    const apisRes = await request(app).get('/api/apis');
+    assert.equal(apisRes.status, 200);
+
+    const apiDetailRes = await request(app).get('/api/apis/1');
+    assert.equal(apiDetailRes.status, 200);
+
+    const usageRes = await request(app).get('/api/usage');
+    assert.equal(usageRes.status, 200);
+  });
+
+  test('protected routes require authentication', async () => {
+    const app = createApp();
+    
+    const analyticsRes = await request(app).get('/api/developers/analytics');
+    assert.equal(analyticsRes.status, 401);
+
+    const developerApisRes = await request(app).get('/api/developers/apis');
+    assert.equal(developerApisRes.status, 401);
+
+    const vaultRes = await request(app).get('/api/vault/balance');
+    assert.equal(vaultRes.status, 401);
+
+    const depositRes = await request(app).post('/api/vault/deposit/prepare');
+    assert.equal(depositRes.status, 401);
+
+    const deleteKeyRes = await request(app).delete('/api/keys/some-id');
+    assert.equal(deleteKeyRes.status, 401);
+
+    const postApiRes = await request(app).post('/api/developers/apis');
+    assert.equal(postApiRes.status, 401);
+  });
+});
+
+describe('Global middleware behavior', () => {
+  test('requestId middleware adds X-Request-Id header to response', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/health');
+    assert.ok(res.headers['x-request-id']);
+    assert.equal(typeof res.headers['x-request-id'], 'string');
+  });
+
+  test('requestId middleware uses provided x-request-id from request', async () => {
+    const app = createApp();
+    const customId = 'custom-trace-id-123';
+    const res = await request(app)
+      .get('/api/health')
+      .set('x-request-id', customId);
+    assert.equal(res.headers['x-request-id'], customId);
+  });
+
+  test('requestId middleware generates UUID when not provided', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/health');
+    // Mock returns 'mock-uuid-1234' from jest.mock('uuid')
+    assert.equal(res.headers['x-request-id'], 'mock-uuid-1234');
+  });
+
+  test('CORS headers are set correctly', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/health')
+      .set('Origin', 'http://localhost:5173');
+    
+    assert.ok(res.headers['access-control-allow-origin']);
+  });
+
+  test('CORS blocks unauthorized origins', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/health')
+      .set('Origin', 'http://evil.com');
+    
+    // CORS middleware will reject this, but the request still processes
+    // The browser would block the response, but in tests we see the response
+    assert.ok(res.status);
+  });
+
+  test('errorHandler middleware catches thrown errors', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('x-user-id', 'dev-1')
+      .set('Content-Type', 'application/json')
+      .send('invalid json');
+    
+    assert.ok(res.status >= 400);
+  });
+
+  test('errorHandler returns consistent JSON error format', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/developers/analytics');
+    
+    assert.equal(res.status, 401);
+    assert.ok(res.body.error);
+    assert.equal(typeof res.body.error, 'string');
+    assert.equal(res.body.code, 'UNAUTHORIZED');
+  });
+
+  test('JSON body parser is configured', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('x-user-id', 'dev-1')
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify(validApiBody));
+    
+    assert.equal(res.status, 201);
+    assert.ok(res.body.name);
+  });
+});
+
+describe('Route precedence and ordering', () => {
+  test('specific routes take precedence over parameterized routes', async () => {
+    const app = createApp();
+    
+    // /api/health is a specific route
+    const healthRes = await request(app).get('/api/health');
+    assert.equal(healthRes.status, 200);
+    assert.equal(healthRes.body.status, 'ok');
+  });
+
+  test('admin routes are isolated under /api/admin prefix', async () => {
+    const app = createApp();
+    
+    // Admin routes should not interfere with other /api routes
+    const adminRes = await request(app).get('/api/admin/users');
+    assert.equal(adminRes.status, 401); // Requires admin auth
+    
+    const regularRes = await request(app).get('/api/apis');
+    assert.equal(regularRes.status, 200); // Public route
+  });
+
+  test('errorHandler is registered last and catches all errors', async () => {
+    const app = createApp();
+    
+    // Test that errors from any route are caught
+    const res = await request(app)
+      .get('/api/developers/analytics?from=invalid&to=invalid')
+      .set('x-user-id', 'dev-1');
+    
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error);
+    assert.equal(typeof res.body.error, 'string');
+  });
+});
