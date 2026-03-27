@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import adminRouter from './routes/admin.js';
+import routes from './routes/index.js';
+import { pool } from './db.js';
 import {
   InMemoryUsageEventsRepository,
   type GroupBy,
@@ -75,6 +77,9 @@ const parseNonNegativeIntegerParam = (
 
 export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
+  
+  // Set database pool in locals for billing routes
+  app.locals.dbPool = pool;
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
   const vaultRepository =
@@ -150,6 +155,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
 
   app.use('/api/admin', adminRouter);
+
+  // Mount all routes including billing
+  app.use('/api', routes);
 
 
   app.get('/api/apis', (req, res) => {
