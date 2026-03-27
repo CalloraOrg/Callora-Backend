@@ -12,11 +12,22 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 
 - Health check: `GET /api/health`
 - Placeholder routes: `GET /api/apis`, `GET /api/usage`
-- JSON body parsing; ready to add auth, metering, and contract calls
+- JSON body parsing plus gateway API key authentication for upstream proxy routes
 - In-memory `VaultRepository` with:
   - `create(userId, contractId, network)`
   - `findByUserId(userId, network)`
   - `updateBalanceSnapshot(id, balance, lastSyncedAt)`
+
+## Gateway authentication
+
+Gateway proxy routes accept API keys through either:
+
+- `Authorization: Bearer <api_key>`
+- `X-Api-Key: <api_key>`
+
+The gateway auth middleware performs prefix-based lookup, timing-safe full-key hash verification, revoked-key checks, and request context loading for the authenticated `user`, `vault`, `api`, `endpoint`, and `apiKeyRecord`.
+
+See [docs/gateway-api-key-auth.md](./docs/gateway-api-key-auth.md) for the full flow, attached request fields, and failure responses.
 
 ## Vault repository behavior
 
