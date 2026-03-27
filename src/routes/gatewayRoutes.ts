@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
+import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { GatewayDeps } from '../types/gateway.js';
 import { startUpstreamTimer } from '../metrics.js';
+import { validate } from '../middleware/validate.js';
 
 const CREDIT_COST_PER_CALL = 1; // cost per proxied request
 
@@ -12,6 +14,11 @@ const CREDIT_COST_PER_CALL = 1; // cost per proxied request
 export function createGatewayRouter(deps: GatewayDeps): Router {
   const { billing, rateLimiter, usageStore, upstreamUrl, apiKeys } = deps;
   const router = Router();
+
+  // Validation schema for API ID parameter
+  const apiIdParamsSchema = z.object({
+    apiId: z.string().min(1, 'API ID is required').max(50, 'API ID too long')
+  });
 
   /**
    * POST /api/gateway/:apiId
@@ -24,19 +31,21 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
    *   5. Record usage event
    *   6. Return upstream response
    */
-  router.all('/:apiId', async (req: Request, res: Response) => {
-    // 1. Validate API key
-    const apiKeyHeader = req.headers['x-api-key'] as string | undefined;
-    if (!apiKeyHeader) {
-      res.status(401).json({ error: 'Unauthorized: missing x-api-key header' });
-      return;
-    }
+  router.all('/:apiId', 
+    validate({ params: apiIdParamsSchema }), 
+    async (req: Request, res: Response) => {
+      // 1. Validate API key
+      const apiKeyHeader = req.headers['x-api-key'] as string | undefined;
+      if (!apiKeyHeader) {
+        res.status(401).json({ error: 'Unauthorized: missing x-api-key header' });
+        return;
+      }
 
-    const keyRecord = apiKeys.get(apiKeyHeader);
-    if (!keyRecord || keyRecord.apiId !== req.params.apiId) {
-      res.status(401).json({ error: 'Unauthorized: invalid API key' });
-      return;
-    }
+      const keyRecord = apiKeys.get(apiKeyHeader);
+      if (!keyRecord || keyRecord.apiId !== req.params.apiId) {
+        res.status(401).json({ error: 'Unauthorized: invalid API key' });
+        return;
+      }
 
     // 2. Rate-limit check
     const rateResult = rateLimiter.check(apiKeyHeader);

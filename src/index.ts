@@ -1,9 +1,12 @@
+import './config/env.js'
 import express from 'express';
 import { initializeDb, closeDb } from './db/index.js';
 import { closePgPool } from './db.js';
 import { closeDbPool } from './config/health.js';
 import { disconnectPrisma } from './lib/prisma.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { createGatewayIpAllowlist } from './middleware/ipAllowlist.js';
+import type { Response } from 'express';
 import type { Socket } from 'net';
 import type { Server } from 'http';
 
@@ -16,72 +19,7 @@ import { createUsageStore } from './services/usageStore.js';
 import { createSettlementStore } from './services/settlementStore.js';
 import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
-
-type ShutdownLogger = Pick<typeof console, 'log' | 'warn' | 'error'>;
-
-interface GracefulShutdownOptions {
-  server: Server;
-  activeConnections: Set<Socket>;
-  closeDatabase: () => Promise<void>;
-  logger?: ShutdownLogger;
-  timeoutMs?: number;
-}
-
-export function createGracefulShutdownHandler({
-  server,
-  activeConnections,
-  closeDatabase,
-  logger = console,
-  timeoutMs = 30_000,
-}: GracefulShutdownOptions) {
-  let shutdownPromise: Promise<number> | null = null;
-
-  return async (signal: NodeJS.Signals | string): Promise<number> => {
-    if (shutdownPromise) {
-      return shutdownPromise;
-    }
-
-    shutdownPromise = (async () => {
-      logger.log(`\n[shutdown] Received ${signal}. Starting graceful shutdown...`);
-
-      const timeoutHandle = setTimeout(() => {
-        if (activeConnections.size > 0) {
-          logger.warn(`[shutdown] Timeout reached. Destroying ${activeConnections.size} connection(s).`);
-          for (const socket of activeConnections) {
-            socket.destroy();
-          }
-        }
-      }, timeoutMs);
-      timeoutHandle.unref();
-
-      try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((err?: Error) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            resolve();
-          });
-        });
-        logger.log('[shutdown] HTTP server closed. No new requests accepted.');
-
-        await closeDatabase();
-        logger.log('[shutdown] Database and pools closed.');
-
-        logger.log('[shutdown] Shutdown complete.');
-        return 0;
-      } catch (error) {
-        logger.error('[shutdown] Shutdown failed:', error);
-        return 1;
-      } finally {
-        clearTimeout(timeoutHandle);
-      }
-    })();
-
-    return shutdownPromise;
-  };
-}
+import { config } from './config/index.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution = process.argv[1] && (process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('index.js'));
@@ -125,10 +63,10 @@ if (isDirectExecution) {
     billing,
     rateLimiter,
     usageStore,
-    upstreamUrl: process.env.UPSTREAM_URL ?? 'http://localhost:4000',
+    upstreamUrl: config.proxy.upstreamUrl,
     apiKeys,
   });
-  app.use('/api/gateway', gatewayRouter);
+  app.use('/api/gateway', createGatewayIpAllowlist(), gatewayRouter);
 
   // New proxy route: /v1/call/:apiSlugOrId/*
   const proxyRouter = createProxyRouter({
@@ -138,7 +76,7 @@ if (isDirectExecution) {
     registry,
     apiKeys,
     proxyConfig: {
-      timeoutMs: parseInt(process.env.PROXY_TIMEOUT_MS ?? '30000', 10),
+      timeoutMs: config.proxy.timeoutMs,
     },
   });
   app.use('/v1/call', proxyRouter);
@@ -149,7 +87,7 @@ if (isDirectExecution) {
   // Global error handler (must be after all routes)
   app.use(errorHandler);
 
-  const PORT = process.env.PORT ?? 3000;
+  const PORT = config.port;
 
   const closeAllDataResources = async () => {
     await closeDb();

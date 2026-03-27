@@ -322,3 +322,249 @@ describe('Proxy /v1/call', () => {
     await new Promise<void>((resolve) => tmpServer.close(() => resolve()));
   });
 });
+
+// ── Resilience Tests ──────────────────────────────────────────────────────
+
+describe('Proxy Resilience', () => {
+  it('handles connection resets gracefully', async () => {
+    let requestCount = 0;
+    
+    setUpstreamHandler((req, res) => {
+      requestCount++;
+      // Reset connection on first request
+      if (requestCount === 1) {
+        res.socket!.destroy();
+        return;
+      }
+      // Succeed on retry
+      res.status(200).json({ message: 'success after reset', requestCount });
+    });
+
+    // First request should fail with connection reset
+    const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/reset-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({ test: 'reset' }),
+    });
+
+    expect(res1.status).toBe(502);
+    const body1 = await res1.json();
+    expect(body1.error).toMatch(/bad gateway/i);
+
+    // Second request should succeed
+    const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/reset-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({ test: 'reset' }),
+    });
+
+    expect(res2.status).toBe(200);
+    const body2 = await res2.json();
+    expect(body2.message).toBe('success after reset');
+    expect(body2.requestCount).toBe(2);
+  });
+
+  it('handles slow upstreams with timeout', async () => {
+    setUpstreamHandler(async (req, res) => {
+      // Simulate slow response that exceeds timeout
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      res.status(200).json({ message: 'too late' });
+    });
+
+    const startTime = Date.now();
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/slow`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    const duration = Date.now() - startTime;
+    
+    // Should timeout before 3 seconds (proxy timeout is 2000ms)
+    expect(duration).toBeLessThan(3000);
+    expect(res.status).toBe(504);
+    
+    const body = await res.json();
+    expect(body.error).toMatch(/timeout/i);
+    expect(body.requestId).toBeTruthy();
+  });
+
+  it('handles upstream that responds slowly but within timeout', async () => {
+    setUpstreamHandler(async (req, res) => {
+      // Respond within timeout (1.5 seconds, timeout is 2 seconds)
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      res.status(200).json({ message: 'slow but success' });
+    });
+
+    const startTime = Date.now();
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/slow-but-ok`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    const duration = Date.now() - startTime;
+    
+    // Should complete within timeout
+    expect(duration).toBeGreaterThan(1500);
+    expect(duration).toBeLessThan(3000);
+    expect(res.status).toBe(200);
+    
+    const body = await res.json();
+    expect(body.message).toBe('slow but success');
+  });
+
+  it('prevents sensitive header leakage to upstream', async () => {
+    let receivedHeaders: Record<string, string | string[] | undefined> = {};
+
+    setUpstreamHandler((req, res) => {
+      receivedHeaders = { ...req.headers };
+      res.status(200).json({ receivedHeaders: Object.keys(receivedHeaders) });
+    });
+
+    await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/security-test`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': TEST_API_KEY,
+        'authorization': 'Bearer secret-token',
+        'cookie': 'session=abc123',
+        'x-forwarded-for': '192.168.1.1',
+        'x-real-ip': '192.168.1.1',
+        'x-custom-safe': 'should-forward',
+        'user-agent': 'TestAgent/1.0',
+      },
+      body: JSON.stringify({}),
+    });
+
+    // Verify sensitive headers are stripped
+    expect(receivedHeaders['x-api-key']).toBeUndefined();
+    expect(receivedHeaders['authorization']).toBeUndefined();
+    expect(receivedHeaders['cookie']).toBeUndefined();
+    expect(receivedHeaders['x-forwarded-for']).toBeUndefined();
+    expect(receivedHeaders['x-real-ip']).toBeUndefined();
+    expect(receivedHeaders['host']).toBeUndefined();
+    expect(receivedHeaders['connection']).toBeUndefined();
+    expect(receivedHeaders['keep-alive']).toBeUndefined();
+    expect(receivedHeaders['transfer-encoding']).toBeUndefined();
+    expect(receivedHeaders['proxy-authorization']).toBeUndefined();
+    expect(receivedHeaders['proxy-connection']).toBeUndefined();
+
+    // Verify safe headers are forwarded
+    expect(receivedHeaders['x-custom-safe']).toBe('should-forward');
+    expect(receivedHeaders['user-agent']).toBe('TestAgent/1.0');
+    expect(receivedHeaders['content-type']).toBe('application/json');
+    
+    // Verify X-Request-Id is added
+    expect(receivedHeaders['x-request-id']).toBeTruthy();
+    expect(receivedHeaders['x-request-id']).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('handles case-insensitive header stripping', async () => {
+    let receivedHeaders: Record<string, string | string[] | undefined> = {};
+
+    setUpstreamHandler((req, res) => {
+      receivedHeaders = { ...req.headers };
+      res.status(200).json({ ok: true });
+    });
+
+    await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/case-test`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': TEST_API_KEY,
+        'X-API-Key': 'should-be-stripped', // Uppercase variant
+        'Authorization': 'Bearer token', // Capitalized
+        'HOST': 'should-be-stripped', // All caps
+        'x-custom-safe': 'should-forward',
+      },
+      body: JSON.stringify({}),
+    });
+
+    // All variants should be stripped (case-insensitive)
+    expect(receivedHeaders['x-api-key']).toBeUndefined();
+    expect(receivedHeaders['X-API-Key']).toBeUndefined();
+    expect(receivedHeaders['authorization']).toBeUndefined();
+    expect(receivedHeaders['Authorization']).toBeUndefined();
+    expect(receivedHeaders['host']).toBeUndefined();
+    expect(receivedHeaders['HOST']).toBeUndefined();
+
+    // Safe header should still be forwarded
+    expect(receivedHeaders['x-custom-safe']).toBe('should-forward');
+  });
+
+  it('preserves response headers from upstream while filtering hop-by-hop', async () => {
+    setUpstreamHandler((req, res) => {
+      res.set({
+        'content-type': 'application/json',
+        'cache-control': 'max-age=3600',
+        'x-upstream-custom': 'upstream-value',
+        'connection': 'close', // Should be filtered
+        'transfer-encoding': 'chunked', // Should be filtered
+        'x-request-id': 'upstream-id', // Should be overridden by proxy
+      });
+      res.status(200).json({ message: 'response with headers' });
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/headers-test`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    expect(res.status).toBe(200);
+    
+    // Should preserve safe headers
+    expect(res.headers.get('content-type')).toBe('application/json');
+    expect(res.headers.get('cache-control')).toBe('max-age=3600');
+    expect(res.headers.get('x-upstream-custom')).toBe('upstream-value');
+    
+    // Should filter hop-by-hop headers
+    expect(res.headers.get('connection')).toBeNull();
+    expect(res.headers.get('transfer-encoding')).toBeNull();
+    
+    // Should override upstream request-id with proxy's
+    expect(res.headers.get('x-request-id')).not.toBe('upstream-id');
+    expect(res.headers.get('x-request-id')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('handles upstream that closes connection prematurely', async () => {
+    setUpstreamHandler((req, res) => {
+      // Start response but close connection before finishing
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"partial": "response"');
+      res.socket!.destroy();
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/premature-close`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    // Should handle gracefully with 502
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toMatch(/bad gateway/i);
+  });
+
+  it('maintains request id through connection errors', async () => {
+    setUpstreamHandler((req, res) => {
+      // Destroy connection immediately
+      res.socket!.destroy();
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/error-with-id`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toMatch(/bad gateway/i);
+    expect(body.requestId).toBeTruthy();
+    expect(body.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+});
