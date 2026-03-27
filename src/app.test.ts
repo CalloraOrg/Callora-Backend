@@ -2,7 +2,7 @@ import request from 'supertest';
 import { createApp } from './app.js';
 import { InMemoryUsageEventsRepository } from './repositories/usageEventsRepository.js';
 import type { Api } from './db/schema.js';
-import type { ApiRepository, ApiListFilters } from './repositories/apiRepository.js';
+import type { ApiRepository, ApiListFilters, ApiCreateInput, ApiUpdateInput } from './repositories/apiRepository.js';
 import type { Developer } from './db/schema.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
@@ -125,10 +125,68 @@ const sampleApis: Api[] = [
 class FakeApiRepository implements ApiRepository {
   constructor(private readonly apis: Api[]) { }
 
+  async create(api: ApiCreateInput): Promise<Api> {
+    const created: Api = {
+      id: this.apis.length + 1,
+      developer_id: api.developer_id,
+      name: api.name,
+      description: api.description ?? null,
+      base_url: api.base_url,
+      logo_url: api.logo_url ?? null,
+      category: api.category ?? null,
+      status: api.status ?? 'draft',
+      created_at: new Date(1000),
+      updated_at: new Date(1000),
+    };
+    this.apis.push(created);
+    return created;
+  }
+
+  async update(id: number, data: ApiUpdateInput): Promise<Api | null> {
+    const index = this.apis.findIndex((api) => api.id === id);
+    if (index === -1) return null;
+    const current = this.apis[index];
+    const updated: Api = {
+      ...current,
+      ...(typeof data.name === 'string' ? { name: data.name } : {}),
+      ...(typeof data.description === 'string' || data.description === null
+        ? { description: data.description }
+        : {}),
+      ...(typeof data.base_url === 'string' ? { base_url: data.base_url } : {}),
+      ...(typeof data.logo_url === 'string' || data.logo_url === null ? { logo_url: data.logo_url } : {}),
+      ...(typeof data.category === 'string' || data.category === null ? { category: data.category } : {}),
+      ...(data.status ? { status: data.status } : {}),
+      updated_at: new Date(),
+    };
+    this.apis[index] = updated;
+    return updated;
+  }
+
   async listByDeveloper(developerId: number, filters: ApiListFilters = {}): Promise<Api[]> {
     let results = this.apis.filter((api) => api.developer_id === developerId);
     if (filters.status) {
       results = results.filter((api) => api.status === filters.status);
+    }
+    if (typeof filters.offset === 'number') {
+      results = results.slice(filters.offset);
+    }
+    if (typeof filters.limit === 'number') {
+      results = results.slice(0, filters.limit);
+    }
+    return results;
+  }
+
+  async listPublic(filters: ApiListFilters = {}): Promise<Api[]> {
+    if (filters.status && filters.status !== 'active') {
+      return [];
+    }
+    let results = this.apis.filter((api) => api.status === 'active');
+    if (filters.category) {
+      results = results.filter((api) => api.category === filters.category);
+    }
+    if (filters.search) {
+      const needle = filters.search.toLowerCase();
+      results = results.filter((api) => api.name.toLowerCase().includes(needle));
     }
     if (typeof filters.offset === 'number') {
       results = results.slice(filters.offset);
