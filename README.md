@@ -80,6 +80,42 @@ callora-backend/
 
 ## Environment
 
-- `PORT` — HTTP port (default: 3000). Optional for local dev.
+Copy `.env.example` to `.env` and fill in your values before running locally:
+
+```bash
+cp .env.example .env
+```
+
+The app validates all environment variables at startup using [Zod](https://zod.dev). If a required variable is missing, the app will exit immediately with a clear error message.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PORT` | No | `3000` | HTTP port |
+| `NODE_ENV` | No | `development` | `development` / `production` / `test` |
+| `DATABASE_URL` | No | local postgres | Primary PostgreSQL connection string |
+| `DB_HOST` | No | `localhost` | Database host |
+| `DB_PORT` | No | `5432` | Database port |
+| `DB_USER` | No | `postgres` | Database user |
+| `DB_PASSWORD` | No | `postgres` | Database password |
+| `DB_NAME` | No | `callora` | Database name |
+| `DB_POOL_MAX` | No | `10` | Max pool connections |
+| `DB_IDLE_TIMEOUT_MS` | No | `30000` | Pool idle timeout (ms) |
+| `DB_CONN_TIMEOUT_MS` | No | `2000` | Pool connection timeout (ms) |
+| `JWT_SECRET` | **Yes** | — | Secret for signing JWTs |
+| `ADMIN_API_KEY` | **Yes** | — | Key for admin endpoints |
+| `METRICS_API_KEY` | **Yes** | — | Key for `/api/metrics` in production |
+| `UPSTREAM_URL` | No | `http://localhost:4000` | Gateway upstream URL |
+| `PROXY_TIMEOUT_MS` | No | `30000` | Proxy request timeout (ms) |
+| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed origins |
+| `SOROBAN_RPC_ENABLED` | No | `false` | Enable Soroban RPC health check |
+| `SOROBAN_RPC_URL` | If `SOROBAN_RPC_ENABLED=true` | — | Soroban RPC endpoint URL |
+| `SOROBAN_RPC_TIMEOUT` | No | `2000` | Soroban RPC timeout (ms) |
+| `HORIZON_ENABLED` | No | `false` | Enable Horizon health check |
+| `HORIZON_URL` | If `HORIZON_ENABLED=true` | — | Horizon endpoint URL |
+| `HORIZON_TIMEOUT` | No | `2000` | Horizon timeout (ms) |
+| `HEALTH_CHECK_DB_TIMEOUT` | No | `2000` | DB health check timeout (ms) |
+| `APP_VERSION` | No | `1.0.0` | Reported in health check responses |
+| `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
+| `GATEWAY_PROFILING_ENABLED` | No | `false` | Enable request profiling |
 
 This repo is part of [Callora](https://github.com/your-org/callora). Frontend: `callora-frontend`. Contracts: `callora-contracts`.

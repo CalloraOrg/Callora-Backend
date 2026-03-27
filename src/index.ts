@@ -1,3 +1,4 @@
+import './config/env.js'
 import express from 'express';
 import { initializeDb, closeDb } from './db/index.js';
 import { type AuthenticatedLocals } from './middleware/requireAuth.js';
@@ -14,6 +15,7 @@ import { createUsageStore } from './services/usageStore.js';
 import { createSettlementStore } from './services/settlementStore.js';
 import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
+import { config } from './config/index.js';
 
 
 
@@ -59,7 +61,7 @@ if (isDirectExecution) {
     billing,
     rateLimiter,
     usageStore,
-    upstreamUrl: process.env.UPSTREAM_URL ?? 'http://localhost:4000',
+    upstreamUrl: config.proxy.upstreamUrl,
     apiKeys,
   });
   app.use('/api/gateway', gatewayRouter);
@@ -72,7 +74,7 @@ if (isDirectExecution) {
     registry,
     apiKeys,
     proxyConfig: {
-      timeoutMs: parseInt(process.env.PROXY_TIMEOUT_MS ?? '30000', 10),
+      timeoutMs: config.proxy.timeoutMs,
     },
   });
   app.use('/v1/call', proxyRouter);
@@ -83,7 +85,7 @@ if (isDirectExecution) {
   // Global error handler (must be after all routes)
   app.use(errorHandler);
 
-  const PORT = process.env.PORT ?? 3000;
+  const PORT = config.port;
 
   // Initialize database and start server
   async function startServer() {
