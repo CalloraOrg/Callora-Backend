@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import adminRouter from './routes/admin.js';
 import {
   InMemoryUsageEventsRepository,
@@ -89,6 +90,41 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
   const developerRepository = dependencies?.developerRepository ?? defaultDeveloperRepository;
 
+  // Production-safe security headers with environment-based configuration
+  const isProduction = process.env.NODE_ENV === 'production';
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  
+  // Apply Helmet with production-safe defaults
+  app.use(helmet({
+    // Content Security Policy - stricter in production
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for development
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'", ...(isDevelopment ? ["ws:", "wss:"] : [])],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+      },
+    },
+    // Cross-Origin Embedder Policy
+    crossOriginEmbedderPolicy: isProduction ? { policy: "require-corp" } : false,
+    // HSTS - only in production with HTTPS
+    hsts: isProduction ? {
+      maxAge: 31536000, // 1 year
+      includeSubDomains: true,
+      preload: true
+    } : false,
+    // Other security headers
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    permittedCrossDomainPolicies: false,
+    // Allow dev tools in development
+    hidePoweredBy: !isDevelopment,
+  }));
+
   app.use(requestIdMiddleware);
 
   // Lazy singleton for production Drizzle repo; injected repo is used in tests.
@@ -105,22 +141,54 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   app.use(requestLogger);
 
+  // Parse allowed origins with validation
   const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173')
     .split(',')
-    .map((o) => o.trim());
+    .map((o: string) => o.trim())
+    .filter((o: string) => o.length > 0);
+
+  // Validate origins in production
+  if (isProduction && allowedOrigins.length === 0) {
+    console.warn('WARNING: No CORS_ALLOWED_ORIGINS configured in production');
+  }
 
   app.use(
     cors({
-      origin(origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        // Allow requests with no origin (mobile apps, curl, etc.)
+        if (!origin) {
+          return callback(null, true);
         }
+
+        // Check if origin is in allowlist
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+
+        // In development, allow localhost with any port
+        if (isDevelopment && origin.startsWith('http://localhost:')) {
+          return callback(null, true);
+        }
+
+        // Log blocked attempts in production
+        if (isProduction) {
+          console.warn(`CORS blocked origin: ${origin}`);
+        }
+
+        callback(new Error('Not allowed by CORS'));
       },
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key'],
+      allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'x-admin-api-key',
+        'x-user-id', // Added for authentication
+        'x-request-id' // Added for tracing
+      ],
       credentials: true,
+      // Reduce preflight cache time in production for security
+      maxAge: isProduction ? 600 : 86400, // 10 minutes vs 24 hours
+      optionsSuccessStatus: 204, // No content for preflight
     }),
   );
   app.use(express.json());

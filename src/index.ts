@@ -1,4 +1,5 @@
 import express from 'express';
+import helmet from 'helmet';
 import { initializeDb, closeDb } from './db/index.js';
 import { type AuthenticatedLocals } from './middleware/requireAuth.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -28,6 +29,16 @@ app.get('/api/health', (_req, res) => {
 // Check if fil is being run directly (CommonJS / ESM compatibility trick for ts-jest)
 
 if (isDirectExecution) {
+
+  // Apply basic Helmet security headers for the main app
+  const isProduction = process.env.NODE_ENV === 'production';
+  app.use(helmet({
+    hsts: isProduction ? {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true
+    } : false,
+  }));
 
   // Shared services
   const MOCK_DEVELOPER_BALANCES: Record<string, number> = {
