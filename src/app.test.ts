@@ -9,6 +9,9 @@ import { InMemoryApiRepository } from './repositories/apiRepository.js';
 import assert from 'node:assert';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
+jest.mock('./services/transactionBuilder.js', () => ({
+  TransactionBuilderService: class MockTxBuilder {}
+}));
 
 // Mock better-sqlite3 before any module that transitively imports it is loaded.
 // This allows unit tests for app.ts to run without a compiled native binding.
@@ -221,6 +224,36 @@ test('GET /api/developers/analytics validates query params', async () => {
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-10&groupBy=year')
     .set('x-user-id', 'dev-1');
   expect(badGroupBy.status).toBe(400);
+});
+
+test('GET /api/developers/analytics returns 400 when from > to', async () => {
+  const app = createApp({ usageEventsRepository: seedRepository() });
+  const response = await request(app)
+    .get('/api/developers/analytics?from=2026-02-10&to=2026-02-01')
+    .set('x-user-id', 'dev-1');
+  expect(response.status).toBe(400);
+  expect(response.body.error).toMatch(/from must be before or equal to to/);
+});
+
+test('GET /api/developers/analytics aggregates by month', async () => {
+  const app = createApp({ usageEventsRepository: seedRepository() });
+  const response = await request(app)
+    .get('/api/developers/analytics?from=2026-01-01&to=2026-03-31&groupBy=month')
+    .set('x-user-id', 'dev-1');
+  expect(response.status).toBe(200);
+  expect(response.body.data).toEqual([
+    { period: '2026-02-01', calls: 4, revenue: '940' },
+  ]);
+});
+
+test('GET /api/health returns default ok schema without db', async () => {
+  const app = createApp(); // no healthCheckConfig
+  const response = await request(app).get('/api/health');
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual({
+    status: 'ok',
+    service: 'callora-backend'
+  });
 });
 
 test('GET /api/developers/analytics aggregates by day', async () => {
@@ -597,6 +630,19 @@ test('POST /api/developers/apis returns 400 when price_per_call_usdc is invalid'
     .send({
       ...validApiBody,
       endpoints: [{ path: '/data', method: 'GET', price_per_call_usdc: 'free' }],
+    });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /price_per_call_usdc/i);
+});
+
+test('POST /api/developers/apis returns 400 when price_per_call_usdc is negative', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({
+      ...validApiBody,
+      endpoints: [{ path: '/data', method: 'GET', price_per_call_usdc: '-0.01' }],
     });
   assert.equal(res.status, 400);
   assert.match(res.body.error, /price_per_call_usdc/i);

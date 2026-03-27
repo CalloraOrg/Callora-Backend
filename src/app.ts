@@ -125,6 +125,30 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
   app.use(express.json());
 
+  /**
+   * GET /api/health
+   *
+   * Provides health status of the application and its dependencies.
+   * If health check config is minimally configured, returns a basic status.
+   *
+   * @schema HealthCheckResult | BasicHealthResult
+   * @example Basic
+   * {
+   *   "status": "ok",
+   *   "service": "callora-backend"
+   * }
+   * @example Full
+   * {
+   *   "status": "ok",
+   *   "version": "1.0.0",
+   *   "timestamp": "2026-03-27T10:00:00.000Z",
+   *   "checks": {
+   *     "api": "ok",
+   *     "database": "ok",
+   *     "soroban_rpc": "ok"
+   *   }
+   * }
+   */
   app.get('/api/health', async (_req, res) => {
     // If no health check config provided, return simple health check
     if (!dependencies?.healthCheckConfig) {
@@ -157,6 +181,39 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     res.json(paginatedResponse([], { limit, offset }));
   });
 
+  /**
+   * GET /api/apis/:id
+   *
+   * Retrieves full details for a specific API, including pricing endpoints.
+   *
+   * Path params:
+   *   id - Positive integer ID of the API
+   *
+   * @schema ApiWithEndpointsDetails
+   * @example
+   * {
+   *   "id": 1,
+   *   "name": "Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "logo_url": null,
+   *   "category": "weather",
+   *   "status": "active",
+   *   "developer": {
+   *     "name": "Alice Dev",
+   *     "website": "https://alice.example.com",
+   *     "description": "Building climate tools"
+   *   },
+   *   "endpoints": [
+   *     {
+   *       "path": "/v1/current",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.001",
+   *       "description": "Current conditions"
+   *     }
+   *   ]
+   * }
+   */
   app.get('/api/apis/:id', async (req, res) => {
     const rawId = req.params.id;
     const id = Number(rawId);
@@ -261,6 +318,36 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     res.json({ data: payload });
   });
 
+  /**
+   * GET /api/developers/analytics
+   *
+   * Retrieves usage and revenue analytics for the authenticated developer.
+   *
+   * Query params:
+   *   from       - Start date (ISO-8601 string) (required)
+   *   to         - End date (ISO-8601 string) (required)
+   *   groupBy    - Aggregation period: 'day', 'week', 'month' (default 'day')
+   *   apiId      - Filter by specific API ID (optional)
+   *   includeTop - Include top endpoints and users (optional, default false)
+   *
+   * @schema DeveloperAnalyticsResponse
+   * @example
+   * {
+   *   "data": [
+   *     {
+   *       "period": "2026-02-01",
+   *       "calls": 2,
+   *       "revenue": "240"
+   *     }
+   *   ],
+   *   "topEndpoints": [
+   *     { "endpoint": "/v1/search", "calls": 2 }
+   *   ],
+   *   "topUsers": [
+   *     { "userId": "user-a", "calls": 2 }
+   *   ]
+   * }
+   */
   app.get('/api/developers/analytics', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>) => {
     const user = res.locals.authenticatedUser;
     if (!user) {
@@ -335,7 +422,54 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     res.status(204).send();
   });
 
-  // POST /api/developers/apis — publish a new API (authenticated)
+  /**
+   * POST /api/developers/apis
+   *
+   * Publishes a new API for the authenticated developer.
+   *
+   * @schema CreateApiInput -> ApiWithEndpoints
+   * @example Request
+   * {
+   *   "name": "My Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "category": "weather",
+   *   "status": "draft",
+   *   "endpoints": [
+   *     {
+   *       "path": "/forecast",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.01",
+   *       "description": "Get forecast"
+   *     }
+   *   ]
+   * }
+   * @example Response (201 Created)
+   * {
+   *   "id": 1,
+   *   "developer_id": 42,
+   *   "name": "My Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "logo_url": null,
+   *   "category": "weather",
+   *   "status": "draft",
+   *   "created_at": "2026-03-27T10:00:00.000Z",
+   *   "updated_at": "2026-03-27T10:00:00.000Z",
+   *   "endpoints": [
+   *     {
+   *       "id": 1,
+   *       "api_id": 1,
+   *       "path": "/forecast",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.01",
+   *       "description": "Get forecast",
+   *       "created_at": "2026-03-27T10:00:00.000Z",
+   *       "updated_at": "2026-03-27T10:00:00.000Z"
+   *     }
+   *   ]
+   * }
+   */
   app.post('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
     try {
       const user = res.locals.authenticatedUser;

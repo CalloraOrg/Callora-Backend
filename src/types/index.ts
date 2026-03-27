@@ -9,8 +9,23 @@ export interface HealthResponse {
   db?: DbHealthStatus;
 }
 
+export interface ApiSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  base_url: string;
+  logo_url: string | null;
+  category: string | null;
+  status: string;
+  developer: {
+    name: string | null;
+    website: string | null;
+    description: string | null;
+  };
+}
+
 export interface ApisResponse {
-  apis: unknown[];
+  apis: ApiSummary[];
 }
 
 export interface UsageResponse {
