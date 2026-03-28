@@ -133,30 +133,19 @@ export function validate(schemas: ValidationSchemas) {
  * @returns Array of formatted validation errors
  */
 function formatZodErrors(error: ZodError, location: string): ValidationErrorDetail[] {
-  return error.errors.map((err): ValidationErrorDetail => {
+  return error.issues.map((err): ValidationErrorDetail => {
     const field = err.path.join('.');
     const code = err.code.toUpperCase();
-    
-    // Map Zod error codes to user-friendly messages
+
     let message = err.message;
-    switch (err.code) {
-      case 'invalid_string':
-        message = `Invalid ${field}: ${err.message}`;
-        break;
-      case 'invalid_type':
-        message = `Invalid ${field}: expected ${err.expected}, received ${err.received}`;
-        break;
-      case 'too_small':
-        message = `${field} is too small: ${err.message}`;
-        break;
-      case 'too_big':
-        message = `${field} is too big: ${err.message}`;
-        break;
-      case 'invalid_enum_value':
-        message = `Invalid ${field}: must be one of ${err.options?.join(', ')}`;
-        break;
-      default:
-        message = `${field}: ${err.message}`;
+    if (err.code === 'invalid_type') {
+      message = `Invalid ${field}: expected ${err.expected}`;
+    } else if (err.code === 'too_small') {
+      message = `${field} is too small: ${err.message}`;
+    } else if (err.code === 'too_big') {
+      message = `${field} is too big: ${err.message}`;
+    } else {
+      message = `${field}: ${err.message}`;
     }
 
     return {

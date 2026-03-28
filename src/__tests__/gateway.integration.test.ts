@@ -11,6 +11,7 @@ import { ApiKey } from '../types/gateway.js';
 const TEST_API_KEY = 'integration-test-key';
 const TEST_DEVELOPER_ID = 'dev_integration';
 const TEST_API_ID = 'api_test';
+const LARGE_PAYLOAD_BYTES = 90 * 1024; // stay below Express's default 100kb JSON body limit
 
 const apiKeys = new Map<string, ApiKey>([
   [TEST_API_KEY, { key: TEST_API_KEY, developerId: TEST_DEVELOPER_ID, apiId: TEST_API_ID }],
@@ -229,5 +230,92 @@ describe('Gateway Proxy Integration', () => {
 
     // Billing was still deducted (call succeeded from gateway perspective)
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(999);
+  });
+
+  it('returns a stable 504 JSON error when the upstream times out', async () => {
+    setUpstreamHandler((_req, _res) => {
+      // Intentionally never respond.
+    });
+
+    const originalTimeout = AbortSignal.timeout;
+    const timeoutSpy = jest
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation((ms: number) => originalTimeout(Math.min(ms, 50)));
+
+    try {
+      const res = await fetch(`${gatewayUrl}/api/gateway/${TEST_API_ID}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+        },
+        body: JSON.stringify({ slow: true }),
+      });
+
+      expect(res.status).toBe(504);
+      expect(res.headers.get('content-type')).toMatch(/application\/json/);
+
+      const body = await res.json();
+      expect(body.error).toBe('Gateway Timeout');
+      expect(body.requestId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+
+      const events = usageStore.getEvents(TEST_API_KEY);
+      expect(events).toHaveLength(1);
+      expect(events[0].statusCode).toBe(504);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('passes through non-JSON upstream responses without wrapping them', async () => {
+    setUpstreamHandler((_req, res) => {
+      res.status(200).type('text/plain').send('plain-text upstream response');
+    });
+
+    const res = await fetch(`${gatewayUrl}/api/gateway/${TEST_API_ID}`, {
+      method: 'GET',
+      headers: {
+        'x-api-key': TEST_API_KEY,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/text\/plain/);
+    expect(await res.text()).toBe('plain-text upstream response');
+  });
+
+  it('proxies large JSON payloads within the documented parser limit', async () => {
+    let receivedLength = 0;
+    let receivedBody: { blob?: string } | undefined;
+
+    setUpstreamHandler((req, res) => {
+      receivedLength = Number(req.headers['content-length'] ?? 0);
+      receivedBody = req.body as { blob?: string };
+      res.status(200).json({
+        receivedLength,
+        blobLength: receivedBody.blob?.length ?? 0,
+      });
+    });
+
+    const payload = {
+      blob: 'x'.repeat(LARGE_PAYLOAD_BYTES),
+    };
+
+    const res = await fetch(`${gatewayUrl}/api/gateway/${TEST_API_ID}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': TEST_API_KEY,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.blobLength).toBe(LARGE_PAYLOAD_BYTES);
+    expect(receivedBody?.blob?.length).toBe(LARGE_PAYLOAD_BYTES);
+    expect(receivedLength).toBeGreaterThan(LARGE_PAYLOAD_BYTES);
   });
 });

@@ -129,4 +129,19 @@ describe('Gateway X-Api-Key auth', () => {
     );
     expect(parseInt(result.rows[0].count)).toBe(3);
   });
+
+  it('does not regress auth or usage logging for large authenticated headers', async () => {
+    const res = await request(app)
+      .get('/gateway/data')
+      .set('x-api-key', validKey)
+      .set('x-test-context', 'x'.repeat(8 * 1024));
+
+    expect(res.status).toBe(200);
+
+    const result = await db.pool.query(
+      `SELECT COUNT(*) as count FROM usage_logs WHERE api_key_id = $1`,
+      [validKeyId]
+    );
+    expect(parseInt(result.rows[0].count)).toBe(1);
+  });
 });
