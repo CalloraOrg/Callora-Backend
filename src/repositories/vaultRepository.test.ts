@@ -20,6 +20,20 @@ test('create stores a vault with default snapshot values', async () => {
   assert.ok(vault.updatedAt instanceof Date);
 });
 
+test('create returns a detached copy of persisted dates', async () => {
+  const repository = new InMemoryVaultRepository();
+
+  const created = await repository.create('user-1', 'contract-1', 'testnet');
+  created.createdAt.setUTCFullYear(1999);
+  created.updatedAt.setUTCFullYear(1999);
+
+  const stored = await repository.findByUserId('user-1', 'testnet');
+
+  assert.ok(stored);
+  assert.notEqual(stored.createdAt.getUTCFullYear(), 1999);
+  assert.notEqual(stored.updatedAt.getUTCFullYear(), 1999);
+});
+
 test('create enforces one vault per user and network', async () => {
   const repository = new InMemoryVaultRepository();
   await repository.create('user-1', 'contract-1', 'testnet');
@@ -82,6 +96,47 @@ test('updateBalanceSnapshot updates balance and last synced timestamp', async ()
   assert.equal(updated.balanceSnapshot, 15000000n);
   assert.deepEqual(updated.lastSyncedAt, syncedAt);
   assert.ok(updated.updatedAt.getTime() >= vault.updatedAt.getTime());
+});
+
+test('updateBalanceSnapshot preserves prior snapshots and creates detached date copies', async () => {
+  const repository = new InMemoryVaultRepository();
+  const original = await repository.create('user-1', 'contract-1', 'testnet');
+  const syncedAt = new Date('2026-02-25T10:00:00.000Z');
+
+  const updated = await repository.updateBalanceSnapshot(original.id, 15000000n, syncedAt);
+  syncedAt.setUTCFullYear(1999);
+  updated.lastSyncedAt?.setUTCFullYear(2000);
+  updated.updatedAt.setUTCFullYear(2000);
+
+  const stored = await repository.findByUserId('user-1', 'testnet');
+
+  assert.ok(stored);
+  assert.equal(original.balanceSnapshot, 0n);
+  assert.equal(original.lastSyncedAt, null);
+  assert.equal(stored.balanceSnapshot, 15000000n);
+  assert.equal(stored.lastSyncedAt?.toISOString(), '2026-02-25T10:00:00.000Z');
+  assert.notEqual(stored.updatedAt.getUTCFullYear(), 2000);
+});
+
+test('updateBalanceSnapshot applies later writes on the same vault id', async () => {
+  const repository = new InMemoryVaultRepository();
+  const vault = await repository.create('user-1', 'contract-1', 'testnet');
+  const firstSync = new Date('2026-02-25T10:00:00.000Z');
+  const secondSync = new Date('2026-02-25T10:05:00.000Z');
+
+  await repository.updateBalanceSnapshot(vault.id, 10000000n, firstSync);
+  const secondUpdate = await repository.updateBalanceSnapshot(
+    vault.id,
+    25000000n,
+    secondSync
+  );
+  const stored = await repository.findByUserId('user-1', 'testnet');
+
+  assert.ok(stored);
+  assert.equal(secondUpdate.balanceSnapshot, 25000000n);
+  assert.equal(secondUpdate.lastSyncedAt?.toISOString(), '2026-02-25T10:05:00.000Z');
+  assert.equal(stored.balanceSnapshot, 25000000n);
+  assert.equal(stored.lastSyncedAt?.toISOString(), '2026-02-25T10:05:00.000Z');
 });
 
 test('updateBalanceSnapshot throws for unknown vault id', async () => {

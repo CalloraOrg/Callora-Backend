@@ -40,6 +40,16 @@ export class VaultNotFoundError extends Error {
 const createVaultKey = (userId: string, network: string): string =>
   `${userId}::${network}`;
 
+const cloneDate = (value: Date | null): Date | null =>
+  value ? new Date(value.getTime()) : null;
+
+const cloneVault = (vault: Vault): Vault => ({
+  ...vault,
+  lastSyncedAt: cloneDate(vault.lastSyncedAt),
+  createdAt: new Date(vault.createdAt.getTime()),
+  updatedAt: new Date(vault.updatedAt.getTime()),
+});
+
 export class InMemoryVaultRepository implements VaultRepository {
   private readonly vaultsById = new Map<VaultId, Vault>();
   private readonly vaultIdByUserAndNetwork = new Map<string, VaultId>();
@@ -66,7 +76,7 @@ export class InMemoryVaultRepository implements VaultRepository {
     this.vaultsById.set(vault.id, vault);
     this.vaultIdByUserAndNetwork.set(key, vault.id);
 
-    return { ...vault };
+    return cloneVault(vault);
   }
 
   async findByUserId(userId: string, network: string): Promise<Vault | null> {
@@ -78,7 +88,7 @@ export class InMemoryVaultRepository implements VaultRepository {
     }
 
     const vault = this.vaultsById.get(vaultId);
-    return vault ? { ...vault } : null;
+    return vault ? cloneVault(vault) : null;
   }
 
   async updateBalanceSnapshot(
@@ -103,6 +113,6 @@ export class InMemoryVaultRepository implements VaultRepository {
     };
 
     this.vaultsById.set(id, updatedVault);
-    return { ...updatedVault };
+    return cloneVault(updatedVault);
   }
 }
