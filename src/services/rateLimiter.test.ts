@@ -1,22 +1,22 @@
-import { createRateLimiter } from './rateLimiter.js';
+import { createRateLimiter } from "./rateLimiter.js";
 
-describe('InMemoryRateLimiter', () => {
+describe("InMemoryRateLimiter", () => {
   beforeEach(() => {
     // Use modern fake timers so Date.now() and time advances are deterministic
     // cast to any to satisfy TS defs in this project
-    jest.useFakeTimers('modern' as unknown as any);
-    jest.setSystemTime(new Date('2026-03-30T00:00:00.000Z').getTime());
+    jest.useFakeTimers("modern" as unknown as any);
+    jest.setSystemTime(new Date("2026-03-30T00:00:00.000Z").getTime());
   });
 
   afterEach(() => {
     jest.useRealTimers();
   });
 
-  test('allows up to maxRequests then rejects until window elapses', () => {
+  test("allows up to maxRequests then rejects until window elapses", () => {
     const maxRequests = 2;
     const windowMs = 1000;
     const rl = createRateLimiter(maxRequests, windowMs);
-    const apiKey = 'test-key';
+    const apiKey = "test-key";
 
     const r1 = rl.check(apiKey);
     expect(r1.allowed).toBe(true);
