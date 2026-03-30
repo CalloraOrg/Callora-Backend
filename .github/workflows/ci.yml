@@ -37,12 +37,24 @@ jobs:
         run: npm run typecheck
 
       - name: Run Unit Tests
+        env:
+          JWT_SECRET: test-secret-for-ci
+          ADMIN_API_KEY: test-admin-key
+          METRICS_API_KEY: test-metrics-key
         run: NODE_ENV=test npm run test:unit
 
       - name: Run Integration Tests
+        env:
+          JWT_SECRET: test-secret-for-ci
+          ADMIN_API_KEY: test-admin-key
+          METRICS_API_KEY: test-metrics-key
         run: NODE_ENV=test npm run test:integration
 
       - name: Generate Coverage Report
+        env:
+          JWT_SECRET: test-secret-for-ci
+          ADMIN_API_KEY: test-admin-key
+          METRICS_API_KEY: test-metrics-key
         run: NODE_ENV=test npm run test:coverage
 
       - name: Build
