@@ -1,43 +1,37 @@
-import type { NextFunction, Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
+import type { NextFunction, Request, Response } from "express";
+import jwt from "jsonwebtoken";
 
-import type { AuthenticatedUser } from '../types/auth.js';
-import { UnauthorizedError } from '../errors/index.js';
-import { logger } from '../logger.js';
+import type { AuthenticatedUser } from "../types/auth.js";
+import { UnauthorizedError } from "../errors/index.js";
+import { logger } from "../logger.js";
 
-export interface AuthenticatedLocals {
+// Re-export the locals shape for files that import it from this module
+export type AuthenticatedLocals = {
   authenticatedUser?: AuthenticatedUser;
-}
-
-// Extend Express Request to carry the authenticated developer id
-declare module 'express-serve-static-core' {
-  interface Request {
-    developerId?: string;
-  }
-}
+};
 
 /** Restrict accepted signing algorithms to prevent algorithm-confusion attacks. */
-const ALLOWED_ALGORITHMS: jwt.Algorithm[] = ['HS256'];
+const ALLOWED_ALGORITHMS: jwt.Algorithm[] = ["HS256"];
 
 export const requireAuth = (
   req: Request,
   res: Response<unknown, AuthenticatedLocals>,
-  next: NextFunction
+  next: NextFunction,
 ): void => {
   let userId: string | undefined;
 
-  const authHeader = req.header('authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.slice('Bearer '.length).trim();
+  const authHeader = req.header("authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice("Bearer ".length).trim();
 
     if (!token) {
-      next(new UnauthorizedError('Missing token', 'MISSING_TOKEN'));
+      next(new UnauthorizedError("Missing token", "MISSING_TOKEN"));
       return;
     }
 
     const secret = process.env.JWT_SECRET;
     if (!secret) {
-      logger.error('[requireAuth] JWT_SECRET is not configured');
+      logger.error("[requireAuth] JWT_SECRET is not configured");
       next(new UnauthorizedError());
       return;
     }
@@ -48,37 +42,45 @@ export const requireAuth = (
       });
 
       // jwt.verify can return a plain string for unsigned payloads
-      if (typeof decoded === 'string' || !decoded) {
-        logger.warn('[requireAuth] Token payload is not a valid object');
-        next(new UnauthorizedError('Invalid token', 'INVALID_TOKEN'));
+      if (typeof decoded === "string" || !decoded) {
+        logger.warn("[requireAuth] Token payload is not a valid object");
+        next(new UnauthorizedError("Invalid token", "INVALID_TOKEN"));
         return;
       }
 
       const uid = (decoded as Record<string, unknown>).userId;
-      if (typeof uid !== 'string' || uid.trim() === '') {
-        logger.warn('[requireAuth] Token missing required userId claim');
-        next(new UnauthorizedError('Token missing required claims', 'MISSING_CLAIMS'));
+      if (typeof uid !== "string" || uid.trim() === "") {
+        logger.warn("[requireAuth] Token missing required userId claim");
+        next(
+          new UnauthorizedError(
+            "Token missing required claims",
+            "MISSING_CLAIMS",
+          ),
+        );
         return;
       }
 
       userId = uid;
     } catch (err) {
       // Log the failure reason but never the token contents
-      const code = err instanceof jwt.TokenExpiredError
-        ? 'TOKEN_EXPIRED'
-        : err instanceof jwt.NotBeforeError
-          ? 'TOKEN_NOT_ACTIVE'
-          : 'INVALID_TOKEN';
+      const code =
+        err instanceof jwt.TokenExpiredError
+          ? "TOKEN_EXPIRED"
+          : err instanceof jwt.NotBeforeError
+            ? "TOKEN_NOT_ACTIVE"
+            : "INVALID_TOKEN";
 
-      logger.warn('[requireAuth] JWT verification failed', { code });
-      next(new UnauthorizedError(
-        code === 'TOKEN_EXPIRED' ? 'Token expired' : 'Invalid token',
-        code,
-      ));
+      logger.warn("[requireAuth] JWT verification failed", { code });
+      next(
+        new UnauthorizedError(
+          code === "TOKEN_EXPIRED" ? "Token expired" : "Invalid token",
+          code,
+        ),
+      );
       return;
     }
   } else {
-    userId = req.header('x-user-id');
+    userId = req.header("x-user-id");
   }
 
   if (!userId) {
