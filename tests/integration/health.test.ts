@@ -173,6 +173,295 @@ describe('GET /api/health - Integration Tests', () => {
     assert.ok(!JSON.stringify(response.body).includes('sensitive info'));
   });
 
+  test('returns 200 with degraded status when database response is slow', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock slow database query
+      const originalQuery = testDb.pool.query;
+      testDb.pool.query = async (...args) => {
+        await new Promise(resolve => setTimeout(resolve, 1500)); // > 1000ms threshold
+        return originalQuery.apply(testDb.pool, args);
+      };
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'degraded');
+      assert.equal(response.body.checks.database, 'degraded');
+      assert.equal(response.body.checks.api, 'ok');
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('returns 200 with ok status when soroban rpc is reachable', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock fetch for soroban rpc
+      const originalFetch = global.fetch;
+      global.fetch = async (url: string | URL | Request) => {
+        if (url.toString().includes('soroban')) {
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'ok' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return originalFetch(url);
+      };
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+        sorobanRpc: {
+          url: 'http://mock-soroban-rpc.com',
+          timeout: 2000,
+        },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'ok');
+      assert.equal(response.body.checks.soroban_rpc, 'ok');
+
+      global.fetch = originalFetch;
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('returns 200 with degraded status when soroban rpc response is slow', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock slow fetch for soroban rpc
+      const originalFetch = global.fetch;
+      global.fetch = async (url: string | URL | Request) => {
+        if (url.toString().includes('soroban')) {
+          await new Promise(resolve => setTimeout(resolve, 2500)); // > 2000ms threshold
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'ok' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return originalFetch(url);
+      };
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+        sorobanRpc: {
+          url: 'http://mock-soroban-rpc.com',
+          timeout: 3000,
+        },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'degraded');
+      assert.equal(response.body.checks.soroban_rpc, 'degraded');
+
+      global.fetch = originalFetch;
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('returns 200 with ok status when horizon is reachable', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock fetch for horizon
+      const originalFetch = global.fetch;
+      global.fetch = async (url: string | URL | Request) => {
+        if (url.toString().includes('horizon')) {
+          return new Response('', { status: 200 });
+        }
+        return originalFetch(url);
+      };
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+        horizon: {
+          url: 'http://mock-horizon.com',
+          timeout: 2000,
+        },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'ok');
+      assert.equal(response.body.checks.horizon, 'ok');
+
+      global.fetch = originalFetch;
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('returns 200 with degraded status when horizon response is slow', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock slow fetch for horizon
+      const originalFetch = global.fetch;
+      global.fetch = async (url: string | URL | Request) => {
+        if (url.toString().includes('horizon')) {
+          await new Promise(resolve => setTimeout(resolve, 2500)); // > 2000ms threshold
+          return new Response('', { status: 200 });
+        }
+        return originalFetch(url);
+      };
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+        horizon: {
+          url: 'http://mock-horizon.com',
+          timeout: 3000,
+        },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'degraded');
+      assert.equal(response.body.checks.horizon, 'degraded');
+
+      global.fetch = originalFetch;
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('returns 200 with degraded status when database and soroban rpc are degraded', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock slow database query
+      const originalQuery = testDb.pool.query;
+      testDb.pool.query = async (...args) => {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        return originalQuery.apply(testDb.pool, args);
+      };
+
+      // Mock slow fetch for soroban rpc
+      const originalFetch = global.fetch;
+      global.fetch = async (url: string | URL | Request) => {
+        if (url.toString().includes('soroban')) {
+          await new Promise(resolve => setTimeout(resolve, 2500));
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'ok' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return originalFetch(url);
+      };
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+        sorobanRpc: {
+          url: 'http://mock-soroban-rpc.com',
+          timeout: 3000,
+        },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'degraded');
+      assert.equal(response.body.checks.database, 'degraded');
+      assert.equal(response.body.checks.soroban_rpc, 'degraded');
+
+      global.fetch = originalFetch;
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('does not include optional checks when not configured', async () => {
+    const testDb = createTestDb();
+
+    try {
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+        // No sorobanRpc or horizon configured
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'ok');
+      assert.equal(response.body.checks.api, 'ok');
+      assert.equal(response.body.checks.database, 'ok');
+      assert.ok(!('soroban_rpc' in response.body.checks));
+      assert.ok(!('horizon' in response.body.checks));
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('includes version and timestamp in response', async () => {
+    const testDb = createTestDb();
+
+    try {
+      const config: HealthCheckConfig = {
+        version: '2.1.3',
+        database: { pool: testDb.pool },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.version, '2.1.3');
+      assert.ok(response.body.timestamp);
+      assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(response.body.timestamp));
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('returns fallback response when health check throws', async () => {
+    const badPool = {
+      query: async () => {
+        throw new Error('Unexpected error');
+      },
+    };
+
+    const config: HealthCheckConfig = {
+      database: { pool: badPool as any },
+    };
+
+    const app = createApp({ healthCheckConfig: config });
+    const response = await request(app).get('/api/health');
+
+    assert.equal(response.status, 503);
+    assert.equal(response.body.status, 'down');
+    assert.ok(response.body.timestamp);
+    assert.equal(response.body.checks.api, 'ok');
+    assert.equal(response.body.checks.database, 'down');
+  });
+
   test('completes health check within performance threshold', async () => {
     const testDb = createTestDb();
 

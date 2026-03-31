@@ -87,5 +87,40 @@ describe('AmountValidator', () => {
       const result = AmountValidator.validateUsdcAmount('1e7');
       assert.strictEqual(result.valid, false);
     });
+
+    it('should reject scientific notation variants', () => {
+      for (const value of ['1E7', '1e+7', '1e-7', '5.0e3']) {
+        const result = AmountValidator.validateUsdcAmount(value);
+        assert.strictEqual(result.valid, false, `expected invalid for ${value}`);
+      }
+    });
+
+    it('should reject locale formatted amounts', () => {
+      const cases = [
+        '1,000.0000000', // comma thousands separator
+        '1000,0000000', // comma decimal separator
+        '1.000,0000000', // European format
+        '1000.0000000 ', // trailing whitespace
+        ' 1000.0000000', // leading whitespace
+        '1_000.0000000', // underscore grouping
+      ];
+
+      for (const value of cases) {
+        const result = AmountValidator.validateUsdcAmount(value);
+        assert.strictEqual(result.valid, false, `expected invalid for ${value}`);
+      }
+    });
+
+    it('should accept the smallest non-zero step (1 stroop)', () => {
+      const result = AmountValidator.validateUsdcAmount('0.0000001');
+      assert.strictEqual(result.valid, true);
+      assert.strictEqual(result.normalizedAmount, '0.0000001');
+    });
+
+    it('should reject below smallest non-zero step', () => {
+      const result = AmountValidator.validateUsdcAmount('0.0000000');
+      assert.strictEqual(result.valid, false);
+      assert.strictEqual(result.error, 'Amount must be greater than zero');
+    });
   });
 });

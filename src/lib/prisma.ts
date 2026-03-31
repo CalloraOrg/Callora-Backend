@@ -1,5 +1,5 @@
-import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '../generated/prisma/client.js';
 
 type PrismaClientLike = {
   $disconnect: () => Promise<void>;
@@ -15,7 +15,7 @@ function getPrismaClient(): PrismaClientLike {
       throw new Error("DATABASE_URL environment variable is required");
     }
     const adapter = new PrismaPg({ connectionString });
-    prisma = new PrismaClient({ adapter }) as PrismaClientLike;
+    prisma = new PrismaClient({ adapter }) as unknown as PrismaClientLike;
   }
   return prisma;
 }

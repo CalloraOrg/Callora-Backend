@@ -102,6 +102,32 @@ describe('billingInternals', () => {
       false
     );
   });
+
+  test('parses smallest on-chain units correctly', () => {
+    assert.equal(billingInternals.parseUsdcToContractUnits('0.0000001').toString(), '1');
+    assert.equal(billingInternals.parseUsdcToContractUnits('1').toString(), '10000000');
+    assert.equal(billingInternals.parseUsdcToContractUnits('1.0000000').toString(), '10000000');
+    assert.equal(billingInternals.parseUsdcToContractUnits('  1.23  ').toString(), '12300000');
+  });
+
+  test('rejects invalid USDC values', () => {
+    assert.throws(
+      () => billingInternals.parseUsdcToContractUnits('0'),
+      { message: 'amountUsdc must be greater than zero' }
+    );
+    assert.throws(
+      () => billingInternals.parseUsdcToContractUnits('-1.0'),
+      { message: 'amountUsdc must be a positive decimal with at most 7 fractional digits' }
+    );
+    assert.throws(
+      () => billingInternals.parseUsdcToContractUnits('0.00000001'),
+      { message: 'amountUsdc must be a positive decimal with at most 7 fractional digits' }
+    );
+    assert.throws(
+      () => billingInternals.parseUsdcToContractUnits('abc'),
+      { message: 'amountUsdc must be a positive decimal with at most 7 fractional digits' }
+    );
+  });
 });
 
 describe('BillingService.deduct', () => {
@@ -124,6 +150,67 @@ describe('BillingService.deduct', () => {
     assert.equal(result.usageEventId, '1');
     assert.equal(result.stellarTxHash, 'tx_stellar_123');
     assert.equal(result.alreadyProcessed, false);
+    assert.equal(soroban.getBalanceCount(), 1);
+    assert.equal(soroban.getDeductCount(), 1);
+  });
+
+  test('does not double-charge when same request_id is retried', async () => {
+    const inMemoryUsage = new Map<string, { id: number; stellar_tx_hash?: string }>();
+    let nextId = 1;
+
+    const client = {
+      query: async (sql: string, params: any[] = []) => {
+        if (sql.startsWith('BEGIN') || sql.startsWith('COMMIT') || sql.startsWith('ROLLBACK')) {
+          return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] } as QueryResult;
+        }
+
+        if (sql.includes('FROM usage_events') && params?.[0]) {
+          const existing = inMemoryUsage.get(params[0]);
+          return {
+            rows: existing ? [{ id: existing.id, stellar_tx_hash: existing.stellar_tx_hash }] : [],
+            rowCount: existing ? 1 : 0,
+            command: 'SELECT',
+            oid: 0,
+            fields: [],
+          } as QueryResult;
+        }
+
+        if (sql.includes('INSERT INTO usage_events')) {
+          const requestId = params[5];
+          const id = nextId++;
+          inMemoryUsage.set(requestId, { id });
+          return { rows: [{ id }], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+        }
+
+        if (sql.includes('UPDATE usage_events')) {
+          const [txHash, id] = params;
+          for (const value of inMemoryUsage.values()) {
+            if (value.id === id) {
+              value.stellar_tx_hash = txHash;
+            }
+          }
+          return { rows: [], rowCount: 1, command: 'UPDATE', oid: 0, fields: [] } as QueryResult;
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      },
+      release: () => {},
+    } as unknown as PoolClient;
+
+    const pool = createMockPool(client);
+    const soroban = createMockSorobanClient({ balance: '500000', txHash: 'tx_first' });
+    const billingService = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
+
+    const request = { ...baseRequest, requestId: 'req_double' };
+
+    const first = await billingService.deduct(request);
+    assert.equal(first.success, true);
+    assert.equal(first.alreadyProcessed, false);
+
+    const second = await billingService.deduct(request);
+    assert.equal(second.success, true);
+    assert.equal(second.alreadyProcessed, true);
+
     assert.equal(soroban.getBalanceCount(), 1);
     assert.equal(soroban.getDeductCount(), 1);
   });

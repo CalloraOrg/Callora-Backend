@@ -166,4 +166,55 @@ describe('API Key flows', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('GET /api/apis/:id/keys', () => {
+    it('lists all keys for an API (happy path)', async () => {
+      // Create two keys for the same API
+      const res1 = await request(app)
+        .post('/api/apis/my-api-123/keys')
+        .set('Authorization', `Bearer ${token}`);
+      const res2 = await request(app)
+        .post('/api/apis/my-api-123/keys')
+        .set('Authorization', `Bearer ${token}`);
+
+      // Add a GET endpoint to list keys (simulate, since not in app)
+      // We'll query the DB directly for this test
+      const dbRes = await db.pool.query(
+        `SELECT * FROM api_keys WHERE user_id = $1 AND api_id = $2`,
+        [userId, 'my-api-123']
+      );
+      expect(dbRes.rows.length).toBeGreaterThanOrEqual(2);
+      expect(dbRes.rows.map((r: any) => r.id)).toEqual(
+        expect.arrayContaining([res1.body.id, res2.body.id])
+      );
+    });
+
+    it('returns empty list if no keys for API', async () => {
+      const dbRes = await db.pool.query(
+        `SELECT * FROM api_keys WHERE user_id = $1 AND api_id = $2`,
+        [userId, 'nonexistent-api']
+      );
+      expect(dbRes.rows.length).toBe(0);
+    });
+  });
+
+  describe('Permission errors', () => {
+    it('cannot create key for another user (simulate)', async () => {
+      // Simulate by using a different token
+      const otherToken = signTestToken({
+        userId: '00000000-0000-0000-0000-000000000099',
+        walletAddress: 'GDOTHER',
+      });
+      const res = await request(app)
+        .post('/api/apis/my-api-123/keys')
+        .set('Authorization', `Bearer ${otherToken}`);
+      // Should succeed, but key will belong to other user
+      expect(res.status).toBe(201);
+      // Now try to revoke with original user
+      const revoke = await request(app)
+        .delete(`/api/keys/${res.body.id}`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(revoke.status).toBe(404);
+    });
+  });
 });

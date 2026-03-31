@@ -43,6 +43,20 @@ export class NotFoundError extends AppError {
   }
 }
 
+export class PaymentRequiredError extends AppError {
+  constructor(message: string = 'Payment Required', code?: string) {
+    super(message, 402, code ?? 'PAYMENT_REQUIRED');
+    this.name = 'PaymentRequiredError';
+  }
+}
+
+export class TooManyRequestsError extends AppError {
+  constructor(message: string = 'Too Many Requests', code?: string) {
+    super(message, 429, code ?? 'TOO_MANY_REQUESTS');
+    this.name = 'TooManyRequestsError';
+  }
+}
+
 export function isAppError(err: unknown): err is AppError {
   return err instanceof AppError;
 }

@@ -5,32 +5,34 @@ import { logger } from '../logger.js';
 const isProduction = process.env.NODE_ENV === 'production';
 
 /**
- * Standard JSON body for error responses: { error: string, code?: string }
+ * Standard JSON body for error responses: { error: string, code?: string, requestId: string }
  */
 export interface ErrorResponseBody {
   error: string;
   code?: string;
+  requestId: string;
 }
 
 /**
  * Global error-handling middleware (4-arg form).
  * - Catches errors thrown in routes/services
  * - Maps known AppError subclasses to HTTP status codes
- * - Returns consistent JSON: { error, code? }
+ * - Returns consistent JSON: { error, code?, requestId }
  * - Never sends stack traces to the client in production
  * - Logs full error server-side
  */
 export function errorHandler(
   err: unknown,
-  _req: Request,
+  req: Request,
   res: Response<ErrorResponseBody>,
   _next: NextFunction
 ): void {
   const statusCode = isAppError(err) ? err.statusCode : 500;
   const message = err instanceof Error ? err.message : 'Internal server error';
   const code = isAppError(err) ? err.code : undefined;
+  const requestId = (req as any).id || 'unknown';
 
-  const body: ErrorResponseBody = { error: message };
+  const body: ErrorResponseBody = { error: message, requestId };
   if (code) body.code = code;
 
   if (!res.headersSent) {
