@@ -37,5 +37,10 @@ export function paginatedResponse<T>(
   data: T[],
   meta: PaginationMeta,
 ): PaginatedResponse<T> {
+  // Performance optimization: truncate large lists in-place to reduce allocations.
+  // Setting length is faster than slice() as it avoids creating a new array.
+  if (data.length > meta.limit) {
+    data.length = meta.limit;
+  }
   return { data, meta };
 }

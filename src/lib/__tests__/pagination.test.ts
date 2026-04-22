@@ -129,14 +129,28 @@ describe('paginatedResponse', () => {
     assert.deepEqual(Object.keys(result.meta).sort(), ['limit', 'offset']);
   });
 
-  // --- Edge cases: data pass-through ---
-
-  it('passes through a large dataset unchanged', () => {
+  // --- Edge cases: data truncation optimization ---
+  
+  it('truncates a large dataset to the limit in-place', () => {
     const items = Array.from({ length: 1000 }, (_, i) => ({ id: i }));
     const result = paginatedResponse(items, { total: 1000, limit: 100, offset: 0 });
-    assert.equal(result.data.length, 1000);
+    
+    // Should be truncated to limit
+    assert.equal(result.data.length, 100);
     assert.deepEqual(result.data[0], { id: 0 });
-    assert.deepEqual(result.data[999], { id: 999 });
+    assert.deepEqual(result.data[99], { id: 99 });
+    
+    // Verify in-place mutation (allocation reduction)
+    assert.equal(items.length, 100);
+  });
+
+  it('does not mutate or truncate if data is within limit', () => {
+    const items = Array.from({ length: 50 }, (_, i) => ({ id: i }));
+    const result = paginatedResponse(items, { total: 50, limit: 100, offset: 0 });
+    
+    assert.equal(result.data.length, 50);
+    assert.equal(items.length, 50);
+    assert.strictEqual(result.data, items);
   });
 
   it('handles an empty data array with non-zero offset', () => {
