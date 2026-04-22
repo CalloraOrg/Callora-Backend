@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { startUpstreamTimer, type UpstreamOutcome } from '../metrics.js';
 import { validate } from '../middleware/validate.js';
@@ -7,6 +7,7 @@ import type { GatewayDeps } from '../types/gateway.js';
 
 const CREDIT_COST_PER_CALL = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_BODY_SIZE = '1mb';
 
 const apiIdParamsSchema = z.object({
   apiId: z.string().min(1, 'API ID is required').max(50, 'API ID too long'),
@@ -15,7 +16,14 @@ const apiIdParamsSchema = z.object({
 export function createGatewayRouter(deps: GatewayDeps): Router {
   const { billing, rateLimiter, usageStore, upstreamUrl } = deps;
   const apiKeys = deps.apiKeys ?? new Map();
+  const maxBodySize = deps.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
   const router = Router();
+
+  // Enforce body size limits at the router level so the gateway is self-contained
+  // regardless of whether a global body parser is present. Oversized bodies surface
+  // as 413 via the app-level error handler.
+  router.use(express.json({ limit: maxBodySize }));
+  router.use(express.urlencoded({ extended: false, limit: maxBodySize }));
 
   router.all(
     '/:apiId',

@@ -196,7 +196,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       optionsSuccessStatus: 204, // No content for preflight
     }),
   );
-  app.use(express.json());
+  const requestBodyLimit = process.env.REQUEST_BODY_LIMIT ?? '100kb';
+  app.use(express.json({ limit: requestBodyLimit }));
+  app.use(express.urlencoded({ extended: false, limit: requestBodyLimit }));
 
   /**
    * GET /api/health

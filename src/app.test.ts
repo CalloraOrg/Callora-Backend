@@ -911,14 +911,73 @@ describe('Route precedence and ordering', () => {
 
   test('errorHandler is registered last and catches all errors', async () => {
     const app = createApp();
-    
+
     // Test that errors from any route are caught
     const res = await request(app)
       .get('/api/developers/analytics?from=invalid&to=invalid')
       .set('x-user-id', 'dev-1');
-    
+
     assert.equal(res.status, 400);
     assert.ok(res.body.error);
     assert.equal(typeof res.body.error, 'string');
+  });
+});
+
+describe('body size limits (REQUEST_BODY_LIMIT)', () => {
+  // These tests rely on the default REQUEST_BODY_LIMIT of '100kb'.
+  // Body parsing happens before auth, so auth is irrelevant to the 413 outcome.
+
+  test('returns 413 when JSON body exceeds the configured limit', async () => {
+    const app = createApp();
+    // ~200 KB – exceeds the 100kb default
+    const oversizedBody = JSON.stringify({ data: 'x'.repeat(200 * 1024) });
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/json')
+      .send(oversizedBody);
+
+    assert.equal(res.status, 413);
+  });
+
+  test('returns a JSON error body with a descriptive message on 413', async () => {
+    const app = createApp();
+    const oversizedBody = JSON.stringify({ data: 'x'.repeat(200 * 1024) });
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/json')
+      .send(oversizedBody);
+
+    assert.equal(res.status, 413);
+    assert.ok(res.headers['content-type']?.includes('application/json'));
+    assert.equal(res.body.error, 'Request body too large');
+  });
+
+  test('accepts JSON bodies within the configured limit', async () => {
+    const app = createApp();
+    // ~1 KB – well within the 100kb default
+    const smallBody = { name: 'tiny' };
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/json')
+      .send(smallBody);
+
+    // Any status except 413 confirms body parsing succeeded (401 is fine — auth hasn't run yet)
+    assert.notEqual(res.status, 413);
+  });
+
+  test('returns 413 for oversized URL-encoded bodies', async () => {
+    const app = createApp();
+    // Build a URL-encoded value that exceeds 100kb
+    const oversizedValue = 'x'.repeat(200 * 1024);
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/x-www-form-urlencoded')
+      .send(`data=${oversizedValue}`);
+
+    assert.equal(res.status, 413);
   });
 });

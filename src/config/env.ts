@@ -98,6 +98,10 @@ const envSchema = z
       .string()
       .transform((v) => v === 'true')
       .default(false),
+
+    // Body size limits
+    REQUEST_BODY_LIMIT: z.string().default('100kb'),
+    GATEWAY_BODY_LIMIT: z.string().default('1mb'),
   })
   .superRefine((values, ctx) => {
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {

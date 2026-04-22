@@ -96,6 +96,8 @@ export interface GatewayDeps {
   upstreamUrl: string;
   apiKeys?: Map<string, ApiKey>;
   authMiddleware?: RequestHandler;
+  /** Maximum allowed request body size (Express size string, e.g. '1mb', '512kb'). Default: '1mb'. */
+  maxBodySize?: string;
 }
 
 /** Dependencies injected into the proxy router factory. */
