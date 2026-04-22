@@ -39,9 +39,11 @@ export const logger = pino(structuredLoggerOptions);
 
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
   const requestId =
+    req.id ||
     (Array.isArray(req.headers['x-request-id'])
       ? req.headers['x-request-id'][0]
-      : req.headers['x-request-id']) ?? uuidv4();
+      : req.headers['x-request-id']) ||
+    uuidv4();
 
   res.setHeader('x-request-id', requestId);
 

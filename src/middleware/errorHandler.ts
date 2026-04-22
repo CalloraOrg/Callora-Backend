@@ -40,9 +40,16 @@ export function errorHandler(
   }
 
   // Log full error server-side (including stack in dev)
+  const logData = {
+    requestId,
+    statusCode,
+    message,
+    ...(isProduction ? {} : { err }),
+  };
+
   if (isProduction) {
-    logger.error('[errorHandler]', statusCode, message, err instanceof Error ? err.stack : String(err));
+    logger.error('[errorHandler]', logData, err instanceof Error ? err.stack : String(err));
   } else {
-    logger.error('[errorHandler]', err);
+    logger.error('[errorHandler]', logData);
   }
 }

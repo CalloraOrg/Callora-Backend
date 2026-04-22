@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import type { Request, Response } from 'express';
 
@@ -28,19 +27,17 @@ describe('structured logger options', () => {
       30,
     );
 
-    assert.deepEqual(method.mock.calls[0], [
-      {
-        headers: {
-          authorization: REDACTED_LOG_VALUE,
-          'x-api-key': REDACTED_LOG_VALUE,
-        },
-        password: REDACTED_LOG_VALUE,
-        nested: {
-          token: REDACTED_LOG_VALUE,
-          ok: true,
-        },
+    expect(method).toHaveBeenCalledWith({
+      headers: {
+        authorization: REDACTED_LOG_VALUE,
+        'x-api-key': REDACTED_LOG_VALUE,
       },
-    ]);
+      password: REDACTED_LOG_VALUE,
+      nested: {
+        token: REDACTED_LOG_VALUE,
+        ok: true,
+      },
+    });
   });
 });
 
@@ -72,19 +69,49 @@ describe('requestLogger', () => {
       requestLogger(req, res, next);
       res.emit('finish');
 
-      assert.equal(next.mock.calls.length, 1);
-      assert.deepEqual(res.setHeader.mock.calls[0], ['x-request-id', 'req-safe-1']);
-      assert.equal(infoSpy.mock.calls.length, 1);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(res.setHeader).toHaveBeenCalledWith('x-request-id', 'req-safe-1');
+      expect(infoSpy).toHaveBeenCalledTimes(1);
 
       const [payload, message] = infoSpy.mock.calls[0] as [Record<string, unknown>, string];
-      assert.equal(message, 'request completed');
-      assert.equal(payload.requestId, 'req-safe-1');
-      assert.equal(payload.method, 'POST');
-      assert.equal(payload.path, '/api/vault/deposit/prepare');
-      assert.equal(payload.statusCode, 200);
-      assert.equal(typeof payload.durationMs, 'number');
-      assert.equal('headers' in payload, false);
-      assert.equal('body' in payload, false);
+      expect(message).toBe('request completed');
+      expect(payload.requestId).toBe('req-safe-1');
+      expect(payload.method).toBe('POST');
+      expect(payload.path).toBe('/api/vault/deposit/prepare');
+      expect(payload.statusCode).toBe(200);
+      expect(typeof payload.durationMs).toBe('number');
+      expect('headers' in payload).toBe(false);
+      expect('body' in payload).toBe(false);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  test('honors req.id set by upstream middleware', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+
+    try {
+      const req = {
+        id: 'req-from-id-property',
+        headers: {},
+        method: 'GET',
+        path: '/test',
+      } as unknown as Request;
+
+      const res = new EventEmitter() as EventEmitter &
+        Response & {
+          statusCode: number;
+          setHeader: jest.Mock;
+        };
+      res.statusCode = 200;
+      res.setHeader = jest.fn();
+
+      requestLogger(req, res, jest.fn());
+      res.emit('finish');
+
+      const [payload] = infoSpy.mock.calls[0] as [Record<string, unknown>, string];
+      expect(payload.requestId).toBe('req-from-id-property');
+      expect(res.setHeader).toHaveBeenCalledWith('x-request-id', 'req-from-id-property');
     } finally {
       infoSpy.mockRestore();
     }
@@ -111,10 +138,10 @@ describe('requestLogger', () => {
       requestLogger(req, res, jest.fn());
       res.emit('finish');
 
-      assert.equal(errorSpy.mock.calls.length, 1);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
       const [payload, message] = errorSpy.mock.calls[0] as [Record<string, unknown>, string];
-      assert.equal(message, 'request completed');
-      assert.equal(payload.statusCode, 503);
+      expect(message).toBe('request completed');
+      expect(payload.statusCode).toBe(503);
     } finally {
       errorSpy.mockRestore();
     }

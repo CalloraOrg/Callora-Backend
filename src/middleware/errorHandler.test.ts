@@ -1,6 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { errorHandler, ErrorResponseBody } from '../middleware/errorHandler.js';
 import { AppError, BadRequestError, UnauthorizedError } from '../errors/index.js';
+import { logger } from '../logger.js';
+
+jest.mock('../logger.js', () => ({
+  logger: {
+    error: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+  },
+}));
 
 describe('Error Handler', () => {
   let mockReq: Partial<Request>;
@@ -39,6 +48,11 @@ describe('Error Handler', () => {
       code: 'BAD_REQUEST',
       requestId: 'test-request-id'
     });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      '[errorHandler]',
+      expect.objectContaining({ requestId: 'test-request-id', statusCode: 400 })
+    );
   });
 
   it('should handle generic Error with default values', () => {
@@ -56,6 +70,11 @@ describe('Error Handler', () => {
       error: 'Generic error',
       requestId: 'test-request-id'
     });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      '[errorHandler]',
+      expect.objectContaining({ requestId: 'test-request-id', statusCode: 500 })
+    );
   });
 
   it('should handle unknown error type', () => {
