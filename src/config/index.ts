@@ -1,6 +1,6 @@
-import { env } from './env.js';
+import { env } from "./env.js";
 
-export type StellarNetwork = 'testnet' | 'mainnet';
+export type StellarNetwork = "testnet" | "mainnet";
 
 interface StellarNetworkConfig {
   horizonUrl: string;
@@ -10,11 +10,12 @@ interface StellarNetworkConfig {
   settlementContractId?: string;
 }
 
-const TESTNET_NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015';
-const MAINNET_NETWORK_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
+const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const MAINNET_NETWORK_PASSPHRASE =
+  "Public Global Stellar Network ; September 2015";
 
 const selectedNetwork: StellarNetwork =
-  env.STELLAR_NETWORK ?? env.SOROBAN_NETWORK ?? 'testnet';
+  env.STELLAR_NETWORK ?? env.SOROBAN_NETWORK ?? "testnet";
 
 const testnetConfig: StellarNetworkConfig = {
   horizonUrl: env.STELLAR_TESTNET_HORIZON_URL,
@@ -32,7 +33,8 @@ const mainnetConfig: StellarNetworkConfig = {
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
 };
 
-const activeConfig = selectedNetwork === 'mainnet' ? mainnetConfig : testnetConfig;
+const activeConfig =
+  selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
 
 export const config = {
   port: env.PORT,
@@ -70,19 +72,21 @@ export const config = {
     timeoutMs: env.PROXY_TIMEOUT_MS,
   },
 
-  sorobanRpc: env.SOROBAN_RPC_ENABLED && env.SOROBAN_RPC_URL
-    ? {
-        url: env.SOROBAN_RPC_URL,
-        timeout: env.SOROBAN_RPC_TIMEOUT,
-      }
-    : undefined,
+  sorobanRpc:
+    env.SOROBAN_RPC_ENABLED && env.SOROBAN_RPC_URL
+      ? {
+          url: env.SOROBAN_RPC_URL,
+          timeout: env.SOROBAN_RPC_TIMEOUT,
+        }
+      : undefined,
 
-  horizon: env.HORIZON_ENABLED && env.HORIZON_URL
-    ? {
-        url: env.HORIZON_URL,
-        timeout: env.HORIZON_TIMEOUT,
-      }
-    : undefined,
+  horizon:
+    env.HORIZON_ENABLED && env.HORIZON_URL
+      ? {
+          url: env.HORIZON_URL,
+          timeout: env.HORIZON_TIMEOUT,
+        }
+      : undefined,
 
   stellar: {
     network: selectedNetwork,
@@ -98,5 +102,9 @@ export const config = {
       testnet: testnetConfig,
       mainnet: mainnetConfig,
     },
+  },
+
+  bcrypt: {
+    costFactor: env.BCRYPT_COST_FACTOR,
   },
 } as const;

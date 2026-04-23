@@ -1,18 +1,22 @@
-import 'dotenv/config';
-import { z } from 'zod';
+import "dotenv/config";
+import { z } from "zod";
 
-const stellarNetworkSchema = z.enum(['testnet', 'mainnet']);
+const stellarNetworkSchema = z.enum(["testnet", "mainnet"]);
 
-const envSchema = z
+export const envSchema = z
   .object({
     // Server
     PORT: z.coerce.number().default(3000),
-    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+    NODE_ENV: z
+      .enum(["development", "production", "test"])
+      .default("development"),
 
     // Database (primary connection string)
     DATABASE_URL: z
       .string()
-      .default('postgresql://postgres:postgres@localhost:5432/callora?schema=public'),
+      .default(
+        "postgresql://postgres:postgres@localhost:5432/callora?schema=public",
+      ),
 
     // Database pool
     DB_POOL_MAX: z.coerce.number().default(10),
@@ -20,28 +24,28 @@ const envSchema = z
     DB_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
 
     // Database (individual fields for health checks)
-    DB_HOST: z.string().default('localhost'),
+    DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().default(5432),
-    DB_USER: z.string().default('postgres'),
-    DB_PASSWORD: z.string().default('postgres'),
-    DB_NAME: z.string().default('callora'),
+    DB_USER: z.string().default("postgres"),
+    DB_PASSWORD: z.string().default("postgres"),
+    DB_NAME: z.string().default("callora"),
 
     // Auth
-    JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
-    ADMIN_API_KEY: z.string().min(1, 'ADMIN_API_KEY is required'),
-    METRICS_API_KEY: z.string().min(1, 'METRICS_API_KEY is required'),
+    JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
+    ADMIN_API_KEY: z.string().min(1, "ADMIN_API_KEY is required"),
+    METRICS_API_KEY: z.string().min(1, "METRICS_API_KEY is required"),
 
     // Proxy / Gateway
-    UPSTREAM_URL: z.string().url().default('http://localhost:4000'),
+    UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
     PROXY_TIMEOUT_MS: z.coerce.number().default(30_000),
 
     // CORS
-    CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
+    CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
 
     // Soroban RPC (optional)
     SOROBAN_RPC_ENABLED: z
       .string()
-      .transform((v) => v === 'true')
+      .transform((v) => v === "true")
       .default(false),
     SOROBAN_RPC_URL: z.string().url().optional(),
     SOROBAN_RPC_TIMEOUT: z.coerce.number().default(2_000),
@@ -49,7 +53,7 @@ const envSchema = z
     // Horizon (optional)
     HORIZON_ENABLED: z
       .string()
-      .transform((v) => v === 'true')
+      .transform((v) => v === "true")
       .default(false),
     HORIZON_URL: z.string().url().optional(),
     HORIZON_TIMEOUT: z.coerce.number().default(2_000),
@@ -61,19 +65,19 @@ const envSchema = z
     STELLAR_TESTNET_HORIZON_URL: z
       .string()
       .url()
-      .default('https://horizon-testnet.stellar.org'),
+      .default("https://horizon-testnet.stellar.org"),
     STELLAR_MAINNET_HORIZON_URL: z
       .string()
       .url()
-      .default('https://horizon.stellar.org'),
+      .default("https://horizon.stellar.org"),
     SOROBAN_TESTNET_RPC_URL: z
       .string()
       .url()
-      .default('https://soroban-testnet.stellar.org'),
+      .default("https://soroban-testnet.stellar.org"),
     SOROBAN_MAINNET_RPC_URL: z
       .string()
       .url()
-      .default('https://soroban-mainnet.stellar.org'),
+      .default("https://soroban-mainnet.stellar.org"),
 
     STELLAR_TESTNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
@@ -86,17 +90,17 @@ const envSchema = z
 
     // Health check
     HEALTH_CHECK_DB_TIMEOUT: z.coerce.number().default(2_000),
-    APP_VERSION: z.string().default('1.0.0'),
+    APP_VERSION: z.string().default("1.0.0"),
 
     // Logging
     LOG_LEVEL: z
-      .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
-      .default('info'),
+      .enum(["trace", "debug", "info", "warn", "error", "fatal"])
+      .default("info"),
 
     // Profiling
     GATEWAY_PROFILING_ENABLED: z
       .string()
-      .transform((v) => v === 'true')
+      .transform((v) => v === "true")
       .default(false),
 
     // Body size limits
@@ -107,16 +111,16 @@ const envSchema = z
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['SOROBAN_RPC_URL'],
-        message: 'SOROBAN_RPC_URL is required when SOROBAN_RPC_ENABLED=true',
+        path: ["SOROBAN_RPC_URL"],
+        message: "SOROBAN_RPC_URL is required when SOROBAN_RPC_ENABLED=true",
       });
     }
 
     if (values.HORIZON_ENABLED && !values.HORIZON_URL) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['HORIZON_URL'],
-        message: 'HORIZON_URL is required when HORIZON_ENABLED=true',
+        path: ["HORIZON_URL"],
+        message: "HORIZON_URL is required when HORIZON_ENABLED=true",
       });
     }
   });
@@ -124,9 +128,9 @@ const envSchema = z
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
-  console.error('❌ Invalid environment configuration:');
+  console.error("❌ Invalid environment configuration:");
   parsed.error.issues.forEach((issue) => {
-    console.error(`  - ${issue.path.join('.')}: ${issue.message}`);
+    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
   });
   process.exit(1);
 }
