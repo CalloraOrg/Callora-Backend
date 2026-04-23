@@ -9,7 +9,9 @@ import { dispatchWebhook } from '../../src/webhooks/webhook.dispatcher.js';
 import { WebhookEventType } from '../../src/webhooks/webhook.types.js';
 
 // Mock the logger to avoid console output in tests
-const mockLogger = {
+// Must use `var` so the variable is hoisted with the jest.mock() call (same as mockDnsLookup below)
+// eslint-disable-next-line no-var
+var mockLogger = {
   error: jest.fn(),
   warn: jest.fn(),
   info: jest.fn(),
@@ -21,7 +23,11 @@ jest.mock('../../src/logger.js', () => ({
 }));
 
 // Mock DNS resolution for URL validation tests
-const mockDnsLookup = jest.fn();
+// Must use `var` (not `const`/`let`) so the variable is hoisted along with
+// the jest.mock() call — `const` and `let` are not hoisted and would be in the
+// temporal dead zone when Jest runs the factory at module load time.
+// eslint-disable-next-line no-var
+var mockDnsLookup = jest.fn();
 jest.mock('dns/promises', () => ({
   lookup: mockDnsLookup,
 }));

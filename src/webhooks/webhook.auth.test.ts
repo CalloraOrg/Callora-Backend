@@ -88,16 +88,14 @@ describe('Webhook Authentication Middleware (Future Implementation)', () => {
         .update(payloadString)
         .digest('hex');
 
-      const invalidSignature = 'invalid-signature-here';
+      // Use a fake signature with the same length (64 hex chars) to simulate a real comparison
+      const invalidSignature = 'a'.repeat(64);
 
       // Simulate timing-safe comparison (Node.js provides crypto.timingSafeEqual)
       const validBuffer = Buffer.from(validSignature, 'utf8');
       const invalidBuffer = Buffer.from(invalidSignature, 'utf8');
 
-      // This would be the actual implementation:
-      // const isValid = crypto.timingSafeEqual(validBuffer, receivedBuffer);
-      
-      // For testing purposes, we'll just verify the buffers are different lengths
+      // Both buffers must be the same length for crypto.timingSafeEqual to work
       expect(validBuffer.length).toBe(invalidBuffer.length);
       expect(validBuffer.equals(invalidBuffer)).toBe(false);
     });
@@ -135,7 +133,8 @@ describe('Webhook Authentication Middleware (Future Implementation)', () => {
 
     it('should reject old timestamps to prevent replay attacks', () => {
       const now = Date.now();
-      const fiveMinutesAgo = new Date(now - 5 * 60 * 1000).toISOString();
+      // Use 4 minutes ago so recentAge is strictly < 5 minutes (boundary exclusive)
+      const fiveMinutesAgo = new Date(now - 4 * 60 * 1000).toISOString();
       const sixMinutesAgo = new Date(now - 6 * 60 * 1000).toISOString();
 
       const recentPayload = { ...mockPayload, timestamp: fiveMinutesAgo };

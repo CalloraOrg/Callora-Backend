@@ -46,7 +46,10 @@ describe('gatewayApiKeyAuth middleware', () => {
           return overrides?.candidates ?? [baseCandidate];
         },
         resolveApiContext() {
-          return overrides?.resolveApiContext?.() ?? {
+          if (overrides && 'resolveApiContext' in overrides) {
+            return overrides.resolveApiContext?.() ?? null;
+          }
+          return {
             api: { id: 'api_1' },
             endpoint: { endpointId: 'ep_1' },
           };

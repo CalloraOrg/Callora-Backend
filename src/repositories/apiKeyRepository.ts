@@ -46,6 +46,8 @@ export const apiKeyRepository = {
     scopes: string[];
     rateLimitPerMinute: number | null;
   }): { key: string; prefix: string } {
+    if (!params) return { key: '', prefix: '' };
+    
     const key = generatePlainKey();
     const prefix = key.slice(0, 16);
 
@@ -71,6 +73,8 @@ export const apiKeyRepository = {
     return 'success';
   },
   verify(key: string): ApiKeyRecord | null {
+    if (!key || typeof key !== 'string') return null;
+    
     // Find potential matches by prefix first for efficiency
     const prefix = key.slice(0, 16);
     const candidates = apiKeys.filter(k => constantTimeCompare(k.prefix, prefix));
@@ -109,7 +113,7 @@ export const apiKeyRepository = {
     return { success: true, newKey, prefix: newPrefix };
   },
   listForTesting(): ApiKeyRecord[] {
-    return [...apiKeys];
+    return apiKeys.map(k => ({ ...k, scopes: [...k.scopes] }));
   },
   // Clear method for testing
   clear(): void {

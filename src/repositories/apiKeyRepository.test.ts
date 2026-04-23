@@ -136,7 +136,8 @@ describe('ApiKeyRepository Security Tests', () => {
       });
 
       const validKey = createResult.key;
-      const invalidKey = 'ck_live_invalidkey123456789012345678901234';
+      // Use the same prefix so it passes the fast-path check and tests the slow-path
+      const invalidKey = validKey.slice(0, 16) + 'invalidkey123456789012345678901234';
 
       // Measure time for valid key verification
       const startValid = process.hrtime.bigint();

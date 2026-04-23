@@ -58,10 +58,12 @@ describe('logger redaction helpers', () => {
   test('logger.info prefixes request id and redacts structured arguments', async () => {
     const originalLog = console.log;
     const logMock = jest.fn();
-    console.log = logMock as unknown as typeof console.log;
 
     try {
+      // Reset modules and set the mock BEFORE importing so wrapLog(console.log)
+      // captures the mocked version at module initialization time.
       jest.resetModules();
+      console.log = logMock as unknown as typeof console.log;
       const { logger, runWithRequestContext, REDACTED_LOG_VALUE } = await import('./logger.js');
 
       runWithRequestContext({ requestId: 'req-123' }, () => {
@@ -74,8 +76,8 @@ describe('logger redaction helpers', () => {
         });
       });
 
-      assert.equal(logMock.mock.calls.length, 1);
-      assert.deepEqual(logMock.mock.calls[0], [
+      expect(logMock.mock.calls).toHaveLength(1);
+      expect(logMock.mock.calls[0]).toEqual([
         '[request_id:req-123]',
         'auth failed',
         {
