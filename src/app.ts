@@ -34,6 +34,7 @@ import { VaultController } from './controllers/vaultController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { requestLogger } from './middleware/logging.js';
+import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 import { BadRequestError } from './errors/index.js';
 import { apiKeyRepository } from './repositories/apiKeyRepository.js';
 
@@ -131,6 +132,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   }));
 
   app.use(requestIdMiddleware);
+  app.use(metricsMiddleware);
 
   // Lazy singleton for production Drizzle repo; injected repo is used in tests.
   const _injectedApiRepo = dependencies?.apiRepository;
@@ -253,6 +255,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
 
   app.use('/api/admin', adminRouter);
+
+  // Prometheus metrics endpoint — auth-gated in production
+  app.get('/api/metrics', metricsEndpoint);
 
   // Mount all routes including billing
   app.use('/api', routes);
