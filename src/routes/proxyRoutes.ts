@@ -15,8 +15,7 @@ import { buildHopByHopSet, STATIC_HOP_BY_HOP } from '../lib/hopByHop.js';
  * buildHopByHopSet().
  */
 const DEFAULT_STRIP_HEADERS = [
-  'host',
-  'x-api-key',
+  // Hop-by-hop
   'connection',
   'keep-alive',
   'proxy-authenticate',

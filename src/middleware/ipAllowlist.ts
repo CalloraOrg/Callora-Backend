@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import ipRangeCheck from 'ip-range-check';
 import { logger } from './logging.js';
+import { getClientIp, isValidIp, DEFAULT_PROXY_HEADERS } from '../lib/clientIp.js';
 
 /**
  * Configuration for IP allowlist middleware
@@ -14,63 +15,6 @@ export interface IpAllowlistConfig {
   proxyHeaders?: string[];
   /** Whether to enable the allowlist (defaults to true) */
   enabled?: boolean;
-}
-
-/**
- * Default proxy headers to check when trustProxy is enabled
- * Ordered by reliability (most reliable first)
- */
-const DEFAULT_PROXY_HEADERS = [
-  'x-forwarded-for',      // Standard header
-  'x-real-ip',            // Nginx
-  'x-client-ip',          // Apache
-  'x-forwarded',          // Non-standard but used
-  'x-cluster-client-ip',  // Load balancers
-  'cf-connecting-ip',      // Cloudflare
-  'x-aws-client-ip',      // AWS ALB
-];
-
-/**
- * Extracts the real client IP from request, considering proxy headers if configured
- */
-function getClientIp(req: Request, config: IpAllowlistConfig): string {
-  // If proxy headers are not trusted, use direct connection IP
-  if (!config.trustProxy) {
-    return req.ip || req.connection.remoteAddress || req.socket.remoteAddress || '';
-  }
-
-  // Check proxy headers in order of priority
-  const headers = config.proxyHeaders || DEFAULT_PROXY_HEADERS;
-  
-  for (const header of headers) {
-    const headerValue = req.headers[header.toLowerCase()];
-    if (typeof headerValue === 'string' && headerValue.trim()) {
-      // X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2, ...)
-      // The first IP is the original client
-      const ips = headerValue.split(',').map(ip => ip.trim());
-      const firstIp = ips[0];
-      
-      // Validate IP format
-      if (isValidIp(firstIp)) {
-        return firstIp;
-      }
-    }
-  }
-
-  // Fallback to direct connection IP
-  return req.ip || req.connection.remoteAddress || req.socket.remoteAddress || '';
-}
-
-/**
- * Basic IP validation - checks if string looks like a valid IP address
- */
-function isValidIp(ip: string): boolean {
-  // IPv4 pattern
-  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
-  // IPv6 pattern (simplified)
-  const ipv6Pattern = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
-  
-  return ipv4Pattern.test(ip) || ipv6Pattern.test(ip) || ip.includes(':');
 }
 
 /**
@@ -112,7 +56,7 @@ export function createIpAllowlist(config: IpAllowlistConfig) {
       return;
     }
 
-    const clientIp = getClientIp(req, { ...config, trustProxy, proxyHeaders });
+    const clientIp = getClientIp(req, trustProxy, proxyHeaders);
 
     // Validate extracted IP format
     if (!isValidIp(clientIp)) {
