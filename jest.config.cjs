@@ -2,6 +2,7 @@
 module.exports = {
   preset: "ts-jest",
   testEnvironment: "node",
+  setupFiles: ["<rootDir>/jest.env-setup.cjs"],
   testMatch: ["**/?(*.)+(spec|test).ts"],
   // Exclude tests that use Node.js native test runner
   testPathIgnorePatterns: ["/node_modules/", "event.emitter.test.ts"],

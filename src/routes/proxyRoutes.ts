@@ -4,20 +4,27 @@ import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../ty
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import { startUpstreamTimer, type UpstreamOutcome } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
+import { buildHopByHopSet, STATIC_HOP_BY_HOP } from '../lib/hopByHop.js';
 
-
-/** Headers that must never be forwarded to the upstream server. */
+/**
+ * Headers that must never be forwarded to the upstream server.
+ *
+ * Includes all RFC 7230 §6.1 hop-by-hop headers plus gateway-specific
+ * internal headers (host, x-api-key) that must not leak to the origin.
+ * Dynamic Connection-listed headers are stripped at request time via
+ * buildHopByHopSet().
+ */
 const DEFAULT_STRIP_HEADERS = [
-  'host',
-  'x-api-key',
+  // Hop-by-hop
   'connection',
   'keep-alive',
-  'transfer-encoding',
-  'te',
-  'trailer',
-  'upgrade',
+  'proxy-authenticate',
   'proxy-authorization',
   'proxy-connection',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
 ];
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -114,9 +121,16 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       ? `${apiEntry.base_url}/${wildcardPath}`
       : apiEntry.base_url;
 
-    // 6. Build forwarded headers
+    // 6. Build forwarded headers — strip hop-by-hop and gateway-internal headers.
+    // buildHopByHopSet() also strips any additional names listed in the
+    // incoming Connection header value (RFC 7230 §6.1).
     const forwardHeaders: Record<string, string> = {};
-    const stripSet = new Set(config.stripHeaders.map((h) => h.toLowerCase()));
+    const connectionValue = typeof req.headers['connection'] === 'string'
+      ? req.headers['connection']
+      : undefined;
+    const stripSet = buildHopByHopSet(connectionValue);
+    // Always strip gateway-internal headers regardless of Connection listing
+    for (const h of config.stripHeaders) stripSet.add(h.toLowerCase());
 
     for (const [key, value] of Object.entries(req.headers)) {
       if (!stripSet.has(key.toLowerCase()) && typeof value === 'string') {
@@ -140,10 +154,12 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       upstreamStatus = upstreamRes.status;
       timer.stop(upstreamStatus, 'success');
 
-      // Forward response headers (skip hop-by-hop)
-      const hopByHop = new Set(['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade']);
+      // Forward response headers — strip hop-by-hop headers from the upstream
+      // response, including any names listed in the upstream Connection header.
+      const upstreamConnection = upstreamRes.headers.get('connection') ?? undefined;
+      const responseStripSet = buildHopByHopSet(upstreamConnection);
       upstreamRes.headers.forEach((value, key) => {
-        if (!hopByHop.has(key.toLowerCase())) {
+        if (!responseStripSet.has(key.toLowerCase())) {
           res.set(key, value);
         }
       });

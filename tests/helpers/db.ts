@@ -47,3 +47,23 @@ export function createTestDb() {
     },
   };
 }
+
+export async function resetTestDb(pool: any) {
+  try {
+    // Clear tables in reverse order of dependencies or use CASCADE
+    // Using TRUNCATE with CASCADE is the most reliable way in PostgreSQL
+    const tables = ['usage_logs', 'api_keys', 'users'];
+    
+    for (const table of tables) {
+      try {
+        await pool.query(`TRUNCATE TABLE ${table} CASCADE`);
+      } catch (err) {
+        // If table doesn't exist, log and continue (some tests might have partial schema)
+        console.warn(`Could not truncate table ${table}:`, (err as Error).message);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to reset test database:', error);
+    throw error;
+  }
+}

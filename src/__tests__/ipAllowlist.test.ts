@@ -4,7 +4,14 @@ import { createIpAllowlist, createAdminIpAllowlist, createGatewayIpAllowlist } f
 import { logger } from '../middleware/logging.js';
 
 // Mock the logger to avoid actual logging during tests
-jest.mock('../middleware/logging.js');
+jest.mock('../middleware/logging.js', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  }
+}));
 const mockLogger = logger as jest.Mocked<typeof logger>;
 
 describe('IP Allowlist Middleware', () => {

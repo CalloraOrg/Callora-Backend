@@ -373,6 +373,95 @@ test('GET /api/developers/analytics filters by apiId and blocks non-owned API', 
   expect(blocked.status).toBe(403);
 });
 
+const boundaryWeekRepository = () =>
+  new InMemoryUsageEventsRepository([
+    {
+      id: 'evt-week-sunday',
+      developerId: 'dev-1',
+      apiId: 'api-1',
+      endpoint: '/v1/test',
+      userId: 'user-1',
+      occurredAt: new Date('2026-02-09T12:00:00.000Z'), // Sunday
+      revenue: 100n,
+    },
+    {
+      id: 'evt-week-monday',
+      developerId: 'dev-1',
+      apiId: 'api-1',
+      endpoint: '/v1/test',
+      userId: 'user-1',
+      occurredAt: new Date('2026-02-10T12:00:00.000Z'), // Monday
+      revenue: 200n,
+    },
+    {
+      id: 'evt-week-sunday-next',
+      developerId: 'dev-1',
+      apiId: 'api-1',
+      endpoint: '/v1/test',
+      userId: 'user-1',
+      occurredAt: new Date('2026-02-16T12:00:00.000Z'), // Sunday next week
+      revenue: 300n,
+    },
+    {
+      id: 'evt-week-monday-next',
+      developerId: 'dev-1',
+      apiId: 'api-1',
+      endpoint: '/v1/test',
+      userId: 'user-1',
+      occurredAt: new Date('2026-02-17T12:00:00.000Z'), // Monday next week
+      revenue: 400n,
+    },
+  ]);
+
+test('GET /api/developers/analytics correctly handles week boundaries', async () => {
+  const app = createApp({ usageEventsRepository: boundaryWeekRepository() });
+  const response = await request(app)
+    .get('/api/developers/analytics?from=2026-02-08&to=2026-02-18&groupBy=week')
+    .set('x-user-id', 'dev-1');
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toEqual([
+    { period: '2026-02-03', calls: 1, revenue: '100' }, // Sunday Feb 9 in week starting Feb 3
+    { period: '2026-02-10', calls: 2, revenue: '500' }, // Monday Feb 10 and Sunday Feb 16 in week starting Feb 10
+    { period: '2026-02-17', calls: 1, revenue: '400' }, // Monday Feb 17 in week starting Feb 17
+  ]);
+});
+
+const boundaryMonthRepository = () =>
+  new InMemoryUsageEventsRepository([
+    {
+      id: 'evt-month-last',
+      developerId: 'dev-1',
+      apiId: 'api-1',
+      endpoint: '/v1/test',
+      userId: 'user-1',
+      occurredAt: new Date('2026-01-31T12:00:00.000Z'), // Last day of January
+      revenue: 100n,
+    },
+    {
+      id: 'evt-month-first',
+      developerId: 'dev-1',
+      apiId: 'api-1',
+      endpoint: '/v1/test',
+      userId: 'user-1',
+      occurredAt: new Date('2026-02-01T12:00:00.000Z'), // First day of February
+      revenue: 200n,
+    },
+  ]);
+
+test('GET /api/developers/analytics correctly handles month boundaries', async () => {
+  const app = createApp({ usageEventsRepository: boundaryMonthRepository() });
+  const response = await request(app)
+    .get('/api/developers/analytics?from=2026-01-30&to=2026-02-02&groupBy=month')
+    .set('x-user-id', 'dev-1');
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toEqual([
+    { period: '2026-01-01', calls: 1, revenue: '100' }, // Jan 31 in January
+    { period: '2026-02-01', calls: 1, revenue: '200' }, // Feb 1 in February
+  ]);
+});
+
 test('GET /api/developers/apis returns 401 when unauthenticated', async () => {
   const response = await request(createDeveloperApisApp()).get('/api/developers/apis');
   assert.equal(response.status, 401);
@@ -911,14 +1000,73 @@ describe('Route precedence and ordering', () => {
 
   test('errorHandler is registered last and catches all errors', async () => {
     const app = createApp();
-    
+
     // Test that errors from any route are caught
     const res = await request(app)
       .get('/api/developers/analytics?from=invalid&to=invalid')
       .set('x-user-id', 'dev-1');
-    
+
     assert.equal(res.status, 400);
     assert.ok(res.body.error);
     assert.equal(typeof res.body.error, 'string');
+  });
+});
+
+describe('body size limits (REQUEST_BODY_LIMIT)', () => {
+  // These tests rely on the default REQUEST_BODY_LIMIT of '100kb'.
+  // Body parsing happens before auth, so auth is irrelevant to the 413 outcome.
+
+  test('returns 413 when JSON body exceeds the configured limit', async () => {
+    const app = createApp();
+    // ~200 KB – exceeds the 100kb default
+    const oversizedBody = JSON.stringify({ data: 'x'.repeat(200 * 1024) });
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/json')
+      .send(oversizedBody);
+
+    assert.equal(res.status, 413);
+  });
+
+  test('returns a JSON error body with a descriptive message on 413', async () => {
+    const app = createApp();
+    const oversizedBody = JSON.stringify({ data: 'x'.repeat(200 * 1024) });
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/json')
+      .send(oversizedBody);
+
+    assert.equal(res.status, 413);
+    assert.ok(res.headers['content-type']?.includes('application/json'));
+    assert.equal(res.body.error, 'Request body too large');
+  });
+
+  test('accepts JSON bodies within the configured limit', async () => {
+    const app = createApp();
+    // ~1 KB – well within the 100kb default
+    const smallBody = { name: 'tiny' };
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/json')
+      .send(smallBody);
+
+    // Any status except 413 confirms body parsing succeeded (401 is fine — auth hasn't run yet)
+    assert.notEqual(res.status, 413);
+  });
+
+  test('returns 413 for oversized URL-encoded bodies', async () => {
+    const app = createApp();
+    // Build a URL-encoded value that exceeds 100kb
+    const oversizedValue = 'x'.repeat(200 * 1024);
+
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('Content-Type', 'application/x-www-form-urlencoded')
+      .send(`data=${oversizedValue}`);
+
+    assert.equal(res.status, 413);
   });
 });

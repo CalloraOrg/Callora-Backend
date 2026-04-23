@@ -69,8 +69,8 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
       return event.occurredAt >= query.from && event.occurredAt <= query.to;
     });
 
-    // Apply limit if specified
-    if (query.limit && query.limit > 0) {
+    // Apply limit if specified (0 means return nothing, consistent with PgUsageEventsRepository)
+    if (query.limit !== undefined) {
       filtered = filtered.slice(0, query.limit);
     }
 

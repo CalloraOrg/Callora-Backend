@@ -12,6 +12,10 @@ export class MockSorobanBilling implements BillingService {
   }
 
   async deductCredit(developerId: string, amount: number): Promise<BillingResult> {
+    if (amount <= 0) {
+      return { success: false, balance: this.balances.get(developerId) ?? 0 };
+    }
+
     const current = this.balances.get(developerId) ?? 0;
 
     if (current < amount) {

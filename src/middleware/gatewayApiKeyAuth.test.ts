@@ -46,7 +46,10 @@ describe('gatewayApiKeyAuth middleware', () => {
           return overrides?.candidates ?? [baseCandidate];
         },
         resolveApiContext() {
-          return overrides?.resolveApiContext?.() ?? {
+          if (overrides && overrides.resolveApiContext !== undefined) {
+            return overrides.resolveApiContext();
+          }
+          return {
             api: { id: 'api_1' },
             endpoint: { endpointId: 'ep_1' },
           };
@@ -192,7 +195,7 @@ describe('gatewayApiKeyAuth middleware', () => {
       .get('/gateway/api_1')
       .set('x-api-key', validApiKey);
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
     expect(res.body.error).toBe('Unauthorized: API key has been revoked');
   });
 

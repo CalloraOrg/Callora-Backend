@@ -368,7 +368,7 @@ export class InMemoryApiRepository implements ApiRepository {
 
   async findById(id: number): Promise<ApiDetails | null> {
     const item = this.detailsById.get(id) ?? null;
-    if (!item || item.status !== 'active') return null;
+    if (!item) return null;
     return item;
   }
 
