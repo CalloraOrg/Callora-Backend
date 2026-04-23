@@ -1,3 +1,8 @@
+// Set required env vars for validation in src/config/env.ts
+process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
+process.env.ADMIN_API_KEY = 'test-admin-key';
+process.env.METRICS_API_KEY = 'test-metrics-key';
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import request from 'supertest';
 import express from 'express';
@@ -12,7 +17,7 @@ import type { DeveloperRepository } from '../../src/repositories/developerReposi
 import type { ApiRepository, ApiListFilters } from '../../src/repositories/apiRepository.js';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
-
+ 
 // Mock better-sqlite3 to avoid native binding requirement in test env
 jest.mock('better-sqlite3', () => {
   return class MockDatabase {
@@ -240,6 +245,12 @@ const protectedEndpoints: Array<{
 describe('requireAuth – rejects unauthenticated requests on all protected routes', () => {
   let app: express.Express;
 
+  beforeEach(() => {
+    process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+  });
+
   beforeAll(() => {
     app = buildRealApp();
   });
@@ -274,13 +285,46 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         const res = await req;
         expectUnauthorized(res);
       });
+
+      it('returns 401 with lowercase bearer prefix', async () => {
+        const req = request(app)[method](path).set('Authorization', 'bearer some-token');
+        if (body) req.send(body);
+        const res = await req;
+        expectUnauthorized(res);
+      });
+
+      it('returns 401 when space is missing after Bearer', async () => {
+        const req = request(app)[method](path).set('Authorization', 'Bearersometoken');
+        if (body) req.send(body);
+        const res = await req;
+        expectUnauthorized(res);
+      });
+
+      it('returns 401 with empty x-user-id', async () => {
+        const req = request(app)[method](path).set('x-user-id', '');
+        if (body) req.send(body);
+        const res = await req;
+        expectUnauthorized(res);
+      });
+
+      it('returns 401 with whitespace-only x-user-id', async () => {
+        const req = request(app)[method](path).set('x-user-id', '   ');
+        if (body) req.send(body);
+        const res = await req;
+        expectUnauthorized(res);
+      });
     },
   );
 });
 
 describe('requireAuth – accepts valid credentials on protected routes', () => {
   let app: express.Express;
-  const originalJwtSecret = process.env.JWT_SECRET;
+
+  beforeEach(() => {
+    process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+  });
 
   const bearerToken = () =>
     signTestToken({
@@ -289,22 +333,15 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
     });
 
   beforeAll(() => {
-    process.env.JWT_SECRET = TEST_JWT_SECRET;
     app = buildRealApp();
   });
 
-  afterAll(() => {
-    // Clean up
-    delete process.env.JWT_SECRET;
-  });
-
   it('authenticates via Bearer token on GET /api/developers/apis', async () => {
-    // Use x-user-id instead of invalid JWT
+    const token = bearerToken();
     const res = await request(app)
       .get('/api/developers/apis')
-      .set('x-user-id', 'user-42');
+      .set('Authorization', `Bearer ${token}`);
 
-    // Auth passes; the route itself may return 200 (empty list) or 404 depending on developer lookup
     expect(res.status).not.toBe(401);
   });
 
@@ -312,7 +349,16 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
     const res = await request(app)
       .get('/api/developers/apis')
       .set('x-user-id', 'user-42');
+ 
+    expect(res.status).not.toBe(401);
+  });
 
+  it('authenticates when extra spaces are present after Bearer', async () => {
+    const token = bearerToken();
+    const res = await request(app)
+      .get('/api/developers/apis')
+      .set('Authorization', `Bearer    ${token}`);
+    
     expect(res.status).not.toBe(401);
   });
 
@@ -371,6 +417,15 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
 
     expect(res.status).not.toBe(401);
   });
+
+  it('authenticates via x-user-id when an invalid Authorization scheme is present', async () => {
+    const res = await request(app)
+      .get('/api/developers/apis')
+      .set('Authorization', 'Invalid scheme')
+      .set('x-user-id', 'user-42');
+
+    expect(res.status).not.toBe(401);
+  });
 });
 
 describe('requireAuth – error body consistency', () => {
@@ -395,8 +450,8 @@ describe('requireAuth – error body consistency', () => {
     expect(res.body).not.toHaveProperty('statusCode');
     // Only expected keys
     const keys = Object.keys(res.body);
-    expect(keys).toEqual(expect.arrayContaining(['error', 'code']));
-    expect(keys.length).toBe(2);
+    expect(keys).toEqual(expect.arrayContaining(['error', 'code', 'requestId']));
+    expect(keys.length).toBe(3);
   });
 
   it('produces identical error shape across different protected routes', async () => {
@@ -406,7 +461,11 @@ describe('requireAuth – error body consistency', () => {
 
     for (const res of [res1, res2, res3]) {
       expect(res.status).toBe(401);
-      expect(res.body).toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+      expect(res.body).toEqual({
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED',
+        requestId: 'mock-uuid-1234',
+      });
     }
   });
 });

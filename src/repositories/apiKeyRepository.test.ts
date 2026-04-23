@@ -136,7 +136,7 @@ describe('ApiKeyRepository Security Tests', () => {
       });
 
       const validKey = createResult.key;
-      const invalidKey = 'ck_live_invalidkey123456789012345678901234';
+      const invalidKey = validKey.slice(0, 16) + 'invalidkey123456789012345678901234';
 
       // Measure time for valid key verification
       const startValid = process.hrtime.bigint();
@@ -336,9 +336,13 @@ describe('ApiKeyRepository Security Tests', () => {
 
       // Revoke the key
       const keys = apiKeyRepository.listForTesting();
-      const keyId = keys.find(k => k.userId === userId)!.id;
-      const revokeResult = apiKeyRepository.revoke(keyId, userId);
+      const keyToRevoke = keys.find(k => k.userId === userId)!;
+      const revokeResult = apiKeyRepository.revoke(keyToRevoke.id, userId);
       expect(revokeResult).toBe('success');
+
+      // Verify the flag is set
+      const revokedKey = apiKeyRepository.listForTesting().find(k => k.id === keyToRevoke.id)!;
+      expect(revokedKey.revoked).toBe(true);
 
       // Try to verify the revoked key
       expect(apiKeyRepository.verify(createResult.key)).toBeNull();
@@ -400,7 +404,8 @@ describe('ApiKeyRepository Security Tests', () => {
       expect(apiKeyRepository.verify(createdKeys[2].key)).toBeTruthy(); // Unchanged key
 
       const finalKeys = apiKeyRepository.listForTesting();
-      expect(finalKeys).toHaveLength(2); // Only 2 keys should remain
+      expect(finalKeys).toHaveLength(3); // All 3 keys remain (1 revoked, 2 active)
+      expect(finalKeys.filter(k => k.revoked)).toHaveLength(1);
     });
   });
 });

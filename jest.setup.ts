@@ -5,6 +5,11 @@
  * to enable parallel test execution without flakiness.
  */
 
+// Set required environment variables for validation in src/config/env.ts
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-do-not-use-in-prod';
+process.env.ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'test-admin-key';
+process.env.METRICS_API_KEY = process.env.METRICS_API_KEY || 'test-metrics-key';
+
 import { WebhookStore } from './src/webhooks/webhook.store.js';
 import { resetAllMetrics } from './src/metrics.js';
 

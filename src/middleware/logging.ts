@@ -41,10 +41,16 @@ export const logger = pino(structuredLoggerOptions);
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
+  // Prefer the sanitized ID already set by requestIdMiddleware (req.id).
+  // Fall back to the raw header value for contexts where requestIdMiddleware
+  // hasn't run (e.g. isolated unit tests), and finally generate a UUID.
+  const reqWithId = req as Request & { id?: string };
   const requestId =
+    req.id ||
     (Array.isArray(req.headers['x-request-id'])
       ? req.headers['x-request-id'][0]
-      : req.headers['x-request-id']) ?? uuidv4();
+      : req.headers['x-request-id']) ||
+    uuidv4();
 
   res.setHeader('x-request-id', requestId);
 

@@ -27,10 +27,28 @@ export function errorHandler(
   res: Response<ErrorResponseBody>,
   _next: NextFunction
 ): void {
-  const statusCode = isAppError(err) ? err.statusCode : 500;
-  const message = err instanceof Error ? err.message : 'Internal server error';
+  // AppError subclasses carry statusCode; Express body-parser errors carry status (e.g. 413)
+  const statusCode = isAppError(err)
+    ? err.statusCode
+    : typeof (err as Record<string, unknown>).status === 'number'
+      ? (err as { status: number }).status
+      : 500;
+
+  const message =
+    statusCode === 413
+      ? 'Request body too large'
+      : err instanceof Error
+        ? err.message
+        : 'Internal server error';
+
   const code = isAppError(err) ? err.code : undefined;
   const requestId = (req as any).id || 'unknown';
+
+  // Security: In production, mask the message for unexpected (non-AppError) errors
+  let message = err instanceof Error ? err.message : 'Internal server error';
+  if (isProduction && !isKnownError) {
+    message = 'Internal server error';
+  }
 
   const body: ErrorResponseBody = { error: message, requestId };
   if (code) body.code = code;
@@ -40,9 +58,16 @@ export function errorHandler(
   }
 
   // Log full error server-side (including stack in dev)
+  const logData = {
+    requestId,
+    statusCode,
+    message,
+    ...(isProduction ? {} : { err }),
+  };
+
   if (isProduction) {
-    logger.error('[errorHandler]', statusCode, message, err instanceof Error ? err.stack : String(err));
+    logger.error('[errorHandler]', logData, err instanceof Error ? err.stack : String(err));
   } else {
-    logger.error('[errorHandler]', err);
+    logger.error('[errorHandler]', logData);
   }
 }

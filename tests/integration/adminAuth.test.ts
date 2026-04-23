@@ -16,6 +16,40 @@ jest.mock('better-sqlite3', () => {
   };
 });
 
+// Bypass startup env-var validation so the test can control process.env at runtime.
+jest.mock('../../src/config/env', () => ({
+  env: {
+    PORT: 3000,
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://localhost/callora_test',
+    DB_HOST: 'localhost',
+    DB_PORT: 5432,
+    DB_USER: 'postgres',
+    DB_PASSWORD: 'postgres',
+    DB_NAME: 'callora_test',
+    DB_POOL_MAX: 1,
+    DB_IDLE_TIMEOUT_MS: 1000,
+    DB_CONN_TIMEOUT_MS: 1000,
+    JWT_SECRET: 'placeholder-replaced-by-beforeEach',
+    ADMIN_API_KEY: 'placeholder-replaced-by-beforeEach',
+    METRICS_API_KEY: 'test-metrics-api-key',
+    UPSTREAM_URL: 'http://localhost:4000',
+    PROXY_TIMEOUT_MS: 30000,
+    CORS_ALLOWED_ORIGINS: 'http://localhost:5173',
+    SOROBAN_RPC_ENABLED: false,
+    HORIZON_ENABLED: false,
+    STELLAR_TESTNET_HORIZON_URL: 'https://horizon-testnet.stellar.org',
+    STELLAR_MAINNET_HORIZON_URL: 'https://horizon.stellar.org',
+    SOROBAN_TESTNET_RPC_URL: 'https://soroban-testnet.stellar.org',
+    SOROBAN_MAINNET_RPC_URL: 'https://soroban-mainnet.stellar.org',
+    STELLAR_BASE_FEE: 100,
+    HEALTH_CHECK_DB_TIMEOUT: 2000,
+    APP_VERSION: '1.0.0',
+    LOG_LEVEL: 'info',
+    GATEWAY_PROFILING_ENABLED: false,
+  },
+}));
+
 // Mock userRepository to keep admin route tests isolated from Prisma wiring.
 jest.mock('../../src/repositories/userRepository', () => ({
   findUsers: jest.fn(),
@@ -84,6 +118,41 @@ describe('adminAuth middleware on /api/admin routes', () => {
     expect(res.body.error).toBe('Unauthorized: admin access required');
   });
 
+  it('rejects expired JWT tokens', async () => {
+    const app = createApp();
+    const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, TEST_JWT_SECRET, { expiresIn: '-1s' });
+
+    const res = await request(app)
+      .get('/api/admin/users')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Unauthorized: admin access required');
+  });
+
+  it('rejects JWT tokens signed with the wrong secret', async () => {
+    const app = createApp();
+    const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, 'wrong-secret', { expiresIn: '1h' });
+
+    const res = await request(app)
+      .get('/api/admin/users')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Unauthorized: admin access required');
+  });
+
+  it('rejects a malformed Bearer token (not a valid JWT)', async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .get('/api/admin/users')
+      .set('Authorization', 'Bearer not-a-real-jwt');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Unauthorized: admin access required');
+  });
+
   it('accepts valid admin API key credentials', async () => {
     const app = createApp();
 
@@ -136,4 +205,3 @@ describe('adminAuth middleware on /api/admin routes', () => {
     expect(mockFindUsers).toHaveBeenCalledTimes(1);
   });
 });
-

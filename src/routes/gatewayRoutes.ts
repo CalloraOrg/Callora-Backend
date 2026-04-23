@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { startUpstreamTimer, type UpstreamOutcome } from '../metrics.js';
 import { validate } from '../middleware/validate.js';
 import type { GatewayDeps } from '../types/gateway.js';
+import { buildHopByHopSet } from '../lib/hopByHop.js';
 
 const CREDIT_COST_PER_CALL = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_BODY_SIZE = '1mb';
 
 const apiIdParamsSchema = z.object({
   apiId: z.string().min(1, 'API ID is required').max(50, 'API ID too long'),
@@ -15,7 +17,14 @@ const apiIdParamsSchema = z.object({
 export function createGatewayRouter(deps: GatewayDeps): Router {
   const { billing, rateLimiter, usageStore, upstreamUrl } = deps;
   const apiKeys = deps.apiKeys ?? new Map();
+  const maxBodySize = deps.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
   const router = Router();
+
+  // Enforce body size limits at the router level so the gateway is self-contained
+  // regardless of whether a global body parser is present. Oversized bodies surface
+  // as 413 via the app-level error handler.
+  router.use(express.json({ limit: maxBodySize }));
+  router.use(express.urlencoded({ extended: false, limit: maxBodySize }));
 
   router.all(
     '/:apiId',
@@ -36,6 +45,14 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
       if (!keyRecord || keyRecord.apiId !== req.params.apiId) {
         res.status(401).json({
           error: 'Unauthorized: invalid API key',
+          requestId,
+        });
+        return;
+      }
+
+      if (keyRecord.revoked) {
+        res.status(403).json({
+          error: 'Forbidden: API key has been revoked',
           requestId,
         });
         return;
@@ -70,6 +87,8 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
       let upstreamBody = JSON.stringify({ error: 'Bad Gateway: upstream unreachable', requestId });
       let upstreamContentType = 'application/json; charset=utf-8';
       let outcome: UpstreamOutcome = 'error';
+      // Safe upstream response headers to forward (populated on success)
+      const upstreamResponseHeaders: Record<string, string> = {};
       const timer = startUpstreamTimer(req.params.apiId, req.method);
 
       try {
@@ -85,6 +104,18 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         upstreamContentType =
           upstreamRes.headers.get('content-type') ?? 'application/octet-stream';
         outcome = 'success';
+
+        // Collect safe upstream response headers, stripping hop-by-hop headers
+        // (including any names listed in the upstream Connection header value).
+        const upstreamConnection = upstreamRes.headers.get('connection') ?? undefined;
+        const responseStripSet = buildHopByHopSet(upstreamConnection);
+        upstreamRes.headers.forEach((value, key) => {
+          const lower = key.toLowerCase();
+          // Also skip content-type — we set it explicitly below via res.type()
+          if (!responseStripSet.has(lower) && lower !== 'content-type') {
+            upstreamResponseHeaders[key] = value;
+          }
+        });
       } catch (error) {
         if (
           (error instanceof DOMException && error.name === 'TimeoutError') ||
@@ -114,6 +145,10 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
       });
 
       res.set('x-request-id', requestId);
+      // Forward safe upstream response headers (hop-by-hop already stripped above)
+      for (const [key, value] of Object.entries(upstreamResponseHeaders)) {
+        res.set(key, value);
+      }
       res.status(upstreamStatus);
 
       if (upstreamContentType.toLowerCase().includes('application/json')) {

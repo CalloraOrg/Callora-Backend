@@ -4,13 +4,8 @@ import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
-// ES module setup
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Import the migrate module (we'll test it by running it)
-const migrationPath = path.join(__dirname, '..', 'migrate.ts');
-const migrationSQLPath = path.join(__dirname, '..', 'migrations', '0000_initial_apis_tables.sql');
+// Import the migrate module (we'll test it by running it from the project root)
+const migrationSQLPath = path.join(process.cwd(), 'migrations', '0000_initial_apis_tables.sql');
 
 describe('Migration Runner Tests', () => {
   let testDbPath: string;
@@ -23,7 +18,7 @@ describe('Migration Runner Tests', () => {
 
   beforeEach(() => {
     // Create a unique test database for each test
-    testDbPath = path.join(__dirname, `test_migration_${Date.now()}.db`);
+    testDbPath = path.join(process.cwd(), `test_migration_${Date.now()}.db`);
   });
 
   afterEach(() => {

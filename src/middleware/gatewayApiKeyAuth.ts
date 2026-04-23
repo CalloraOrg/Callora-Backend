@@ -56,6 +56,7 @@ export interface InMemoryGatewayApiKey {
   key: string;
   developerId: string;
   apiId: string;
+  revoked?: boolean;
 }
 
 export interface GatewayAuthQueryable {
@@ -120,6 +121,10 @@ function notFound(res: Response, message: string): void {
   res.status(404).json({ error: message });
 }
 
+function forbidden(res: Response, message: string): void {
+  res.status(403).json({ error: message });
+}
+
 export function extractApiKey(req: Request): ExtractedApiKey {
   const authorization = req.header('authorization');
   if (authorization) {
@@ -159,6 +164,7 @@ export function createGatewayApiKeyAuthMiddleware<
 ): RequestHandler {
   const handleUnauthorized = options.onUnauthorized ?? unauthorized;
   const handleNotFound = options.onNotFound ?? notFound;
+  const handleForbidden = forbidden;
 
   return async (req, res, next) => {
     const extracted = extractApiKey(req);
@@ -194,7 +200,7 @@ export function createGatewayApiKeyAuthMiddleware<
     }
 
     if (matchedCandidate.apiKeyRecord.revoked) {
-      handleUnauthorized(res, 'Unauthorized: API key has been revoked');
+      handleForbidden(res, 'Unauthorized: API key has been revoked');
       return;
     }
 
@@ -241,7 +247,7 @@ export function createMapBackedGatewayApiKeyAuthMiddleware<
             apiId: record.apiId,
             prefix: rawKey.slice(0, API_KEY_PREFIX_LENGTH),
             keyHash: sha256Hex(rawKey),
-            revoked: false,
+            revoked: record.revoked ?? false,
           },
           user: { id: record.developerId },
           vault: null,

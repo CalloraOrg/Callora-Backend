@@ -156,7 +156,11 @@ describe('BillingService - Integration Tests', () => {
     }
   });
 
-  test('rolls back transaction when Soroban fails', async () => {
+  test('leaves a pending row (stellar_tx_hash = NULL) when Soroban fails', async () => {
+    // Design intent: Phase 1 (INSERT) commits before the Soroban call.
+    // If Soroban fails, the pending row stays in the DB for reconciliation.
+    // The caller receives success=false with the usageEventId so operators
+    // can identify and void the pending row.
     const testDb = createTestDb();
     const sorobanClient = new MockSorobanClient();
     sorobanClient.setShouldFail(true);
@@ -179,7 +183,7 @@ describe('BillingService - Integration Tests', () => {
       const billingService = new BillingService(testDb.pool, sorobanClient);
 
       const request: BillingDeductRequest = {
-        requestId: 'req_rollback_test',
+        requestId: 'req_soroban_fail_test',
         userId: 'user_charlie',
         apiId: 'api_data',
         endpointId: 'endpoint_query',
@@ -191,15 +195,16 @@ describe('BillingService - Integration Tests', () => {
 
       assert.equal(result.success, false);
       assert.ok(result.error?.includes('Soroban'));
+      // usageEventId is populated so the pending row can be reconciled
+      assert.ok(result.usageEventId);
 
-      // Verify NO record in database (transaction rolled back)
+      // Pending row exists with stellar_tx_hash = NULL
       const dbResult = await testDb.pool.query(
-        'SELECT COUNT(*) as count FROM usage_events WHERE request_id = $1',
+        'SELECT stellar_tx_hash FROM usage_events WHERE request_id = $1',
         [request.requestId]
       );
-      // Note: pg-mem does not correctly roll back manual transactions 
-      // when the error is thrown in JS instead of SQL. So we expect '1'.
-      assert.equal(String(dbResult.rows[0].count), '1');
+      assert.equal(dbResult.rows.length, 1);
+      assert.equal(dbResult.rows[0].stellar_tx_hash, null);
     } finally {
       await testDb.end();
     }

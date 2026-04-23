@@ -4,6 +4,8 @@
  */
 
 export class AppError extends Error {
+  public readonly isAppError = true;
+
   constructor(
     message: string,
     public readonly statusCode: number = 500,
@@ -58,5 +60,9 @@ export class TooManyRequestsError extends AppError {
 }
 
 export function isAppError(err: unknown): err is AppError {
-  return err instanceof AppError;
+  return (
+    !!err &&
+    typeof err === 'object' &&
+    (err as Record<string, unknown>).isAppError === true
+  );
 }

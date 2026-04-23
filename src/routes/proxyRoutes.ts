@@ -4,47 +4,27 @@ import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../ty
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import { startUpstreamTimer, type UpstreamOutcome } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
-
+import { buildHopByHopSet, STATIC_HOP_BY_HOP } from '../lib/hopByHop.js';
 
 /**
  * Headers that must never be forwarded to the upstream server.
  *
- * Security rationale by category:
- *
- * Hop-by-hop (RFC 7230 §6.1) — must not be forwarded across connections:
- *   connection, keep-alive, transfer-encoding, te, trailer, upgrade
- *
- * Gateway credentials — must never reach the upstream to prevent key leakage:
- *   x-api-key, proxy-authorization, proxy-connection
- *
- * Routing — upstream must use its own Host, not the client's:
- *   host
- *
- * Client IP / forwarding — stripped so the upstream cannot read or be
- * spoofed by a caller-supplied x-forwarded-for value.  If the upstream
- * legitimately needs the client IP it must be injected under a controlled
- * header by the gateway (e.g. x-callora-client-ip) after the value has
- * been validated by {@link getClientIp}.
- *   x-forwarded-for, x-forwarded-host, x-forwarded-proto
+ * Includes all RFC 7230 §6.1 hop-by-hop headers plus gateway-specific
+ * internal headers (host, x-api-key) that must not leak to the origin.
+ * Dynamic Connection-listed headers are stripped at request time via
+ * buildHopByHopSet().
  */
 const DEFAULT_STRIP_HEADERS = [
   // Hop-by-hop
   'connection',
   'keep-alive',
-  'transfer-encoding',
-  'te',
-  'trailer',
-  'upgrade',
-  // Gateway credentials
-  'x-api-key',
+  'proxy-authenticate',
   'proxy-authorization',
   'proxy-connection',
-  // Routing
-  'host',
-  // Client IP / forwarding — prevent spoofing and IP leakage to upstream
-  'x-forwarded-for',
-  'x-forwarded-host',
-  'x-forwarded-proto',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
 ];
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -141,9 +121,16 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       ? `${apiEntry.base_url}/${wildcardPath}`
       : apiEntry.base_url;
 
-    // 6. Build forwarded headers
+    // 6. Build forwarded headers — strip hop-by-hop and gateway-internal headers.
+    // buildHopByHopSet() also strips any additional names listed in the
+    // incoming Connection header value (RFC 7230 §6.1).
     const forwardHeaders: Record<string, string> = {};
-    const stripSet = new Set(config.stripHeaders.map((h) => h.toLowerCase()));
+    const connectionValue = typeof req.headers['connection'] === 'string'
+      ? req.headers['connection']
+      : undefined;
+    const stripSet = buildHopByHopSet(connectionValue);
+    // Always strip gateway-internal headers regardless of Connection listing
+    for (const h of config.stripHeaders) stripSet.add(h.toLowerCase());
 
     for (const [key, value] of Object.entries(req.headers)) {
       if (!stripSet.has(key.toLowerCase()) && typeof value === 'string') {
@@ -167,10 +154,12 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       upstreamStatus = upstreamRes.status;
       timer.stop(upstreamStatus, 'success');
 
-      // Forward response headers (skip hop-by-hop)
-      const hopByHop = new Set(['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade']);
+      // Forward response headers — strip hop-by-hop headers from the upstream
+      // response, including any names listed in the upstream Connection header.
+      const upstreamConnection = upstreamRes.headers.get('connection') ?? undefined;
+      const responseStripSet = buildHopByHopSet(upstreamConnection);
       upstreamRes.headers.forEach((value, key) => {
-        if (!hopByHop.has(key.toLowerCase())) {
+        if (!responseStripSet.has(key.toLowerCase())) {
           res.set(key, value);
         }
       });

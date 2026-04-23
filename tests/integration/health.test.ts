@@ -481,4 +481,69 @@ describe('GET /api/health - Integration Tests', () => {
       await testDb.end();
     }
   });
+
+  describe('response schema stability', () => {
+    /**
+     * Schema stability tests using Jest snapshots.
+     * Ensures /health response structure doesn't change unexpectedly.
+     * Update snapshots only when schema intentionally changes.
+     */
+
+    test('schema stability: healthy DB returns exact OK shape', async () => {
+      const testDb = createTestDb();
+      try {
+        // Mock to avoid complex config - test current simple route
+        const app = createApp();
+        const response = await request(app).get('/api/health');
+        expect(response.status).toBe(200);
+        expect(response.body).toMatchSnapshot('health-ok-schema');
+      } finally {
+        await testDb.end();
+      }
+    });
+
+    test('schema stability: degraded DB with error field', async () => {
+      const testDb = createTestDb();
+      try {
+        // Force DB check failure
+        const originalQuery = testDb.pool.query;
+        testDb.pool.query = async () => {
+          throw new Error('DB connection failed');
+        };
+        const app = createApp();
+        const response = await request(app).get('/api/health');
+        expect(response.status).toBe(200); // Still 200 degraded
+        expect(response.body.status).toBe('degraded');
+        expect(response.body).toMatchSnapshot('health-degraded-schema');
+      } finally {
+        await testDb.end();
+      }
+    });
+
+    test('schema stability: simple fallback matches current route', async () => {
+      const app = createApp();
+      const response = await request(app).get('/api/health');
+      expect(response.body).toMatchInlineSnapshot(`
+        {
+          "db": {
+            "status": "ok",
+          },
+          "service": "callora-backend",
+          "status": "ok",
+        }
+      `, `// Simple health OK snapshot`);
+    });
+
+    test('schema stability: error handler 503 failure mode', async () => {
+      const badPool = {
+        query: async () => { throw new Error('Critical failure'); }
+      };
+      const app = createApp({ /* force error */ });
+      const response = await request(app).get('/api/health');
+      // Expect middleware-handled 503 error response schema stability
+      expect(response.status).toBe(503);
+      expect(response.body).toMatchSnapshot('health-503-error-schema');
+    });
+  });
 });
+

@@ -1,16 +1,32 @@
 import { Request, Response } from 'express';
-import { DepositController, VaultNotFoundError } from '../depositController.js';
-import { TransactionBuilderService, InvalidContractIdError, NetworkError } from '../../services/transactionBuilder.js';
-import { AmountValidator } from '../../validators/amountValidator.js';
-import type { VaultRepository } from '../../repositories/vaultRepository.js';
+import { DepositController, VaultNotFoundError } from './depositController.js';
+import { TransactionBuilderService, InvalidContractIdError, NetworkError } from '../services/transactionBuilder.js';
+import { AmountValidator } from '../validators/amountValidator.js';
+import type { VaultRepository } from '../repositories/vaultRepository.js';
 
-// Mock the AmountValidator
-jest.mock('../../validators/amountValidator.js');
+// Mock the AmountValidator (fully auto-mocked — it only has static methods, no error classes)
+jest.mock('../validators/amountValidator.js');
 const MockedAmountValidator = AmountValidator as jest.Mocked<typeof AmountValidator>;
 
-// Mock the TransactionBuilderService
-jest.mock('../../services/transactionBuilder.js');
+// Mock the TransactionBuilderService but PRESERVE real error classes so instanceof checks work
+jest.mock('../services/transactionBuilder.js', () => {
+  const actual = jest.requireActual('../services/transactionBuilder.js');
+  const mockBuildDepositTransaction = jest.fn();
+  function MockTransactionBuilderService(this: unknown) {}
+  MockTransactionBuilderService.prototype.buildDepositTransaction = mockBuildDepositTransaction;
+  return {
+    ...actual,
+    TransactionBuilderService: MockTransactionBuilderService,
+  };
+});
 const MockedTransactionBuilderService = TransactionBuilderService as jest.MockedClass<typeof TransactionBuilderService>;
+
+// Mock config to fix stellar.network so the controller's network-mismatch guard passes
+jest.mock('../config/index.js', () => ({
+  config: {
+    stellar: { network: 'testnet' },
+  },
+}));
 
 describe('DepositController', () => {
   let depositController: DepositController;
@@ -49,7 +65,7 @@ describe('DepositController', () => {
 
     mockLocals = {
       authenticatedUser: {
-        id: 'GTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        id: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         email: 'test@example.com',
       },
     };
@@ -61,15 +77,15 @@ describe('DepositController', () => {
     });
 
     // Setup default TransactionBuilder mock
-    MockedTransactionBuilderService.prototype.buildDepositTransaction.mockResolvedValue({
+    mockTransactionBuilder.buildDepositTransaction.mockResolvedValue({
       xdr: 'AAAAAgAAAAA...mocked-xdr...',
       network: 'testnet',
       operation: {
         type: 'invoke_contract',
-        contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         function: 'deposit',
         args: [
-          { type: 'address', value: 'GTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI' },
+          { type: 'address', value: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
           { type: 'i128', value: '100000000' },
         ],
       },
@@ -82,7 +98,7 @@ describe('DepositController', () => {
     const validRequest = {
       amount_usdc: '10.00',
       network: 'testnet',
-      source_account: 'GSOURCE1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+      source_account: 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
     };
 
     it('should successfully prepare a deposit transaction', async () => {
@@ -94,7 +110,7 @@ describe('DepositController', () => {
         id: 'vault-123',
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
-        contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -108,7 +124,7 @@ describe('DepositController', () => {
         expect.objectContaining({
           xdr: expect.any(String),
           network: 'testnet',
-          contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+          contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           amount: '10.0000000',
           operation: {
             type: 'invoke_contract',
@@ -222,7 +238,7 @@ describe('DepositController', () => {
         id: 'vault-123',
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
-        contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -286,7 +302,7 @@ describe('DepositController', () => {
         updatedAt: new Date(),
       });
 
-      MockedTransactionBuilderService.prototype.buildDepositTransaction.mockRejectedValue(
+      mockTransactionBuilder.buildDepositTransaction.mockRejectedValue(
         new InvalidContractIdError('invalid-contract-id')
       );
 
@@ -310,12 +326,12 @@ describe('DepositController', () => {
         id: 'vault-123',
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
-        contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
 
-      MockedTransactionBuilderService.prototype.buildDepositTransaction.mockRejectedValue(
+      mockTransactionBuilder.buildDepositTransaction.mockRejectedValue(
         new NetworkError('Failed to connect to Stellar network')
       );
 
@@ -340,12 +356,12 @@ describe('DepositController', () => {
         id: 'vault-123',
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
-        contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
 
-      MockedTransactionBuilderService.prototype.buildDepositTransaction.mockRejectedValue(
+      mockTransactionBuilder.buildDepositTransaction.mockRejectedValue(
         new Error('Unexpected error')
       );
 
@@ -361,7 +377,10 @@ describe('DepositController', () => {
     });
 
     it('should work with mainnet network', async () => {
-      // Arrange
+      // Arrange - override the config mock to simulate a mainnet-configured server
+      const configMock = jest.requireMock('../config/index.js');
+      configMock.config.stellar.network = 'mainnet';
+
       mockReq.body = { ...validRequest, network: 'mainnet' };
       mockRes.locals = mockLocals;
       
@@ -369,20 +388,20 @@ describe('DepositController', () => {
         id: 'vault-123',
         userId: mockLocals.authenticatedUser.id,
         network: 'mainnet',
-        contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
 
-      MockedTransactionBuilderService.prototype.buildDepositTransaction.mockResolvedValue({
+      mockTransactionBuilder.buildDepositTransaction.mockResolvedValue({
         xdr: 'AAAAAgAAAAA...mainnet-xdr...',
         network: 'mainnet',
         operation: {
           type: 'invoke_contract',
-          contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+          contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           function: 'deposit',
           args: [
-            { type: 'address', value: 'GTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI' },
+            { type: 'address', value: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
             { type: 'i128', value: '100000000' },
           ],
         },
@@ -403,6 +422,9 @@ describe('DepositController', () => {
           network: 'mainnet',
         })
       );
+
+      // Restore config mock to testnet for subsequent tests
+      configMock.config.stellar.network = 'testnet';
     });
 
     it('should work without source_account (uses user public key)', async () => {
@@ -414,7 +436,7 @@ describe('DepositController', () => {
         id: 'vault-123',
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
-        contractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -426,7 +448,7 @@ describe('DepositController', () => {
       expect(mockTransactionBuilder.buildDepositTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
           userPublicKey: mockLocals.authenticatedUser.id,
-          vaultContractId: 'CCONTRACT1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
+          vaultContractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           amountUsdc: '10.0000000',
           network: 'testnet',
           sourceAccount: undefined,
@@ -435,10 +457,10 @@ describe('DepositController', () => {
     });
 
     it('should validate Stellar public key format correctly', async () => {
-      // Test valid keys
+      // Test valid keys — exactly G + 55 uppercase alphanumeric = 56 chars
       const validKeys = [
-        'GTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI',
-        'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDE',
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       ];
 
       validKeys.forEach((key) => {
@@ -448,10 +470,10 @@ describe('DepositController', () => {
       // Test invalid keys
       const invalidKeys = [
         'invalid',
-        'XTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI', // Wrong prefix
-        'GTEST123', // Too short
-        'GTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI123', // Too long
-        'gtest1234567890abcdefghijklmnopqrstuvwxyzabcdefghi', // Lowercase
+        'XAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', // Wrong prefix
+        'GAAAAAAAAA', // Too short
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', // Too long (58)
+        'gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', // Lowercase
       ];
 
       invalidKeys.forEach((key) => {

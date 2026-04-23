@@ -101,18 +101,36 @@ describe('requireAuth – missing credentials', () => {
       .set('Authorization', 'Basic dXNlcjpwYXNz');
 
     expect(res.status).toBe(401);
-    expect(res.body.code).toBe('UNAUTHORIZED');
+    expect(res.body.code).toBe('INVALID_AUTH_HEADER');
   });
 
-  it('returns 401 when Bearer prefix has no token value', async () => {
-    // HTTP transport trims trailing whitespace, so "Bearer " becomes "Bearer"
-    // which does not match the "Bearer " prefix — correctly rejected.
+  it('returns 401 when invalid Authorization header is present alongside x-user-id', async () => {
     const res = await request(app)
       .get('/protected')
-      .set('Authorization', 'Bearer ');
+      .set('Authorization', 'Basic dXNlcjpwYXNz')
+      .set('x-user-id', 'user-via-header');
 
     expect(res.status).toBe(401);
-    expect(res.body.code).toBe('UNAUTHORIZED');
+    expect(res.body.code).toBe('INVALID_AUTH_HEADER');
+  });
+
+  it('returns 401 when Bearer prefix is malformed and no token is provided', async () => {
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', 'Bearer');
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('INVALID_AUTH_HEADER');
+  });
+
+  it('returns 401 when malformed Bearer authorization is present alongside x-user-id', async () => {
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', 'Bearer')
+      .set('x-user-id', 'user-via-header');
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('INVALID_AUTH_HEADER');
   });
 
   it('returns 401 with MISSING_TOKEN for Bearer followed by only whitespace', async () => {
