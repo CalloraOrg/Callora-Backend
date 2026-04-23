@@ -240,9 +240,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   app.use('/api', routes);
 
 
-  app.get('/api/apis', (req, res) => {
+  app.get('/api/apis', async (req, res) => {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);
-    res.json(paginatedResponse([], { limit, offset }));
+    const apiRepo = await getApiRepo();
+    const apis = await apiRepo.listPublic({
+      limit,
+      offset,
+      category: typeof req.query.category === 'string' ? req.query.category : undefined,
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+    });
+    res.json(paginatedResponse(apis, { limit, offset }));
   });
 
   /**
@@ -452,7 +459,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       return entry;
     });
 
-    res.json({ data: payload });
+    res.json(paginatedResponse(payload, { limit, offset }));
   });
 
   /**

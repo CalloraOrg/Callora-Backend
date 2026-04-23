@@ -5,6 +5,8 @@
 - Enforced a `DEFAULT_LIMIT` of 20 and a `MAX_LIMIT` of 100 across all endpoints.
 - Normalized invalid inputs (NaN, negative, zero) to safe defaults.
 - Refactored `src/app.ts` to use the shared `parsePagination` helper consistently, replacing ad-hoc parsing.
+- Improved consistency of API responses by using `paginatedResponse` for `/api/apis` and `/api/developers/apis`.
+- Implemented full public API listing in `GET /api/apis` (previously returned empty array).
 - Updated `UsageEventsRepository` (both In-Memory and PG implementations) to support pagination (limit and offset).
 - Updated `developerRoutes.ts` to support `page` parameter in revenue analytics.
 - Updated `admin.ts` to support `page` parameter in user listing.
