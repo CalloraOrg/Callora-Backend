@@ -157,6 +157,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     console.warn('WARNING: No CORS_ALLOWED_ORIGINS configured in production');
   }
 
+  // Regex for localhost with optional port (e.g., http://localhost:5173)
+  const localhostRegex = /^http:\/\/localhost(:\d+)?$/;
+
   app.use(
     cors({
       origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
@@ -170,8 +173,8 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
           return callback(null, true);
         }
 
-        // In development, allow localhost with any port
-        if (isDevelopment && origin.startsWith('http://localhost:')) {
+        // In development, allow localhost with any port using strict regex
+        if (isDevelopment && localhostRegex.test(origin)) {
           return callback(null, true);
         }
 
@@ -180,7 +183,8 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
           console.warn(`CORS blocked origin: ${origin}`);
         }
 
-        callback(new Error('Not allowed by CORS'));
+        // Pass false instead of Error to prevent Express from returning 500
+        callback(null, false);
       },
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: [
