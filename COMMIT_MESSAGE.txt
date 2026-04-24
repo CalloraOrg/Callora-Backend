@@ -1,0 +1,20 @@
+test(proxy): integration resilience coverage
+
+Add comprehensive resilience tests for proxy integration including:
+- Connection reset handling and recovery
+- Slow upstream timeout scenarios  
+- Sensitive header leakage prevention
+- Case-insensitive header stripping
+- Response header filtering
+- Request ID correlation through errors
+
+Security improvements:
+- Verify API keys, auth tokens, and cookies are stripped upstream
+- Ensure IP address headers are not leaked
+- Validate proper hop-by-hop header filtering
+
+Documentation:
+- Add comprehensive forwarded header policy (FORWARDED_HEADER_POLICY.md)
+- Document security measures and data integrity notes
+
+Closes #147

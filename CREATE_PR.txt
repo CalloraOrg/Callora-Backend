@@ -1,0 +1,13 @@
+Go to this URL to create the Pull Request:
+
+https://github.com/sheyman546/Callora-Backend/compare/main...feature/stellar-error-normalization
+
+Steps:
+1. Click the link above
+2. Review the changes 
+3. Click "Create pull request"
+4. Title: "chore(backend): normalize soroban rpc errors into stable api error codes"
+5. Copy description from PR_ERROR_NORMALIZATION.md
+6. Create PR
+
+Branch is ready: feature/stellar-error-normalization

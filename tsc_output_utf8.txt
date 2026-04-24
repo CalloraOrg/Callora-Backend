@@ -1,0 +1,11 @@
+﻿src/db/index.ts(2,25): error TS2307: Cannot find module 'drizzle-orm/better-sqlite3' or its corresponding type declarations.
+src/db/schema.ts(1,21): error TS2307: Cannot find module 'drizzle-orm' or its corresponding type declarations.
+src/db/schema.ts(2,44): error TS2307: Cannot find module 'drizzle-orm/sqlite-core' or its corresponding type declarations.
+src/events/event.emitter.test.ts(94,9): error TS1308: 'await' expressions are only allowed within async functions and at the top levels of modules.
+src/lib/prisma.ts(1,30): error TS2307: Cannot find module '../generated/prisma/client.js' or its corresponding type declarations.
+src/repositories/apiRepository.drizzle.ts(1,35): error TS2307: Cannot find module 'drizzle-orm' or its corresponding type declarations.
+src/repositories/apiRepository.drizzle.ts(75,22): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/repositories/apiRepository.ts(1,35): error TS2307: Cannot find module 'drizzle-orm' or its corresponding type declarations.
+src/repositories/developerRepository.ts(1,20): error TS2307: Cannot find module 'drizzle-orm' or its corresponding type declarations.
+src/repositories/userRepository.ts(2,27): error TS2307: Cannot find module '../generated/prisma/client.js' or its corresponding type declarations.
+src/services/transactionBuilder.ts(9,8): error TS2307: Cannot find module '@stellar/stellar-sdk' or its corresponding type declarations.

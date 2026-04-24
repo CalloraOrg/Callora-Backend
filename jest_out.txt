@@ -1,0 +1,73 @@
+TAP version 13
+# Subtest: BillingService - Integration Tests
+    # Subtest: successfully processes new billing request
+    ok 1 - successfully processes new billing request
+      ---
+      duration_ms: 224.8251
+      type: 'test'
+      ...
+    # Subtest: prevents double charge on duplicate request_id
+    ok 2 - prevents double charge on duplicate request_id
+      ---
+      duration_ms: 42.7217
+      type: 'test'
+      ...
+    # Subtest: rolls back transaction when Soroban fails
+    not ok 3 - rolls back transaction when Soroban fails
+      ---
+      duration_ms: 29.392
+      type: 'test'
+      location: 'C:\\Users\\EMMA\\Desktop\\callora\\tests\\integration\\billing.test.ts:163:29'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        '1' !== '0'
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: '0'
+      actual: '1'
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (C:\Users\EMMA\Desktop\callora\tests\integration\billing.test.ts:195:30)
+        Test.run (node:internal/test_runner/test:1054:7)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: handles concurrent requests with same request_id
+    ok 4 - handles concurrent requests with same request_id
+      ---
+      duration_ms: 50.2071
+      type: 'test'
+      ...
+    # Subtest: getByRequestId returns existing usage event
+    ok 5 - getByRequestId returns existing usage event
+      ---
+      duration_ms: 28.2436
+      type: 'test'
+      ...
+    # Subtest: getByRequestId returns null for non-existent request
+    ok 6 - getByRequestId returns null for non-existent request
+      ---
+      duration_ms: 10.5575
+      type: 'test'
+      ...
+    1..6
+not ok 1 - BillingService - Integration Tests
+  ---
+  duration_ms: 388.9698
+  type: 'suite'
+  location: 'C:\\Users\\EMMA\\Desktop\\callora\\tests\\integration\\billing.test.ts:70:26'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 6
+# suites 1
+# pass 5
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 399.9602

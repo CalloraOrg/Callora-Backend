@@ -1,0 +1,36 @@
+FAIL tests/integration/health.test.ts
+  ● Test suite failed to run
+
+    Cannot find module '@prisma/client/runtime/client' from 'src/generated/prisma/internal/class.ts'
+
+    Require stack:
+      src/generated/prisma/internal/class.ts
+      src/generated/prisma/client.ts
+      src/lib/prisma.ts
+      src/repositories/userRepository.ts
+      src/routes/admin.ts
+      src/app.ts
+      tests/integration/health.test.ts
+
+    [0m [90m 12 |[39m [90m */[39m
+     [90m 13 |[39m
+    [31m[1m>[22m[39m[90m 14 |[39m [36mimport[39m [33m*[39m [36mas[39m runtime [36mfrom[39m [32m"@prisma/client/runtime/client"[39m
+     [90m    |[39m [31m[1m^[22m[39m
+     [90m 15 |[39m [36mimport[39m type [33m*[39m [36mas[39m [33mPrisma[39m [36mfrom[39m [32m"./prismaNamespace.js"[39m
+     [90m 16 |[39m
+     [90m 17 |[39m[0m
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:863:11)
+      at Object.<anonymous> (src/generated/prisma/internal/class.ts:14:1)
+      at Object.<anonymous> (src/generated/prisma/client.ts:21:1)
+      at Object.<anonymous> (src/lib/prisma.ts:1:1)
+      at Object.<anonymous> (src/repositories/userRepository.ts:1:1)
+      at Object.<anonymous> (src/routes/admin.ts:3:1)
+      at Object.<anonymous> (src/app.ts:3:1)
+      at Object.<anonymous> (tests/integration/health.test.ts:12:1)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.065 s
+Ran all test suites matching tests/integration/health.test.ts.

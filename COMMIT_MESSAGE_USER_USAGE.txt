@@ -1,0 +1,12 @@
+feat: REST user usage and stats
+
+Implement GET /api/usage (authenticated) with query params (from, to, limit, apiId).
+Return usage events for the current user (from JWT), total spent in period, 
+and optional breakdown by API. Use usage_events repository and requireAuth.
+
+- Add UserUsageEventQuery interface and findByUser/aggregateByUser methods
+- Implement authenticated route with comprehensive parameter validation
+- Support smart default period handling (last 30 days)
+- Add pagination with limit parameter
+- Return structured response with events, stats, and period info
+- Include comprehensive test suite with 12 test cases
