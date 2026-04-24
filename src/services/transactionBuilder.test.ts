@@ -173,6 +173,26 @@ describe('TransactionBuilderService', () => {
     assert.equal(mockAddMemo.mock.calls.length, 0);
   });
 
+  test('uses the correct network passphrase from configuration', async () => {
+    const service = new TransactionBuilderService();
+
+    await service.buildDepositTransaction({
+      userPublicKey: 'GUSERPUBLICKEY123',
+      vaultContractId: 'CVAULTTEST',
+      amountUsdc: '10.0000000',
+    });
+
+    // Check that the TransactionBuilder receives the correct options.
+    // We check mockBuild which receives the options via the MockTransactionBuilder instance.
+    
+    // Since I can't easily access arguments of the mock constructor in this setup 
+    // because of how MockTransactionBuilder is defined, I'll check mockBuild 
+    // which receives the options via the MockTransactionBuilder instance.
+    
+    const buildCall = mockBuild.mock.calls[0]?.[0];
+    assert.equal(buildCall.options.networkPassphrase, 'Test SDF Network ; September 2015');
+  });
+
   test('supports explicit fee, timeout, and text memo values', async () => {
     const service = new TransactionBuilderService({
       baseFee: 250,

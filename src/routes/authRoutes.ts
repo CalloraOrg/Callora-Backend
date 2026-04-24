@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/authController.js';
 import { requireAuth } from '../middleware/requireAuth.js';
-import { bodyValidator } from '../middleware/bodyValidator.js';
+import { bodyValidator } from '../middleware/validate.js';
 import { z } from 'zod';
 
 const refreshTokenSchema = z.object({

@@ -41,12 +41,13 @@ export function createIpAllowlist(config: IpAllowlistConfig) {
 
   // Log configuration for security audit
   logger.info(
-    'IP allowlist middleware configured', {
+    {
       allowedRangesCount: allowedRanges.length,
       trustProxy,
       proxyHeaders,
       enabled,
-    }
+    },
+    'IP allowlist middleware configured'
   );
 
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -61,11 +62,12 @@ export function createIpAllowlist(config: IpAllowlistConfig) {
     // Validate extracted IP format
     if (!isValidIp(clientIp)) {
       logger.warn(
-        'Invalid IP format detected', {
+        {
           ip: clientIp,
           userAgent: req.get('User-Agent'),
           path: req.path,
-        }
+        },
+        'Invalid IP format detected'
       );
       
       res.status(400).json({ 
@@ -81,13 +83,14 @@ export function createIpAllowlist(config: IpAllowlistConfig) {
     if (!isAllowed) {
       // Log blocked attempt for security monitoring
       logger.warn(
-        'IP allowlist blocked request', {
+        {
           clientIp,
           path: req.path,
           method: req.method,
           userAgent: req.get('User-Agent'),
           timestamp: new Date().toISOString(),
-        }
+        },
+        'IP allowlist blocked request'
       );
 
       res.status(403).json({ 
@@ -99,11 +102,12 @@ export function createIpAllowlist(config: IpAllowlistConfig) {
 
     // Log successful allowlist check for audit trail
     logger.debug(
-      'IP allowlist check passed', {
+      {
         clientIp,
         path: req.path,
         method: req.method,
-      }
+      },
+      'IP allowlist check passed'
     );
 
     next();

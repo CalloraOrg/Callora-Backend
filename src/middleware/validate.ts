@@ -201,3 +201,12 @@ export function validateWithDetails(schemas: ValidationSchemas) {
     next();
   };
 }
+/**
+ * Simplified validation middleware that only validates the request body.
+ * 
+ * @param schema - Zod schema for the request body
+ * @returns Express middleware function
+ */
+export function bodyValidator(schema: ZodSchema) {
+  return validate({ body: schema });
+}

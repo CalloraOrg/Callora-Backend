@@ -243,7 +243,7 @@ describe('Refresh Token Integration Tests', () => {
 
       // Verify token is revoked
       const storedToken = await mockRepository.findRefreshTokenByHash(
-        refreshTokenService.hashToken(tokenPair.refreshToken),
+        (refreshTokenService as any).hashToken(tokenPair.refreshToken),
         userId
       );
       expect(storedToken?.isRevoked).toBe(true);

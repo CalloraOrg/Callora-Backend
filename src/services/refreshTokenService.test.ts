@@ -136,7 +136,7 @@ describe('RefreshTokenService', () => {
   describe('verifyTokenHash', () => {
     it('should verify matching token hashes', () => {
       const token = 'test-token';
-      const hash = service.hashToken(token);
+      const hash = (service as any).hashToken(token);
 
       const isValid = service.verifyTokenHash(token, hash);
       expect(isValid).toBe(true);
@@ -144,7 +144,7 @@ describe('RefreshTokenService', () => {
 
     it('should reject non-matching token hashes', () => {
       const token = 'test-token';
-      const wrongHash = service.hashToken('wrong-token');
+      const wrongHash = (service as any).hashToken('wrong-token');
 
       const isValid = service.verifyTokenHash(token, wrongHash);
       expect(isValid).toBe(false);
@@ -198,16 +198,16 @@ describe('RefreshTokenService', () => {
   describe('hashToken', () => {
     it('should create consistent hashes', () => {
       const token = 'test-token';
-      const hash1 = service.hashToken(token);
-      const hash2 = service.hashToken(token);
+      const hash1 = (service as any).hashToken(token);
+      const hash2 = (service as any).hashToken(token);
 
       expect(hash1).toBe(hash2);
       expect(hash1).toMatch(/^[a-f0-9]{64}$/); // SHA-256 hex
     });
 
     it('should create different hashes for different tokens', () => {
-      const hash1 = service.hashToken('token1');
-      const hash2 = service.hashToken('token2');
+      const hash1 = (service as any).hashToken('token1');
+      const hash2 = (service as any).hashToken('token2');
 
       expect(hash1).not.toBe(hash2);
     });

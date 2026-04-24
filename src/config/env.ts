@@ -106,6 +106,9 @@ export const envSchema = z
     // Body size limits
     REQUEST_BODY_LIMIT: z.string().default('100kb'),
     GATEWAY_BODY_LIMIT: z.string().default('1mb'),
+
+    // Security
+    BCRYPT_COST_FACTOR: z.coerce.number().int().min(10).max(31).default(12),
   })
   .superRefine((values, ctx) => {
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
