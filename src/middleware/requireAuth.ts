@@ -85,7 +85,8 @@ export const requireAuth = (
       return;
     }
   } else {
-    userId = req.header("x-user-id");
+    const forwardedUserId = req.header("x-user-id");
+    userId = forwardedUserId?.trim();
   }
 
   if (!userId) {

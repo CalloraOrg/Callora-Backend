@@ -220,11 +220,14 @@ function buildRealApp() {
 }
 
 /** Standard assertion for an unauthenticated response from the errorHandler */
-function expectUnauthorized(res: request.Response) {
+function expectUnauthorizedShape(res: request.Response) {
   expect(res.status).toBe(401);
   expect(res.body).toHaveProperty('error');
-  expect(res.body.error).toBe('Unauthorized');
-  expect(res.body.code).toBe('UNAUTHORIZED');
+  expect(typeof res.body.error).toBe('string');
+  expect(res.body).toHaveProperty('code');
+  expect(typeof res.body.code).toBe('string');
+  expect(res.body).toHaveProperty('requestId');
+  expect(typeof res.body.requestId).toBe('string');
 }
 
 // Collect every protected endpoint so we can run the same failure-mode matrix
@@ -262,56 +265,63 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         const req = request(app)[method](path);
         if (body) req.send(body);
         const res = await req;
-        expectUnauthorized(res);
+        expectUnauthorizedShape(res);
+        expect(res.body.error).toBe('Unauthorized');
+        expect(res.body.code).toBe('UNAUTHORIZED');
       });
 
-      it('returns 401 when Bearer token is empty', async () => {
-        const req = request(app)[method](path).set('Authorization', 'Bearer ');
+      it('returns 401 when Bearer token is empty whitespace', async () => {
+        const req = request(app)[method](path).set('Authorization', 'Bearer \t');
         if (body) req.send(body);
         const res = await req;
-        expectUnauthorized(res);
-      });
-
-      it('returns 401 when Bearer token is whitespace-only', async () => {
-        const req = request(app)[method](path).set('Authorization', 'Bearer    ');
-        if (body) req.send(body);
-        const res = await req;
-        expectUnauthorized(res);
+        expectUnauthorizedShape(res);
+        expect(res.body.error).toBe('Missing token');
+        expect(res.body.code).toBe('MISSING_TOKEN');
       });
 
       it('returns 401 with non-Bearer scheme (Basic)', async () => {
         const req = request(app)[method](path).set('Authorization', 'Basic dXNlcjpwYXNz');
         if (body) req.send(body);
         const res = await req;
-        expectUnauthorized(res);
+        expectUnauthorizedShape(res);
+        expect(res.body.error).toBe('Invalid authorization header');
+        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 with lowercase bearer prefix', async () => {
         const req = request(app)[method](path).set('Authorization', 'bearer some-token');
         if (body) req.send(body);
         const res = await req;
-        expectUnauthorized(res);
+        expectUnauthorizedShape(res);
+        expect(res.body.error).toBe('Invalid authorization header');
+        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 when space is missing after Bearer', async () => {
         const req = request(app)[method](path).set('Authorization', 'Bearersometoken');
         if (body) req.send(body);
         const res = await req;
-        expectUnauthorized(res);
+        expectUnauthorizedShape(res);
+        expect(res.body.error).toBe('Invalid authorization header');
+        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 with empty x-user-id', async () => {
         const req = request(app)[method](path).set('x-user-id', '');
         if (body) req.send(body);
         const res = await req;
-        expectUnauthorized(res);
+        expectUnauthorizedShape(res);
+        expect(res.body.error).toBe('Unauthorized');
+        expect(res.body.code).toBe('UNAUTHORIZED');
       });
 
       it('returns 401 with whitespace-only x-user-id', async () => {
         const req = request(app)[method](path).set('x-user-id', '   ');
         if (body) req.send(body);
         const res = await req;
-        expectUnauthorized(res);
+        expectUnauthorizedShape(res);
+        expect(res.body.error).toBe('Unauthorized');
+        expect(res.body.code).toBe('UNAUTHORIZED');
       });
     },
   );
@@ -418,13 +428,15 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
     expect(res.status).not.toBe(401);
   });
 
-  it('authenticates via x-user-id when an invalid Authorization scheme is present', async () => {
+  it('rejects invalid Authorization scheme even when x-user-id is present', async () => {
     const res = await request(app)
       .get('/api/developers/apis')
       .set('Authorization', 'Invalid scheme')
       .set('x-user-id', 'user-42');
 
-    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Invalid authorization header');
+    expect(res.body.code).toBe('INVALID_AUTH_HEADER');
   });
 });
 
