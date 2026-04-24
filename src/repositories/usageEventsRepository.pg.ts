@@ -142,7 +142,7 @@ const appendDateFilters = (params: unknown[], clauses: string[], from?: Date, to
 };
 
 export class PgUsageEventsRepository implements UsageEventsPgRepository {
-  constructor(private readonly db: UsageEventsRepositoryQueryable) {}
+  constructor(private readonly db: UsageEventsRepositoryQueryable) { }
 
   async create(event: CreateUsageEventInput): Promise<BillingUsageEvent> {
     const userId = assertNonEmpty(event.userId, 'userId');
@@ -152,21 +152,32 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const requestId = assertNonEmpty(event.requestId, 'requestId');
     const amount = assertAmount(event.amount).toString();
 
-    await this.db.query(
+    const result = await this.db.query<UsageEventRow>(
       `
-        INSERT INTO usage_events (
-          user_id,
-          api_id,
-          endpoint_id,
-          api_key_id,
-          amount_usdc,
-          request_id,
-          stellar_tx_hash,
-          created_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, NOW()))
-        ON CONFLICT (request_id) DO NOTHING
-      `,
+      INSERT INTO usage_events (
+        user_id,
+        api_id,
+        endpoint_id,
+        api_key_id,
+        amount_usdc,
+        request_id,
+        stellar_tx_hash,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, NOW()))
+      ON CONFLICT (request_id)
+      DO UPDATE SET request_id = EXCLUDED.request_id
+      RETURNING
+        id,
+        user_id,
+        api_id,
+        endpoint_id,
+        api_key_id,
+        amount_usdc,
+        request_id,
+        stellar_tx_hash,
+        created_at
+    `,
       [
         userId,
         apiId,
@@ -179,30 +190,13 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       ],
     );
 
-    const existing = await this.db.query<UsageEventRow>(
-      `
-        SELECT
-          id,
-          user_id,
-          api_id,
-          endpoint_id,
-          api_key_id,
-          amount_usdc,
-          request_id,
-          stellar_tx_hash,
-          created_at
-        FROM usage_events
-        WHERE request_id = $1
-        LIMIT 1
-      `,
-      [requestId],
-    );
+    const row = result.rows[0];
 
-    if (!existing.rows[0]) {
-      throw new Error(`Usage event with requestId "${requestId}" could not be loaded after insert.`);
+    if (!row) {
+      throw new Error(`Failed to create or retrieve usage event for requestId "${requestId}".`);
     }
 
-    return mapUsageEventRow(existing.rows[0]);
+    return mapUsageEventRow(row);
   }
 
   async findByUserId(

@@ -57,6 +57,88 @@ describe('InMemoryUsageEventsRepository – findByDeveloper', () => {
     assert.equal(results[0]?.id, 'e1');
   });
 
+  it('returns the same record when called multiple times with the same requestId', async () => {
+    const input = {
+      userId: 'user-1',
+      apiId: 'api-1',
+      endpointId: 'endpoint-1',
+      apiKeyId: 'key-1',
+      amount: 100n,
+      requestId: 'req-idempotent-1',
+    };
+
+    const first = await repo.create(input);
+    const second = await repo.create(input);
+
+    expect(second).toEqual(first);
+  });
+
+  it('does not create duplicate rows for the same requestId', async () => {
+    const input = {
+      userId: 'user-dup',
+      apiId: 'api-dup',
+      endpointId: 'endpoint-dup',
+      apiKeyId: 'key-dup',
+      amount: 50n,
+      requestId: 'req-idempotent-2',
+    };
+
+    await repo.create(input);
+    await repo.create(input);
+
+    const result = await db.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM usage_events WHERE request_id = $1`,
+      [input.requestId],
+    );
+
+    expect(Number(result.rows[0].count)).toBe(1);
+  });
+
+  it('returns the existing record even if subsequent payload differs for same requestId', async () => {
+    const requestId = 'req-idempotent-3';
+
+    const first = await repo.create({
+      userId: 'user-a',
+      apiId: 'api-a',
+      endpointId: 'endpoint-a',
+      apiKeyId: 'key-a',
+      amount: 10n,
+      requestId,
+    });
+
+    const second = await repo.create({
+      userId: 'user-b', // different
+      apiId: 'api-b',
+      endpointId: 'endpoint-b',
+      apiKeyId: 'key-b',
+      amount: 999n,
+      requestId,
+    });
+
+    // Should still return original row
+    expect(second.id).toBe(first.id);
+    expect(second.userId).toBe(first.userId);
+    expect(second.amount).toBe(first.amount);
+  });
+
+  it('creates a new usage event when requestId is unique', async () => {
+    const input = {
+      userId: 'user-new',
+      apiId: 'api-new',
+      endpointId: 'endpoint-new',
+      apiKeyId: 'key-new',
+      amount: 123n,
+      requestId: 'req-unique-1',
+    };
+
+    const result = await repo.create(input);
+
+    expect(result.id).toBeDefined();
+    expect(result.requestId).toBe(input.requestId);
+    expect(result.amount).toBe(123n);
+  });
+
+
   it('filters by optional apiId', async () => {
     const repo = new InMemoryUsageEventsRepository([
       makeEvent({ id: 'e1', apiId: 'api-weather' }),
