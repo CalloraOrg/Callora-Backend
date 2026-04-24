@@ -179,9 +179,9 @@ describe('GET /api/health - Integration Tests', () => {
     try {
       // Mock slow database query
       const originalQuery = testDb.pool.query;
-      testDb.pool.query = async (...args) => {
+      testDb.pool.query = async (...args: any[]) => {
         await new Promise(resolve => setTimeout(resolve, 1500)); // > 1000ms threshold
-        return originalQuery.apply(testDb.pool, args);
+        return originalQuery.apply(testDb.pool, args as any);
       };
 
       const config: HealthCheckConfig = {
@@ -355,9 +355,9 @@ describe('GET /api/health - Integration Tests', () => {
     try {
       // Mock slow database query
       const originalQuery = testDb.pool.query;
-      testDb.pool.query = async (...args) => {
+      testDb.pool.query = async (...args: any[]) => {
         await new Promise(resolve => setTimeout(resolve, 1500));
-        return originalQuery.apply(testDb.pool, args);
+        return originalQuery.apply(testDb.pool, args as any);
       };
 
       // Mock slow fetch for soroban rpc

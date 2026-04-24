@@ -111,6 +111,8 @@ describe('DepositController', () => {
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
         contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -239,6 +241,8 @@ describe('DepositController', () => {
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
         contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -298,6 +302,8 @@ describe('DepositController', () => {
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
         contractId: 'invalid-contract-id',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -327,6 +333,8 @@ describe('DepositController', () => {
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
         contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -357,6 +365,8 @@ describe('DepositController', () => {
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
         contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -389,6 +399,8 @@ describe('DepositController', () => {
         userId: mockLocals.authenticatedUser.id,
         network: 'mainnet',
         contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -437,6 +449,8 @@ describe('DepositController', () => {
         userId: mockLocals.authenticatedUser.id,
         network: 'testnet',
         contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });

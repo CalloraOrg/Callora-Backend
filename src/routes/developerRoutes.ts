@@ -26,8 +26,13 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
     offset: z
       .string()
       .optional()
-      .transform((val) => val ? parseInt(val, 10) : 0)
-      .pipe(z.number().int().min(0))
+      .transform((val) => (val ? parseInt(val, 10) : 0))
+      .pipe(z.number().int().min(0)),
+    page: z
+      .string()
+      .optional()
+      .transform((val) => (val ? parseInt(val, 10) : undefined))
+      .pipe(z.number().int().min(1).optional()),
   });
 
   /**
@@ -79,7 +84,11 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
 
       const parsedQuery = revenueQuerySchema.parse(req.query);
       const limit = parsedQuery.limit;
-      const offset = parsedQuery.offset;
+      let offset = parsedQuery.offset;
+
+      if (parsedQuery.page) {
+        offset = (parsedQuery.page - 1) * limit;
+      }
 
     // Fetch settlements
     const allSettlements = settlementStore.getDeveloperSettlements(developerId);

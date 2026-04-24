@@ -81,6 +81,24 @@ export function createGracefulShutdownHandler({
 
 export const app = express();
 
+// Create webhook validator instance
+const webhookValidator = createWebhookValidator({
+  secret: WEBHOOK_SECRET,
+  maxAge: 300, // 5 minutes
+  maxPayloadSize: 1024 * 1024, // 1MB
+});
+
+// Standard JSON middleware for non-webhook routes
+app.use((req, res, next) => {
+  if (req.path === '/api/webhooks') {
+    // Skip JSON parsing for webhook route (we need raw body)
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
+
+// Health check endpoint
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'callora-backend' });
 });

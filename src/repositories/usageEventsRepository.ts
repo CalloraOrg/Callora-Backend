@@ -23,6 +23,7 @@ export interface UserUsageEventQuery {
   to: Date;
   apiId?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface UsageStats {
@@ -69,6 +70,11 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
       return event.occurredAt >= query.from && event.occurredAt <= query.to;
     });
 
+    // Apply pagination
+    if (typeof query.offset === 'number' && query.offset > 0) {
+      filtered = filtered.slice(query.offset);
+    }
+    if (typeof query.limit === 'number' && query.limit > 0) {
     // Apply limit if specified (0 means return nothing, consistent with PgUsageEventsRepository)
     if (query.limit !== undefined) {
       filtered = filtered.slice(0, query.limit);

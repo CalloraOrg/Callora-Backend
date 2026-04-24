@@ -10,6 +10,7 @@ export function adminAuth(req: Request, res: Response, next: NextFunction): void
   // Path 1: API key header
   const apiKey = req.header('x-admin-api-key');
   if (apiKey && apiKey === process.env.ADMIN_API_KEY) {
+    res.locals.adminActor = 'admin-api-key';
     next();
     return;
   }
@@ -28,6 +29,7 @@ export function adminAuth(req: Request, res: Response, next: NextFunction): void
     try {
       const payload = jwt.verify(token, secret) as AdminJwtPayload;
       if (payload.role === 'admin') {
+        res.locals.adminActor = (payload.sub as string) || (payload.email as string) || 'admin-jwt';
         next();
         return;
       }

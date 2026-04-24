@@ -1,5 +1,5 @@
 import * as fc from "fast-check";
-import { envSchema } from "./env";
+import { envSchema } from "./env.js";
 
 // Minimal base env satisfying all required fields (no defaults)
 const baseEnv = {

@@ -1,41 +1,53 @@
 import Database from 'better-sqlite3';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { readFileSync, readdirSync } from 'fs';
+import path from 'path';
 import { logger } from './logger.js';
 
-// ES module
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Use process.cwd() to avoid the __filename SyntaxError in Jest
+const rootDir = process.cwd();
+const migrationDir = path.join(rootDir, 'migrations');
+const dbPath = path.join(rootDir, 'database.db');
+const db = new Database(dbPath);
 
-// Create database instance
-const db = new Database('./database.db');
+function ensureMigrationsTable() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+}
+
+function discoverMigrations() {
+  return readdirSync(migrationDir)
+    .filter(file => file.endsWith('.sql') && !file.endsWith('.down.sql'))
+    .sort();
+}
 
 try {
-  // Read and execute the migration SQL
-  const migrationSQL = readFileSync(join(__dirname, '..', 'migrations', '0000_initial_apis_tables.sql'), 'utf8');
+  ensureMigrationsTable();
+  const available = discoverMigrations();
 
-  // Split by semicolon and execute each statement
-  const statements = migrationSQL.split(';').filter(stmt => stmt.trim());
+  for (const filename of available) {
+    const isExecuted = db.prepare('SELECT id FROM _migrations WHERE name = ?').get(filename);
+    if (isExecuted) continue;
 
-  db.exec('BEGIN TRANSACTION');
+    logger.info(`🚀 Running migration: ${filename}`);
+    const sql = readFileSync(path.join(migrationDir, filename), 'utf8');
 
-  for (const statement of statements) {
-    if (statement.trim()) {
-      db.exec(statement);
-    }
+    // Safer, automatic transaction
+    const run = db.transaction(() => {
+      db.exec(sql);
+      db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    });
+
+    run();
+    logger.info(`✅ Finished ${filename}`);
   }
-
-  db.exec('COMMIT');
-
-  console.log('✅ Database migration completed successfully');
-  console.log('Tables created: apis, api_endpoints');
-  console.log('Indexes created: idx_api_endpoints_api_id, idx_apis_developer_id, idx_apis_status');
-
 } catch (error) {
-  db.exec('ROLLBACK');
-  logger.error('❌ Migration failed:', error);
-  throw error;
+  logger.error('❌ Migration runner failed:', error);
+  process.exit(1);
 } finally {
   db.close();
 }

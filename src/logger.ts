@@ -125,4 +125,16 @@ export const logger = {
   info: wrapLog(console.log),
   warn: wrapLog(console.warn),
   error: wrapLog(console.error),
+  audit: (event: string, actor: string, details?: Record<string, unknown>) => {
+    const logData = {
+      type: 'AUDIT',
+      event,
+      actor,
+      timestamp: new Date().toISOString(),
+      ...(details ? { details: redactLogValue(details) } : {}),
+    };
+    // Use console.log directly via wrapLog to ensure consistent formatting
+    const auditLogger = wrapLog(console.log);
+    auditLogger(logData);
+  },
 };

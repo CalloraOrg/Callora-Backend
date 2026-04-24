@@ -60,65 +60,10 @@ export interface ValidationErrorResponse {
  */
 export function validate(schemas: ValidationSchemas) {
   return (req: Request, _res: Response, next: NextFunction): void => {
-    const errors: ValidationErrorDetail[] = [];
+    const errors = collectValidationErrors(schemas, req);
 
-    // Validate request body
-    if (schemas.body) {
-      try {
-        schemas.body.parse(req.body);
-      } catch (err) {
-        if (err instanceof ZodError) {
-          errors.push(...formatZodErrors(err, 'body'));
-        } else {
-          errors.push({
-            field: 'body',
-            message: 'Invalid request body format',
-            code: 'INVALID_BODY'
-          });
-        }
-      }
-    }
-
-    // Validate query parameters
-    if (schemas.query) {
-      try {
-        schemas.query.parse(req.query);
-      } catch (err) {
-        if (err instanceof ZodError) {
-          errors.push(...formatZodErrors(err, 'query'));
-        } else {
-          errors.push({
-            field: 'query',
-            message: 'Invalid query parameters format',
-            code: 'INVALID_QUERY'
-          });
-        }
-      }
-    }
-
-    // Validate route parameters
-    if (schemas.params) {
-      try {
-        schemas.params.parse(req.params);
-      } catch (err) {
-        if (err instanceof ZodError) {
-          errors.push(...formatZodErrors(err, 'params'));
-        } else {
-          errors.push({
-            field: 'params',
-            message: 'Invalid route parameters format',
-            code: 'INVALID_PARAMS'
-          });
-        }
-      }
-    }
-
-    // If there are validation errors, throw a BadRequestError
     if (errors.length > 0) {
-      throw new BadRequestError(
-        'Request validation failed',
-        'VALIDATION_ERROR'
-      );
+      throw new ValidationError(errors);
     }
 
     next();
@@ -134,26 +79,86 @@ export function validate(schemas: ValidationSchemas) {
  */
 function formatZodErrors(error: ZodError, location: string): ValidationErrorDetail[] {
   return error.issues.map((err): ValidationErrorDetail => {
-    const field = err.path.join('.');
+    const field = formatFieldPath(location, err.path);
     const code = err.code.toUpperCase();
 
-    let message = err.message;
-    if (err.code === 'invalid_type') {
-      message = `Invalid ${field}: expected ${err.expected}`;
-    } else if (err.code === 'too_small') {
-      message = `${field} is too small: ${err.message}`;
-    } else if (err.code === 'too_big') {
-      message = `${field} is too big: ${err.message}`;
-    } else {
-      message = `${field}: ${err.message}`;
-    }
-
     return {
-      field: `${location}.${field}`,
-      message,
+      field,
+      message: err.message,
       code
     };
   });
+}
+
+function formatFieldPath(location: string, path: ReadonlyArray<PropertyKey>): string {
+  if (path.length === 0) {
+    return location;
+  }
+
+  return path.reduce<string>((formattedPath, segment) => {
+    if (typeof segment === 'number') {
+      return `${formattedPath}[${segment}]`;
+    }
+
+    return `${formattedPath}.${String(segment)}`;
+  }, location);
+}
+
+function collectValidationErrors(
+  schemas: ValidationSchemas,
+  req: Request
+): ValidationErrorDetail[] {
+  const errors: ValidationErrorDetail[] = [];
+
+  if (schemas.body) {
+    try {
+      schemas.body.parse(req.body);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        errors.push(...formatZodErrors(err, 'body'));
+      } else {
+        errors.push({
+          field: 'body',
+          message: 'Invalid request body format',
+          code: 'INVALID_BODY'
+        });
+      }
+    }
+  }
+
+  if (schemas.query) {
+    try {
+      schemas.query.parse(req.query);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        errors.push(...formatZodErrors(err, 'query'));
+      } else {
+        errors.push({
+          field: 'query',
+          message: 'Invalid query parameters format',
+          code: 'INVALID_QUERY'
+        });
+      }
+    }
+  }
+
+  if (schemas.params) {
+    try {
+      schemas.params.parse(req.params);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        errors.push(...formatZodErrors(err, 'params'));
+      } else {
+        errors.push({
+          field: 'params',
+          message: 'Invalid route parameters format',
+          code: 'INVALID_PARAMS'
+        });
+      }
+    }
+  }
+
+  return errors;
 }
 
 /**
@@ -165,6 +170,8 @@ export class ValidationError extends BadRequestError {
 
   constructor(details: ValidationErrorDetail[]) {
     super('Request validation failed', 'VALIDATION_ERROR');
+    this.name = 'ValidationError';
+    Object.setPrototypeOf(this, ValidationError.prototype);
     this.details = details;
   }
 }
@@ -178,42 +185,8 @@ export class ValidationError extends BadRequestError {
  */
 export function validateWithDetails(schemas: ValidationSchemas) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const errors: ValidationErrorDetail[] = [];
+    const errors = collectValidationErrors(schemas, req);
 
-    // Validate request body
-    if (schemas.body) {
-      try {
-        schemas.body.parse(req.body);
-      } catch (err) {
-        if (err instanceof ZodError) {
-          errors.push(...formatZodErrors(err, 'body'));
-        }
-      }
-    }
-
-    // Validate query parameters
-    if (schemas.query) {
-      try {
-        schemas.query.parse(req.query);
-      } catch (err) {
-        if (err instanceof ZodError) {
-          errors.push(...formatZodErrors(err, 'query'));
-        }
-      }
-    }
-
-    // Validate route parameters
-    if (schemas.params) {
-      try {
-        schemas.params.parse(req.params);
-      } catch (err) {
-        if (err instanceof ZodError) {
-          errors.push(...formatZodErrors(err, 'params'));
-        }
-      }
-    }
-
-    // If there are validation errors, return detailed error response
     if (errors.length > 0) {
       const responseBody: ValidationErrorResponse = {
         error: 'Request validation failed',
@@ -227,4 +200,13 @@ export function validateWithDetails(schemas: ValidationSchemas) {
 
     next();
   };
+}
+/**
+ * Simplified validation middleware that only validates the request body.
+ * 
+ * @param schema - Zod schema for the request body
+ * @returns Express middleware function
+ */
+export function bodyValidator(schema: ZodSchema) {
+  return validate({ body: schema });
 }

@@ -59,6 +59,13 @@ export class TooManyRequestsError extends AppError {
   }
 }
 
+export class GatewayTimeoutError extends AppError {
+  constructor(message: string = 'Gateway Timeout', code?: string) {
+    super(message, 504, code ?? 'GATEWAY_TIMEOUT');
+    this.name = 'GatewayTimeoutError';
+  }
+}
+
 export function isAppError(err: unknown): err is AppError {
   return (
     !!err &&

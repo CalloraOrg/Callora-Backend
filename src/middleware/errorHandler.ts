@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import { isAppError } from '../errors/index.js';
 import { logger } from '../logger.js';
+import type { ValidationErrorDetail } from './validate.js';
+import { ValidationError } from './validate.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -11,6 +13,7 @@ export interface ErrorResponseBody {
   error: string;
   code?: string;
   requestId: string;
+  details?: ValidationErrorDetail[];
 }
 
 /**
@@ -34,7 +37,7 @@ export function errorHandler(
       ? (err as { status: number }).status
       : 500;
 
-  const message =
+  const rawMessage =
     statusCode === 413
       ? 'Request body too large'
       : err instanceof Error
@@ -52,6 +55,7 @@ export function errorHandler(
 
   const body: ErrorResponseBody = { error: finalMessage, requestId };
   if (code) body.code = code;
+  if (err instanceof ValidationError) body.details = err.details;
 
   if (!res.headersSent) {
     res.status(statusCode).json(body);

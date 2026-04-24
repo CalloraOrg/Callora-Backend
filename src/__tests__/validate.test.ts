@@ -3,6 +3,7 @@ import { app } from '../index.js';
 import { z } from 'zod';
 import { validate, validateWithDetails } from '../middleware/validate.js';
 import express from 'express';
+import { errorHandler } from '../middleware/errorHandler.js';
 
 describe('Validation Middleware', () => {
   let testApp: express.Application;
@@ -40,6 +41,7 @@ describe('Validation Middleware', () => {
       testApp.get('/test', validate({ query: schema }), (req, res) => {
         res.json({ success: true });
       });
+      testApp.use(errorHandler);
 
       const response = await request(testApp)
         .get('/test?limit=0') // Invalid: limit must be >= 1
@@ -47,6 +49,12 @@ describe('Validation Middleware', () => {
 
       expect(response.body.error).toBe('Request validation failed');
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(response.body.details).toEqual([
+        expect.objectContaining({
+          field: 'query.limit',
+          code: 'TOO_SMALL',
+        }),
+      ]);
     });
 
     it('should pass validation with valid body', async () => {
@@ -78,6 +86,7 @@ describe('Validation Middleware', () => {
       testApp.post('/test', validate({ body: schema }), (req, res) => {
         res.json({ success: true });
       });
+      testApp.use(errorHandler);
 
       const response = await request(testApp)
         .post('/test')
@@ -86,6 +95,12 @@ describe('Validation Middleware', () => {
 
       expect(response.body.error).toBe('Request validation failed');
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(response.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: 'body.name' }),
+          expect.objectContaining({ field: 'body.email' }),
+        ])
+      );
     });
 
     it('should pass validation with valid params', async () => {
@@ -114,6 +129,7 @@ describe('Validation Middleware', () => {
       testApp.get('/test/:id', validate({ params: schema }), (req, res) => {
         res.json({ success: true });
       });
+      testApp.use(errorHandler);
 
       const response = await request(testApp)
         .get('/test/invalid-uuid')
@@ -121,6 +137,9 @@ describe('Validation Middleware', () => {
 
       expect(response.body.error).toBe('Request validation failed');
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(response.body.details).toEqual([
+        expect.objectContaining({ field: 'params.id' }),
+      ]);
     });
   });
 
@@ -153,6 +172,33 @@ describe('Validation Middleware', () => {
       expect(details.some((detail: any) => detail.field.includes('body.email'))).toBe(true);
       expect(details.some((detail: any) => detail.field.includes('body.age'))).toBe(true);
     });
+
+    it('should format nested array field paths consistently', async () => {
+      const schema = z.object({
+        endpoints: z.array(
+          z.object({
+            path: z.string().min(1, 'Path is required'),
+          })
+        ),
+      });
+
+      testApp.post('/test', validateWithDetails({ body: schema }), (_req, res) => {
+        res.json({ success: true });
+      });
+
+      const response = await request(testApp)
+        .post('/test')
+        .send({ endpoints: [{}] })
+        .expect(400);
+
+      expect(response.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'body.endpoints[0].path',
+          }),
+        ])
+      );
+    });
   });
 
   describe('multiple schema validation', () => {
@@ -175,6 +221,7 @@ describe('Validation Middleware', () => {
           res.json({ success: true });
         }
       );
+      testApp.use(errorHandler);
 
       // Should pass with valid data
       await request(testApp)

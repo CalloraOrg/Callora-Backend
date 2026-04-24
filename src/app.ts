@@ -63,19 +63,7 @@ const parseDate = (value: unknown): Date | null => {
   return date;
 };
 
-const parseNonNegativeIntegerParam = (
-  value: unknown
-): { value?: number; invalid: boolean } => {
-  if (typeof value !== 'string' || value.trim() === '') {
-    return { value: undefined, invalid: false };
-  }
 
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
-    return { value: undefined, invalid: true };
-  }
-  return { value: parsed, invalid: false };
-};
 
 export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
@@ -263,9 +251,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   app.use('/api', routes);
 
 
-  app.get('/api/apis', (req, res) => {
-    const { limit, offset } = parsePagination(req.query as { limit?: string; offset?: string });
-    res.json(paginatedResponse([], { limit, offset }));
+  app.get('/api/apis', async (req, res) => {
+    const { limit, offset } = parsePagination(req.query as Record<string, string>);
+    const apiRepo = await getApiRepo();
+    const apis = await apiRepo.listPublic({
+      limit,
+      offset,
+      category: typeof req.query.category === 'string' ? req.query.category : undefined,
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+    });
+    res.json(paginatedResponse(apis, { limit, offset }));
   });
 
   /**
@@ -371,11 +366,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     return;
   }
 
-  const limitParam = parseNonNegativeIntegerParam(req.query.limit);
-  if (limitParam.invalid) {
-    res.status(400).json({ error: 'limit must be a non-negative integer' });
-    return;
-  }
+  const { limit, offset } = parsePagination(req.query as Record<string, string>);
 
   const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
 
@@ -386,7 +377,8 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       from: queryFrom,
       to: queryTo,
       apiId,
-      limit: limitParam.value,
+      limit,
+      offset,
     });
 
     // Get aggregated statistics
@@ -453,22 +445,12 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       statusFilter = statusParam as ApiStatus;
     }
 
-    const limitParam = parseNonNegativeIntegerParam(req.query.limit);
-    if (limitParam.invalid) {
-      res.status(400).json({ error: 'limit must be a non-negative integer' });
-      return;
-    }
-
-    const offsetParam = parseNonNegativeIntegerParam(req.query.offset);
-    if (offsetParam.invalid) {
-      res.status(400).json({ error: 'offset must be a non-negative integer' });
-      return;
-    }
+    const { limit, offset } = parsePagination(req.query as Record<string, string>);
 
     const apis = await apiRepository.listByDeveloper(developer.id, {
       status: statusFilter,
-      ...(typeof limitParam.value === 'number' ? { limit: limitParam.value } : {}),
-      ...(typeof offsetParam.value === 'number' ? { offset: offsetParam.value } : {}),
+      limit,
+      offset,
     });
 
     const usageStats = await usageEventsRepository.aggregateByDeveloper(user.id);
@@ -488,7 +470,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       return entry;
     });
 
-    res.json({ data: payload });
+    res.json(paginatedResponse(payload, { limit, offset }));
   });
 
   /**

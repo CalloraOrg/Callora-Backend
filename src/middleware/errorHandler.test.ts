@@ -9,6 +9,7 @@ import {
   PaymentRequiredError,
   TooManyRequestsError
 } from '../errors/index.js';
+import { ValidationError } from '../middleware/validate.js';
 import { logger } from '../logger.js';
 
 jest.mock('../logger.js', () => ({
@@ -154,6 +155,18 @@ describe('Error Handler', () => {
     });
   });
 
+<<<<<<< HEAD
+  it('should include validation details for validation errors', () => {
+    const error = new ValidationError([
+      {
+        field: 'body.endpoints[0].path',
+        message: 'Invalid input: expected string, received undefined',
+        code: 'INVALID_TYPE',
+      },
+    ]);
+
+    errorHandler(
+=======
   it('should map ForbiddenError to 403', () => {
     const error = new ForbiddenError('Test forbidden');
     errorHandler(error, mockReq as Request, mockRes as Response<ErrorResponseBody>, mockNext);
@@ -245,6 +258,7 @@ describe('Error Handler - Production Environment', () => {
     const error = new BadRequestError('User-facing validation error');
     
     productionErrorHandler(
+>>>>>>> upstream/main
       error,
       mockReq as Request,
       mockRes as Response<ErrorResponseBody>,
@@ -253,9 +267,22 @@ describe('Error Handler - Production Environment', () => {
 
     expect(mockRes.status).toHaveBeenCalledWith(400);
     expect(mockRes.json).toHaveBeenCalledWith({
+<<<<<<< HEAD
+      error: 'Request validation failed',
+      code: 'VALIDATION_ERROR',
+      requestId: 'test-request-id',
+      details: [
+        {
+          field: 'body.endpoints[0].path',
+          message: 'Invalid input: expected string, received undefined',
+          code: 'INVALID_TYPE',
+        },
+      ],
+=======
       error: 'User-facing validation error',
       code: 'BAD_REQUEST',
       requestId: 'prod-request-id'
+>>>>>>> upstream/main
     });
   });
 });

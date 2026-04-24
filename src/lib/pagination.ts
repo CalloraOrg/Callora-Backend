@@ -20,6 +20,7 @@ const MAX_LIMIT = 100;
 export function parsePagination(query: {
   limit?: string;
   offset?: string;
+  page?: string;
 }): PaginationParams {
   const parsedLimit = parseInt(query.limit ?? '', 10);
   const limit = Math.min(
@@ -27,8 +28,15 @@ export function parsePagination(query: {
     Math.max(1, Number.isNaN(parsedLimit) ? DEFAULT_LIMIT : parsedLimit),
   );
 
-  const parsedOffset = parseInt(query.offset ?? '', 10);
-  const offset = Math.max(0, Number.isNaN(parsedOffset) ? 0 : parsedOffset);
+  let offset = 0;
+  if (query.page) {
+    const parsedPage = parseInt(query.page, 10);
+    const page = Math.max(1, Number.isNaN(parsedPage) ? 1 : parsedPage);
+    offset = (page - 1) * limit;
+  } else {
+    const parsedOffset = parseInt(query.offset ?? '', 10);
+    offset = Math.max(0, Number.isNaN(parsedOffset) ? 0 : parsedOffset);
+  }
 
   return { limit, offset };
 }

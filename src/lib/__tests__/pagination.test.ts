@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { parsePagination, paginatedResponse } from '../pagination.js';
 
 describe('parsePagination', () => {
@@ -91,6 +92,33 @@ describe('parsePagination', () => {
 
   it('handles leading/trailing whitespace in numeric strings', () => {
     assert.deepEqual(parsePagination({ limit: ' 50 ', offset: ' 10 ' }), { limit: 50, offset: 10 });
+  });
+
+  // --- Page parameter tests ---
+
+  it('calculates offset based on page and limit', () => {
+    assert.deepEqual(parsePagination({ limit: '10', page: '1' }), { limit: 10, offset: 0 });
+    assert.deepEqual(parsePagination({ limit: '10', page: '2' }), { limit: 10, offset: 10 });
+    assert.deepEqual(parsePagination({ limit: '25', page: '3' }), { limit: 25, offset: 50 });
+  });
+
+  it('uses default limit when only page is provided', () => {
+    assert.deepEqual(parsePagination({ page: '1' }), { limit: 20, offset: 0 });
+    assert.deepEqual(parsePagination({ page: '2' }), { limit: 20, offset: 20 });
+  });
+
+  it('prefers page over offset when both are provided', () => {
+    assert.deepEqual(parsePagination({ limit: '10', page: '2', offset: '50' }), { limit: 10, offset: 10 });
+  });
+
+  it('handles invalid page values gracefully', () => {
+    assert.deepEqual(parsePagination({ page: 'abc' }), { limit: 20, offset: 0 });
+    assert.deepEqual(parsePagination({ page: '0' }), { limit: 20, offset: 0 });
+    assert.deepEqual(parsePagination({ page: '-5' }), { limit: 20, offset: 0 });
+  });
+
+  it('handles floating-point page values', () => {
+    assert.deepEqual(parsePagination({ page: '2.9' }), { limit: 20, offset: 20 });
   });
 });
 

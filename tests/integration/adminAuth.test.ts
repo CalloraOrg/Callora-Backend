@@ -2,8 +2,21 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { createApp } from '../../src/app.js';
 import { findUsers } from '../../src/repositories/userRepository.js';
+import { logger } from '../../src/logger.js';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
+jest.mock('../../src/logger', () => {
+  const actual = jest.requireActual('../../src/logger');
+  return {
+    ...actual,
+    logger: {
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      audit: jest.fn(),
+    },
+  };
+});
 
 // Avoid native binding requirements in test env.
 jest.mock('better-sqlite3', () => {
@@ -153,7 +166,7 @@ describe('adminAuth middleware on /api/admin routes', () => {
     expect(res.body.error).toBe('Unauthorized: admin access required');
   });
 
-  it('accepts valid admin API key credentials', async () => {
+  it('accepts valid admin API key credentials and logs audit event', async () => {
     const app = createApp();
 
     const res = await request(app)
@@ -164,9 +177,14 @@ describe('adminAuth middleware on /api/admin routes', () => {
     expect(res.body).toHaveProperty('data');
     expect(res.body).toHaveProperty('meta');
     expect(mockFindUsers).toHaveBeenCalledTimes(1);
+    expect(logger.audit).toHaveBeenCalledWith(
+      'LIST_USERS',
+      'admin-api-key',
+      expect.objectContaining({ count: 0, total: 0 })
+    );
   });
 
-  it('accepts valid Bearer JWT credentials with admin role', async () => {
+  it('accepts valid Bearer JWT credentials with admin role and logs audit event', async () => {
     const app = createApp();
     const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, TEST_JWT_SECRET, { expiresIn: '1h' });
 
@@ -178,6 +196,11 @@ describe('adminAuth middleware on /api/admin routes', () => {
     expect(res.body).toHaveProperty('data');
     expect(res.body).toHaveProperty('meta');
     expect(mockFindUsers).toHaveBeenCalledTimes(1);
+    expect(logger.audit).toHaveBeenCalledWith(
+      'LIST_USERS',
+      'admin-1',
+      expect.objectContaining({ count: 0, total: 0 })
+    );
   });
 
   it('returns 500 for JWT auth path when JWT_SECRET is not configured', async () => {
