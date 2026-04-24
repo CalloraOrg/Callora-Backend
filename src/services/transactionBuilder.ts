@@ -7,6 +7,7 @@ import {
   nativeToScVal,
   BASE_FEE,
 } from '@stellar/stellar-sdk';
+import { withRetry, RetryOptions } from '../utils/retry.js';
 
 export type StellarNetwork = 'testnet' | 'mainnet';
 
@@ -56,6 +57,8 @@ export class TransactionBuilderService {
   private static readonly TRANSACTION_TIMEOUT = 300; // 5 minutes
   private static readonly USDC_STROOPS_MULTIPLIER = 10_000_000;
 
+  constructor(private readonly retryOptions: RetryOptions = {}) {}
+
   async buildDepositTransaction(
     params: BuildDepositParams
   ): Promise<UnsignedTransaction> {
@@ -64,12 +67,16 @@ export class TransactionBuilderService {
 
     const server = new Horizon.Server(horizonUrl);
 
-    // Step 2: Load source account from network
+    // Step 2: Load source account from network with retry/backoff for
+    // transient Horizon errors (timeouts, 5xx, 429).
     const sourceKey = params.sourceAccount ?? params.userPublicKey;
     let sourceAccount;
 
     try {
-      sourceAccount = await server.loadAccount(sourceKey);
+      sourceAccount = await withRetry(
+        () => server.loadAccount(sourceKey),
+        this.retryOptions
+      );
     } catch (error) {
       throw new NetworkError(
         `Failed to load source account from Stellar network: ${
