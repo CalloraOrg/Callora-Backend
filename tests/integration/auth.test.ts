@@ -3,7 +3,9 @@ import request from 'supertest';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { createTestDb } from '../helpers/db.js';
-import { TEST_JWT_SECRET } from '../helpers/jwt.js';
+import { TEST_JWT_SECRET, signTokenMissingClaims } from '../helpers/jwt.js';
+import { requireAuth } from '../../src/middleware/requireAuth.js';
+import { errorHandler } from '../../src/middleware/errorHandler.js';
 
 const mockVerifySignature = jest.fn();
 
@@ -40,6 +42,12 @@ function buildAuthApp(pool: any) {
 
     return res.status(200).json({ token, user });
   });
+
+  app.get('/protected', requireAuth, (req, res) => {
+    res.status(200).json({ message: 'Success', user: res.locals.authenticatedUser });
+  });
+
+  app.use(errorHandler);
 
   return app;
 }
@@ -103,5 +111,70 @@ describe('POST /auth/wallet', () => {
     expect(res1.status).toBe(200);
     expect(res2.status).toBe(200);
     expect(res1.body.user.id).toBe(res2.body.user.id);
+  });
+});
+
+describe('requireAuth middleware integration', () => {
+  let db: any;
+  let app: express.Express;
+
+  beforeEach(() => {
+    db = createTestDb();
+    app = buildAuthApp(db.pool);
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterEach(async () => {
+    await db.end();
+  });
+
+  it('rejects token with missing both userId and sub', async () => {
+    const token = signTokenMissingClaims({ foo: 'bar' });
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('MISSING_CLAIMS');
+  });
+
+  it('rejects token with empty userId', async () => {
+    const token = signTokenMissingClaims({ userId: '' });
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('MISSING_CLAIMS');
+  });
+
+  it('rejects token with empty sub', async () => {
+    const token = signTokenMissingClaims({ sub: '' });
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('MISSING_CLAIMS');
+  });
+
+  it('accepts token with userId', async () => {
+    const token = signTokenMissingClaims({ userId: 'user-123' });
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.id).toBe('user-123');
+  });
+
+  it('accepts token with sub (subject) as fallback', async () => {
+    const token = signTokenMissingClaims({ sub: 'user-456' });
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.id).toBe('user-456');
   });
 });

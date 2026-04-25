@@ -49,9 +49,11 @@ export const requireAuth = (
           return;
         }
 
-        const uid = (decoded as Record<string, unknown>).userId;
+        const payload = decoded as Record<string, unknown>;
+        const uid = payload.userId || payload.sub;
+
         if (typeof uid !== "string" || uid.trim() === "") {
-          logger.warn("[requireAuth] Token missing required userId claim");
+          logger.warn("[requireAuth] Token missing required userId or sub claim");
           next(
             new UnauthorizedError(
               "Token missing required claims",

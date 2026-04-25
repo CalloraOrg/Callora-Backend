@@ -49,9 +49,7 @@ export function errorHandler(
 
   // Security: In production, mask the message for unexpected (non-AppError) errors
   let finalMessage = message;
-  const isKnownError = isAppError(err) || statusCode < 500;
-  
-  if (isProduction && !isKnownError) {
+  if (isProduction && !isAppError(err)) {
     finalMessage = 'Internal server error';
   }
 
