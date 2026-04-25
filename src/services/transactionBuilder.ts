@@ -7,6 +7,7 @@ import {
   nativeToScVal,
 } from '@stellar/stellar-sdk';
 import { config } from '../config/index.js';
+import { withRetry } from '../lib/retry.js';
 
 export type StellarNetwork = 'testnet' | 'mainnet';
 
@@ -107,6 +108,23 @@ export interface TransactionBuilderServiceOptions {
   createServer?: (horizonUrl: string) => HorizonAccountLoader;
   baseFee?: string | number;
   timeoutSeconds?: number;
+  /** Maximum number of retries for transient Horizon errors. Default: 3. */
+  maxRetries?: number;
+  /** Base delay in ms for exponential backoff. Default: 500. */
+  retryBaseDelayMs?: number;
+}
+
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 500;
+
+/**
+ * Returns true for errors that represent a transient Horizon failure worth retrying.
+ * 404 / account-not-found is a permanent state — retrying won't help.
+ */
+function isHorizonTransientError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return false;
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return !msg.includes('404') && !msg.includes('not found') && !msg.includes('resource missing');
 }
 
 export class TransactionBuilderService {
@@ -153,7 +171,14 @@ export class TransactionBuilderService {
     let sourceAccount: unknown;
 
     try {
-      sourceAccount = await server.loadAccount(sourceKey);
+      sourceAccount = await withRetry(
+        () => server.loadAccount(sourceKey),
+        {
+          maxAttempts: (this.options.maxRetries ?? DEFAULT_MAX_RETRIES) + 1,
+          baseDelayMs: this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
+          shouldRetry: isHorizonTransientError,
+        }
+      );
     } catch (error) {
       throw this.mapLoadAccountError(sourceKey, error);
     }

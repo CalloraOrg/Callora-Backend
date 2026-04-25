@@ -274,7 +274,8 @@ describe('TransactionBuilderService', () => {
   });
 
   test('maps Horizon transport failures to NetworkError', async () => {
-    const service = new TransactionBuilderService();
+    // mockRejectedValue (not Once) so all retry attempts fail
+    const service = new TransactionBuilderService({ maxRetries: 0 });
     mockLoadAccount.mockRejectedValueOnce(new Error('connect ETIMEDOUT'));
 
     await assert.rejects(
@@ -286,6 +287,38 @@ describe('TransactionBuilderService', () => {
       }),
       NetworkError
     );
+  });
+
+  test('retries transient Horizon errors and succeeds on second attempt', async () => {
+    const service = new TransactionBuilderService({ maxRetries: 1, retryBaseDelayMs: 0 });
+    mockLoadAccount
+      .mockRejectedValueOnce(new Error('connect ETIMEDOUT'))
+      .mockResolvedValueOnce({ accountId: 'GSOURCEACCOUNT123', sequence: '1' });
+
+    const result = await service.buildDepositTransaction({
+      userPublicKey: 'GUSERPUBLICKEY123',
+      vaultContractId: 'CVAULTTEST',
+      amountUsdc: '1.0000000',
+    });
+
+    assert.equal(result.network, 'testnet');
+    expect(mockLoadAccount).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not retry Horizon 404 account-not-found errors', async () => {
+    const service = new TransactionBuilderService({ maxRetries: 3, retryBaseDelayMs: 0 });
+    mockLoadAccount.mockRejectedValue(new Error('404 Resource Missing'));
+
+    await assert.rejects(
+      service.buildDepositTransaction({
+        userPublicKey: 'GUSERPUBLICKEY123',
+        vaultContractId: 'CVAULTTEST',
+        amountUsdc: '1.0000000',
+      }),
+      SourceAccountNotFoundError
+    );
+    // 404 is permanent — single attempt only
+    expect(mockLoadAccount).toHaveBeenCalledTimes(1);
   });
 
   test('maps transaction builder failures to TransactionBuildError', async () => {
