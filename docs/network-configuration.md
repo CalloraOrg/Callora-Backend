@@ -45,6 +45,9 @@ STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID=CC...MAINNET_SETTLEMENT
 - Deposit preparation rejects requests for a different network than the active configuration.
 - Soroban settlement client resolves RPC URL and settlement contract ID from the active network.
 - If a settlement contract ID is missing for the active network, the Soroban client fails fast.
+- Stellar Horizon and Soroban RPC endpoints are validated at runtime before config export.
+- Remote Stellar endpoints must use `https://`; plain `http://` is only allowed for localhost-based development endpoints.
+- Stellar endpoint URLs must not include embedded credentials, query strings, or URL fragments.
 
 ## Optional Aliases
 
