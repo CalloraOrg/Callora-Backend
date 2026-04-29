@@ -18,6 +18,7 @@ const SENSITIVE_LOG_KEYS = new Set([
   'passwd',
   'secret',
   'clientsecret',
+  'webhooksecret',
   'apikey',
   'apikeyhash',
   'keyhash',
