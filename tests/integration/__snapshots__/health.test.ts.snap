@@ -1,0 +1,8 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`GET /api/health - Integration Tests response schema stability schema stability: healthy DB returns exact OK shape: health-ok-schema 1`] = `
+{
+  "service": "callora-backend",
+  "status": "ok",
+}
+`;

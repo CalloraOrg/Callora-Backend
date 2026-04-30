@@ -41,6 +41,7 @@ export function createTestDb() {
   const pool = new Pool();
 
   return {
+    db,
     pool,
     async end() {
       await pool.end();

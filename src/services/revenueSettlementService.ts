@@ -11,6 +11,8 @@ export interface RevenueSettlementOptions {
 }
 
 export class RevenueSettlementService {
+  private batchTail: Promise<void> = Promise.resolve();
+
   constructor(
     private usageStore: UsageStore,
     private settlementStore: SettlementStore,
@@ -27,6 +29,22 @@ export class RevenueSettlementService {
    * 4. For each developer meeting min payout, creates a settlement + calls distribute().
    */
   async runBatch(): Promise<{ processed: number; settledAmount: number; errors: number }> {
+    const previousBatch = this.batchTail.catch(() => undefined);
+    let releaseBatch!: () => void;
+    this.batchTail = new Promise<void>((resolve) => {
+      releaseBatch = resolve;
+    });
+
+    await previousBatch;
+
+    try {
+      return await this.runBatchOnce();
+    } finally {
+      releaseBatch();
+    }
+  }
+
+  private async runBatchOnce(): Promise<{ processed: number; settledAmount: number; errors: number }> {
     const unsettled = this.usageStore.getUnsettledEvents();
     if (unsettled.length === 0) {
       return { processed: 0, settledAmount: 0, errors: 0 };
