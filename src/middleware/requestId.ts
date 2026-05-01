@@ -6,21 +6,22 @@ const REQUEST_ID_HEADER = 'x-request-id';
 
 /**
  * Maximum byte length accepted for a client-supplied X-Request-Id value.
- * Anything longer is discarded and a fresh UUID is generated instead.
- * 128 chars comfortably covers UUID v4 (36), ULID (26), and common trace-id formats.
+ * We restrict this to 36 characters to strictly allow only UUIDs.
  */
-export const REQUEST_ID_MAX_LENGTH = 128;
+export const REQUEST_ID_MAX_LENGTH = 36;
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Sanitise a raw header value so it is safe to echo back in a response header.
- * - Strips ASCII control characters (including CR/LF) to prevent header injection.
- * - Trims surrounding whitespace.
- * - Returns undefined when the result is empty or exceeds REQUEST_ID_MAX_LENGTH.
+ * - Only accepts valid UUID strings.
+ * - Trims surrounding whitespace before validation.
+ * - Returns undefined when the result is not a valid UUID.
  */
 export const sanitizeRequestId = (raw: string | undefined): string | undefined => {
   if (!raw) return undefined;
-  const sanitized = raw.replace(/[\x00-\x1F\x7F]/g, '').trim();
-  if (!sanitized.length || sanitized.length > REQUEST_ID_MAX_LENGTH) return undefined;
+  const sanitized = raw.trim();
+  if (!UUID_REGEX.test(sanitized)) return undefined;
   return sanitized;
 };
 
