@@ -3,21 +3,23 @@ import type { Request, Response, NextFunction } from 'express';
 import { getRequestId } from '../logger.js';
 import { requestIdMiddleware, sanitizeRequestId, REQUEST_ID_MAX_LENGTH } from './requestId.js';
 
+const VALID_UUID = '123e4567-e89b-12d3-a456-426614174000';
+
 describe('sanitizeRequestId', () => {
-  test('returns the value unchanged for a normal id', () => {
-    assert.equal(sanitizeRequestId('trace-abc-123'), 'trace-abc-123');
+  test('returns the value unchanged for a valid UUID', () => {
+    assert.equal(sanitizeRequestId(VALID_UUID), VALID_UUID);
   });
 
-  test('trims surrounding whitespace', () => {
-    assert.equal(sanitizeRequestId('  test-trim-id  '), 'test-trim-id');
+  test('trims surrounding whitespace and accepts valid UUID', () => {
+    assert.equal(sanitizeRequestId(`  ${VALID_UUID}  `), VALID_UUID);
   });
 
-  test('strips CR and LF to prevent header injection', () => {
-    assert.equal(sanitizeRequestId('id\r\nX-Evil: injected'), 'idX-Evil: injected');
+  test('returns undefined for non-UUID string', () => {
+    assert.equal(sanitizeRequestId('trace-abc-123'), undefined);
   });
 
-  test('strips all ASCII control characters', () => {
-    assert.equal(sanitizeRequestId('id\x00\x01\x1F\x7F'), 'id');
+  test('returns undefined for UUID with injected malicious characters', () => {
+    assert.equal(sanitizeRequestId(`${VALID_UUID}\r\nX-Evil: injected`), undefined);
   });
 
   test('returns undefined for empty string', () => {
@@ -33,39 +35,34 @@ describe('sanitizeRequestId', () => {
   });
 
   test('returns undefined when value exceeds REQUEST_ID_MAX_LENGTH', () => {
-    const oversized = 'a'.repeat(REQUEST_ID_MAX_LENGTH + 1);
+    const oversized = VALID_UUID + 'a';
     assert.equal(sanitizeRequestId(oversized), undefined);
-  });
-
-  test('accepts value exactly at REQUEST_ID_MAX_LENGTH', () => {
-    const maxLen = 'a'.repeat(REQUEST_ID_MAX_LENGTH);
-    assert.equal(sanitizeRequestId(maxLen), maxLen);
   });
 });
 
 describe('requestId middleware', () => {
-  test('uses incoming x-request-id header as request id and response header', (done) => {
+  test('uses incoming x-request-id header if it is a valid UUID', (done) => {
     const req = {
-      header: (name: string) => (name.toLowerCase() === 'x-request-id' ? 'test-id-123' : undefined),
+      header: (name: string) => (name.toLowerCase() === 'x-request-id' ? VALID_UUID : undefined),
     } as unknown as Request;
 
     const res = {
       setHeader: (name: string, value: string) => {
         assert.equal(name, 'X-Request-Id');
-        assert.equal(value, 'test-id-123');
+        assert.equal(value, VALID_UUID);
       },
     } as unknown as Response;
 
     const next = (() => {
-      assert.equal((req as any).id, 'test-id-123');
-      assert.equal(getRequestId(), 'test-id-123');
+      assert.equal((req as any).id, VALID_UUID);
+      assert.equal(getRequestId(), VALID_UUID);
       done();
     }) as NextFunction;
 
     requestIdMiddleware(req, res, next);
   });
 
-  test('generates a UUID request id when header is absent and sets it on response', (done) => {
+  test('generates a new UUID request id when header is absent', (done) => {
     const req = {
       header: () => undefined,
     } as unknown as Request;
@@ -83,7 +80,7 @@ describe('requestId middleware', () => {
       assert.ok(setHeaderValue, 'response X-Request-Id must be set');
       assert.equal((req as any).id, setHeaderValue);
 
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       assert.match(setHeaderValue ?? '', uuidRegex);
       assert.match((req as any).id, uuidRegex);
       assert.equal(getRequestId(), (req as any).id);
@@ -94,82 +91,46 @@ describe('requestId middleware', () => {
     requestIdMiddleware(req, res, next);
   });
 
-  test('strips whitespace from x-request-id header before using it', (done) => {
+  test('generates a new UUID when header is not a valid UUID (e.g. contains PII)', (done) => {
     const req = {
-      header: (name: string) => (name.toLowerCase() === 'x-request-id' ? '  test-trim-id  ' : undefined),
+      header: (name: string) => (name.toLowerCase() === 'x-request-id' ? 'john.doe@example.com' : undefined),
     } as unknown as Request;
+
+    let setHeaderValue: string | undefined;
 
     const res = {
       setHeader: (_name: string, value: string) => {
-        assert.equal(value, 'test-trim-id');
+        setHeaderValue = value;
       },
     } as unknown as Response;
 
     const next = (() => {
-      assert.equal((req as any).id, 'test-trim-id');
-      done();
-    }) as NextFunction;
+      assert.notEqual(setHeaderValue, 'john.doe@example.com');
+      assert.notEqual((req as any).id, 'john.doe@example.com');
 
-    requestIdMiddleware(req, res, next);
-  });
-
-  test('generates a UUID when header contains only control characters', (done) => {
-    const req = {
-      header: (name: string) => (name.toLowerCase() === 'x-request-id' ? '\r\n\x00' : undefined),
-    } as unknown as Request;
-
-    let setHeaderValue: string | undefined;
-    const res = {
-      setHeader: (_name: string, value: string) => { setHeaderValue = value; },
-    } as unknown as Response;
-
-    const next = (() => {
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       assert.match(setHeaderValue ?? '', uuidRegex);
+      assert.match((req as any).id, uuidRegex);
+      
       done();
     }) as NextFunction;
 
     requestIdMiddleware(req, res, next);
   });
 
-  test('generates a UUID when header value exceeds max length', (done) => {
-    const oversized = 'x'.repeat(REQUEST_ID_MAX_LENGTH + 1);
+  test('strips whitespace from valid UUID before using it', (done) => {
     const req = {
-      header: (name: string) => (name.toLowerCase() === 'x-request-id' ? oversized : undefined),
+      header: (name: string) => (name.toLowerCase() === 'x-request-id' ? `  ${VALID_UUID}  ` : undefined),
     } as unknown as Request;
 
-    let setHeaderValue: string | undefined;
     const res = {
-      setHeader: (_name: string, value: string) => { setHeaderValue = value; },
+      setHeader: (_name: string, value: string) => {
+        assert.equal(value, VALID_UUID);
+      },
     } as unknown as Response;
 
     const next = (() => {
-      // Must not echo the oversized value back
-      assert.notEqual(setHeaderValue, oversized);
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      assert.match(setHeaderValue ?? '', uuidRegex);
-      done();
-    }) as NextFunction;
-
-    requestIdMiddleware(req, res, next);
-  });
-
-  test('strips CRLF injection attempt and uses sanitized value', (done) => {
-    // After stripping control chars the remaining value is non-empty, so it should be used.
-    const req = {
-      header: (name: string) =>
-        name.toLowerCase() === 'x-request-id' ? 'safe-id\r\nX-Evil: injected' : undefined,
-    } as unknown as Request;
-
-    let setHeaderValue: string | undefined;
-    const res = {
-      setHeader: (_name: string, value: string) => { setHeaderValue = value; },
-    } as unknown as Response;
-
-    const next = (() => {
-      assert.equal(setHeaderValue, 'safe-idX-Evil: injected');
-      assert.ok(!setHeaderValue?.includes('\r'));
-      assert.ok(!setHeaderValue?.includes('\n'));
+      assert.equal((req as any).id, VALID_UUID);
       done();
     }) as NextFunction;
 
