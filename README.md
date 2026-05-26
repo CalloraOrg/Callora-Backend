@@ -11,7 +11,11 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 ## What's included
 
 - Health check: `GET /api/health`
-- Placeholder routes: `GET /api/apis`, `GET /api/usage`
+- Marketplace routes:
+  - `GET /api/apis`
+  - `GET /api/apis/:id`
+  - `POST /api/apis` for authenticated developers to register an API with priced endpoints
+- Usage route: `GET /api/usage`
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - In-memory `VaultRepository` with:
   - `create(userId, contractId, network)`
@@ -28,6 +32,29 @@ Gateway proxy routes accept API keys through either:
 The gateway auth middleware performs prefix-based lookup, timing-safe full-key hash verification, revoked-key checks, and request context loading for the authenticated `user`, `vault`, `api`, `endpoint`, and `apiKeyRecord`.
 
 See [docs/gateway-api-key-auth.md](./docs/gateway-api-key-auth.md) for the full flow, attached request fields, and failure responses.
+
+## API Registration
+
+Authenticated developers can register a marketplace API by calling `POST /api/apis` with:
+
+```json
+{
+  "name": "Weather API",
+  "description": "Forecast and current conditions",
+  "base_url": "https://api.weather.example.com",
+  "category": "weather",
+  "endpoints": [
+    {
+      "path": "/forecast",
+      "method": "GET",
+      "price_per_call_usdc": "0.01",
+      "description": "Daily forecast"
+    }
+  ]
+}
+```
+
+The request requires developer auth via `Authorization: Bearer ...` or `x-user-id` in local/test flows. Validation errors return HTTP `400` with field-level `details`, and successful writes are persisted atomically with their endpoint rows.
 
 ## Vault repository behavior
 

@@ -177,6 +177,21 @@ class StubApiRepository implements ApiRepository {
   async update() {
     return null;
   }
+  async createWithEndpoints(input: import('../../src/repositories/apiRepository.js').CreateApiInput) {
+    return {
+      id: 1,
+      developer_id: input.developer_id,
+      name: input.name,
+      description: input.description ?? null,
+      base_url: input.base_url,
+      logo_url: null,
+      category: input.category ?? null,
+      status: input.status ?? 'draft',
+      created_at: new Date(),
+      updated_at: new Date(),
+      endpoints: [],
+    };
+  }
   async listByDeveloper(_developerId: number, _filters?: ApiListFilters) {
     return [];
   }
@@ -203,19 +218,6 @@ function buildRealApp() {
     developerRepository: stubDeveloperRepository,
     apiRepository: new StubApiRepository(),
     findDeveloperByUserId: async (id) => stubDeveloperRepository.findByUserId(id),
-    createApiWithEndpoints: async (input) => ({
-      id: 1,
-      developer_id: input.developer_id,
-      name: input.name,
-      description: input.description ?? null,
-      base_url: input.base_url,
-      logo_url: null,
-      category: input.category ?? null,
-      status: input.status ?? 'draft',
-      created_at: new Date(),
-      updated_at: new Date(),
-      endpoints: [],
-    }),
   });
 }
 
