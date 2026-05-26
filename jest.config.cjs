@@ -4,8 +4,7 @@ module.exports = {
   testEnvironment: "node",
   setupFiles: ["<rootDir>/jest.env-setup.cjs"],
   testMatch: ["**/?(*.)+(spec|test).ts"],
-  // Exclude tests that use Node.js native test runner
-  testPathIgnorePatterns: ["/node_modules/", "event.emitter.test.ts"],
+  testPathIgnorePatterns: ["/node_modules/"],
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   moduleNameMapper: {
     "^(.*/)?generated/prisma/client(\\.js)?$":

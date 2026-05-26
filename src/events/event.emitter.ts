@@ -9,7 +9,59 @@ import {
 import { WebhookStore } from '../webhooks/webhook.store.js';
 import { dispatchToAll } from '../webhooks/webhook.dispatcher.js';
 
-export const calloraEvents = new EventEmitter();
+export interface CalloraEventMap {
+    new_api_call: [developerId: string, data: NewApiCallData];
+    settlement_completed: [developerId: string, data: SettlementCompletedData];
+    low_balance_alert: [developerId: string, data: LowBalanceAlertData];
+}
+
+export type CalloraEventName = keyof CalloraEventMap;
+export type CalloraEventListener<TEvent extends CalloraEventName> = (
+    ...args: CalloraEventMap[TEvent]
+) => void;
+export type CalloraEventUnsubscribe = () => void;
+
+export class CalloraEventEmitter {
+    private readonly emitter = new EventEmitter();
+
+    on<TEvent extends CalloraEventName>(
+        event: TEvent,
+        listener: CalloraEventListener<TEvent>
+    ): CalloraEventUnsubscribe {
+        this.emitter.on(event, listener as (...args: unknown[]) => void);
+
+        let active = true;
+        return () => {
+            if (!active) {
+                return;
+            }
+
+            active = false;
+            this.off(event, listener);
+        };
+    }
+
+    off<TEvent extends CalloraEventName>(
+        event: TEvent,
+        listener: CalloraEventListener<TEvent>
+    ): this {
+        this.emitter.off(event, listener as (...args: unknown[]) => void);
+        return this;
+    }
+
+    emit<TEvent extends CalloraEventName>(
+        event: TEvent,
+        ...args: CalloraEventMap[TEvent]
+    ): boolean {
+        return this.emitter.emit(event, ...args);
+    }
+
+    listenerCount<TEvent extends CalloraEventName>(event: TEvent): number {
+        return this.emitter.listenerCount(event);
+    }
+}
+
+export const calloraEvents = new CalloraEventEmitter();
 
 async function handleEvent(
     event: WebhookEventType,

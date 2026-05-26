@@ -15,9 +15,15 @@ The `event.emitter.ts` module provides a centralized event system for the Callor
 
 ### Event Types
 
-1. `new_api_call`: Triggered when API calls are made
-2. `settlement_completed`: Triggered when settlements are processed
-3. `low_balance_alert`: Triggered when balance falls below threshold
+The emitter API is typed through `CalloraEventMap`; event names and payloads are checked at compile time.
+
+| Event | Payload |
+| --- | --- |
+| `new_api_call` | `NewApiCallData`: `apiId`, `endpoint`, `method`, `statusCode`, `latencyMs`, `creditsUsed` |
+| `settlement_completed` | `SettlementCompletedData`: `settlementId`, `amount`, `asset`, `txHash`, `settledAt` |
+| `low_balance_alert` | `LowBalanceAlertData`: `currentBalance`, `thresholdBalance`, `asset` |
+
+The first argument for every event is `developerId: string`; the second argument is the event-specific payload.
 
 ## Threading and Async Behavior
 
@@ -27,18 +33,31 @@ The event emitter operates on Node.js's single-threaded event loop with the foll
 
 #### Event Emission (Synchronous)
 ```typescript
-// Event emission is SYNCHRONOUS and NON-BLOCKING
+// Event emission is SYNCHRONOUS and NON-BLOCKING.
 calloraEvents.emit('new_api_call', developerId, data);
 // Returns immediately, does not wait for processing
 ```
 
 #### Event Processing (Asynchronous)
 ```typescript
-// Event listeners are ASYNCHRONOUS
+// Event listeners may start asynchronous work.
 calloraEvents.on('new_api_call', async (developerId, data) => {
     await handleEvent('new_api_call', developerId, data);
     // Processing happens in the background
 });
+```
+
+### Unsubscribe Semantics
+
+`on()` returns an unsubscribe function. The unsubscribe removes only the listener that created it and is safe to call more than once.
+
+```typescript
+const unsubscribe = calloraEvents.on('low_balance_alert', (developerId, data) => {
+    // handle alert
+});
+
+unsubscribe();
+unsubscribe(); // no-op
 ```
 
 ### Concurrency Model

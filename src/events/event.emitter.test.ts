@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { calloraEvents } from './event.emitter.js';
+import { calloraEvents, CalloraEventEmitter } from './event.emitter.js';
 import { WebhookStore } from '../webhooks/webhook.store.js';
 import type { 
     WebhookConfig, 
@@ -41,6 +41,58 @@ describe('Event Emitter - Memory Leak Safety', () => {
         assert.equal(calloraEvents.listenerCount('new_api_call'), 1, 'Should have 1 new_api_call listener');
         assert.equal(calloraEvents.listenerCount('settlement_completed'), 1, 'Should have 1 settlement_completed listener');
         assert.equal(calloraEvents.listenerCount('low_balance_alert'), 1, 'Should have 1 low_balance_alert listener');
+    });
+
+    test('unsubscribe removes only the target listener and is idempotent', () => {
+        const emitter = new CalloraEventEmitter();
+        let firstCalls = 0;
+        let secondCalls = 0;
+
+        const firstListener = () => {
+            firstCalls += 1;
+        };
+        const secondListener = () => {
+            secondCalls += 1;
+        };
+
+        const unsubscribeFirst = emitter.on('new_api_call', firstListener);
+        emitter.on('new_api_call', secondListener);
+
+        assert.equal(emitter.listenerCount('new_api_call'), 2);
+
+        unsubscribeFirst();
+        unsubscribeFirst();
+
+        assert.equal(emitter.listenerCount('new_api_call'), 1);
+
+        emitter.emit('new_api_call', 'dev_unsubscribe', {
+            apiId: 'api_unsubscribe',
+            endpoint: '/test',
+            method: 'GET',
+            statusCode: 200,
+            latencyMs: 10,
+            creditsUsed: 1,
+        });
+
+        assert.equal(firstCalls, 0);
+        assert.equal(secondCalls, 1);
+    });
+
+    test('event names and payloads are statically typed', () => {
+        if (false) {
+            // @ts-expect-error unknown event names are rejected by the typed API
+            calloraEvents.emit('unknown_event', 'dev_type_test', {});
+
+            // @ts-expect-error payload must match the event contract
+            calloraEvents.emit('new_api_call', 'dev_type_test', { invalid: 'data' });
+
+            // @ts-expect-error listener payload must match the selected event
+            calloraEvents.on('low_balance_alert', (_developerId, data: NewApiCallData) => {
+                return data.apiId;
+            });
+        }
+
+        assert.ok(true);
     });
 
     test('event emission does not accumulate listeners', async () => {
@@ -303,28 +355,32 @@ describe('Event Emitter - Async Behavior and Node.js Event Loop', () => {
 });
 
 describe('Event Emitter - Error Handling and Edge Cases', () => {
+    const untypedEvents = calloraEvents as unknown as {
+        emit(event: string, ...args: unknown[]): boolean;
+    };
+
     test('handles malformed event data gracefully', () => {
         const developerId = 'dev_malformed_test';
         
         // Emit with various malformed data
         assert.doesNotThrow(() => {
-            calloraEvents.emit('new_api_call', developerId, null);
+            untypedEvents.emit('new_api_call', developerId, null);
         });
 
         assert.doesNotThrow(() => {
-            calloraEvents.emit('new_api_call', developerId, undefined);
+            untypedEvents.emit('new_api_call', developerId, undefined);
         });
 
         assert.doesNotThrow(() => {
-            calloraEvents.emit('new_api_call', developerId, { invalid: 'data' });
+            untypedEvents.emit('new_api_call', developerId, { invalid: 'data' });
         });
 
         assert.doesNotThrow(() => {
-            calloraEvents.emit('new_api_call', null, {});
+            untypedEvents.emit('new_api_call', null, {});
         });
 
         assert.doesNotThrow(() => {
-            calloraEvents.emit('new_api_call', undefined, {});
+            untypedEvents.emit('new_api_call', undefined, {});
         });
     });
 
@@ -334,15 +390,15 @@ describe('Event Emitter - Error Handling and Edge Cases', () => {
 
         // Emit unknown event types
         assert.doesNotThrow(() => {
-            calloraEvents.emit('unknown_event', developerId, data);
+            untypedEvents.emit('unknown_event', developerId, data);
         });
 
         assert.doesNotThrow(() => {
-            calloraEvents.emit('', developerId, data);
+            untypedEvents.emit('', developerId, data);
         });
 
         assert.doesNotThrow(() => {
-            calloraEvents.emit('another_unknown_event', developerId, data);
+            untypedEvents.emit('another_unknown_event', developerId, data);
         });
     });
 

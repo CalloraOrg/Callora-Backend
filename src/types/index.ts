@@ -32,3 +32,10 @@ export interface UsageResponse {
   calls: number;
   period: string;
 }
+
+export type {
+  CalloraEventListener,
+  CalloraEventMap,
+  CalloraEventName,
+  CalloraEventUnsubscribe,
+} from '../events/event.emitter.js';
