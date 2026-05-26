@@ -41,6 +41,12 @@ See [docs/gateway-api-key-auth.md](./docs/gateway-api-key-auth.md) for the full 
 - Read methods support time-bounded lookups by `userId` or `apiId`, plus aggregate totals for user spend and API revenue.
 - Amounts are handled as smallest-unit `bigint` values in application code, even though the backing column is named `amount_usdc`.
 
+## Proxy usage and billing consistency
+
+- Recordable `/v1/call` responses now anchor charging on `requestId` when the billing backend supports it.
+- The proxy records the in-memory usage view only after a matching charge succeeds, so a call yields one usage event and one deduction, or neither.
+- If a durable billing write or post-charge usage-view update still needs reconciliation, the proxy logs that path explicitly instead of failing silently.
+
 ## Local setup
 
 1. **Prerequisites:** Node.js 18+
