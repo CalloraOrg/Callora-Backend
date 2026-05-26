@@ -188,6 +188,8 @@ STELLAR_TRANSACTION_TIMEOUT=300
 
 Notes:
 - Do not point a testnet deployment at mainnet URLs or contract IDs (or vice versa).
+- Stellar-aware API routes that accept a `network` query parameter only allow `testnet` or `mainnet`.
+- `GET /api/vault/balance` defaults `network` to `testnet` when the query parameter is omitted.
 - Deposit transaction building uses the configured network Horizon URL and validates vault contract ID when configured.
 - Deposit transaction building defaults to a `100` stroop fee and a `300` second timeout unless overridden.
 - Soroban settlement client uses the configured network RPC URL and settlement contract ID.

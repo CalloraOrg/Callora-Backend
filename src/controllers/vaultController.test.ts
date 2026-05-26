@@ -4,6 +4,15 @@ import { VaultController } from './vaultController.js';
 import { InMemoryVaultRepository } from '../repositories/vaultRepository.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 
+// Keep app-router integration coverage independent from the native sqlite binding.
+jest.mock('better-sqlite3', () => {
+  return class MockDatabase {
+    prepare() { return { get: () => null }; }
+    exec() { }
+    close() { }
+  };
+});
+
 function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = false) {
   const app = express();
   app.use(express.json());
@@ -38,9 +47,9 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
       res.status(401).json({ error: 'Authentication required' });
     });
   } else {
-    // Mock requireAuth to accept essentially any user via x-user-id header
+    // Mock requireAuth's x-user-id behavior for controller-level tests.
     app.use((req, res, next) => {
-      const userId = req.headers['x-user-id'] as string;
+      const userId = (req.headers['x-user-id'] as string | undefined)?.trim();
       if (userId) {
         res.locals.authenticatedUser = {
           id: userId,
@@ -317,7 +326,7 @@ describe('VaultController - getBalance', () => {
       repository.findByUserId = originalFindByUserId;
     });
 
-    it('handles malformed user IDs gracefully', async () => {
+    it('rejects whitespace-only user IDs', async () => {
       const repository = new InMemoryVaultRepository();
       const app = createTestApp(repository);
 
@@ -325,7 +334,7 @@ describe('VaultController - getBalance', () => {
         .get('/api/vault/balance')
         .set('x-user-id', '   '); // whitespace only
 
-      expect(response.status).toBe(404); // Will be treated as authenticated but vault not found
+      expect(response.status).toBe(401);
     });
   });
 
@@ -442,6 +451,32 @@ describe('VaultController - getBalance', () => {
       expect(response.status).toBe(404);
       expect(response.body).toHaveProperty('error');
       expect(typeof response.body.error).toBe('string');
+    });
+
+    it('rejects invalid network values through app-level validation middleware', async () => {
+      const { createApp } = await import('../app.js');
+      const repository = new InMemoryVaultRepository();
+      await repository.create('integration-user', 'contract-integration', 'testnet');
+
+      const app = createApp({ vaultRepository: repository });
+
+      const response = await request(app)
+        .get('/api/vault/balance?network=invalid')
+        .set('x-user-id', 'integration-user');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: 'Request validation failed',
+      });
+      expect(response.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'query.network',
+            message: 'network must be either "testnet" or "mainnet"',
+          }),
+        ])
+      );
     });
   });
 

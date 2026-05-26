@@ -34,6 +34,7 @@ import { VaultController } from './controllers/vaultController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { requestLogger } from './middleware/logging.js';
+import { validate } from './middleware/validate.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 import {
   BadRequestError,
@@ -43,6 +44,7 @@ import {
   UnauthorizedError,
 } from './errors/index.js';
 import { apiKeyRepository } from './repositories/apiKeyRepository.js';
+import { optionalNetworkQuerySchema } from './validators/networkValidator.js';
 
 interface AppDependencies {
   usageEventsRepository?: UsageEventsRepository;
@@ -557,10 +559,22 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     depositController.prepareDeposit(req, res);
   });
 
-  // Vault balance endpoint
-  app.get('/api/vault/balance', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>) => {
-    vaultController.getBalance(req, res);
-  });
+  /**
+   * GET /api/vault/balance
+   *
+   * Returns the authenticated user's vault balance.
+   *
+   * Query params:
+   *   network - Optional Stellar network: "testnet" or "mainnet". Defaults to "testnet".
+   */
+  app.get(
+    '/api/vault/balance',
+    requireAuth,
+    validate({ query: optionalNetworkQuerySchema }),
+    (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+      vaultController.getBalance(req, res);
+    }
+  );
 
   // Revoke API key endpoint
   app.delete('/api/keys/:id', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
