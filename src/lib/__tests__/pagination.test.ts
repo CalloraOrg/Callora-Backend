@@ -1,6 +1,20 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parsePagination, paginatedResponse } from '../pagination.js';
+import { parsePagination, PaginationParseError, paginatedResponse } from '../pagination.js';
+
+function assertPaginationError(
+  query: Parameters<typeof parsePagination>[0],
+  field: 'limit' | 'offset' | 'page',
+) {
+  assert.throws(
+    () => parsePagination(query),
+    (error: unknown) =>
+      error instanceof PaginationParseError &&
+      error.field === field &&
+      error.statusCode === 400 &&
+      error.message.includes(field),
+  );
+}
 
 describe('parsePagination', () => {
   it('returns defaults when no query params given', () => {
@@ -15,17 +29,18 @@ describe('parsePagination', () => {
     assert.deepEqual(parsePagination({ limit: '500' }), { limit: 100, offset: 0 });
   });
 
-  it('clamps limit to min 1', () => {
-    assert.deepEqual(parsePagination({ limit: '0' }), { limit: 1, offset: 0 });
-    assert.deepEqual(parsePagination({ limit: '-5' }), { limit: 1, offset: 0 });
+  it('rejects zero and negative limits', () => {
+    assertPaginationError({ limit: '0' }, 'limit');
+    assertPaginationError({ limit: '-5' }, 'limit');
   });
 
-  it('clamps offset to min 0', () => {
-    assert.deepEqual(parsePagination({ offset: '-10' }), { limit: 20, offset: 0 });
+  it('rejects negative offsets', () => {
+    assertPaginationError({ offset: '-10' }, 'offset');
   });
 
-  it('handles non-numeric strings gracefully', () => {
-    assert.deepEqual(parsePagination({ limit: 'abc', offset: 'xyz' }), { limit: 20, offset: 0 });
+  it('rejects non-numeric strings with the offending field', () => {
+    assertPaginationError({ limit: 'abc' }, 'limit');
+    assertPaginationError({ offset: 'xyz' }, 'offset');
   });
 
   // --- Edge cases: undefined / empty ---
@@ -34,22 +49,24 @@ describe('parsePagination', () => {
     assert.deepEqual(parsePagination({ limit: undefined, offset: undefined }), { limit: 20, offset: 0 });
   });
 
-  it('returns defaults for empty strings', () => {
-    assert.deepEqual(parsePagination({ limit: '', offset: '' }), { limit: 20, offset: 0 });
+  it('rejects empty strings when provided', () => {
+    assertPaginationError({ limit: '' }, 'limit');
+    assertPaginationError({ offset: '' }, 'offset');
   });
 
-  it('returns defaults for whitespace-only strings', () => {
-    assert.deepEqual(parsePagination({ limit: '  ', offset: '  ' }), { limit: 20, offset: 0 });
+  it('rejects whitespace-only strings when provided', () => {
+    assertPaginationError({ limit: '  ' }, 'limit');
+    assertPaginationError({ offset: '  ' }, 'offset');
   });
 
   // --- Edge cases: floating-point values ---
 
-  it('truncates floating-point limit via parseInt', () => {
-    assert.deepEqual(parsePagination({ limit: '10.7' }), { limit: 10, offset: 0 });
+  it('rejects floating-point limits', () => {
+    assertPaginationError({ limit: '10.7' }, 'limit');
   });
 
-  it('truncates floating-point offset via parseInt', () => {
-    assert.deepEqual(parsePagination({ offset: '5.9' }), { limit: 20, offset: 5 });
+  it('rejects floating-point offsets', () => {
+    assertPaginationError({ offset: '5.9' }, 'offset');
   });
 
   // --- Edge cases: huge values (prevent unbounded queries) ---
@@ -82,12 +99,12 @@ describe('parsePagination', () => {
 
   // --- Edge cases: special strings ---
 
-  it('falls back to defaults for "Infinity"', () => {
-    assert.deepEqual(parsePagination({ limit: 'Infinity' }), { limit: 20, offset: 0 });
+  it('rejects "Infinity"', () => {
+    assertPaginationError({ limit: 'Infinity' }, 'limit');
   });
 
-  it('falls back to defaults for "NaN"', () => {
-    assert.deepEqual(parsePagination({ limit: 'NaN' }), { limit: 20, offset: 0 });
+  it('rejects "NaN"', () => {
+    assertPaginationError({ limit: 'NaN' }, 'limit');
   });
 
   it('handles leading/trailing whitespace in numeric strings', () => {
@@ -111,14 +128,14 @@ describe('parsePagination', () => {
     assert.deepEqual(parsePagination({ limit: '10', page: '2', offset: '50' }), { limit: 10, offset: 10 });
   });
 
-  it('handles invalid page values gracefully', () => {
-    assert.deepEqual(parsePagination({ page: 'abc' }), { limit: 20, offset: 0 });
-    assert.deepEqual(parsePagination({ page: '0' }), { limit: 20, offset: 0 });
-    assert.deepEqual(parsePagination({ page: '-5' }), { limit: 20, offset: 0 });
+  it('rejects invalid page values', () => {
+    assertPaginationError({ page: 'abc' }, 'page');
+    assertPaginationError({ page: '0' }, 'page');
+    assertPaginationError({ page: '-5' }, 'page');
   });
 
-  it('handles floating-point page values', () => {
-    assert.deepEqual(parsePagination({ page: '2.9' }), { limit: 20, offset: 20 });
+  it('rejects floating-point page values', () => {
+    assertPaginationError({ page: '2.9' }, 'page');
   });
 });
 

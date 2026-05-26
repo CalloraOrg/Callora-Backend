@@ -549,6 +549,25 @@ const buildApiRepo = () => {
   return new InMemoryApiRepository([activeApi], endpoints);
 };
 
+test('GET /api/apis rejects malformed pagination query parameters', async () => {
+  const app = createApp({ apiRepository: buildApiRepo() });
+
+  const invalidLimit = await request(app).get('/api/apis?limit=abc');
+  assert.equal(invalidLimit.status, 400);
+  assert.match(invalidLimit.body.message, /limit/);
+
+  const negativeOffset = await request(app).get('/api/apis?offset=-5');
+  assert.equal(negativeOffset.status, 400);
+  assert.match(negativeOffset.body.message, /offset/);
+});
+
+test('GET /api/apis still clamps valid over-max limits', async () => {
+  const app = createApp({ apiRepository: buildApiRepo() });
+
+  const response = await request(app).get('/api/apis?limit=500');
+  assert.equal(response.status, 200);
+});
+
 test('GET /api/apis/:id returns 400 for non-integer id', async () => {
   const app = createApp({ apiRepository: buildApiRepo() });
 
