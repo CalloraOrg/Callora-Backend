@@ -25,6 +25,12 @@ export interface ApiSummary {
   logo_url: string | null;
   category: string | null;
   status: string;
+  endpoints?: Array<{
+    path: string;
+    method: string;
+    price_per_call_usdc: string;
+    description: string | null;
+  }>;
   developer: {
     name: string | null;
     website: string | null;
@@ -34,6 +40,15 @@ export interface ApiSummary {
 
 export interface ApisResponse {
   apis: ApiSummary[];
+}
+
+export interface PaginatedApisResponse {
+  data: ApiSummary[];
+  meta: {
+    total?: number;
+    limit: number;
+    offset: number;
+  };
 }
 
 export interface UsageResponse {

@@ -225,7 +225,8 @@ describe('Webhook Integration', () => {
       const response = await request(app).get('/api/apis');
 
       expect(response.status).toBe(200);
-      expect(response.body.apis).toBeDefined();
+      expect(response.body.data).toBeDefined();
+      expect(response.body.meta).toBeDefined();
     });
 
     it('should not affect usage endpoint', async () => {
