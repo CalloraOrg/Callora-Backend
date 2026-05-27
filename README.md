@@ -11,7 +11,7 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 ## What's included
 
 - Health check: `GET /api/health`
-- Placeholder routes: `GET /api/apis`, `GET /api/usage`
+- Public routes: `GET /api/apis`, `GET /api/usage`
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - In-memory `VaultRepository` with:
   - `create(userId, contractId, network)`

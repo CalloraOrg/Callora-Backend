@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import adminRouter from './routes/admin.js';
 import routes from './routes/index.js';
+import { createApisRouter } from './routes/apis.js';
 import { pool } from './db.js';
 import {
   InMemoryUsageEventsRepository,
@@ -253,21 +254,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   // Prometheus metrics endpoint — auth-gated in production
   app.get('/api/metrics', metricsEndpoint);
 
+  app.use('/api/apis', createApisRouter({ apiRepository }));
+
   // Mount all routes including billing
   app.use('/api', routes);
-
-
-  app.get('/api/apis', async (req, res) => {
-    const { limit, offset } = parsePagination(req.query as Record<string, string>);
-    const apiRepo = await getApiRepo();
-    const apis = await apiRepo.listPublic({
-      limit,
-      offset,
-      category: typeof req.query.category === 'string' ? req.query.category : undefined,
-      search: typeof req.query.search === 'string' ? req.query.search : undefined,
-    });
-    res.json(paginatedResponse(apis, { limit, offset }));
-  });
 
   /**
    * GET /api/apis/:id
