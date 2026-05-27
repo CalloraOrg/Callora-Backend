@@ -7,10 +7,16 @@ import {
 } from '../errors/index.js';
 import type { AuthenticatedLocals } from '../middleware/requireAuth.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
+import { parseNetworkWithDefault } from '../validators/networkSchema.js';
 
 export class VaultController {
   constructor(private readonly vaultRepository: VaultRepository) { }
 
+  /**
+   * Returns the authenticated user's vault balance for the requested Stellar network.
+   * Accepted query values for `network` are `testnet` and `mainnet`.
+   * When omitted, `network` defaults to `testnet`.
+   */
   async getBalance(
     req: Request,
     res: Response<unknown, AuthenticatedLocals>,
@@ -22,7 +28,7 @@ export class VaultController {
       return;
     }
 
-    const network = (req.query.network as string) ?? 'testnet';
+      const network = parseNetworkWithDefault(req.query);
 
     try {
       const vault = await this.vaultRepository.findByUserId(user.id, network);

@@ -38,6 +38,8 @@ export const envSchema = z
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
     PROXY_TIMEOUT_MS: z.coerce.number().default(30_000),
+    REST_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    REST_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
 
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
@@ -57,6 +59,8 @@ export const envSchema = z
       .default(false),
     HORIZON_URL: z.string().url().optional(),
     HORIZON_TIMEOUT: z.coerce.number().default(2_000),
+    SETTLEMENT_STATUS_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+    SETTLEMENT_STATUS_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 
     // Stellar network configuration
     STELLAR_NETWORK: stellarNetworkSchema.optional(),

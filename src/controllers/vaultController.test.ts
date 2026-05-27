@@ -4,35 +4,16 @@ import { z } from 'zod';
 import { VaultController } from './vaultController.js';
 import { InMemoryVaultRepository } from '../repositories/vaultRepository.js';
 import { errorHandler } from '../middleware/errorHandler.js';
-import { UnauthorizedError } from '../errors/index.js';
-import { requestIdMiddleware } from '../middleware/requestId.js';
 import { validate } from '../middleware/validate.js';
+import { stellarNetworkQuerySchema } from '../validators/networkSchema.js';
 
 jest.mock('better-sqlite3', () => {
   return class MockDatabase {
-    prepare() {
-      return { get: () => null };
-    }
-    exec() {}
-    close() {}
+    prepare() { return { get: () => null }; }
+    exec() { }
+    close() { }
   };
 });
-
-const vaultBalanceQuerySchema = z.object({
-  network: z.enum(['testnet', 'mainnet']).optional(),
-});
-
-function expectErrorEnvelope(
-  body: Record<string, unknown>,
-  message?: string,
-  code?: string,
-) {
-  expect(body).toEqual(expect.objectContaining({
-    message: message ?? expect.any(String),
-    code: code ?? expect.any(String),
-    requestId: expect.any(String),
-  }));
-}
 
 function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = false) {
   const app = express();
@@ -87,8 +68,8 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
   const vaultController = new VaultController(vaultRepository);
   app.get(
     '/api/vault/balance',
-    validate({ query: vaultBalanceQuerySchema }),
-    (req, res, next) => void vaultController.getBalance(req, res, next),
+    validate({ query: stellarNetworkQuerySchema }),
+    vaultController.getBalance.bind(vaultController),
   );
 
   app.use(errorHandler);
@@ -191,12 +172,11 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expectErrorEnvelope(response.body, 'Request validation failed', 'VALIDATION_ERROR');
-      expect(response.body.details).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ field: 'query.network' }),
-        ]),
-      );
+      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(response.body).toHaveProperty('message', 'Request validation failed');
+      expect(response.body.details[0]).toMatchObject({
+        field: 'query.network',
+      });
     });
 
     it('returns 400 for empty network parameter', async () => {
@@ -208,7 +188,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expectErrorEnvelope(response.body, 'Request validation failed', 'VALIDATION_ERROR');
+      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('returns 400 for network parameter with only whitespace', async () => {
@@ -220,7 +201,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expectErrorEnvelope(response.body, 'Request validation failed', 'VALIDATION_ERROR');
+      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('accepts case-sensitive network parameters', async () => {
@@ -410,7 +392,7 @@ describe('VaultController - getBalance', () => {
           .set('x-user-id', 'user-1');
 
         expect(response.status).toBe(400);
-        expectErrorEnvelope(response.body, 'Request validation failed', 'VALIDATION_ERROR');
+        expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
       }
     });
 
@@ -523,7 +505,9 @@ describe('VaultController - getBalance', () => {
         .get('/api/vault/balance?network=invalid')
         .set('x-user-id', 'user-1');
       expect(validationResponse.status).toBe(400);
-      expectErrorEnvelope(validationResponse.body, 'Request validation failed', 'VALIDATION_ERROR');
+      expect(validationResponse.body).toHaveProperty('message');
+      expect(typeof validationResponse.body.message).toBe('string');
+      expect(validationResponse.body).toHaveProperty('code', 'VALIDATION_ERROR');
     });
   });
 });

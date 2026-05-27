@@ -2,6 +2,24 @@ import { Pool } from 'pg';
 import { config } from './config/index.js';
 import { logger } from './logger.js';
 
+function createTimeoutPromise(timeoutMs: number, message: string): {
+  promise: Promise<never>;
+  cancel: () => void;
+} {
+  let timeoutId: NodeJS.Timeout | undefined;
+
+  return {
+    promise: new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+    cancel: () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    },
+  };
+}
+
 /**
  * Shared PostgreSQL connection pool for the application.
  *
@@ -34,8 +52,13 @@ export const query = (
  * when the database is unreachable or misconfigured.
  */
 export async function checkDbHealth(): Promise<{ ok: boolean; error?: string }> {
+  const timeout = createTimeoutPromise(
+    config.database.timeout,
+    'Database health check timeout'
+  );
+
   try {
-    await pool.query('SELECT 1');
+    await Promise.race([pool.query('SELECT 1'), timeout.promise]);
     return { ok: true };
   } catch (error) {
     logger.error('[db] health check failed', error);
@@ -43,6 +66,8 @@ export async function checkDbHealth(): Promise<{ ok: boolean; error?: string }> 
       ok: false,
       error: error instanceof Error ? error.message : 'Unknown database error',
     };
+  } finally {
+    timeout.cancel();
   }
 }
 

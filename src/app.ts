@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import adminRouter from './routes/admin.js';
 import routes from './routes/index.js';
+import { createApisRouter } from './routes/apis.js';
 import { pool } from './db.js';
 import {
   InMemoryUsageEventsRepository,
@@ -25,6 +26,7 @@ import {
 import { apiStatusEnum, type ApiStatus, httpMethodEnum } from './db/schema.js';
 import type { Developer } from './db/schema.js';
 import { requireAuth, type AuthenticatedLocals } from './middleware/requireAuth.js';
+import { bodyValidator } from './middleware/validate.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { performHealthCheck, type HealthCheckConfig } from './services/healthCheck.js';
@@ -36,6 +38,7 @@ import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { validate } from './middleware/validate.js';
 import { requestLogger } from './middleware/logging.js';
+import { createConfiguredRestRateLimitMiddleware } from './middleware/restRateLimit.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 import {
   BadRequestError,
@@ -45,6 +48,7 @@ import {
   UnauthorizedError,
 } from './errors/index.js';
 import { apiKeyRepository } from './repositories/apiKeyRepository.js';
+import { apiRegistrationSchema } from './validators/apiRegistration.js';
 
 interface AppDependencies {
   usageEventsRepository?: UsageEventsRepository;
@@ -79,6 +83,7 @@ const vaultBalanceQuerySchema = z.object({
 
 export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
+  const restRateLimit = createConfiguredRestRateLimitMiddleware();
   
   // Set database pool in locals for billing routes
   app.locals.dbPool = pool;
@@ -133,18 +138,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   app.use(requestIdMiddleware);
   app.use(metricsMiddleware);
-
-  // Lazy singleton for production Drizzle repo; injected repo is used in tests.
-  const _injectedApiRepo = dependencies?.apiRepository;
-  let _drizzleApiRepo: ApiRepository | undefined;
-  async function getApiRepo(): Promise<ApiRepository> {
-    if (_injectedApiRepo) return _injectedApiRepo;
-    if (!_drizzleApiRepo) {
-      const { DrizzleApiRepository } = await import('./repositories/apiRepository.drizzle.js');
-      _drizzleApiRepo = new DrizzleApiRepository();
-    }
-    return _drizzleApiRepo!;
-  }
 
   app.use(requestLogger);
 
@@ -259,90 +252,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   // Prometheus metrics endpoint — auth-gated in production
   app.get('/api/metrics', metricsEndpoint);
 
+  app.use(
+    '/api/apis',
+    createApisRouter({
+      apiRepository,
+      developerRepository,
+    }),
+  );
+
   // Mount all routes including billing
-  app.use('/api', routes);
-
-
-  app.get('/api/apis', async (req, res) => {
-    const { limit, offset } = parsePagination(req.query as Record<string, string>);
-    const apiRepo = await getApiRepo();
-    const apis = await apiRepo.listPublic({
-      limit,
-      offset,
-      category: typeof req.query.category === 'string' ? req.query.category : undefined,
-      search: typeof req.query.search === 'string' ? req.query.search : undefined,
-    });
-    res.json(paginatedResponse(apis, { limit, offset }));
-  });
-
-  /**
-   * GET /api/apis/:id
-   *
-   * Retrieves full details for a specific API, including pricing endpoints.
-   *
-   * Path params:
-   *   id - Positive integer ID of the API
-   *
-   * @schema ApiWithEndpointsDetails
-   * @example
-   * {
-   *   "id": 1,
-   *   "name": "Weather API",
-   *   "description": "Real-time weather data",
-   *   "base_url": "https://api.weather.example.com",
-   *   "logo_url": null,
-   *   "category": "weather",
-   *   "status": "active",
-   *   "developer": {
-   *     "name": "Alice Dev",
-   *     "website": "https://alice.example.com",
-   *     "description": "Building climate tools"
-   *   },
-   *   "endpoints": [
-   *     {
-   *       "path": "/v1/current",
-   *       "method": "GET",
-   *       "price_per_call_usdc": "0.001",
-   *       "description": "Current conditions"
-   *     }
-   *   ]
-   * }
-   */
-  app.get('/api/apis/:id', async (req, res, next) => {
-    const rawId = req.params.id;
-    const id = Number(rawId);
-
-    if (!Number.isInteger(id) || id <= 0) {
-      next(new BadRequestError('id must be a positive integer'));
-      return;
-    }
-
-    const apiRepo = await getApiRepo();
-    const api = await apiRepo.findById(id);
-    if (!api) {
-      next(new NotFoundError('API not found or not active'));
-      return;
-    }
-
-    const endpoints = await apiRepo.getEndpoints(id);
-
-    res.json({
-      id: api.id,
-      name: api.name,
-      description: api.description,
-      base_url: api.base_url,
-      logo_url: api.logo_url,
-      category: api.category,
-      status: api.status,
-      developer: api.developer,
-      endpoints: endpoints.map((ep) => ({
-        path: ep.path,
-        method: ep.method,
-        price_per_call_usdc: ep.price_per_call_usdc,
-        description: ep.description,
-      })),
-    });
-  });
+  app.use('/api', createApiRouter({ restRateLimit }));
 
   app.get('/api/usage', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
   const user = res.locals.authenticatedUser;
@@ -563,15 +482,19 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     depositController.prepareDeposit(req, res);
   });
 
+  /**
+   * GET /api/vault/balance
+   *
+   * Returns the authenticated user's vault balance for the requested Stellar network.
+   *
+   * Query params:
+   *   network - optional Stellar network identifier (`testnet` or `mainnet`)
+   *             default: `testnet`
+   */
   // Vault balance endpoint
-  app.get(
-    '/api/vault/balance',
-    requireAuth,
-    validate({ query: vaultBalanceQuerySchema }),
-    (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
-      void vaultController.getBalance(req, res, next);
-    }
-  );
+  app.get('/api/vault/balance', requireAuth, validate({ query: stellarNetworkQuerySchema }), (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+    vaultController.getBalance(req, res);
+  });
 
   // Revoke API key endpoint
   app.delete('/api/keys/:id', requireAuth, (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
@@ -640,7 +563,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
    *   ]
    * }
    */
-  app.post('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+  app.post('/api/developers/apis', requireAuth, bodyValidator(apiRegistrationSchema), async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
     try {
       const user = res.locals.authenticatedUser;
       if (!user) {
@@ -648,62 +571,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
         return;
       }
 
-      const { name, description, base_url, category, status, endpoints } = req.body as Record<string, unknown>;
-
-      // Validate required string fields
-      if (!name || typeof name !== 'string' || name.trim() === '') {
-        next(new BadRequestError('name is required'));
-        return;
-      }
-
-      if (!base_url || typeof base_url !== 'string' || base_url.trim() === '') {
-        next(new BadRequestError('base_url is required'));
-        return;
-      }
-
-      // Validate base_url is a proper URL
-      try {
-        new URL(base_url);
-      } catch {
-        next(new BadRequestError('base_url must be a valid URL (e.g. https://api.example.com)'));
-        return;
-      }
-
-      // Validate optional status
-      if (status !== undefined && !apiStatusEnum.includes(status as typeof apiStatusEnum[number])) {
-        next(new BadRequestError(`status must be one of: ${apiStatusEnum.join(', ')}`));
-        return;
-      }
-
-      // Validate endpoints array
-      if (!Array.isArray(endpoints)) {
-        next(new BadRequestError('endpoints must be an array'));
-        return;
-      }
-
-      for (let i = 0; i < endpoints.length; i++) {
-        const ep = endpoints[i] as Record<string, unknown>;
-
-        if (!ep.path || typeof ep.path !== 'string' || !ep.path.startsWith('/')) {
-          next(new BadRequestError(`endpoints[${i}].path must be a string starting with /`));
-          return;
-        }
-
-        if (!ep.method || !httpMethodEnum.includes(ep.method as typeof httpMethodEnum[number])) {
-          next(new BadRequestError(`endpoints[${i}].method must be one of: ${httpMethodEnum.join(', ')}`));
-          return;
-        }
-
-        if (
-          !ep.price_per_call_usdc ||
-          typeof ep.price_per_call_usdc !== 'string' ||
-          isNaN(parseFloat(ep.price_per_call_usdc)) ||
-          parseFloat(ep.price_per_call_usdc) < 0
-        ) {
-          next(new BadRequestError(`endpoints[${i}].price_per_call_usdc must be a non-negative numeric string`));
-          return;
-        }
-      }
+      const payload = apiRegistrationSchema.parse(req.body);
 
       // Ensure the caller has a developer profile
       const developer = await lookupDeveloper(user.id);
@@ -714,16 +582,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
       const api = await persistApi({
         developer_id: developer.id,
-        name: name.trim(),
-        description: typeof description === 'string' ? description : null,
-        base_url: base_url.trim(),
-        category: typeof category === 'string' ? category : null,
-        status: (status as typeof apiStatusEnum[number]) ?? 'draft',
-        endpoints: (endpoints as Array<Record<string, unknown>>).map((ep) => ({
-          path: ep.path as string,
-          method: ep.method as typeof httpMethodEnum[number],
-          price_per_call_usdc: ep.price_per_call_usdc as string,
-          description: typeof ep.description === 'string' ? ep.description : null,
+        name: payload.name,
+        description: payload.description ?? null,
+        base_url: payload.base_url,
+        category: payload.category,
+        status: 'active',
+        endpoints: payload.endpoints.map((ep) => ({
+          path: ep.path,
+          method: ep.method,
+          price_per_call_usdc: ep.price_per_call_usdc,
+          description: ep.description ?? null,
         })),
       });
 

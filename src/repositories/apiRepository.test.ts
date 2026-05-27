@@ -154,4 +154,71 @@ describe('InMemoryApiRepository', () => {
       assert.deepStrictEqual(result, []);
     });
   });
+
+  describe('createWithEndpoints', () => {
+    test('creates an API and its endpoints together', async () => {
+      const repo = new InMemoryApiRepository();
+
+      const created = await repo.createWithEndpoints({
+        developer_id: 7,
+        name: 'Maps API',
+        description: 'Location intelligence',
+        base_url: 'https://maps.example.com',
+        category: 'maps',
+        status: 'draft',
+        endpoints: [
+          {
+            path: '/geocode',
+            method: 'POST',
+            price_per_call_usdc: '0.15',
+            description: 'Forward geocoding',
+          },
+          {
+            path: '/reverse',
+            method: 'GET',
+            price_per_call_usdc: '0.05',
+            description: null,
+          },
+        ],
+      });
+
+      assert.equal(created.developer_id, 7);
+      assert.equal(created.name, 'Maps API');
+      assert.equal(created.endpoints.length, 2);
+      assert.equal(created.endpoints[0]?.api_id, created.id);
+
+      const endpoints = await repo.getEndpoints(created.id);
+      assert.deepStrictEqual(endpoints, [
+        {
+          path: '/geocode',
+          method: 'POST',
+          price_per_call_usdc: '0.15',
+          description: 'Forward geocoding',
+        },
+        {
+          path: '/reverse',
+          method: 'GET',
+          price_per_call_usdc: '0.05',
+          description: null,
+        },
+      ]);
+    });
+
+    test('supports creating an API with no endpoint rows in memory when asked directly', async () => {
+      const repo = new InMemoryApiRepository();
+
+      const created = await repo.createWithEndpoints({
+        developer_id: 9,
+        name: 'Empty API',
+        description: null,
+        base_url: 'https://empty.example.com',
+        category: 'utility',
+        status: 'draft',
+        endpoints: [],
+      });
+
+      assert.deepStrictEqual(created.endpoints, []);
+      assert.deepStrictEqual(await repo.getEndpoints(created.id), []);
+    });
+  });
 });

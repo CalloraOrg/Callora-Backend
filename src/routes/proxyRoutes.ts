@@ -32,6 +32,13 @@ const DEFAULT_STRIP_HEADERS = [
   'trailer',
   'transfer-encoding',
   'upgrade',
+  // Sensitive and gateway-internal headers
+  'host',
+  'x-api-key',
+  'authorization',
+  'cookie',
+  'x-forwarded-for',
+  'x-real-ip',
 ];
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -208,28 +215,34 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         timer.stop(upstreamStatus, outcome);
       }
 
-      // 8. Record usage & deduct billing (Non-blocking background task)
+      // 8. Keep metering and billing consistent after a recordable response.
       if (config.recordableStatuses(upstreamStatus)) {
         setImmediate(() => {
-          const recorded = usageStore.record({
-            id: randomUUID(), // ID of the usage event itself
-            requestId,        // Idempotency key
-            apiKey: apiKeyHeader,
-            apiKeyId: keyRecord.id,
-            apiId: String(apiEntry.id),
-            endpointId: endpoint.endpointId,
-            userId: keyRecord.userId,
-            amountUsdc: endpoint.priceUsdc,
-            statusCode: upstreamStatus,
-            timestamp: new Date().toISOString(),
-          });
+          void (async () => {
+            try {
+              const recorded = await usageStore.record({
+                id: randomUUID(), // ID of the usage event itself
+                requestId,        // Idempotency key
+                apiKey: apiKeyHeader,
+                apiKeyId: keyRecord.id,
+                apiId: String(apiEntry.id),
+                endpointId: endpoint.endpointId,
+                userId: keyRecord.userId,
+                amountUsdc: endpoint.priceUsdc,
+                statusCode: upstreamStatus,
+                timestamp: new Date().toISOString(),
+              });
 
-          // Only deduct billing if we haven't processed this requestId before
-          if (recorded && endpoint.priceUsdc > 0) {
-            billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
-              console.error('Background billing deduction failed:', err);
-            });
-          }
+              // Only deduct billing if we haven't processed this requestId before
+              if (recorded && endpoint.priceUsdc > 0) {
+                billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
+                  console.error('Background billing deduction failed:', err);
+                });
+              }
+            } catch (err) {
+              console.error('Background usage recording failed:', err);
+            }
+          })();
         });
       }
     } catch (error) {
@@ -238,4 +251,104 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   }
 
   return router;
+}
+
+interface ReconcileUsageAndBillingArgs {
+  billing: ProxyDeps['billing'];
+  usageStore: ProxyDeps['usageStore'];
+  requestId: string;
+  apiKeyHeader: string;
+  keyRecord: { id: string; userId: string; apiId: string };
+  apiEntry: ApiRegistryEntry;
+  endpoint: EndpointPricing;
+  upstreamStatus: number;
+}
+
+async function reconcileUsageAndBilling({
+  billing,
+  usageStore,
+  requestId,
+  apiKeyHeader,
+  keyRecord,
+  apiEntry,
+  endpoint,
+  upstreamStatus,
+}: ReconcileUsageAndBillingArgs): Promise<void> {
+  let chargeResult:
+    | { success: boolean; alreadyProcessed?: boolean; reconciliationRequired?: boolean; error?: string }
+    | undefined;
+
+  if (endpoint.priceUsdc > 0) {
+    if (billing.chargeUsage) {
+      chargeResult = await billing.chargeUsage({
+        requestId,
+        developerId: keyRecord.userId,
+        apiId: String(apiEntry.id),
+        endpointId: endpoint.endpointId,
+        apiKeyId: keyRecord.id,
+        amountUsdc: endpoint.priceUsdc,
+      });
+    } else {
+      const deduction = await billing.deductCredit(keyRecord.userId, endpoint.priceUsdc);
+      chargeResult = {
+        success: deduction.success,
+        alreadyProcessed: false,
+        reconciliationRequired: false,
+      };
+    }
+
+    if (!chargeResult.success) {
+      if (chargeResult.reconciliationRequired) {
+        console.error(
+          '[proxy billing reconciliation] Billing anchor failed after usage write phase started',
+          {
+            requestId,
+            apiId: apiEntry.id,
+            endpointId: endpoint.endpointId,
+            developerId: keyRecord.userId,
+            error: chargeResult.error ?? 'Unknown billing failure',
+          },
+        );
+      }
+      return;
+    }
+  }
+
+  try {
+    const recorded = usageStore.record({
+      id: randomUUID(),
+      requestId,
+      apiKey: apiKeyHeader,
+      apiKeyId: keyRecord.id,
+      apiId: String(apiEntry.id),
+      endpointId: endpoint.endpointId,
+      userId: keyRecord.userId,
+      amountUsdc: endpoint.priceUsdc,
+      statusCode: upstreamStatus,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!recorded && !chargeResult?.alreadyProcessed) {
+      console.error(
+        '[proxy billing reconciliation] Usage view write failed after successful billing charge',
+        {
+          requestId,
+          apiId: apiEntry.id,
+          endpointId: endpoint.endpointId,
+          developerId: keyRecord.userId,
+        },
+      );
+    }
+  } catch (error) {
+    console.error(
+      '[proxy billing reconciliation] Usage view write threw after successful billing charge',
+      {
+        requestId,
+        apiId: apiEntry.id,
+        endpointId: endpoint.endpointId,
+        developerId: keyRecord.userId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
 }

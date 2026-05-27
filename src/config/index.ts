@@ -118,6 +118,11 @@ export const config = {
     timeoutMs: env.PROXY_TIMEOUT_MS,
   },
 
+  restRateLimit: {
+    windowMs: env.REST_RATE_LIMIT_WINDOW_MS,
+    maxRequests: env.REST_RATE_LIMIT_MAX_REQUESTS,
+  },
+
   sorobanRpc:
     env.SOROBAN_RPC_ENABLED && env.SOROBAN_RPC_URL
       ? {
@@ -133,6 +138,11 @@ export const config = {
           timeout: env.HORIZON_TIMEOUT,
         }
       : undefined,
+
+  settlementSync: {
+    intervalMs: env.SETTLEMENT_STATUS_SYNC_INTERVAL_MS,
+    timeoutMs: env.SETTLEMENT_STATUS_SYNC_TIMEOUT_MS,
+  },
 
   stellar: {
     network: selectedNetwork,

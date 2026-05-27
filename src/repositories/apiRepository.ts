@@ -55,6 +55,7 @@ export interface ApiEndpointInfo {
 
 export interface ApiRepository {
   create(api: ApiCreateInput): Promise<Api>;
+  createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints>;
   update(id: number, data: ApiUpdateInput): Promise<Api | null>;
   listByDeveloper(developerId: number, filters?: ApiListFilters): Promise<Api[]>;
   listPublic(filters?: ApiListFilters): Promise<Api[]>;
@@ -79,6 +80,10 @@ export const defaultApiRepository: ApiRepository = {
 
     if (!created) throw new Error('API insert failed');
     return created;
+  },
+
+  async createWithEndpoints(input) {
+    return createApi(input);
   },
 
   async update(id, data) {
@@ -293,6 +298,33 @@ export class InMemoryApiRepository implements ApiRepository {
     return created;
   }
 
+  async createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints> {
+    const api = await this.create(input);
+    const now = new Date();
+    const endpointRows: ApiEndpoint[] = input.endpoints.map((endpoint, index) => ({
+      id: index + 1,
+      api_id: api.id,
+      path: endpoint.path,
+      method: endpoint.method,
+      price_per_call_usdc: endpoint.price_per_call_usdc,
+      description: endpoint.description ?? null,
+      created_at: now,
+      updated_at: now,
+    }));
+
+    this.endpointsByApiId.set(api.id, endpointRows.map((endpoint) => ({
+      path: endpoint.path,
+      method: endpoint.method,
+      price_per_call_usdc: endpoint.price_per_call_usdc,
+      description: endpoint.description,
+    })));
+
+    return {
+      ...api,
+      endpoints: endpointRows,
+    };
+  }
+
   async update(id: number, data: ApiUpdateInput): Promise<Api | null> {
     const index = this.apis.findIndex((a) => a.id === id);
     if (index === -1) return null;
@@ -402,39 +434,40 @@ export interface ApiWithEndpoints extends Api {
 
 export async function createApi(input: CreateApiInput): Promise<ApiWithEndpoints> {
   const { endpoints, ...apiData } = input;
-
-  const [api] = await db
-    .insert(schema.apis)
-    .values({
-      developer_id: apiData.developer_id,
-      name: apiData.name,
-      description: apiData.description ?? null,
-      base_url: apiData.base_url,
-      category: apiData.category ?? null,
-      status: apiData.status ?? 'draft',
-    } as NewApi)
-    .returning();
-
-  if (!api) throw new Error('API insert failed');
-
-  let endpointRows: ApiEndpoint[] = [];
-  if (endpoints.length > 0) {
-    endpointRows = await db
-      .insert(schema.apiEndpoints)
-      .values(
-        endpoints.map(
-          (e) =>
-            ({
-              api_id: api.id,
-              path: e.path,
-              method: e.method,
-              price_per_call_usdc: e.price_per_call_usdc,
-              description: e.description ?? null,
-            }) as NewApiEndpoint,
-        ),
-      )
+  return db.transaction(async (tx) => {
+    const [api] = await tx
+      .insert(schema.apis)
+      .values({
+        developer_id: apiData.developer_id,
+        name: apiData.name,
+        description: apiData.description ?? null,
+        base_url: apiData.base_url,
+        category: apiData.category ?? null,
+        status: apiData.status ?? 'draft',
+      } as NewApi)
       .returning();
-  }
 
-  return { ...api, endpoints: endpointRows };
+    if (!api) throw new Error('API insert failed');
+
+    let endpointRows: ApiEndpoint[] = [];
+    if (endpoints.length > 0) {
+      endpointRows = await tx
+        .insert(schema.apiEndpoints)
+        .values(
+          endpoints.map(
+            (e) =>
+              ({
+                api_id: api.id,
+                path: e.path,
+                method: e.method,
+                price_per_call_usdc: e.price_per_call_usdc,
+                description: e.description ?? null,
+              }) as NewApiEndpoint,
+          ),
+        )
+        .returning();
+    }
+
+    return { ...api, endpoints: endpointRows };
+  });
 }
