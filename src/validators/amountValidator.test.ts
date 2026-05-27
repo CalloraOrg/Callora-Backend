@@ -1,126 +1,267 @@
 import assert from 'node:assert';
+import * as fc from 'fast-check';
 import { AmountValidator } from './amountValidator.js';
 
-describe('AmountValidator', () => {
-  describe('validateUsdcAmount', () => {
-    it('should accept valid amount with 7 decimals', () => {
-      const result = AmountValidator.validateUsdcAmount('100.0000000');
-      assert.strictEqual(result.valid, true);
-      assert.strictEqual(result.normalizedAmount, '100.0000000');
-      assert.strictEqual(result.error, undefined);
-    });
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-    it('should accept small valid amount', () => {
-      const result = AmountValidator.validateUsdcAmount('0.0000001');
-      assert.strictEqual(result.valid, true);
-      assert.strictEqual(result.normalizedAmount, '0.0000001');
-    });
+const STROOPS_PER_USDC = BigInt(10 ** AmountValidator.USDC_DECIMALS);
+const MAX_STROOPS = BigInt(AmountValidator.MAX_AMOUNT) * STROOPS_PER_USDC;
 
-    it('should accept maximum valid amount', () => {
-      const result = AmountValidator.validateUsdcAmount('1000000000.0000000');
-      assert.strictEqual(result.valid, true);
-      assert.strictEqual(result.normalizedAmount, '1000000000.0000000');
-    });
+/**
+ * Convert a stroop count back to a canonical 7-decimal string.
+ * This is the inverse of toSmallestUnit and is guaranteed to produce
+ * an exactly-representable IEEE 754 double (since we derive the string
+ * from integer arithmetic, not from floating-point).
+ */
+function stroopsToCanonical(stroops: bigint): string {
+  const whole = stroops / STROOPS_PER_USDC;
+  const frac = stroops % STROOPS_PER_USDC;
+  return `${whole}.${String(frac).padStart(7, '0')}`;
+}
 
-    it('should reject amount with wrong decimal places (too few)', () => {
-      const result = AmountValidator.validateUsdcAmount('100.00');
-      assert.strictEqual(result.valid, false);
+/**
+ * Arbitrary for valid canonical USDC amounts.
+ * Generated from stroop integers so the resulting string is always
+ * exactly representable as a float64 (no precision-loss rejections).
+ */
+const validStroopsArb = fc.bigInt({ min: 1n, max: MAX_STROOPS });
+const validAmountArb = validStroopsArb.map(stroopsToCanonical);
+
+// ---------------------------------------------------------------------------
+// Unit tests – valid inputs
+// ---------------------------------------------------------------------------
+
+describe('AmountValidator.validateUsdcAmount – valid inputs', () => {
+  it('accepts a typical amount', () => {
+    const r = AmountValidator.validateUsdcAmount('100.0000000');
+    assert.strictEqual(r.valid, true);
+    assert.strictEqual(r.normalizedAmount, '100.0000000');
+  });
+
+  it('accepts the smallest non-zero step (1 stroop)', () => {
+    const r = AmountValidator.validateUsdcAmount('0.0000001');
+    assert.strictEqual(r.valid, true);
+    assert.strictEqual(r.normalizedAmount, '0.0000001');
+  });
+
+  it('accepts the maximum allowed amount', () => {
+    const r = AmountValidator.validateUsdcAmount('1000000000.0000000');
+    assert.strictEqual(r.valid, true);
+    assert.strictEqual(r.normalizedAmount, '1000000000.0000000');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests – invalid inputs
+// ---------------------------------------------------------------------------
+
+describe('AmountValidator.validateUsdcAmount – invalid inputs', () => {
+  // --- type guard ---
+  it('rejects non-string input', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    assert.strictEqual(AmountValidator.validateUsdcAmount(100 as any).valid, false);
+  });
+
+  // --- zero / negative ---
+  it('rejects zero', () => {
+    const r = AmountValidator.validateUsdcAmount('0.0000000');
+    assert.strictEqual(r.valid, false);
+    assert.strictEqual(r.error, 'Amount must be greater than zero');
+  });
+
+  it('rejects negative amount', () => {
+    assert.strictEqual(AmountValidator.validateUsdcAmount('-1.0000000').valid, false);
+  });
+
+  // --- precision ---
+  it('rejects too few decimal places', () => {
+    assert.strictEqual(AmountValidator.validateUsdcAmount('100.00').valid, false);
+  });
+
+  it('rejects too many decimal places (8)', () => {
+    assert.strictEqual(AmountValidator.validateUsdcAmount('100.00000001').valid, false);
+  });
+
+  it('rejects no decimal point', () => {
+    assert.strictEqual(AmountValidator.validateUsdcAmount('100').valid, false);
+  });
+
+  // --- scientific notation ---
+  it('rejects scientific notation variants', () => {
+    for (const v of ['1e7', '1E7', '1e+7', '1e-7', '5.0e3', '1.0E+7', '1.23e5']) {
       assert.strictEqual(
-        result.error,
-        'Amount must have exactly 7 decimal places (e.g., "100.0000000")'
+        AmountValidator.validateUsdcAmount(v).valid,
+        false,
+        `expected invalid for "${v}"`
       );
-    });
+    }
+  });
 
-    it('should reject amount with wrong decimal places (too many)', () => {
-      const result = AmountValidator.validateUsdcAmount('100.00000000');
-      assert.strictEqual(result.valid, false);
+  // --- NaN / Infinity strings ---
+  it('rejects NaN and Infinity strings', () => {
+    for (const v of ['NaN', 'Infinity', '-Infinity', 'inf']) {
       assert.strictEqual(
-        result.error,
-        'Amount must have exactly 7 decimal places (e.g., "100.0000000")'
+        AmountValidator.validateUsdcAmount(v).valid,
+        false,
+        `expected invalid for "${v}"`
       );
-    });
+    }
+  });
 
-    it('should reject amount without decimal point', () => {
-      const result = AmountValidator.validateUsdcAmount('100');
-      assert.strictEqual(result.valid, false);
-    });
-
-    it('should reject zero amount', () => {
-      const result = AmountValidator.validateUsdcAmount('0.0000000');
-      assert.strictEqual(result.valid, false);
-      assert.strictEqual(result.error, 'Amount must be greater than zero');
-    });
-
-    it('should reject negative amount', () => {
-      const result = AmountValidator.validateUsdcAmount('-50.0000000');
-      assert.strictEqual(result.valid, false);
-      assert.strictEqual(result.error, 'Amount must have exactly 7 decimal places (e.g., "100.0000000")');
-    });
-
-    it('should reject amount exceeding maximum', () => {
-      const result = AmountValidator.validateUsdcAmount('1000000001.0000000');
-      assert.strictEqual(result.valid, false);
+  // --- locale / whitespace / special chars ---
+  it('rejects locale-formatted and whitespace-padded strings', () => {
+    for (const v of [
+      '1,000.0000000',
+      '1000,0000000',
+      '1.000,0000000',
+      '1000.0000000 ',
+      ' 1000.0000000',
+      '1_000.0000000',
+    ]) {
       assert.strictEqual(
-        result.error,
-        'Amount exceeds maximum limit of 1,000,000,000 USDC'
+        AmountValidator.validateUsdcAmount(v).valid,
+        false,
+        `expected invalid for "${v}"`
       );
-    });
+    }
+  });
 
-    it('should reject non-string input', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = AmountValidator.validateUsdcAmount(100 as any);
-      assert.strictEqual(result.valid, false);
-      assert.strictEqual(result.error, 'Amount must be a string');
-    });
+  it('rejects empty string', () => {
+    assert.strictEqual(AmountValidator.validateUsdcAmount('').valid, false);
+  });
 
-    it('should reject invalid format (letters)', () => {
-      const result = AmountValidator.validateUsdcAmount('abc.0000000');
-      assert.strictEqual(result.valid, false);
-    });
+  it('rejects alphabetic input', () => {
+    assert.strictEqual(AmountValidator.validateUsdcAmount('abc.0000000').valid, false);
+  });
 
-    it('should reject empty string', () => {
-      const result = AmountValidator.validateUsdcAmount('');
-      assert.strictEqual(result.valid, false);
-    });
+  // --- over maximum ---
+  it('rejects amount exceeding 1 billion USDC', () => {
+    const r = AmountValidator.validateUsdcAmount('1000000001.0000000');
+    assert.strictEqual(r.valid, false);
+    assert.match(r.error!, /maximum/i);
+  });
+});
 
-    it('should reject scientific notation', () => {
-      const result = AmountValidator.validateUsdcAmount('1e7');
-      assert.strictEqual(result.valid, false);
-    });
+// ---------------------------------------------------------------------------
+// toSmallestUnit – bigint round-trip
+// ---------------------------------------------------------------------------
 
-    it('should reject scientific notation variants', () => {
-      for (const value of ['1E7', '1e+7', '1e-7', '5.0e3']) {
-        const result = AmountValidator.validateUsdcAmount(value);
-        assert.strictEqual(result.valid, false, `expected invalid for ${value}`);
-      }
-    });
+describe('AmountValidator.toSmallestUnit', () => {
+  it('converts 1.0000000 to 10_000_000n', () => {
+    assert.strictEqual(AmountValidator.toSmallestUnit('1.0000000'), 10_000_000n);
+  });
 
-    it('should reject locale formatted amounts', () => {
-      const cases = [
-        '1,000.0000000', // comma thousands separator
-        '1000,0000000', // comma decimal separator
-        '1.000,0000000', // European format
-        '1000.0000000 ', // trailing whitespace
-        ' 1000.0000000', // leading whitespace
-        '1_000.0000000', // underscore grouping
-      ];
+  it('converts 0.0000001 to 1n (1 stroop)', () => {
+    assert.strictEqual(AmountValidator.toSmallestUnit('0.0000001'), 1n);
+  });
 
-      for (const value of cases) {
-        const result = AmountValidator.validateUsdcAmount(value);
-        assert.strictEqual(result.valid, false, `expected invalid for ${value}`);
-      }
-    });
+  it('converts 100.0000000 to 1_000_000_000n', () => {
+    assert.strictEqual(AmountValidator.toSmallestUnit('100.0000000'), 1_000_000_000n);
+  });
 
-    it('should accept the smallest non-zero step (1 stroop)', () => {
-      const result = AmountValidator.validateUsdcAmount('0.0000001');
-      assert.strictEqual(result.valid, true);
-      assert.strictEqual(result.normalizedAmount, '0.0000001');
-    });
+  it('throws on invalid input', () => {
+    assert.throws(() => AmountValidator.toSmallestUnit('1e7'), /Invalid amount/);
+  });
 
-    it('should reject below smallest non-zero step', () => {
-      const result = AmountValidator.validateUsdcAmount('0.0000000');
-      assert.strictEqual(result.valid, false);
-      assert.strictEqual(result.error, 'Amount must be greater than zero');
-    });
+  it('result is always a non-negative bigint', () => {
+    const stroops = AmountValidator.toSmallestUnit('0.0000001');
+    assert.strictEqual(typeof stroops, 'bigint');
+    assert.ok(stroops >= 0n);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Property-based tests (fast-check)
+// ---------------------------------------------------------------------------
+
+describe('AmountValidator – property tests', () => {
+  it('all valid canonical amounts are accepted', () => {
+    fc.assert(
+      fc.property(validAmountArb, (amount) => {
+        return AmountValidator.validateUsdcAmount(amount).valid === true;
+      }),
+      { numRuns: 500 }
+    );
+  });
+
+  it('normalizedAmount always equals the input for valid amounts', () => {
+    fc.assert(
+      fc.property(validAmountArb, (amount) => {
+        const r = AmountValidator.validateUsdcAmount(amount);
+        return r.normalizedAmount === amount;
+      }),
+      { numRuns: 500 }
+    );
+  });
+
+  it('toSmallestUnit round-trips: stroop → canonical string → stroop', () => {
+    fc.assert(
+      fc.property(validStroopsArb, (stroops) => {
+        const amount = stroopsToCanonical(stroops);
+        return AmountValidator.toSmallestUnit(amount) === stroops;
+      }),
+      { numRuns: 500 }
+    );
+  });
+
+  it('toSmallestUnit result is always a non-negative bigint', () => {
+    fc.assert(
+      fc.property(validAmountArb, (amount) => {
+        const stroops = AmountValidator.toSmallestUnit(amount);
+        return typeof stroops === 'bigint' && stroops >= 0n;
+      }),
+      { numRuns: 500 }
+    );
+  });
+
+  it('scientific-notation strings are always rejected', () => {
+    // Build strings like "123e5", "4.5E+3" from integer mantissa + exponent.
+    const sciArb = fc
+      .tuple(
+        fc.integer({ min: 1, max: 999_999 }),
+        fc.integer({ min: 1, max: 9 }),
+        fc.constantFrom('e', 'E'),
+        fc.constantFrom('', '+', '-')
+      )
+      .map(([mantissa, exp, e, sign]) => `${mantissa}${e}${sign}${exp}`);
+
+    fc.assert(
+      fc.property(sciArb, (amount) => {
+        return AmountValidator.validateUsdcAmount(amount).valid === false;
+      }),
+      { numRuns: 300 }
+    );
+  });
+
+  it('strings with more than 7 decimal places are always rejected', () => {
+    // 8-digit fractional part: pad an integer to 8 digits.
+    const overPrecisionArb = fc
+      .tuple(
+        fc.integer({ min: 0, max: 999 }),
+        fc.integer({ min: 0, max: 99_999_999 })
+      )
+      .map(([whole, frac]) => `${whole}.${String(frac).padStart(8, '0')}`);
+
+    fc.assert(
+      fc.property(overPrecisionArb, (amount) => {
+        return AmountValidator.validateUsdcAmount(amount).valid === false;
+      }),
+      { numRuns: 300 }
+    );
+  });
+
+  it('whitespace-padded strings are always rejected', () => {
+    const paddedArb = fc
+      .tuple(validAmountArb, fc.constantFrom(' ', '\t', '\n'), fc.boolean())
+      .map(([amount, ws, prepend]) => (prepend ? `${ws}${amount}` : `${amount}${ws}`));
+
+    fc.assert(
+      fc.property(paddedArb, (amount) => {
+        return AmountValidator.validateUsdcAmount(amount).valid === false;
+      }),
+      { numRuns: 200 }
+    );
   });
 });

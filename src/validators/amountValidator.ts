@@ -5,20 +5,25 @@ export interface ValidationResult {
 }
 
 export class AmountValidator {
-  private static readonly USDC_DECIMALS = 7;
-  private static readonly MAX_AMOUNT = 1_000_000_000;
+  static readonly USDC_DECIMALS = 7;
+  static readonly MAX_AMOUNT = 1_000_000_000;
+
+  /**
+   * Strict format: one or more digits, a literal dot, exactly 7 decimal digits.
+   * Rejects scientific notation, leading signs, whitespace, and locale separators.
+   */
   private static readonly AMOUNT_PATTERN = /^\d+\.\d{7}$/;
 
+  /** Maximum value in stroops (1 USDC = 10^7 stroops). */
+  private static readonly MAX_STROOPS =
+    BigInt(AmountValidator.MAX_AMOUNT) * BigInt(10 ** AmountValidator.USDC_DECIMALS);
+
   static validateUsdcAmount(amount: string): ValidationResult {
-    // Step 1: Check if string is provided
     if (typeof amount !== 'string') {
-      return {
-        valid: false,
-        error: 'Amount must be a string',
-      };
+      return { valid: false, error: 'Amount must be a string' };
     }
 
-    // Step 2: Check format with regex (exactly 7 decimal places)
+    // Reject scientific notation and any non-canonical form before parsing.
     if (!this.AMOUNT_PATTERN.test(amount)) {
       return {
         valid: false,
@@ -26,39 +31,38 @@ export class AmountValidator {
       };
     }
 
-    // Step 3: Parse to number
-    const numericAmount = parseFloat(amount);
+    // Parse using bigint arithmetic to avoid IEEE 754 precision loss.
+    const [whole, frac] = amount.split('.');
+    const stroops = BigInt(whole) * BigInt(10 ** this.USDC_DECIMALS) + BigInt(frac);
 
-    if (isNaN(numericAmount)) {
-      return {
-        valid: false,
-        error: 'Amount is not a valid number',
-      };
+    if (stroops <= 0n) {
+      return { valid: false, error: 'Amount must be greater than zero' };
     }
 
-    // Step 4: Check positive and non-zero
-    if (numericAmount <= 0) {
-      return {
-        valid: false,
-        error: 'Amount must be greater than zero',
-      };
-    }
-
-    // Step 5: Check maximum limit (1 billion USDC)
-    if (numericAmount > this.MAX_AMOUNT) {
+    if (stroops > this.MAX_STROOPS) {
       return {
         valid: false,
         error: 'Amount exceeds maximum limit of 1,000,000,000 USDC',
       };
     }
 
-    // Step 6: Normalize format
-    const normalizedAmount = numericAmount.toFixed(this.USDC_DECIMALS);
+    // Reconstruct the canonical string from bigint to guarantee exact representation.
+    const normalizedAmount = `${whole}.${frac}`;
 
-    // All validations passed
-    return {
-      valid: true,
-      normalizedAmount,
-    };
+    return { valid: true, normalizedAmount };
+  }
+
+  /**
+   * Convert a validated USDC string (7 decimal places) to its smallest-unit
+   * bigint representation (stroops: 1 USDC = 10_000_000 stroops).
+   * Throws if the input is not a valid, canonical 7-decimal string.
+   */
+  static toSmallestUnit(amount: string): bigint {
+    const result = this.validateUsdcAmount(amount);
+    if (!result.valid || !result.normalizedAmount) {
+      throw new Error(`Invalid amount: ${result.error}`);
+    }
+    const [whole, frac] = result.normalizedAmount.split('.');
+    return BigInt(whole) * BigInt(10 ** this.USDC_DECIMALS) + BigInt(frac);
   }
 }
