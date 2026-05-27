@@ -47,8 +47,9 @@ describe('Validation Middleware', () => {
         .get('/test?limit=0') // Invalid: limit must be >= 1
         .expect(400);
 
-      expect(response.body.error).toBe('Request validation failed');
+      expect(response.body.message).toBe('Request validation failed');
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(response.body.requestId).toBe('unknown');
       expect(response.body.details).toEqual([
         expect.objectContaining({
           field: 'query.limit',
@@ -93,8 +94,9 @@ describe('Validation Middleware', () => {
         .send({ name: 'J', email: 'invalid-email' }) // Both fields invalid
         .expect(400);
 
-      expect(response.body.error).toBe('Request validation failed');
+      expect(response.body.message).toBe('Request validation failed');
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(response.body.requestId).toBe('unknown');
       expect(response.body.details).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ field: 'body.name' }),
@@ -135,8 +137,9 @@ describe('Validation Middleware', () => {
         .get('/test/invalid-uuid')
         .expect(400);
 
-      expect(response.body.error).toBe('Request validation failed');
+      expect(response.body.message).toBe('Request validation failed');
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(response.body.requestId).toBe('unknown');
       expect(response.body.details).toEqual([
         expect.objectContaining({ field: 'params.id' }),
       ]);
@@ -154,14 +157,16 @@ describe('Validation Middleware', () => {
       testApp.post('/test', validateWithDetails({ body: schema }), (req, res) => {
         res.json({ success: true });
       });
+      testApp.use(errorHandler);
 
       const response = await request(testApp)
         .post('/test')
         .send({ name: 'John', email: 'invalid-email', age: 16 })
         .expect(400);
 
-      expect(response.body.error).toBe('Request validation failed');
+      expect(response.body.message).toBe('Request validation failed');
       expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(response.body.requestId).toBe('unknown');
       expect(response.body.details).toBeDefined();
       expect(Array.isArray(response.body.details)).toBe(true);
       expect(response.body.details.length).toBeGreaterThan(0);
@@ -185,6 +190,7 @@ describe('Validation Middleware', () => {
       testApp.post('/test', validateWithDetails({ body: schema }), (_req, res) => {
         res.json({ success: true });
       });
+      testApp.use(errorHandler);
 
       const response = await request(testApp)
         .post('/test')
@@ -235,7 +241,7 @@ describe('Validation Middleware', () => {
         .send({ title: '' }) // Empty title
         .expect(400);
 
-      expect(response1.body.error).toBe('Request validation failed');
+      expect(response1.body.message).toBe('Request validation failed');
 
       // Should fail with invalid query
       const response2 = await request(testApp)
@@ -243,15 +249,13 @@ describe('Validation Middleware', () => {
         .send({ title: 'My Post' })
         .expect(400);
 
-      expect(response2.body.error).toBe('Request validation failed');
+      expect(response2.body.message).toBe('Request validation failed');
 
-      // Should fail with invalid params
-      const response3 = await request(testApp)
-        .post('/users//posts?category=tech') // Empty userId
+      // Express will not match a route with a missing path segment, so this stays a 404.
+      await request(testApp)
+        .post('/users//posts?category=tech')
         .send({ title: 'My Post' })
-        .expect(400);
-
-      expect(response3.body.error).toBe('Request validation failed');
+        .expect(404);
     });
   });
 });

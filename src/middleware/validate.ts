@@ -24,8 +24,9 @@ export interface ValidationErrorDetail {
  * Interface for validation error response body
  */
 export interface ValidationErrorResponse {
-  error: string;
+  message: string;
   code: string;
+  requestId: string;
   details: ValidationErrorDetail[];
 }
 
@@ -63,7 +64,8 @@ export function validate(schemas: ValidationSchemas) {
     const errors = collectValidationErrors(schemas, req);
 
     if (errors.length > 0) {
-      throw new ValidationError(errors);
+      next(new ValidationError(errors));
+      return;
     }
 
     next();

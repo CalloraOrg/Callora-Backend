@@ -1,8 +1,10 @@
 import { eq, and, like, type SQL } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import type { Api, NewApi } from '../db/schema.js';
+import type { Api, ApiEndpoint, NewApi, NewApiEndpoint } from '../db/schema.js';
 import type {
   ApiCreateInput,
+  ApiWithEndpoints,
+  CreateApiInput,
   ApiDetails,
   ApiEndpointInfo,
   ApiListFilters,
@@ -27,6 +29,53 @@ export class DrizzleApiRepository implements ApiRepository {
 
     if (!created) throw new Error('API insert failed');
     return created;
+  }
+
+  async createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints> {
+    const { endpoints, ...apiData } = input;
+
+    return db.transaction(async (tx) => {
+      const [api] = await tx
+        .insert(schema.apis)
+        .values({
+          developer_id: apiData.developer_id,
+          name: apiData.name,
+          description: apiData.description ?? null,
+          base_url: apiData.base_url,
+          logo_url: null,
+          category: apiData.category ?? null,
+          status: apiData.status ?? 'draft',
+        } as NewApi)
+        .returning();
+
+      if (!api) {
+        throw new Error('API insert failed');
+      }
+
+      let endpointRows: ApiEndpoint[] = [];
+      if (endpoints.length > 0) {
+        endpointRows = await tx
+          .insert(schema.apiEndpoints)
+          .values(
+            endpoints.map(
+              (endpoint) =>
+                ({
+                  api_id: api.id,
+                  path: endpoint.path,
+                  method: endpoint.method,
+                  price_per_call_usdc: endpoint.price_per_call_usdc,
+                  description: endpoint.description ?? null,
+                }) as NewApiEndpoint,
+            ),
+          )
+          .returning();
+      }
+
+      return {
+        ...api,
+        endpoints: endpointRows,
+      };
+    });
   }
 
   async update(id: number, data: ApiUpdateInput): Promise<Api | null> {

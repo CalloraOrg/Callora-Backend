@@ -130,7 +130,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           }
         }
 
-        usageStore.record({
+        await usageStore.record({
           id: randomUUID(),
           requestId,
           apiKey: apiKeyHeader,

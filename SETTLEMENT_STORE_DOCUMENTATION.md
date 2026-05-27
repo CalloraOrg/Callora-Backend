@@ -162,5 +162,7 @@ The `InMemorySettlementStore` provides a solid foundation for development and te
 Key takeaways:
 - Current implementation is suitable for development/testing only
 - Production use requires database backing and concurrency controls
+- `PostgresSettlementStore` now provides that backing while preserving external settlement IDs through `settlements.external_id`
+- Persistent developer revenue also depends on `revenue_ledger` so unsettled usage continues to satisfy `total_earned = completed + pending + usage` after restarts
 - Security concerns must be addressed at the application layer
 - Test coverage provides confidence in current behavior guarantees
