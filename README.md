@@ -188,6 +188,16 @@ The app validates all environment variables at startup using [Zod](https://zod.d
 | `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `GATEWAY_PROFILING_ENABLED` | No | `false` | Enable request profiling |
 
+### Health Check Behavior
+
+`GET /api/health` reports per-dependency status when detailed health checks are enabled:
+
+- `checks.database` for PostgreSQL
+- `checks.soroban_rpc` for Soroban RPC when `SOROBAN_RPC_ENABLED=true`
+- `checks.horizon` for Horizon when `HORIZON_ENABLED=true`
+
+Each dependency uses its own bounded timeout, so a hung database or remote Stellar service cannot stall the full health response. Use `HEALTH_CHECK_DB_TIMEOUT` for PostgreSQL, `SOROBAN_RPC_TIMEOUT` for Soroban RPC, and `HORIZON_TIMEOUT` for Horizon.
+
 ## Production Shutdown Expectations
 
 - The server listens for `SIGTERM` and `SIGINT` and performs a graceful shutdown.
