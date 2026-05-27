@@ -73,7 +73,7 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
   router.get('/revenue', 
     requireAuth, 
     validate({ query: revenueQuerySchema }), 
-    (req: Request, res: Response<unknown, AuthenticatedLocals>) => {
+    async (req: Request, res: Response<unknown, AuthenticatedLocals>) => {
       const user = res.locals.authenticatedUser;
       if (!user) {
         // Fallback for direct testing mock headers if they bypassed standard gateway structure but still need requireAuth defaults
@@ -91,7 +91,7 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
       }
 
     // Fetch settlements
-    const allSettlements = settlementStore.getDeveloperSettlements(developerId);
+    const allSettlements = await settlementStore.getDeveloperSettlements(developerId);
     const settlements = allSettlements.slice(offset, offset + limit);
     const total = allSettlements.length;
 
@@ -105,7 +105,7 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
       .reduce((sum, s) => sum + s.amount, 0);
 
     // Get unsettled usage to calculate total earned
-    const unsettledEvents = usageStore.getUnsettledEvents().filter((e) => e.userId === developerId);
+    const unsettledEvents = (await usageStore.getUnsettledEvents()).filter((e) => e.userId === developerId);
     const unsettledRevenue = unsettledEvents.reduce((sum, e) => sum + e.amountUsdc, 0);
 
     const totalEarned = completedTotal + unsettledRevenue + pendingTotal;

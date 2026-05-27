@@ -1,4 +1,5 @@
 import type { RequestHandler } from 'express';
+import type { Awaitable } from './awaitable.js';
 
 /** Represents a registered API key mapping to a developer and API. */
 export interface ApiKey {
@@ -58,11 +59,11 @@ export interface RateLimiter {
 /** Interface for recording and querying usage events. */
 export interface UsageStore {
   /** Record an event. Returns false if requestId already exists (idempotent). */
-  record(event: UsageEvent): boolean;
-  hasEvent(requestId: string): boolean;
-  getEvents(apiKey?: string): UsageEvent[];
-  getUnsettledEvents(): UsageEvent[];
-  markAsSettled(eventIds: string[], settlementId: string): void;
+  record(event: UsageEvent): Awaitable<boolean>;
+  hasEvent(requestId: string): Awaitable<boolean>;
+  getEvents(apiKey?: string): Awaitable<UsageEvent[]>;
+  getUnsettledEvents(): Awaitable<UsageEvent[]>;
+  markAsSettled(eventIds: string[], settlementId: string): Awaitable<void>;
 }
 
 /** A registered API with its upstream base URL and endpoint pricing. */

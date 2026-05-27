@@ -69,6 +69,13 @@ The request requires developer auth via `Authorization: Bearer ...` or `x-user-i
 - Read methods support time-bounded lookups by `userId` or `apiId`, plus aggregate totals for user spend and API revenue.
 - Amounts are handled as smallest-unit `bigint` values in application code, even though the backing column is named `amount_usdc`.
 
+## Persistent developer revenue stores
+
+- The runtime now uses PostgreSQL-backed `SettlementStore` and `UsageStore` implementations so `/api/developers/revenue` survives process restarts.
+- Unsettled usage is persisted through `revenue_ledger`, and settlement batches are persisted through `settlements`.
+- The in-memory store factories are still available for unit tests and isolated local scenarios.
+- Apply `migrations/001_create_usage_events.sql`, `migrations/002_create_settlements.sql`, `migrations/003_create_revenue_ledger.sql`, and `migrations/005_add_persistent_store_columns.sql` before starting the API against PostgreSQL.
+
 ## Local setup
 
 1. **Prerequisites:** Node.js 18+
