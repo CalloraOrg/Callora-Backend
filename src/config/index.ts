@@ -153,4 +153,7 @@ export const config = {
   bcrypt: {
     costFactor: env.BCRYPT_COST_FACTOR,
   },
+  idempotency: {
+    retentionWindowSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
+  },
 } as const;

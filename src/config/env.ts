@@ -109,6 +109,9 @@ export const envSchema = z
 
     // Security
     BCRYPT_COST_FACTOR: z.coerce.number().int().min(10).max(31).default(12),
+
+    // Idempotency
+    IDEMPOTENCY_RETENTION_WINDOW_SECONDS: z.coerce.number().int().positive().default(86400),
   })
   .superRefine((values, ctx) => {
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {

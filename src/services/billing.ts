@@ -243,6 +243,15 @@ export class BillingService {
       };
     }
 
+    // --- Idempotency precheck: return early if request has already been processed ---
+    const existing = await this.getByRequestId(request.requestId);
+    if (existing) {
+      return {
+        ...existing,
+        alreadyProcessed: true,
+      };
+    }
+
     // --- Phase 2 (pre-flight): balance check outside any DB transaction ---
     // Soroban is an external ledger; we cannot make this atomic with Postgres.
     // We check before inserting to avoid creating pending rows for requests
