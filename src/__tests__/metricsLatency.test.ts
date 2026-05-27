@@ -3,8 +3,10 @@
  *
  * Covers:
  *   - resolveRouteGroup: all route groups, edge cases, unknown paths
- *   - metricsMiddleware: label correctness, route sanitisation, counter/histogram
- *     increments, 404 cardinality protection
+ *   - normalizeRouteForMetrics: route normalization, UUID/ID sanitization,
+ *     sentinel labels for pathological routes
+ *   - metricsMiddleware: label correctness, cardinality protection,
+ *     counter/histogram increments
  */
 
 import { EventEmitter } from 'node:events';
