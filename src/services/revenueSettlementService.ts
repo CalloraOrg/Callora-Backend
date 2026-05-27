@@ -2,16 +2,33 @@ import { Settlement, SettlementStore } from '../types/developer.js';
 import { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 import { SorobanSettlementClient } from './sorobanSettlement.js';
 import { randomUUID } from 'node:crypto';
+import { config } from '../config/index.js';
+import {
+  RETRIABLE_HTTP_STATUSES,
+  TransientError,
+  isTransientNetworkError,
+  withRetry,
+} from '../lib/retry.js';
 
 export interface RevenueSettlementOptions {
   /** Minimum accumulated USDC to trigger a payout (default: 5.00) */
   minPayoutUsdc?: number;
   /** Maximum number of events to process per developer per batch (to avoid hitting transaction limits) */
   maxEventsPerBatch?: number;
+  horizonUrl?: string;
+  fetchImpl?: typeof fetch;
+  horizonRequestTimeoutMs?: number;
+  horizonMaxRetries?: number;
+  horizonRetryBaseDelayMs?: number;
+}
+
+interface HorizonTransactionResponse {
+  successful?: boolean;
 }
 
 export class RevenueSettlementService {
   private batchTail: Promise<void> = Promise.resolve();
+  private reconcileTail: Promise<void> = Promise.resolve();
 
   constructor(
     private usageStore: UsageStore,
@@ -45,7 +62,7 @@ export class RevenueSettlementService {
   }
 
   private async runBatchOnce(): Promise<{ processed: number; settledAmount: number; errors: number }> {
-    const unsettled = this.usageStore.getUnsettledEvents();
+    const unsettled = await this.usageStore.getUnsettledEvents();
     if (unsettled.length === 0) {
       return { processed: 0, settledAmount: 0, errors: 0 };
     }
@@ -100,7 +117,7 @@ export class RevenueSettlementService {
         created_at: new Date().toISOString(),
       };
       try {
-        this.settlementStore.create(settlement);
+        await this.settlementStore.create(settlement);
       } catch (error) {
         errors++;
         console.error(
@@ -127,38 +144,38 @@ export class RevenueSettlementService {
       // 3. Update settlement status and events
       if (result.success && result.txHash) {
         try {
-          this.settlementStore.updateStatus(settlementId, 'completed', result.txHash);
-          this.usageStore.markAsSettled(eventIds, settlementId);
+          await this.settlementStore.updateStatus(settlementId, 'completed', result.txHash);
+          await this.usageStore.markAsSettled(eventIds, settlementId);
 
           processed += events.length;
           settledAmount += totalAmount;
         } catch (error) {
           errors++;
-          this.recordFailedSettlement(
-            settlementId,
-            developerId,
-            `Finalization failed after payout: ${this.getErrorMessage(error)}`,
+        await this.recordFailedSettlement(
+          settlementId,
+          developerId,
+          `Finalization failed after payout: ${this.getErrorMessage(error)}`,
             true,
           );
         }
       } else {
         // Failed: record failure, do NOT mark events as settled so they retry next batch
         errors++;
-        this.recordFailedSettlement(settlementId, developerId, result.error);
+        await this.recordFailedSettlement(settlementId, developerId, result.error);
       }
     }
 
     return { processed, settledAmount, errors };
   }
 
-  private recordFailedSettlement(
+  private async recordFailedSettlement(
     settlementId: string,
     developerId: string,
     errorMessage?: string,
     clearTxHash = false,
-  ): void {
+  ): Promise<void> {
     try {
-      this.settlementStore.updateStatus(
+      await this.settlementStore.updateStatus(
         settlementId,
         'failed',
         clearTxHash ? null : undefined,

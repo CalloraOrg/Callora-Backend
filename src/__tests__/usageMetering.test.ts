@@ -6,6 +6,7 @@ import { InMemoryRateLimiter } from '../services/rateLimiter.js';
 import { InMemoryUsageStore } from '../services/usageStore.js';
 import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { ApiKey, ApiRegistryEntry, ProxyConfig } from '../types/gateway.js';
+import { errorHandler } from '../middleware/errorHandler.js';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ async function startProxy() {
     proxyConfig: currentProxyConfig,
   });
   app.use('/v1/call', proxyRouter);
+  app.use(errorHandler);
 
   await new Promise<void>((resolve) => {
     proxyServer = app.listen(0, () => {
@@ -109,6 +111,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   usageStore.clear();
+  billing.clear();
   billing.setBalance(TEST_DEVELOPER_ID, 1000);
   rateLimiter.reset();
   currentProxyConfig = { timeoutMs: 2000 };
@@ -233,6 +236,61 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
   });
 
+  it('records neither usage nor deduction when anchored charging fails', async () => {
+    billing.failNextUsageCharge('pending billing write failed', true);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+    expect(res.status).toBe(200);
+
+    expect(usageStore.getEvents()).toHaveLength(0);
+    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(1000);
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[proxy billing reconciliation] Billing anchor failed after usage write phase started',
+      expect.objectContaining({
+        requestId: expect.any(String),
+        apiId: TEST_API_ID,
+        endpointId: 'ep_data',
+        developerId: TEST_DEVELOPER_ID,
+      }),
+    );
+
+    errorSpy.mockRestore();
+  });
+
+  it('logs reconciliation failure when billing succeeds but usage view write throws', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const recordSpy = jest
+      .spyOn(usageStore, 'record')
+      .mockImplementation(() => {
+        throw new Error('usage store offline');
+      });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+    expect(res.status).toBe(200);
+
+    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[proxy billing reconciliation] Usage view write threw after successful billing charge',
+      expect.objectContaining({
+        requestId: expect.any(String),
+        apiId: TEST_API_ID,
+        endpointId: 'ep_data',
+        developerId: TEST_DEVELOPER_ID,
+        error: 'usage store offline',
+      }),
+    );
+
+    recordSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
   it('is idempotent: duplicate requestIds do not double-bill', async () => {
     // Simulate a case where proxy handles same request twice
     // (In reality this is handled by usageStore idempotency directly, so let's unit-test it)
@@ -270,7 +328,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
 
     expect(res.status).toBe(402);
     const body = await res.json();
-    expect(body.error).toMatch(/insufficient balance/i);
+    expect(body.message ?? body.error).toMatch(/insufficient balance/i);
 
     await yieldTick();
 

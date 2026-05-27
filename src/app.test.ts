@@ -142,6 +142,23 @@ class FakeApiRepository implements ApiRepository {
     return created;
   }
 
+  async createWithEndpoints(api: import('./repositories/apiRepository.js').CreateApiInput) {
+    const created = await this.create(api);
+    return {
+      ...created,
+      endpoints: api.endpoints.map((endpoint, index) => ({
+        id: index + 1,
+        api_id: created.id,
+        path: endpoint.path,
+        method: endpoint.method,
+        price_per_call_usdc: endpoint.price_per_call_usdc,
+        description: endpoint.description ?? null,
+        created_at: new Date(1000),
+        updated_at: new Date(1000),
+      })),
+    };
+  }
+
   async update(id: number, data: ApiUpdateInput): Promise<Api | null> {
     const index = this.apis.findIndex((api) => api.id === id);
     if (index === -1) return null;
@@ -212,6 +229,29 @@ const createDeveloperRepository = (profile?: Developer): DeveloperRepository => 
       return profile;
     }
     return undefined;
+  },
+  async getOrCreateByUserId(userId: string) {
+    if (profile && profile.user_id === userId) {
+      return profile;
+    }
+    return {
+      id: 999,
+      user_id: userId,
+      name: null,
+      website: null,
+      description: null,
+      category: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+  },
+  async upsertProfile(userId: string, data) {
+    const current = profile && profile.user_id === userId ? profile : await this.getOrCreateByUserId(userId);
+    return {
+      ...current,
+      ...data,
+      updated_at: new Date(),
+    };
   },
 });
 
@@ -644,7 +684,6 @@ const validApiBody = {
   description: 'Real-time weather data',
   base_url: 'https://api.weather.example.com',
   category: 'weather',
-  status: 'draft',
   endpoints: [
     {
       path: '/forecast',
@@ -699,7 +738,8 @@ test('POST /api/developers/apis returns 400 when name is missing', async () => {
     .set('x-user-id', 'dev-1')
     .send(body);
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /name/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.name');
 });
 
 test('POST /api/developers/apis returns 400 when base_url is missing', async () => {
@@ -711,7 +751,8 @@ test('POST /api/developers/apis returns 400 when base_url is missing', async () 
     .set('x-user-id', 'dev-1')
     .send(body);
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /base_url/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.base_url');
 });
 
 test('POST /api/developers/apis returns 400 when base_url is not a valid URL', async () => {
@@ -721,17 +762,20 @@ test('POST /api/developers/apis returns 400 when base_url is not a valid URL', a
     .set('x-user-id', 'dev-1')
     .send({ ...validApiBody, base_url: 'not-a-url' });
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /base_url/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.base_url');
 });
 
-test('POST /api/developers/apis returns 400 when status is invalid', async () => {
+test('POST /api/developers/apis returns 400 when category is missing', async () => {
   const app = makeApp();
+  const body = { ...validApiBody };
+  delete (body as any).category;
   const res = await request(app)
     .post('/api/developers/apis')
     .set('x-user-id', 'dev-1')
-    .send({ ...validApiBody, status: 'published' });
+    .send(body);
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /status/i);
+  assert.match(res.body.message, /validation/i);
 });
 
 test('POST /api/developers/apis returns 400 when endpoints is not an array', async () => {
@@ -741,7 +785,8 @@ test('POST /api/developers/apis returns 400 when endpoints is not an array', asy
     .set('x-user-id', 'dev-1')
     .send({ ...validApiBody, endpoints: 'bad' });
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /endpoints/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.endpoints');
 });
 
 test('POST /api/developers/apis returns 400 when an endpoint path does not start with /', async () => {
@@ -754,7 +799,8 @@ test('POST /api/developers/apis returns 400 when an endpoint path does not start
       endpoints: [{ path: 'no-slash', method: 'GET', price_per_call_usdc: '0.01' }],
     });
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /path/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.endpoints[0].path');
 });
 
 test('POST /api/developers/apis returns 400 when an endpoint method is invalid', async () => {
@@ -767,7 +813,8 @@ test('POST /api/developers/apis returns 400 when an endpoint method is invalid',
       endpoints: [{ path: '/data', method: 'FETCH', price_per_call_usdc: '0.01' }],
     });
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /method/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.endpoints[0].method');
 });
 
 test('POST /api/developers/apis returns 400 when price_per_call_usdc is invalid', async () => {
@@ -780,7 +827,8 @@ test('POST /api/developers/apis returns 400 when price_per_call_usdc is invalid'
       endpoints: [{ path: '/data', method: 'GET', price_per_call_usdc: 'free' }],
     });
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /price_per_call_usdc/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.endpoints[0].price_per_call_usdc');
 });
 
 test('POST /api/developers/apis returns 400 when price_per_call_usdc is negative', async () => {
@@ -793,7 +841,8 @@ test('POST /api/developers/apis returns 400 when price_per_call_usdc is negative
       endpoints: [{ path: '/data', method: 'GET', price_per_call_usdc: '-0.01' }],
     });
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /price_per_call_usdc/i);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.endpoints[0].price_per_call_usdc');
 });
 
 test('POST /api/developers/apis returns 400 with DEVELOPER_NOT_FOUND when no developer profile', async () => {
@@ -816,21 +865,72 @@ test('POST /api/developers/apis returns 201 with created API and endpoints', asy
   assert.equal(res.body.name, validApiBody.name);
   assert.equal(res.body.base_url, validApiBody.base_url);
   assert.equal(res.body.developer_id, mockDeveloper.id);
+  assert.equal(res.body.status, 'active');
   assert.ok(Array.isArray(res.body.endpoints));
   assert.equal(res.body.endpoints.length, 1);
   assert.equal(res.body.endpoints[0].path, '/forecast');
   assert.equal(res.body.endpoints[0].method, 'GET');
 });
 
-test('POST /api/developers/apis returns 201 when endpoints array is empty', async () => {
+test('POST /api/developers/apis returns 400 when endpoints array is empty', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
     .set('x-user-id', 'dev-1')
     .send({ ...validApiBody, endpoints: [] });
-  assert.equal(res.status, 201);
-  assert.ok(Array.isArray(res.body.endpoints));
-  assert.equal(res.body.endpoints.length, 0);
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.details[0].field, 'body.endpoints');
+});
+
+test('POST /api/apis returns 400 with field paths for invalid endpoint data', async () => {
+  const app = createApp({
+    usageEventsRepository: seedRepository(),
+    developerRepository: createDeveloperRepository(mockDeveloper),
+    apiRepository: new InMemoryApiRepository(),
+  });
+
+  const res = await request(app)
+    .post('/api/apis')
+    .set('x-user-id', 'dev-1')
+    .send({
+      ...validApiBody,
+      endpoints: [{ path: '/forecast', method: 'FETCH', price_per_call_usdc: 'free' }],
+    });
+
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.deepEqual(
+    res.body.details.map((detail: { field: string }) => detail.field),
+    ['body.endpoints[0].method', 'body.endpoints[0].price_per_call_usdc'],
+  );
+});
+
+test('POST /api/apis creates an API that appears in GET /api/apis', async () => {
+  const apiRepository = new InMemoryApiRepository();
+  const app = createApp({
+    usageEventsRepository: seedRepository(),
+    developerRepository: createDeveloperRepository(mockDeveloper),
+    apiRepository,
+  });
+
+  const createResponse = await request(app)
+    .post('/api/apis')
+    .set('x-user-id', 'dev-1')
+    .send(validApiBody);
+
+  assert.equal(createResponse.status, 201);
+  assert.equal(createResponse.body.status, 'active');
+  assert.equal(createResponse.body.endpoints.length, 1);
+
+  const listResponse = await request(app).get('/api/apis');
+  assert.equal(listResponse.status, 200);
+  assert.equal(listResponse.body.data.length, 1);
+  assert.equal(listResponse.body.data[0].name, validApiBody.name);
+
+  const detailResponse = await request(app).get(`/api/apis/${createResponse.body.id}`);
+  assert.equal(detailResponse.status, 200);
+  assert.equal(detailResponse.body.endpoints[0].price_per_call_usdc, '0.01');
 });
 
 

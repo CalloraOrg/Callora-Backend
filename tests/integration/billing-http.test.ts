@@ -19,15 +19,27 @@ jest.mock('better-sqlite3', () => {
   };
 });
 
+// Mock Soroban billing client to avoid real network requests in integration tests
+jest.mock('../../src/services/sorobanBilling.js', () => {
+  return {
+    createSorobanRpcBillingClient: jest.fn().mockReturnValue({
+      getBalance: jest.fn().mockResolvedValue({ balance: '100000000000' }),
+      deductBalance: jest.fn().mockResolvedValue({ txHash: 'stellar-tx-hash-mock-123' })
+    })
+  };
+});
+
 import { createTestDb } from '../helpers/db.js';
 import { createApp } from '../../src/app.js';
 import jwt from 'jsonwebtoken';
+import { calculateRequestHash } from '../../src/middleware/idempotency.js';
 
 // Helper to create mock JWT token
 function createMockToken(userId: string = 'user_123'): string {
+  const secret = process.env.JWT_SECRET || 'test-secret-key';
   return jwt.sign(
-    { id: userId, email: 'test@example.com' },
-    'test-secret-key',
+    { sub: userId, userId: userId, email: 'test@example.com' },
+    secret,
     { expiresIn: '1h' }
   );
 }
@@ -159,6 +171,96 @@ describe('Billing HTTP Endpoints - Integration Tests', () => {
           [requestBody.requestId]
         );
         assert.equal(String(dbResult.rows[0].count), '1');
+      } finally {
+        await testDb.end();
+      }
+    });
+
+    test('handles Idempotency-Key header replays and conflicts', async () => {
+      const testDb = createTestDb();
+      const token = createMockToken('user_alice');
+
+      try {
+        // Create tables
+        await testDb.pool.query(`
+          CREATE TABLE IF NOT EXISTS usage_events (
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            api_id VARCHAR(255) NOT NULL,
+            endpoint_id VARCHAR(255) NOT NULL,
+            api_key_id VARCHAR(255) NOT NULL,
+            amount_usdc NUMERIC NOT NULL,
+            request_id VARCHAR(255) NOT NULL UNIQUE,
+            stellar_tx_hash VARCHAR(64),
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+          )
+        `);
+
+        const app = createApp();
+        app.locals.dbPool = testDb.pool;
+
+        const requestBody = {
+          requestId: 'req_idem_001',
+          apiId: 'api_weather',
+          endpointId: 'endpoint_forecast',
+          apiKeyId: 'key_abc123',
+          amountUsdc: '0.05',
+        };
+
+        const idempotencyKey = 'idem-key-test-abc';
+
+        // 1. First request - processes normally
+        const response1 = await request(app)
+          .post('/api/billing/deduct')
+          .set(createAuthHeaders(token))
+          .set('Idempotency-Key', idempotencyKey)
+          .send(requestBody);
+
+        assert.equal(response1.status, 200);
+        assert.equal(response1.body.success, true);
+        assert.equal(response1.body.alreadyProcessed, false);
+
+        // 2. Replay request - returns original cached response and header
+        const response2 = await request(app)
+          .post('/api/billing/deduct')
+          .set(createAuthHeaders(token))
+          .set('Idempotency-Key', idempotencyKey)
+          .send(requestBody);
+
+        assert.equal(response2.status, 200);
+        assert.equal(response2.header['idempotent-replayed'], 'true');
+        assert.equal(response2.body.success, true);
+        assert.equal(response2.body.usageEventId, response1.body.usageEventId);
+
+        // 3. Request with different payload using same key - returns 409 Conflict
+        const differentBody = { ...requestBody, amountUsdc: '1.00' };
+        const response3 = await request(app)
+          .post('/api/billing/deduct')
+          .set(createAuthHeaders(token))
+          .set('Idempotency-Key', idempotencyKey)
+          .send(differentBody);
+
+        assert.equal(response3.status, 409);
+        assert.equal(response3.body.code, 'IDEMPOTENCY_CONFLICT');
+
+        // 4. Request with key that is currently in progress (started) - returns 409 Conflict
+        const activeKey = 'idem-started-key';
+        const reqHash = calculateRequestHash('user_alice', requestBody, 'POST', '/deduct');
+        await testDb.pool.query(
+          `INSERT INTO idempotency_store (idempotency_key, request_hash, status, expires_at)
+           VALUES ($1, $2, $3, $4)`,
+          [activeKey, reqHash, 'started', new Date(Date.now() + 60000).toISOString()]
+        );
+
+        const response4 = await request(app)
+          .post('/api/billing/deduct')
+          .set(createAuthHeaders(token))
+          .set('Idempotency-Key', activeKey)
+          .send(requestBody);
+
+        assert.equal(response4.status, 409);
+        assert.equal(response4.body.code, 'IDEMPOTENCY_IN_PROGRESS');
+
       } finally {
         await testDb.end();
       }

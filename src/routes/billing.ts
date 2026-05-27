@@ -10,6 +10,7 @@ import {
   UnauthorizedError,
 } from '../errors/index.js';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { BillingService } from '../services/billing.js';
 import { createSorobanRpcBillingClient } from '../services/sorobanBilling.js';
 
@@ -32,6 +33,7 @@ function createRouteBillingService(pool: Pool): BillingService {
 router.post(
   '/deduct',
   requireAuth,
+  idempotencyMiddleware,
   async (
     req: Request,
     res: Response<unknown, AuthenticatedLocals>,

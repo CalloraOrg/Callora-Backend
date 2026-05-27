@@ -111,43 +111,35 @@ describe("env schema - BCRYPT_COST_FACTOR", () => {
   });
 });
 
-describe("env schema - rate limiter configuration", () => {
-  it("defaults to the in-memory store with the expected bucket settings", () => {
+describe('env schema — REST rate limit config', () => {
+  it('defaults REST rate limiting values when omitted', () => {
     const result = envSchema.safeParse({ ...baseEnv });
-
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.RATE_LIMIT_STORE).toBe("memory");
-      expect(result.data.RATE_LIMIT_MAX_REQUESTS).toBe(5);
-      expect(result.data.RATE_LIMIT_WINDOW_MS).toBe(60_000);
-      expect(result.data.RATE_LIMIT_PG_TABLE).toBe("gateway_rate_limit_buckets");
+      expect(result.data.REST_RATE_LIMIT_WINDOW_MS).toBe(60_000);
+      expect(result.data.REST_RATE_LIMIT_MAX_REQUESTS).toBe(100);
     }
   });
 
-  it("accepts a postgres-backed shared limiter configuration", () => {
+  it('accepts positive integer REST rate limit values', () => {
     const result = envSchema.safeParse({
       ...baseEnv,
-      RATE_LIMIT_STORE: "postgres",
-      RATE_LIMIT_MAX_REQUESTS: "15",
-      RATE_LIMIT_WINDOW_MS: "120000",
-      RATE_LIMIT_PG_TABLE: "shared_gateway_limits",
+      REST_RATE_LIMIT_WINDOW_MS: '15000',
+      REST_RATE_LIMIT_MAX_REQUESTS: '12',
     });
-
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.RATE_LIMIT_STORE).toBe("postgres");
-      expect(result.data.RATE_LIMIT_MAX_REQUESTS).toBe(15);
-      expect(result.data.RATE_LIMIT_WINDOW_MS).toBe(120_000);
-      expect(result.data.RATE_LIMIT_PG_TABLE).toBe("shared_gateway_limits");
+      expect(result.data.REST_RATE_LIMIT_WINDOW_MS).toBe(15_000);
+      expect(result.data.REST_RATE_LIMIT_MAX_REQUESTS).toBe(12);
     }
   });
 
-  it("rejects unsafe postgres table names", () => {
+  it('rejects non-positive REST rate limit values', () => {
     const result = envSchema.safeParse({
       ...baseEnv,
-      RATE_LIMIT_PG_TABLE: "rate-limits;drop table users",
+      REST_RATE_LIMIT_WINDOW_MS: '0',
+      REST_RATE_LIMIT_MAX_REQUESTS: '-1',
     });
-
     expect(result.success).toBe(false);
   });
 });

@@ -160,44 +160,79 @@ export function startUpstreamTimer(apiId: string, method: string): UpstreamTimer
   };
 }
 
+/** Sentinel value for routes that couldn't be recognized and normalized. */
+const UNKNOWN_ROUTE_SENTINEL = '_unknown';
+
+/**
+ * Normalize a route to a safe, low-cardinality template pattern.
+ *
+ * Rules:
+ *   1. If matched via Express routing (req.route.path), use that pattern
+ *      (e.g., /v1/call/:apiId instead of /v1/call/abc123)
+ *   2. If unmatched (404), sanitize numeric IDs and UUIDs by replacing
+ *      them with :id and :uuid placeholders
+ *   3. For deeply nested or suspicious paths, return the sentinel label
+ *
+ * This ensures metrics cardinality stays bounded regardless of URL
+ * parameter values, bot activity, or path-scanning attacks.
+ */
+function normalizeRouteForMetrics(
+  matched: string | undefined,
+  baseUrl: string | undefined,
+  unmatched: string,
+): string {
+  // Prefer matched route pattern from Express routing
+  if (matched) {
+    return (baseUrl || '') + matched;
+  }
+
+  // Sanitize unmatched paths: replace UUIDs and numeric IDs with placeholders
+  let sanitized = unmatched
+    .replace(/\/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}(?=\/|$)/g, '/:uuid')
+    .replace(/\/\d+(?=\/|$)/g, '/:id');
+
+  // Additional safety: if the path is still very long or has too many segments,
+  // cap it to prevent any pathological cases
+  const segments = sanitized.split('/').filter((s) => s.length > 0);
+  if (segments.length > 20) {
+    return UNKNOWN_ROUTE_SENTINEL;
+  }
+
+  return (baseUrl || '') + sanitized;
+}
+
 /**
  * Global middleware to record per-request latency and count metrics.
  *
  * Labels:
  *   method       – HTTP verb (GET, POST, …)
- *   route        – Parameterised route pattern (/api/apis/:id) or sanitised
- *                  fallback for unmatched paths.  Never contains raw user input.
- *   status_code  – HTTP response status as a string.
- *   route_group  – Logical service area (health, billing, vault, …).
+ *   route        – Parameterised route template (/api/apis/:id) or normalized
+ *                  fallback for unmatched paths; uses sentinel for pathological routes
+ *   status_code  – HTTP response status as a string
+ *   route_group  – Logical service area (health, billing, vault, …)
  *
  * Security / cardinality notes:
- *   - `route` uses req.route.path (Express's matched pattern) when available,
- *     so dynamic segments like IDs are collapsed to `:id` / `:uuid`.
- *   - For 404s the path is sanitised by replacing numeric and UUID segments
- *     before being stored, preventing cardinality explosions from bots or
- *     path-scanning attacks.
- *   - `route_group` is derived from the sanitised route, not raw user input.
+ *   - Routes with matched patterns use the template (e.g., /v1/call/:apiId)
+ *   - Unmatched paths (404s) are normalized by collapsing UUIDs and numeric IDs
+ *   - Pathological routes (too many segments) are capped under a sentinel label
+ *   - This prevents cardinality explosion from dynamic path segments, bots, or attacks
  */
 export const metricsMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   const endTimer = httpRequestDuration.startTimer();
 
   res.on('finish', () => {
-    // Use Express's matched route pattern when available (collapses :id, :uuid, etc.)
-    let routePattern = req.route ? req.route.path : req.path;
+    // Normalize the route to a safe cardinality label
+    const routePattern = normalizeRouteForMetrics(
+      req.route?.path,
+      req.baseUrl,
+      req.path,
+    );
 
-    // Sanitise unmatched paths (404s) to prevent cardinality injection
-    if (!req.route) {
-      routePattern = routePattern
-        .replace(/\/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}/g, '/:uuid')
-        .replace(/\/\d+/g, '/:id');
-    }
-
-    const fullRoute = (req.baseUrl || '') + routePattern;
-    const routeGroup = resolveRouteGroup(fullRoute);
+    const routeGroup = resolveRouteGroup(routePattern);
 
     const labels = {
       method: req.method,
-      route: fullRoute,
+      route: routePattern,
       status_code: res.statusCode.toString(),
       route_group: routeGroup,
     };

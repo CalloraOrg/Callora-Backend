@@ -25,6 +25,8 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(storedKey.keyHash).not.toBe(result.key);
       expect(storedKey.keyHash).not.toContain(result.key);
       expect(storedKey.keyHash.length).toBeGreaterThan(50); // bcrypt hashes are long
+      expect(result.id).toBeTruthy();
+      expect(result.createdAt).toBeInstanceOf(Date);
     });
 
     it("should use different salts for different keys", () => {
@@ -267,6 +269,35 @@ describe("ApiKeyRepository Security Tests", () => {
   });
 
   describe("Error Handling and Edge Cases", () => {
+    it("lists keys for a specific user and API", () => {
+      apiKeyRepository.create({
+        apiId: "api-1",
+        userId: "user-1",
+        scopes: ["*"],
+        rateLimitPerMinute: null,
+      });
+      apiKeyRepository.create({
+        apiId: "api-2",
+        userId: "user-1",
+        scopes: ["read"],
+        rateLimitPerMinute: 60,
+      });
+      apiKeyRepository.create({
+        apiId: "api-1",
+        userId: "user-2",
+        scopes: ["write"],
+        rateLimitPerMinute: null,
+      });
+
+      const userKeys = apiKeyRepository.list({ userId: "user-1" });
+      const apiKeys = apiKeyRepository.list({ userId: "user-1", apiId: "api-1" });
+
+      expect(userKeys).toHaveLength(2);
+      expect(apiKeys).toHaveLength(1);
+      expect(apiKeys[0].apiId).toBe("api-1");
+      expect(apiKeys[0].userId).toBe("user-1");
+    });
+
     it("should handle concurrent operations safely", () => {
       const userId = "user-1";
       const promises = Array.from({ length: 10 }, (_, i) =>

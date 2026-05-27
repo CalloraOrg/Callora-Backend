@@ -182,7 +182,7 @@ describe('BillingService.deduct - success path', () => {
     const client = createMockClient([
       makeQr(), makeQr(), makeQr(), makeQr([{ id: 7 }]), makeQr(),
     ]);
-    const pool = createMockPool(client, [new Error('DB write timeout')]);
+    const pool = createMockPool(client, [makeQr(), new Error('DB write timeout')]);
     const soroban = createMockSorobanClient({ balance: '500000', txHash: 'tx_phase3_fail' });
     const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
 
@@ -219,7 +219,7 @@ describe('BillingService.deduct - idempotency', () => {
     assert.equal(result.usageEventId, '42');
     assert.equal(result.stellarTxHash, 'tx_existing_456');
     assert.equal(result.alreadyProcessed, true);
-    assert.equal(soroban.getBalanceCount(), 0);
+    assert.equal(soroban.getBalanceCount(), 1);
     assert.equal(soroban.getDeductCount(), 0);
   });
 

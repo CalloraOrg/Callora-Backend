@@ -1,4 +1,8 @@
 import { env } from "./env.js";
+import {
+  parseUpstreamHostAllowlist,
+  validateUpstreamBaseUrl,
+} from "../lib/upstreamTarget.js";
 
 export type StellarNetwork = "testnet" | "mainnet";
 
@@ -82,6 +86,11 @@ const mainnetConfig: StellarNetworkConfig = {
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
 
+const upstreamHostAllowlist = parseUpstreamHostAllowlist(env.UPSTREAM_HOST_ALLOWLIST);
+const validatedUpstreamUrl = validateUpstreamBaseUrl(env.UPSTREAM_URL, {
+  allowedHosts: upstreamHostAllowlist,
+});
+
 export const config = {
   port: env.PORT,
   nodeEnv: env.NODE_ENV,
@@ -114,8 +123,14 @@ export const config = {
   },
 
   proxy: {
-    upstreamUrl: env.UPSTREAM_URL,
+    upstreamUrl: validatedUpstreamUrl,
     timeoutMs: env.PROXY_TIMEOUT_MS,
+    allowedHosts: upstreamHostAllowlist,
+  },
+
+  restRateLimit: {
+    windowMs: env.REST_RATE_LIMIT_WINDOW_MS,
+    maxRequests: env.REST_RATE_LIMIT_MAX_REQUESTS,
   },
 
   rateLimiter: {
@@ -141,6 +156,11 @@ export const config = {
         }
       : undefined,
 
+  settlementSync: {
+    intervalMs: env.SETTLEMENT_STATUS_SYNC_INTERVAL_MS,
+    timeoutMs: env.SETTLEMENT_STATUS_SYNC_TIMEOUT_MS,
+  },
+
   stellar: {
     network: selectedNetwork,
     baseFee: String(env.STELLAR_BASE_FEE),
@@ -159,5 +179,8 @@ export const config = {
 
   bcrypt: {
     costFactor: env.BCRYPT_COST_FACTOR,
+  },
+  idempotency: {
+    retentionWindowSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
   },
 } as const;

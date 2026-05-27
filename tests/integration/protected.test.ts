@@ -157,6 +157,23 @@ const stubDeveloperRepository: DeveloperRepository = {
   async findByUserId(userId: string) {
     return userId === testDeveloper.user_id ? testDeveloper : undefined;
   },
+  async getOrCreateByUserId(userId: string) {
+    return userId === testDeveloper.user_id
+      ? testDeveloper
+      : {
+          ...testDeveloper,
+          id: 8,
+          user_id: userId,
+        };
+  },
+  async upsertProfile(userId: string, data) {
+    const current = await this.getOrCreateByUserId(userId);
+    return {
+      ...current,
+      ...data,
+      updated_at: new Date(),
+    };
+  },
 };
 
 class StubApiRepository implements ApiRepository {
@@ -176,6 +193,21 @@ class StubApiRepository implements ApiRepository {
   }
   async update() {
     return null;
+  }
+  async createWithEndpoints(input: import('../../src/repositories/apiRepository.js').CreateApiInput) {
+    return {
+      id: 1,
+      developer_id: input.developer_id,
+      name: input.name,
+      description: input.description ?? null,
+      base_url: input.base_url,
+      logo_url: null,
+      category: input.category ?? null,
+      status: input.status ?? 'draft',
+      created_at: new Date(),
+      updated_at: new Date(),
+      endpoints: [],
+    };
   }
   async listByDeveloper(_developerId: number, _filters?: ApiListFilters) {
     return [];
@@ -203,27 +235,14 @@ function buildRealApp() {
     developerRepository: stubDeveloperRepository,
     apiRepository: new StubApiRepository(),
     findDeveloperByUserId: async (id) => stubDeveloperRepository.findByUserId(id),
-    createApiWithEndpoints: async (input) => ({
-      id: 1,
-      developer_id: input.developer_id,
-      name: input.name,
-      description: input.description ?? null,
-      base_url: input.base_url,
-      logo_url: null,
-      category: input.category ?? null,
-      status: input.status ?? 'draft',
-      created_at: new Date(),
-      updated_at: new Date(),
-      endpoints: [],
-    }),
   });
 }
 
 /** Standard assertion for an unauthenticated response from the errorHandler */
 function expectUnauthorizedShape(res: request.Response) {
   expect(res.status).toBe(401);
-  expect(res.body).toHaveProperty('error');
-  expect(typeof res.body.error).toBe('string');
+  expect(res.body).toHaveProperty('message');
+  expect(typeof res.body.message).toBe('string');
   expect(res.body).toHaveProperty('code');
   expect(typeof res.body.code).toBe('string');
   expect(res.body).toHaveProperty('requestId');
@@ -266,7 +285,7 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.error).toBe('Unauthorized');
+        expect(res.body.message).toBe('Unauthorized');
         expect(res.body.code).toBe('UNAUTHORIZED');
       });
 
@@ -275,8 +294,8 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.error).toBe('Missing token');
-        expect(res.body.code).toBe('MISSING_TOKEN');
+        expect(res.body.message).toBe('Invalid authorization header');
+        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 with non-Bearer scheme (Basic)', async () => {
@@ -284,7 +303,7 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.error).toBe('Invalid authorization header');
+        expect(res.body.message).toBe('Invalid authorization header');
         expect(res.body.code).toBe('INVALID_AUTH_HEADER');
       });
 
@@ -293,7 +312,7 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.error).toBe('Invalid authorization header');
+        expect(res.body.message).toBe('Invalid authorization header');
         expect(res.body.code).toBe('INVALID_AUTH_HEADER');
       });
 
@@ -302,7 +321,7 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.error).toBe('Invalid authorization header');
+        expect(res.body.message).toBe('Invalid authorization header');
         expect(res.body.code).toBe('INVALID_AUTH_HEADER');
       });
 
@@ -311,7 +330,7 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.error).toBe('Unauthorized');
+        expect(res.body.message).toBe('Unauthorized');
         expect(res.body.code).toBe('UNAUTHORIZED');
       });
 
@@ -320,7 +339,7 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.error).toBe('Unauthorized');
+        expect(res.body.message).toBe('Unauthorized');
         expect(res.body.code).toBe('UNAUTHORIZED');
       });
     },
@@ -435,7 +454,7 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
       .set('x-user-id', 'user-42');
 
     expect(res.status).toBe(401);
-    expect(res.body.error).toBe('Invalid authorization header');
+    expect(res.body.message).toBe('Invalid authorization header');
     expect(res.body.code).toBe('INVALID_AUTH_HEADER');
   });
 });
@@ -462,7 +481,7 @@ describe('requireAuth – error body consistency', () => {
     expect(res.body).not.toHaveProperty('statusCode');
     // Only expected keys
     const keys = Object.keys(res.body);
-    expect(keys).toEqual(expect.arrayContaining(['error', 'code', 'requestId']));
+    expect(keys).toEqual(expect.arrayContaining(['message', 'code', 'requestId']));
     expect(keys.length).toBe(3);
   });
 
@@ -474,7 +493,7 @@ describe('requireAuth – error body consistency', () => {
     for (const res of [res1, res2, res3]) {
       expect(res.status).toBe(401);
       expect(res.body).toEqual({
-        error: 'Unauthorized',
+        message: 'Unauthorized',
         code: 'UNAUTHORIZED',
         requestId: 'mock-uuid-1234',
       });

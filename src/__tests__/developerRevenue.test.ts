@@ -4,18 +4,59 @@ import { createDeveloperRouter } from '../routes/developerRoutes.js';
 import { createSettlementStore } from '../services/settlementStore.js';
 import { createUsageStore } from '../services/usageStore.js';
 import { errorHandler } from '../middleware/errorHandler.js';
-import { SettlementStore } from '../types/developer.js';
+import { DeveloperProfile, SettlementStore } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 let settlementStore: SettlementStore;
 let usageStore: UsageStore;
+const devProfiles = new Map<string, DeveloperProfile>();
+
+const developerRepository = {
+  async findByUserId(userId: string) {
+    return devProfiles.get(userId);
+  },
+  async getOrCreateByUserId(userId: string) {
+    const existing = devProfiles.get(userId);
+    if (existing) {
+      return existing;
+    }
+
+    const created: DeveloperProfile = {
+      id: devProfiles.size + 1,
+      user_id: userId,
+      name: null,
+      website: null,
+      description: null,
+      category: null,
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+      updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    };
+    devProfiles.set(userId, created);
+    return created;
+  },
+  async upsertProfile(userId: string, data: {
+    name?: string | null;
+    website?: string | null;
+    description?: string | null;
+    category?: DeveloperProfile['category'];
+  }) {
+    const existing = await this.getOrCreateByUserId(userId);
+    const updated: DeveloperProfile = {
+      ...existing,
+      ...data,
+      updated_at: new Date('2026-02-01T00:00:00.000Z'),
+    };
+    devProfiles.set(userId, updated);
+    return updated;
+  },
+};
 
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api/developers', createDeveloperRouter({ settlementStore, usageStore }));
+  app.use('/api/developers', createDeveloperRouter({ settlementStore, usageStore, developerRepository }));
   app.use(errorHandler);
   return app;
 }
@@ -91,6 +132,27 @@ function seedData() {
 beforeAll(() => {
   settlementStore = createSettlementStore();
   usageStore = createUsageStore();
+  devProfiles.clear();
+  devProfiles.set('dev_001', {
+    id: 1,
+    user_id: 'dev_001',
+    name: 'Revenue Dev',
+    website: null,
+    description: null,
+    category: 'analytics',
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    updated_at: new Date('2026-01-01T00:00:00.000Z'),
+  });
+  devProfiles.set('dev_002', {
+    id: 2,
+    user_id: 'dev_002',
+    name: 'Second Dev',
+    website: null,
+    description: null,
+    category: 'finance',
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    updated_at: new Date('2026-01-01T00:00:00.000Z'),
+  });
   seedData();
 
   return new Promise<void>((resolve) => {

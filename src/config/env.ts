@@ -38,16 +38,8 @@ export const envSchema = z
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
     PROXY_TIMEOUT_MS: z.coerce.number().default(30_000),
-    RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(5),
-    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
-    RATE_LIMIT_STORE: z.enum(["memory", "postgres"]).default("memory"),
-    RATE_LIMIT_PG_TABLE: z
-      .string()
-      .regex(
-        /^[a-z_][a-z0-9_]*$/i,
-        "RATE_LIMIT_PG_TABLE must contain only letters, numbers, and underscores",
-      )
-      .default("gateway_rate_limit_buckets"),
+    REST_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    REST_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
 
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
@@ -67,6 +59,8 @@ export const envSchema = z
       .default(false),
     HORIZON_URL: z.string().url().optional(),
     HORIZON_TIMEOUT: z.coerce.number().default(2_000),
+    SETTLEMENT_STATUS_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+    SETTLEMENT_STATUS_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 
     // Stellar network configuration
     STELLAR_NETWORK: stellarNetworkSchema.optional(),
@@ -119,6 +113,9 @@ export const envSchema = z
 
     // Security
     BCRYPT_COST_FACTOR: z.coerce.number().int().min(10).max(31).default(12),
+
+    // Idempotency
+    IDEMPOTENCY_RETENTION_WINDOW_SECONDS: z.coerce.number().int().positive().default(86400),
   })
   .superRefine((values, ctx) => {
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {

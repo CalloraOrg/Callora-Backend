@@ -67,8 +67,9 @@ describe('RevenueSettlementService', () => {
     expect(settlements[0]).toMatchObject({
       developerId: 'dev_1',
       amount: 6,
-      status: 'completed',
+      status: 'pending',
       tx_hash: '0xmocktx_dev_1',
+      completed_at: null,
     });
 
     expect(usageStore.getUnsettledEvents()).toHaveLength(0);
@@ -168,8 +169,9 @@ describe('RevenueSettlementService', () => {
     expect(result).toEqual({ processed: 1, settledAmount: 7, errors: 1 });
     expect(settlementStore.getDeveloperSettlements('dev_1')).toHaveLength(0);
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]).toMatchObject({
-      status: 'completed',
+      status: 'pending',
       tx_hash: '0xmocktx_dev_2',
+      completed_at: null,
     });
     expect(usageStore.getUnsettledEvents().map((event) => event.id)).toEqual(['e1']);
 
@@ -233,12 +235,177 @@ describe('RevenueSettlementService', () => {
       tx_hash: null,
     });
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]).toMatchObject({
-      status: 'completed',
+      status: 'pending',
       tx_hash: '0xmocktx_dev_2',
+      completed_at: null,
     });
     expect(usageStore.getUnsettledEvents().map((event) => event.id)).toEqual(['e1']);
 
     updateStatusSpy.mockRestore();
+  });
+
+  it('reconciles pending settlements to completed when Horizon confirms the transaction', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: 12,
+      status: 'pending',
+      tx_hash: 'tx-confirmed',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: jest.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ successful: true }),
+      })) as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+    });
+
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 1, failed: 0, errors: 0 });
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
+      status: 'completed',
+      tx_hash: 'tx-confirmed',
+    });
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0]?.completed_at).toBeTruthy();
+  });
+
+  it('reconciles pending settlements to failed when Horizon reports an unsuccessful transaction', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: 12,
+      status: 'pending',
+      tx_hash: 'tx-failed',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: jest.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ successful: false }),
+      })) as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+    });
+
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 0, failed: 1, errors: 0 });
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
+      status: 'failed',
+      tx_hash: 'tx-failed',
+      completed_at: null,
+    });
+  });
+
+  it('treats missing Horizon transactions as failed settlements', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: 12,
+      status: 'pending',
+      tx_hash: 'tx-missing',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: jest.fn(async () => ({
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      })) as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+    });
+
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 0, failed: 1, errors: 0 });
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0]?.status).toBe('failed');
+  });
+
+  it('retries transient Horizon errors with backoff and completes once Horizon succeeds', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: 12,
+      status: 'pending',
+      tx_hash: 'tx-retry',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({}),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ successful: true }),
+      });
+
+    const setTimeoutSpy = jest
+      .spyOn(global, 'setTimeout')
+      .mockImplementation(((fn: (...args: unknown[]) => void) => {
+        fn();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+      horizonMaxRetries: 1,
+      horizonRetryBaseDelayMs: 1,
+    });
+
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 1, failed: 0, errors: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    setTimeoutSpy.mockRestore();
+  });
+
+  it('does not flip settlement status when Horizon transient errors exhaust retries', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: 12,
+      status: 'pending',
+      tx_hash: 'tx-still-pending',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
+
+    const setTimeoutSpy = jest
+      .spyOn(global, 'setTimeout')
+      .mockImplementation(((fn: (...args: unknown[]) => void) => {
+        fn();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: jest.fn(async () => {
+        throw new TypeError('fetch failed');
+      }) as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+      horizonMaxRetries: 1,
+      horizonRetryBaseDelayMs: 1,
+    });
+
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 0, failed: 0, errors: 1 });
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
+      status: 'pending',
+      tx_hash: 'tx-still-pending',
+      completed_at: null,
+    });
+    setTimeoutSpy.mockRestore();
   });
 });
 

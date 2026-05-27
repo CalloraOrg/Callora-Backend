@@ -35,6 +35,16 @@ export function createTestDb() {
       api_key_id UUID REFERENCES api_keys(id),
       called_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS idempotency_store (
+      idempotency_key VARCHAR(255) PRIMARY KEY,
+      request_hash VARCHAR(64) NOT NULL,
+      status VARCHAR(50) NOT NULL,
+      response_status INTEGER,
+      response_body TEXT,
+      expires_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
   `);
 
   const { Pool } = db.adapters.createPg();
@@ -53,7 +63,7 @@ export async function resetTestDb(pool: any) {
   try {
     // Clear tables in reverse order of dependencies or use CASCADE
     // Using TRUNCATE with CASCADE is the most reliable way in PostgreSQL
-    const tables = ['usage_logs', 'api_keys', 'users'];
+    const tables = ['usage_logs', 'api_keys', 'users', 'idempotency_store'];
     
     for (const table of tables) {
       try {

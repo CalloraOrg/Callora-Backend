@@ -1,4 +1,4 @@
-import { eq, and, like, type SQL } from 'drizzle-orm';
+import { eq, and, like, type SQL, count } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import type { Api, ApiEndpoint, NewApi, NewApiEndpoint, ApiStatus, HttpMethod } from '../db/schema.js';
 
@@ -53,8 +53,18 @@ export interface ApiEndpointInfo {
   description: string | null;
 }
 
+export interface ApiListItem extends ApiDetails {
+  endpoints: ApiEndpointInfo[];
+}
+
+export interface PaginatedApiListResult {
+  items: ApiListItem[];
+  total: number;
+}
+
 export interface ApiRepository {
   create(api: ApiCreateInput): Promise<Api>;
+  createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints>;
   update(id: number, data: ApiUpdateInput): Promise<Api | null>;
   listByDeveloper(developerId: number, filters?: ApiListFilters): Promise<Api[]>;
   listPublic(filters?: ApiListFilters): Promise<Api[]>;
@@ -79,6 +89,10 @@ export const defaultApiRepository: ApiRepository = {
 
     if (!created) throw new Error('API insert failed');
     return created;
+  },
+
+  async createWithEndpoints(input) {
+    return createApi(input);
   },
 
   async update(id, data) {
@@ -293,6 +307,33 @@ export class InMemoryApiRepository implements ApiRepository {
     return created;
   }
 
+  async createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints> {
+    const api = await this.create(input);
+    const now = new Date();
+    const endpointRows: ApiEndpoint[] = input.endpoints.map((endpoint, index) => ({
+      id: index + 1,
+      api_id: api.id,
+      path: endpoint.path,
+      method: endpoint.method,
+      price_per_call_usdc: endpoint.price_per_call_usdc,
+      description: endpoint.description ?? null,
+      created_at: now,
+      updated_at: now,
+    }));
+
+    this.endpointsByApiId.set(api.id, endpointRows.map((endpoint) => ({
+      path: endpoint.path,
+      method: endpoint.method,
+      price_per_call_usdc: endpoint.price_per_call_usdc,
+      description: endpoint.description,
+    })));
+
+    return {
+      ...api,
+      endpoints: endpointRows,
+    };
+  }
+
   async update(id: number, data: ApiUpdateInput): Promise<Api | null> {
     const index = this.apis.findIndex((a) => a.id === id);
     if (index === -1) return null;
@@ -366,6 +407,47 @@ export class InMemoryApiRepository implements ApiRepository {
     return results;
   }
 
+  async listPublicDetailed(filters: ApiListFilters = {}): Promise<PaginatedApiListResult> {
+    let results = this.apis;
+    if (filters.status) {
+      results = results.filter((api) => api.status === filters.status);
+    } else {
+      results = results.filter((api) => api.status === 'active');
+    }
+    if (filters.category) {
+      results = results.filter((api) => api.category === filters.category);
+    }
+    if (filters.search) {
+      const needle = filters.search.toLowerCase();
+      results = results.filter((api) => api.name.toLowerCase().includes(needle));
+    }
+
+    const total = results.length;
+    if (typeof filters.offset === 'number') {
+      results = results.slice(filters.offset);
+    }
+    if (typeof filters.limit === 'number') {
+      results = results.slice(0, filters.limit);
+    }
+
+    const items = results.map((api) => {
+      const details = this.detailsById.get(api.id);
+      return {
+        id: api.id,
+        name: api.name,
+        description: api.description,
+        base_url: api.base_url,
+        logo_url: api.logo_url,
+        category: api.category,
+        status: api.status,
+        developer: details?.developer ?? { name: null, website: null, description: null },
+        endpoints: this.endpointsByApiId.get(api.id) ?? [],
+      };
+    });
+
+    return { items, total };
+  }
+
   async findById(id: number): Promise<ApiDetails | null> {
     const item = this.detailsById.get(id) ?? null;
     if (!item) return null;
@@ -375,6 +457,105 @@ export class InMemoryApiRepository implements ApiRepository {
   async getEndpoints(apiId: number): Promise<ApiEndpointInfo[]> {
     return this.endpointsByApiId.get(apiId) ?? [];
   }
+}
+
+export async function listPublicDetailed(
+  repository: ApiRepository,
+  filters: ApiListFilters = {},
+): Promise<PaginatedApiListResult> {
+  const detailedRepository = repository as ApiRepository & {
+    listPublicDetailed?: (filters?: ApiListFilters) => Promise<PaginatedApiListResult>;
+  };
+
+  if (typeof detailedRepository.listPublicDetailed === 'function') {
+    return detailedRepository.listPublicDetailed(filters);
+  }
+
+  if (repository === defaultApiRepository) {
+    const conditions: SQL[] = [];
+    if (filters.status) {
+      conditions.push(eq(schema.apis.status, filters.status));
+    } else {
+      conditions.push(eq(schema.apis.status, 'active'));
+    }
+    if (filters.category) {
+      conditions.push(eq(schema.apis.category, filters.category));
+    }
+    if (filters.search) {
+      conditions.push(like(schema.apis.name, `%${filters.search}%`));
+    }
+
+    const whereClause = and(...conditions);
+    const [{ total }] = await db
+      .select({ total: count() })
+      .from(schema.apis)
+      .where(whereClause);
+
+    let query = db
+      .select({
+        id: schema.apis.id,
+        name: schema.apis.name,
+        description: schema.apis.description,
+        base_url: schema.apis.base_url,
+        logo_url: schema.apis.logo_url,
+        category: schema.apis.category,
+        status: schema.apis.status,
+        developer_name: schema.developers.name,
+        developer_website: schema.developers.website,
+        developer_description: schema.developers.description,
+      })
+      .from(schema.apis)
+      .leftJoin(schema.developers, eq(schema.apis.developer_id, schema.developers.id))
+      .where(whereClause);
+
+    if (typeof filters.limit === 'number') {
+      query = query.limit(filters.limit) as typeof query;
+    }
+    if (typeof filters.offset === 'number') {
+      query = query.offset(filters.offset) as typeof query;
+    }
+
+    const rows = await query;
+    const items = await Promise.all(
+      rows.map(async (row) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        base_url: row.base_url,
+        logo_url: row.logo_url,
+        category: row.category,
+        status: row.status,
+        developer: {
+          name: row.developer_name ?? null,
+          website: row.developer_website ?? null,
+          description: row.developer_description ?? null,
+        },
+        endpoints: await repository.getEndpoints(row.id),
+      })),
+    );
+
+    return { items, total };
+  }
+
+  const apis = await repository.listPublic(filters);
+  const items = await Promise.all(
+    apis.map(async (api) => {
+      const details = await repository.findById(api.id);
+      return {
+        id: api.id,
+        name: api.name,
+        description: api.description,
+        base_url: api.base_url,
+        logo_url: api.logo_url,
+        category: api.category,
+        status: api.status,
+        developer: details?.developer ?? { name: null, website: null, description: null },
+        endpoints: await repository.getEndpoints(api.id),
+      };
+    }),
+  );
+
+  return { items, total: items.length };
 }
 
 // --- Create API (production) ---
@@ -402,39 +583,40 @@ export interface ApiWithEndpoints extends Api {
 
 export async function createApi(input: CreateApiInput): Promise<ApiWithEndpoints> {
   const { endpoints, ...apiData } = input;
-
-  const [api] = await db
-    .insert(schema.apis)
-    .values({
-      developer_id: apiData.developer_id,
-      name: apiData.name,
-      description: apiData.description ?? null,
-      base_url: apiData.base_url,
-      category: apiData.category ?? null,
-      status: apiData.status ?? 'draft',
-    } as NewApi)
-    .returning();
-
-  if (!api) throw new Error('API insert failed');
-
-  let endpointRows: ApiEndpoint[] = [];
-  if (endpoints.length > 0) {
-    endpointRows = await db
-      .insert(schema.apiEndpoints)
-      .values(
-        endpoints.map(
-          (e) =>
-            ({
-              api_id: api.id,
-              path: e.path,
-              method: e.method,
-              price_per_call_usdc: e.price_per_call_usdc,
-              description: e.description ?? null,
-            }) as NewApiEndpoint,
-        ),
-      )
+  return db.transaction(async (tx) => {
+    const [api] = await tx
+      .insert(schema.apis)
+      .values({
+        developer_id: apiData.developer_id,
+        name: apiData.name,
+        description: apiData.description ?? null,
+        base_url: apiData.base_url,
+        category: apiData.category ?? null,
+        status: apiData.status ?? 'draft',
+      } as NewApi)
       .returning();
-  }
 
-  return { ...api, endpoints: endpointRows };
+    if (!api) throw new Error('API insert failed');
+
+    let endpointRows: ApiEndpoint[] = [];
+    if (endpoints.length > 0) {
+      endpointRows = await tx
+        .insert(schema.apiEndpoints)
+        .values(
+          endpoints.map(
+            (e) =>
+              ({
+                api_id: api.id,
+                path: e.path,
+                method: e.method,
+                price_per_call_usdc: e.price_per_call_usdc,
+                description: e.description ?? null,
+              }) as NewApiEndpoint,
+          ),
+        )
+        .returning();
+    }
+
+    return { ...api, endpoints: endpointRows };
+  });
 }

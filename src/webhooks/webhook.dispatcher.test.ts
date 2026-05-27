@@ -1,4 +1,4 @@
-import { dispatchWebhook } from './webhook.dispatcher.js';
+import { dispatchWebhook, resetWebhookDispatcherForTests, stopWebhookDispatching } from './webhook.dispatcher.js';
 import type { WebhookConfig, WebhookPayload } from './webhook.types.js';
 
 describe('Webhook Dispatcher', () => {
@@ -6,6 +6,7 @@ describe('Webhook Dispatcher', () => {
 
     beforeEach(() => {
         originalFetch = global.fetch;
+        resetWebhookDispatcherForTests();
         jest.useFakeTimers();
         jest.spyOn(console, 'warn').mockImplementation(() => {});
         jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -116,5 +117,15 @@ describe('Webhook Dispatcher', () => {
         await promise;
 
         expect(fetchMock).toHaveBeenCalledTimes(5);
+    });
+
+    it('does not start new deliveries after shutdown begins', async () => {
+        const fetchMock = jest.fn();
+        global.fetch = fetchMock as any;
+
+        stopWebhookDispatching();
+        await dispatchWebhook(config, payload);
+
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 });

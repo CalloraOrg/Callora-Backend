@@ -21,12 +21,7 @@ describe('config validation', () => {
           config: {
             port: unknown;
             databaseUrl: string;
-            rateLimiter: {
-              maxRequests: number;
-              postgresTable: string;
-              store: string;
-              windowMs: number;
-            };
+            restRateLimit: { windowMs: number; maxRequests: number };
           };
         }
       | undefined;
@@ -36,33 +31,22 @@ describe('config validation', () => {
 
     expect(cfg!.config.port).toBeDefined();
     expect(cfg!.config.databaseUrl).toContain('postgresql://');
-    expect(cfg!.config.rateLimiter).toEqual({
-      maxRequests: 5,
-      postgresTable: 'gateway_rate_limit_buckets',
-      store: 'memory',
-      windowMs: 60_000,
-    });
+    expect(cfg!.config.restRateLimit.windowMs).toBe(60_000);
+    expect(cfg!.config.restRateLimit.maxRequests).toBe(100);
   });
 
-  it('should expose configured persistent rate limiter settings', async () => {
+  it('should expose configured REST rate limit values', async () => {
     process.env.NODE_ENV = 'test';
     process.env.JWT_SECRET = 'test-secret';
     process.env.ADMIN_API_KEY = 'test-admin-key';
     process.env.METRICS_API_KEY = 'test-metrics-key';
-    process.env.RATE_LIMIT_STORE = 'postgres';
-    process.env.RATE_LIMIT_MAX_REQUESTS = '25';
-    process.env.RATE_LIMIT_WINDOW_MS = '15000';
-    process.env.RATE_LIMIT_PG_TABLE = 'custom_gateway_limits';
+    process.env.REST_RATE_LIMIT_WINDOW_MS = '30000';
+    process.env.REST_RATE_LIMIT_MAX_REQUESTS = '25';
 
     let cfg:
       | {
           config: {
-            rateLimiter: {
-              maxRequests: number;
-              postgresTable: string;
-              store: string;
-              windowMs: number;
-            };
+            restRateLimit: { windowMs: number; maxRequests: number };
           };
         }
       | undefined;
@@ -70,11 +54,9 @@ describe('config validation', () => {
       cfg = await import('./index.js');
     });
 
-    expect(cfg!.config.rateLimiter).toEqual({
+    expect(cfg!.config.restRateLimit).toEqual({
+      windowMs: 30_000,
       maxRequests: 25,
-      postgresTable: 'custom_gateway_limits',
-      store: 'postgres',
-      windowMs: 15_000,
     });
   });
 

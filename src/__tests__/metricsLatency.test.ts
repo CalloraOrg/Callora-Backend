@@ -3,8 +3,10 @@
  *
  * Covers:
  *   - resolveRouteGroup: all route groups, edge cases, unknown paths
- *   - metricsMiddleware: label correctness, route sanitisation, counter/histogram
- *     increments, 404 cardinality protection
+ *   - normalizeRouteForMetrics: route normalization, UUID/ID sanitization,
+ *     sentinel labels for pathological routes
+ *   - metricsMiddleware: label correctness, cardinality protection,
+ *     counter/histogram increments
  */
 
 import { EventEmitter } from 'node:events';
@@ -332,6 +334,174 @@ describe('metricsMiddleware — 404 cardinality protection', () => {
       route_group: 'other',
     });
     expect(entry).toBeDefined();
+  });
+
+  it('uses sentinel label for pathological routes (excessive segments)', async () => {
+    // Build a path with > 20 segments to trigger sentinel
+    const pathSegments = Array.from({ length: 25 }, (_,i) => `seg${i}`).join('/');
+    const { req, res } = buildReqRes({
+      path: `/${pathSegments}`,
+      routePath: null,
+      statusCode: 404,
+    });
+
+    metricsMiddleware(req, res, jest.fn());
+    res.emit('finish');
+
+    const metric = await getMetricValues('http_requests_total');
+    const entry = findCounter(metric!.values, {
+      status_code: '404',
+    });
+    expect(entry).toBeDefined();
+    // Should be the sentinel label, not the raw path
+    expect(entry!.labels.route).toBe('_unknown');
+  });
+
+  it('normalizes mixed UUID and numeric segments', async () => {
+    const uuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const { req, res } = buildReqRes({
+      path: `/api/vault/${uuid}/items/42/details/99`,
+      routePath: null,
+      statusCode: 404,
+    });
+
+    metricsMiddleware(req, res, jest.fn());
+    res.emit('finish');
+
+    const metric = await getMetricValues('http_requests_total');
+    const entry = findCounter(metric!.values, { status_code: '404' });
+    expect(entry).toBeDefined();
+    expect(entry!.labels.route).not.toContain(uuid);
+    expect(entry!.labels.route).not.toContain('/42');
+    expect(entry!.labels.route).not.toContain('/99');
+    expect(entry!.labels.route).toMatch(/\/api\/vault\/:uuid\/items\/:id\/details\/:id/);
+  });
+
+  it('does not normalize when route is matched (Express route pattern)', async () => {
+    const { req, res } = buildReqRes({
+      path: '/api/vault/123/withdraw',
+      routePath: '/api/vault/:vaultId/withdraw',
+      statusCode: 200,
+    });
+
+    metricsMiddleware(req, res, jest.fn());
+    res.emit('finish');
+
+    const metric = await getMetricValues('http_requests_total');
+    const entry = findCounter(metric!.values, { status_code: '200' });
+    expect(entry).toBeDefined();
+    // Should use the Express route template, not sanitized fallback
+    expect(entry!.labels.route).toBe('/api/vault/:vaultId/withdraw');
+  });
+
+  it('handles gateway routes with dynamic apiId correctly', async () => {
+    const { req, res } = buildReqRes({
+      path: '/v1/call/abc-123-def',
+      routePath: '/v1/call/:apiId',
+      statusCode: 200,
+    });
+
+    metricsMiddleware(req, res, jest.fn());
+    res.emit('finish');
+
+    const metric = await getMetricValues('http_requests_total');
+    const entry = findCounter(metric!.values, { status_code: '200' });
+    expect(entry).toBeDefined();
+    expect(entry!.labels.route).toBe('/v1/call/:apiId');
+    expect(entry!.labels.route).not.toContain('abc-123-def');
+  });
+
+  it('caps multiple sequential UUIDs and IDs', async () => {
+    const uuid1 = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const uuid2 = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
+    const { req, res } = buildReqRes({
+      path: `/api/users/${uuid1}/orders/${uuid2}`,
+      routePath: null,
+      statusCode: 404,
+    });
+
+    metricsMiddleware(req, res, jest.fn());
+    res.emit('finish');
+
+    const metric = await getMetricValues('http_requests_total');
+    const entry = findCounter(metric!.values, { status_code: '404' });
+    expect(entry).toBeDefined();
+    expect(entry!.labels.route).not.toContain(uuid1);
+    expect(entry!.labels.route).not.toContain(uuid2);
+    expect(entry!.labels.route).toMatch(/\/api\/users\/:uuid\/orders\/:uuid/);
+  });
+
+  it('preserves baseUrl when normalizing routes', async () => {
+    const { req, res } = buildReqRes({
+      path: '/items/12345',
+      baseUrl: '/api/vault',
+      routePath: null,
+      statusCode: 404,
+    });
+
+    metricsMiddleware(req, res, jest.fn());
+    res.emit('finish');
+
+    const metric = await getMetricValues('http_requests_total');
+    const entry = findCounter(metric!.values, { status_code: '404' });
+    expect(entry).toBeDefined();
+    expect(entry!.labels.route).toBe('/api/vault/items/:id');
+  });
+});
+
+describe('metricsMiddleware — cardinality assertions', () => {
+  it('bounds cardinality of route labels across many different numeric IDs', async () => {
+    const metric = await getMetricValues('http_requests_total');
+    const beforeCount = metric?.values.length ?? 0;
+
+    // Simulate 100 different numeric IDs
+    for (let i = 0; i < 100; i++) {
+      const { req, res } = buildReqRes({
+        path: `/api/items/${i}`,
+        routePath: null,
+        statusCode: 404,
+      });
+      metricsMiddleware(req, res, jest.fn());
+      res.emit('finish');
+    }
+
+    // All requests should be aggregated under the same normalized route
+    const metricsAfter = await getMetricValues('http_requests_total');
+    const entry = findCounter(metricsAfter!.values, {
+      route: '/api/items/:id',
+      status_code: '404',
+    });
+    expect(entry).toBeDefined();
+    expect(entry!.value).toBe(100);
+
+    // Should not have 100 separate entries for each numeric ID
+    const uniqueRoutes = new Set(
+      metricsAfter!.values.map((v) => v.labels.route),
+    );
+    expect(uniqueRoutes.size).toBeLessThan(beforeCount + 10);
+  });
+
+  it('bounds cardinality for bot-like path scanning', async () => {
+    // Simulate bot scanning for paths with random numeric suffixes
+    const randomIds = [999, 12345, 1, 999999, 42, 777];
+    for (const id of randomIds) {
+      const { req, res } = buildReqRes({
+        path: `/admin/users/${id}`,
+        routePath: null,
+        statusCode: 404,
+      });
+      metricsMiddleware(req, res, jest.fn());
+      res.emit('finish');
+    }
+
+    const metric = await getMetricValues('http_requests_total');
+    // All bot requests should be aggregated under a single route label
+    const entry = findCounter(metric!.values, {
+      route: '/admin/users/:id',
+      status_code: '404',
+    });
+    expect(entry).toBeDefined();
+    expect(entry!.value).toBe(randomIds.length);
   });
 });
 

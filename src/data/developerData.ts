@@ -100,8 +100,12 @@ export function assertDeveloperDataIntegrity(): void {
         throw new Error(`Settlement ${settlement.id} has invalid created_at ${settlement.created_at}.`);
       }
 
-      if (settlement.status === 'pending' && settlement.tx_hash !== null) {
-        throw new Error(`Pending settlement ${settlement.id} must not include a transaction hash.`);
+      if (
+        settlement.status === 'pending' &&
+        settlement.tx_hash !== null &&
+        settlement.tx_hash.trim().length === 0
+      ) {
+        throw new Error(`Pending settlement ${settlement.id} cannot use an empty transaction hash.`);
       }
 
       if (

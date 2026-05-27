@@ -1,4 +1,5 @@
 import { ApiRegistry, ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';
+import { validateUpstreamBaseUrl } from '../lib/upstreamTarget.js';
 
 /**
  * In-memory API registry.
@@ -15,8 +16,13 @@ export class InMemoryApiRegistry implements ApiRegistry {
   }
 
   register(entry: ApiRegistryEntry): void {
-    this.byId.set(entry.id, entry);
-    this.bySlug.set(entry.slug, entry);
+    const normalizedEntry: ApiRegistryEntry = {
+      ...entry,
+      base_url: validateUpstreamBaseUrl(entry.base_url),
+    };
+
+    this.byId.set(normalizedEntry.id, normalizedEntry);
+    this.bySlug.set(normalizedEntry.slug, normalizedEntry);
   }
 
   resolve(slugOrId: string): ApiRegistryEntry | undefined {
