@@ -2,18 +2,24 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
-import { DeveloperRevenueResponse, SettlementStore } from '../types/developer.js';
+import {
+  developerCategoryEnum,
+  DeveloperRevenueResponse,
+  SettlementStore,
+} from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
 import { UnauthorizedError } from '../errors/index.js';
+import type { DeveloperRepository } from '../repositories/developerRepository.js';
 
 export interface DeveloperRoutesDeps {
   settlementStore: SettlementStore;
   usageStore: UsageStore;
+  developerRepository: DeveloperRepository;
 }
 
 export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
   const router = Router();
-  const { settlementStore, usageStore } = deps;
+  const { settlementStore, usageStore, developerRepository } = deps;
 
   // Validation schema for revenue query parameters
   const revenueQuerySchema = z.object({
@@ -34,6 +40,48 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
       .transform((val) => (val ? parseInt(val, 10) : undefined))
       .pipe(z.number().int().min(1).optional()),
   });
+
+  const developerProfilePatchSchema = z
+    .object({
+      name: z.string().trim().min(1).max(120).nullable().optional(),
+      website: z.string().trim().url().nullable().optional(),
+      description: z.string().trim().max(500).nullable().optional(),
+      category: z.enum(developerCategoryEnum).nullable().optional(),
+    })
+    .refine((value) => Object.keys(value).length > 0, {
+      message: 'At least one profile field must be provided',
+      path: [],
+    });
+
+  router.get(
+    '/me',
+    requireAuth,
+    async (_req: Request, res: Response<unknown, AuthenticatedLocals>) => {
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        throw new UnauthorizedError();
+      }
+
+      const profile = await developerRepository.getOrCreateByUserId(user.id);
+      res.json(profile);
+    },
+  );
+
+  router.patch(
+    '/me',
+    requireAuth,
+    validate({ body: developerProfilePatchSchema }),
+    async (req: Request, res: Response<unknown, AuthenticatedLocals>) => {
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        throw new UnauthorizedError();
+      }
+
+      const body = developerProfilePatchSchema.parse(req.body);
+      const profile = await developerRepository.upsertProfile(user.id, body);
+      res.json(profile);
+    },
+  );
 
   /**
    * GET /api/developers/revenue

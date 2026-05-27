@@ -2,6 +2,12 @@
 
 API gateway, usage metering, and billing services for the Callora API marketplace. Talks to Soroban contracts and Horizon for on-chain settlement.
 
+## Developer Profile Endpoints
+
+- `GET /api/developers/me` returns the authenticated developer profile and auto-creates a blank profile row on first access.
+- `PATCH /api/developers/me` updates profile fields for the authenticated developer.
+- PATCH validation enforces a valid `website` URL and a supported `category` enum value.
+
 ## Tech stack
 
 - **Node.js** + **TypeScript**
