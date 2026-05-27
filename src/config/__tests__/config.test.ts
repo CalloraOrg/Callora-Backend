@@ -34,6 +34,11 @@ describe('Configuration Network Passphrase', () => {
     };
   };
 
+  const getProxyConfig = async () => {
+    const { config } = await import('../index.js');
+    return config.proxy;
+  };
+
   it('should use testnet passphrase by default', async () => {
     process.env.STELLAR_NETWORK = 'testnet';
     const passphrase = await getPassphrase();
@@ -100,6 +105,28 @@ describe('Configuration Network Passphrase', () => {
 
     await expect(import('../index.js')).rejects.toThrow(
       'SOROBAN_MAINNET_RPC_URL must not include query strings or fragments.'
+    );
+  });
+
+  it('parses the upstream host allowlist and validates UPSTREAM_URL against it', async () => {
+    process.env.UPSTREAM_HOST_ALLOWLIST = 'api.callora.com,*.example.com';
+    process.env.UPSTREAM_URL = 'https://api.callora.com';
+
+    const proxy = await getProxyConfig();
+
+    expect(proxy).toEqual({
+      upstreamUrl: 'https://api.callora.com',
+      timeoutMs: 30000,
+      allowedHosts: ['api.callora.com', '*.example.com'],
+    });
+  });
+
+  it('rejects UPSTREAM_URL hosts outside the configured allowlist', async () => {
+    process.env.UPSTREAM_HOST_ALLOWLIST = 'api.callora.com';
+    process.env.UPSTREAM_URL = 'https://blocked.example.com';
+
+    await expect(import('../index.js')).rejects.toThrow(
+      'base_url host "blocked.example.com" is not in the configured upstream allowlist.'
     );
   });
 });

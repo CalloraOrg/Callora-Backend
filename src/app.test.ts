@@ -724,6 +724,17 @@ test('POST /api/developers/apis returns 400 when base_url is not a valid URL', a
   assert.match(res.body.message, /base_url/i);
 });
 
+test('POST /api/developers/apis returns 400 when base_url points to a blocked internal IP', async () => {
+  const app = makeApp();
+  const res = await request(app)
+    .post('/api/developers/apis')
+    .set('x-user-id', 'dev-1')
+    .send({ ...validApiBody, base_url: 'http://169.254.169.254/latest/meta-data' });
+
+  assert.equal(res.status, 400);
+  assert.match(res.body.message, /private or loopback/i);
+});
+
 test('POST /api/developers/apis returns 400 when status is invalid', async () => {
   const app = makeApp();
   const res = await request(app)

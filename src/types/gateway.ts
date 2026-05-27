@@ -87,6 +87,8 @@ export interface ProxyConfig {
   stripHeaders: string[];
   /** Status code ranges to record metering for. Default: 2xx only. */
   recordableStatuses: (code: number) => boolean;
+  /** Hostnames/IPs the gateway is allowed to contact for proxied APIs. */
+  allowedHosts: string[];
 }
 
 /** Dependencies injected into the gateway router factory. */

@@ -137,6 +137,7 @@ The app validates all environment variables at startup using [Zod](https://zod.d
 | `METRICS_API_KEY` | **Yes** | — | Key for `/api/metrics` in production |
 | `UPSTREAM_URL` | No | `http://localhost:4000` | Gateway upstream URL |
 | `PROXY_TIMEOUT_MS` | No | `30000` | Proxy request timeout (ms) |
+| `UPSTREAM_HOST_ALLOWLIST` | No | `*,localhost,127.0.0.1,::1` | Comma-separated upstream host allowlist for proxy/gateway targets |
 | `CORS_ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed origins |
 | `SOROBAN_RPC_ENABLED` | No | `false` | Enable Soroban RPC health check |
 | `SOROBAN_RPC_URL` | If `SOROBAN_RPC_ENABLED=true` | — | Soroban RPC endpoint URL |
@@ -148,6 +149,14 @@ The app validates all environment variables at startup using [Zod](https://zod.d
 | `APP_VERSION` | No | `1.0.0` | Reported in health check responses |
 | `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `GATEWAY_PROFILING_ENABLED` | No | `false` | Enable request profiling |
+
+### Upstream Target Validation
+
+- Registered API `base_url` values and the legacy `UPSTREAM_URL` are validated before use.
+- Only `http` and `https` targets are accepted.
+- Targets with embedded credentials, query strings, or fragments are rejected.
+- Hosts must match `UPSTREAM_HOST_ALLOWLIST`.
+- Private, loopback, and link-local destinations are blocked unless you explicitly allow the host for controlled local development.
 
 ## Production Shutdown Expectations
 

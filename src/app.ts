@@ -35,6 +35,8 @@ import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { requestLogger } from './middleware/logging.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
+import { config } from './config/index.js';
+import { validateUpstreamBaseUrl } from './lib/upstreamTarget.js';
 import {
   BadRequestError,
   ForbiddenError,
@@ -650,11 +652,18 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
         return;
       }
 
-      // Validate base_url is a proper URL
+      let validatedBaseUrl: string;
+
+      // Validate base_url is a proper, allowed upstream URL
       try {
-        new URL(base_url);
-      } catch {
-        next(new BadRequestError('base_url must be a valid URL (e.g. https://api.example.com)'));
+        validatedBaseUrl = validateUpstreamBaseUrl(base_url, {
+          allowedHosts: config.proxy.allowedHosts,
+        });
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'base_url must be a valid URL (e.g. https://api.example.com)';
+        next(new BadRequestError(message, 'INVALID_BASE_URL'));
         return;
       }
 
@@ -705,7 +714,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
         developer_id: developer.id,
         name: name.trim(),
         description: typeof description === 'string' ? description : null,
-        base_url: base_url.trim(),
+        base_url: validatedBaseUrl,
         category: typeof category === 'string' ? category : null,
         status: (status as typeof apiStatusEnum[number]) ?? 'draft',
         endpoints: (endpoints as Array<Record<string, unknown>>).map((ep) => ({
