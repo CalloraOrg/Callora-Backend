@@ -170,6 +170,7 @@ if (isDirectExecution) {
     apiKeys,
     proxyConfig: {
       timeoutMs: config.proxy.timeoutMs,
+      allowedHosts: config.proxy.allowedHosts,
     },
   });
   app.use('/v1/call', proxyRouter);

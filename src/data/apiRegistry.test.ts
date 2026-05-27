@@ -86,6 +86,24 @@ describe('InMemoryApiRegistry', () => {
     assert.deepStrictEqual(fromCtor.resolve('api_100'), fromRegister.resolve('api_100'));
     assert.deepStrictEqual(fromCtor.resolve('api_200'), fromRegister.resolve('api_200'));
   });
+
+  test('register rejects non-http upstream URLs', () => {
+    const registry = new InMemoryApiRegistry();
+
+    assert.throws(
+      () => registry.register({ ...ENTRY_A, base_url: 'ftp://example.com/data' }),
+      /base_url must use http or https/i,
+    );
+  });
+
+  test('register rejects private IP literals that are not explicitly allowlisted', () => {
+    const registry = new InMemoryApiRegistry();
+
+    assert.throws(
+      () => registry.register({ ...ENTRY_A, base_url: 'http://169.254.169.254/latest' }),
+      /private or loopback IP range/i,
+    );
+  });
 });
 
 // ── resolveEndpointPrice ────────────────────────────────────────────────────

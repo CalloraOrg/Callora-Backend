@@ -40,6 +40,8 @@ import { validate } from './middleware/validate.js';
 import { requestLogger } from './middleware/logging.js';
 import { createConfiguredRestRateLimitMiddleware } from './middleware/restRateLimit.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
+import { config } from './config/index.js';
+import { validateUpstreamBaseUrl } from './lib/upstreamTarget.js';
 import {
   BadRequestError,
   ForbiddenError,

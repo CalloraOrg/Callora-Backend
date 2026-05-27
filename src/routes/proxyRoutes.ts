@@ -4,7 +4,12 @@ import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../ty
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import { startUpstreamTimer, type UpstreamOutcome } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
-import { buildHopByHopSet, STATIC_HOP_BY_HOP } from '../lib/hopByHop.js';
+import { buildHopByHopSet } from '../lib/hopByHop.js';
+import {
+  buildUpstreamTargetUrl,
+  DEFAULT_UPSTREAM_HOST_ALLOWLIST,
+  validateResolvedUpstreamTarget,
+} from '../lib/upstreamTarget.js';
 import {
   BadGatewayError,
   GatewayTimeoutError,
@@ -48,6 +53,7 @@ function resolveConfig(partial?: Partial<ProxyConfig>): ProxyConfig {
     timeoutMs: partial?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     stripHeaders: partial?.stripHeaders ?? DEFAULT_STRIP_HEADERS,
     recordableStatuses: partial?.recordableStatuses ?? ((code) => code >= 200 && code < 300),
+    allowedHosts: partial?.allowedHosts ?? [...DEFAULT_UPSTREAM_HOST_ALLOWLIST],
   };
 }
 
@@ -129,9 +135,19 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       // 5. Build upstream URL & find price
       // req.params[0] captures the wildcard portion after the slug
       const wildcardPath = req.params[0] ?? '';
-      const upstreamTarget = wildcardPath
-        ? `${apiEntry.base_url}/${wildcardPath}`
-        : apiEntry.base_url;
+      const upstreamTarget = buildUpstreamTargetUrl(apiEntry.base_url, wildcardPath);
+      let safeUpstreamTarget: string;
+
+      try {
+        safeUpstreamTarget = await validateResolvedUpstreamTarget(upstreamTarget, {
+          allowedHosts: config.allowedHosts,
+        });
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Configured upstream target is not allowed.';
+        throw new BadGatewayError(message, 'UPSTREAM_TARGET_BLOCKED');
+      }
 
       // 6. Build forwarded headers — strip hop-by-hop and gateway-internal headers.
       // buildHopByHopSet() also strips any additional names listed in the
@@ -156,7 +172,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const timer = startUpstreamTimer(apiEntry.id, req.method);
 
       try {
-        const upstreamRes = await fetch(upstreamTarget, {
+        const upstreamRes = await fetch(safeUpstreamTarget, {
           method: req.method,
           headers: forwardHeaders,
           body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
@@ -209,10 +225,9 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           throw new GatewayTimeoutError('Upstream service timed out');
         } else {
           upstreamStatus = 502;
+          timer.stop(upstreamStatus, outcome);
           throw new BadGatewayError('Bad Gateway: upstream unreachable');
         }
-
-        timer.stop(upstreamStatus, outcome);
       }
 
       // 8. Keep metering and billing consistent after a recordable response.
