@@ -157,6 +157,23 @@ const stubDeveloperRepository: DeveloperRepository = {
   async findByUserId(userId: string) {
     return userId === testDeveloper.user_id ? testDeveloper : undefined;
   },
+  async getOrCreateByUserId(userId: string) {
+    return userId === testDeveloper.user_id
+      ? testDeveloper
+      : {
+          ...testDeveloper,
+          id: 8,
+          user_id: userId,
+        };
+  },
+  async upsertProfile(userId: string, data) {
+    const current = await this.getOrCreateByUserId(userId);
+    return {
+      ...current,
+      ...data,
+      updated_at: new Date(),
+    };
+  },
 };
 
 class StubApiRepository implements ApiRepository {

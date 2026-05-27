@@ -13,6 +13,7 @@ import type { Server } from 'http';
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
+import { defaultDeveloperRepository } from './repositories/developerRepository.js';
 import { createBillingService } from './services/billingService.js';
 import { createRateLimiter } from './services/rateLimiter.js';
 import { createUsageStore } from './services/usageStore.js';
@@ -130,6 +131,7 @@ if (isDirectExecution) {
   const developerRouter = createDeveloperRouter({
     settlementStore,
     usageStore,
+    developerRepository: defaultDeveloperRepository,
   });
   app.use('/api/developers', developerRouter);
 

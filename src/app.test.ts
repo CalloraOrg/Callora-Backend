@@ -213,6 +213,29 @@ const createDeveloperRepository = (profile?: Developer): DeveloperRepository => 
     }
     return undefined;
   },
+  async getOrCreateByUserId(userId: string) {
+    if (profile && profile.user_id === userId) {
+      return profile;
+    }
+    return {
+      id: 999,
+      user_id: userId,
+      name: null,
+      website: null,
+      description: null,
+      category: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+  },
+  async upsertProfile(userId: string, data) {
+    const current = profile && profile.user_id === userId ? profile : await this.getOrCreateByUserId(userId);
+    return {
+      ...current,
+      ...data,
+      updated_at: new Date(),
+    };
+  },
 });
 
 const usageEventsForApis = () =>

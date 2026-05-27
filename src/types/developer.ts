@@ -1,3 +1,35 @@
+export const developerCategoryEnum = [
+  'ai',
+  'analytics',
+  'data',
+  'developer-tools',
+  'finance',
+  'productivity',
+  'search',
+  'security',
+  'weather',
+] as const;
+
+export type DeveloperCategory = typeof developerCategoryEnum[number];
+
+export interface DeveloperProfile {
+  id: number;
+  user_id: string;
+  name: string | null;
+  website: string | null;
+  description: string | null;
+  category: DeveloperCategory | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface UpdateDeveloperProfileInput {
+  name?: string | null;
+  website?: string | null;
+  description?: string | null;
+  category?: DeveloperCategory | null;
+}
+
 export interface Settlement {
   id: string;
   developerId: string; // the dev receiving the payout
