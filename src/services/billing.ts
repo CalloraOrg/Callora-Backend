@@ -49,6 +49,8 @@ export interface BillingDeductResult {
   usageEventId: string;
   stellarTxHash?: string;
   alreadyProcessed: boolean;
+  deductionApplied: boolean;
+  reconciliationRequired: boolean;
   error?: string;
 }
 
@@ -239,6 +241,8 @@ export class BillingService {
         success: false,
         usageEventId: '',
         alreadyProcessed: false,
+        deductionApplied: false,
+        reconciliationRequired: false,
         error: normalizeErrorMessage(error),
       };
     }
@@ -256,6 +260,8 @@ export class BillingService {
         success: false,
         usageEventId: '',
         alreadyProcessed: false,
+        deductionApplied: false,
+        reconciliationRequired: false,
         error: `Balance check failed: ${normalizeErrorMessage(error)}`,
       };
     }
@@ -265,6 +271,8 @@ export class BillingService {
         success: false,
         usageEventId: '',
         alreadyProcessed: false,
+        deductionApplied: false,
+        reconciliationRequired: false,
         error: `Insufficient balance: required ${amountInContractUnits.toString()} units, available ${availableBalance.toString()}`,
       };
     }
@@ -294,6 +302,8 @@ export class BillingService {
             usageEventId: existing.rows[0].id.toString(),
             stellarTxHash: existing.rows[0].stellar_tx_hash ?? undefined,
             alreadyProcessed: true,
+            deductionApplied: Boolean(existing.rows[0].stellar_tx_hash),
+            reconciliationRequired: existing.rows[0].stellar_tx_hash === null,
           };
         }
       }
@@ -302,6 +312,8 @@ export class BillingService {
         success: false,
         usageEventId: '',
         alreadyProcessed: false,
+        deductionApplied: false,
+        reconciliationRequired: false,
         error: normalizeErrorMessage(error),
       };
     } finally {
@@ -315,6 +327,8 @@ export class BillingService {
         usageEventId: phase1.usageEventId!,
         stellarTxHash: phase1.stellarTxHash,
         alreadyProcessed: true,
+        deductionApplied: Boolean(phase1.stellarTxHash),
+        reconciliationRequired: phase1.stellarTxHash === undefined,
       };
     }
 
@@ -339,6 +353,8 @@ export class BillingService {
         success: false,
         usageEventId,
         alreadyProcessed: false,
+        deductionApplied: false,
+        reconciliationRequired: true,
         error: normalizeErrorMessage(error),
       };
     }
@@ -362,6 +378,8 @@ export class BillingService {
       usageEventId,
       stellarTxHash: deductResult.txHash,
       alreadyProcessed: false,
+      deductionApplied: true,
+      reconciliationRequired: false,
     };
   }
 
@@ -380,6 +398,8 @@ export class BillingService {
       usageEventId: result.rows[0].id.toString(),
       stellarTxHash: result.rows[0].stellar_tx_hash ?? undefined,
       alreadyProcessed: true,
+      deductionApplied: Boolean(result.rows[0].stellar_tx_hash),
+      reconciliationRequired: result.rows[0].stellar_tx_hash === null,
     };
   }
 

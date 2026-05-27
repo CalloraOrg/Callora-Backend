@@ -30,6 +30,21 @@ export interface BillingResult {
   balance?: number;
 }
 
+export interface UsageChargeRequest {
+  requestId: string;
+  developerId: string;
+  apiId: string;
+  endpointId: string;
+  apiKeyId: string;
+  amountUsdc: number;
+}
+
+export interface UsageChargeResult extends BillingResult {
+  alreadyProcessed?: boolean;
+  reconciliationRequired?: boolean;
+  error?: string;
+}
+
 /** Result of a rate-limit check. */
 export interface RateLimitResult {
   allowed: boolean;
@@ -49,6 +64,8 @@ export interface BillingService {
   deductCredit(developerId: string, amount: number): Promise<BillingResult>;
   /** Check balance without deducting. */
   checkBalance(developerId: string): Promise<number>;
+  /** Anchor proxy usage charging to requestId when the billing backend supports it. */
+  chargeUsage?(request: UsageChargeRequest): Promise<UsageChargeResult>;
 }
 
 /** Interface for rate limiting. */

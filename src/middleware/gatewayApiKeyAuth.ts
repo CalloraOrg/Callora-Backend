@@ -127,17 +127,17 @@ function forbidden(next: NextFunction, message: string): void {
 }
 
 export function extractApiKey(req: Request): ExtractedApiKey {
+  const xApiKey = req.header('x-api-key');
+  if (typeof xApiKey === 'string' && xApiKey.trim() !== '') {
+    return { apiKey: xApiKey.trim(), source: 'x-api-key' };
+  }
+
   const authorization = req.header('authorization');
   if (authorization) {
     const match = authorization.match(/^Bearer\s+(.+)$/i);
     if (match && match[1].trim()) {
       return { apiKey: match[1].trim(), source: 'authorization' };
     }
-  }
-
-  const xApiKey = req.header('x-api-key');
-  if (typeof xApiKey === 'string' && xApiKey.trim() !== '') {
-    return { apiKey: xApiKey.trim(), source: 'x-api-key' };
   }
 
   if (authorization) {
