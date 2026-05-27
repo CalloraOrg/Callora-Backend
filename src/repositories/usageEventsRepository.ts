@@ -24,10 +24,17 @@ export interface UserUsageEventQuery {
   apiId?: string;
   limit?: number;
   offset?: number;
+  groupBy?: GroupBy;
 }
 
 export interface UsageStats {
   apiId: string;
+  calls: number;
+  revenue: bigint;
+}
+
+export interface UsageBucket {
+  period: string;
   calls: number;
   revenue: bigint;
 }
@@ -37,7 +44,12 @@ export interface UsageEventsRepository {
   findByUser(query: UserUsageEventQuery): Promise<UsageEvent[]>;
   developerOwnsApi(developerId: string, apiId: string): Promise<boolean>;
   aggregateByDeveloper(developerId: string): Promise<UsageStats[]>;
-  aggregateByUser(query: UserUsageEventQuery): Promise<{ totalRevenue: bigint; totalCalls: number; breakdownByApi: UsageStats[] }>;
+  aggregateByUser(query: UserUsageEventQuery): Promise<{
+    totalRevenue: bigint;
+    totalCalls: number;
+    breakdownByApi: UsageStats[];
+    buckets?: UsageBucket[];
+  }>;
 }
 
 export class InMemoryUsageEventsRepository implements UsageEventsRepository {
@@ -112,8 +124,14 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
     }));
   }
 
-  async aggregateByUser(query: UserUsageEventQuery): Promise<{ totalRevenue: bigint; totalCalls: number; breakdownByApi: UsageStats[] }> {
+  async aggregateByUser(query: UserUsageEventQuery): Promise<{
+    totalRevenue: bigint;
+    totalCalls: number;
+    breakdownByApi: UsageStats[];
+    buckets?: UsageBucket[];
+  }> {
     const statsByApi = new Map<string, { calls: number; revenue: bigint }>();
+    const bucketStats = new Map<string, { calls: number; revenue: bigint }>();
     let totalCalls = 0;
     let totalRevenue = BigInt(0);
 
@@ -133,12 +151,25 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
       totalCalls += 1;
       totalRevenue += event.revenue;
 
-      const existing = statsByApi.get(event.apiId);
-      if (existing) {
-        existing.calls += 1;
-        existing.revenue += event.revenue;
+      // Api breakdown
+      const existingApi = statsByApi.get(event.apiId);
+      if (existingApi) {
+        existingApi.calls += 1;
+        existingApi.revenue += event.revenue;
       } else {
         statsByApi.set(event.apiId, { calls: 1, revenue: event.revenue });
+      }
+
+      // Bucketing
+      if (query.groupBy) {
+        const period = this.getPeriodString(event.occurredAt, query.groupBy);
+        const existingBucket = bucketStats.get(period);
+        if (existingBucket) {
+          existingBucket.calls += 1;
+          existingBucket.revenue += event.revenue;
+        } else {
+          bucketStats.set(period, { calls: 1, revenue: event.revenue });
+        }
       }
     }
 
@@ -148,10 +179,40 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
       revenue: values.revenue,
     }));
 
+    let buckets: UsageBucket[] | undefined;
+    if (query.groupBy) {
+      buckets = [...bucketStats.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([period, values]) => ({
+          period,
+          calls: values.calls,
+          revenue: values.revenue,
+        }));
+    }
+
     return {
       totalRevenue,
       totalCalls,
       breakdownByApi,
+      buckets,
     };
+  }
+
+  private getPeriodString(date: Date, groupBy: GroupBy): string {
+    const d = new Date(date);
+    if (groupBy === 'day') {
+      return d.toISOString().slice(0, 10);
+    }
+    if (groupBy === 'week') {
+      // Simple week start (Monday)
+      const day = d.getUTCDay();
+      const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1);
+      const weekStart = new Date(d.setUTCDate(diff));
+      return weekStart.toISOString().slice(0, 10);
+    }
+    if (groupBy === 'month') {
+      return d.toISOString().slice(0, 7) + '-01';
+    }
+    return d.toISOString().slice(0, 10);
   }
 }

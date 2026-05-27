@@ -51,9 +51,36 @@ export interface PaginatedApisResponse {
   };
 }
 
-export interface UsageResponse {
-  calls: number;
+export interface UsageBucket {
   period: string;
+  calls: number;
+  revenue: string;
+}
+
+export interface ApiUsageStats {
+  apiId: string;
+  calls: number;
+  revenue: string;
+}
+
+export interface UsageResponse {
+  events: Array<{
+    id: string;
+    apiId: string;
+    endpoint: string;
+    occurredAt: string;
+    revenue: string;
+  }>;
+  stats: {
+    totalCalls: number;
+    totalSpent: string;
+    breakdownByApi: ApiUsageStats[];
+    buckets?: UsageBucket[];
+  };
+  period: {
+    from: string;
+    to: string;
+  };
 }
 
 export type {

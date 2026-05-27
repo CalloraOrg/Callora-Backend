@@ -1,20 +1,26 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import healthRouter from './health.js';
-import usageRouter from './usage.js';
+import { createUsageRouter, type UsageRouterDeps } from './usage.js';
 import billingRouter from './billing.js';
-import type { RequestHandler } from 'express';
+import { createApisRouter, type ApisRouterDeps } from './apis.js';
 
-export interface ApiRouterDeps {
+export interface ApiRouterDeps extends UsageRouterDeps, ApisRouterDeps {
   restRateLimit?: RequestHandler;
 }
 
-router.use('/health', healthRouter);
-router.use('/usage', usageRouter);
-router.use('/billing', billingRouter);
+export function createApiRouter(deps: ApiRouterDeps): Router {
+  const router = Router();
 
   router.use('/health', healthRouter);
-  router.use('/apis', apisRouter);
-  router.use('/usage', usageRouter);
+  
+  router.use('/apis', createApisRouter({
+    apiRepository: deps.apiRepository,
+    developerRepository: deps.developerRepository
+  }));
+
+  router.use('/usage', createUsageRouter({
+    usageEventsRepository: deps.usageEventsRepository
+  }));
 
   if (deps.restRateLimit) {
     router.use('/billing', deps.restRateLimit, billingRouter);
@@ -25,4 +31,4 @@ router.use('/billing', billingRouter);
   return router;
 }
 
-export default createApiRouter();
+export default createApiRouter;

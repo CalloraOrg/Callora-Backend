@@ -1,3 +1,13 @@
+import {
+  type UsageEventsRepository,
+  type UsageEvent,
+  type UsageEventQuery,
+  type UserUsageEventQuery,
+  type UsageStats,
+  type UsageBucket,
+  type GroupBy,
+} from './usageEventsRepository.js';
+
 export interface CreateUsageEventInput {
   userId: string;
   apiId: string;
@@ -21,7 +31,7 @@ export interface BillingUsageEvent {
   createdAt: Date;
 }
 
-export interface UsageEventsPgRepository {
+export interface UsageEventsPgRepository extends UsageEventsRepository {
   create(event: CreateUsageEventInput): Promise<BillingUsageEvent>;
   findByUserId(userId: string, from?: Date, to?: Date, limit?: number, offset?: number): Promise<BillingUsageEvent[]>;
   findByApiId(apiId: string, from?: Date, to?: Date, limit?: number, offset?: number): Promise<BillingUsageEvent[]>;
@@ -47,6 +57,7 @@ interface UsageEventRow {
 
 interface TotalRow {
   total: string | number | bigint | null;
+  count?: string | number;
 }
 
 const assertNonEmpty = (value: string, fieldName: string): string => {
@@ -93,7 +104,7 @@ const normalizeLimit = (limit?: number): number | undefined => {
 };
 
 const toBigInt = (value: string | number | bigint | null, fieldName: string): bigint => {
-  if (value === null) {
+  if (value === null || value === undefined) {
     return 0n;
   }
 
@@ -110,11 +121,18 @@ const toBigInt = (value: string | number | bigint | null, fieldName: string): bi
   }
 
   const trimmed = value.trim();
-  if (!/^-?\d+$/.test(trimmed)) {
-    throw new Error(`${fieldName} must be stored as an integer string in smallest units.`);
+  // Handle potential DECIMAL(20, 7) string format from PG (e.g. "100.0000000")
+  const [integerPart, fractionalPart] = trimmed.split('.');
+  
+  if (fractionalPart && !/^[0]+$/.test(fractionalPart)) {
+    throw new Error(`${fieldName} must be stored as an integer string in smallest units. Got: ${value}`);
   }
 
-  return BigInt(trimmed);
+  if (!integerPart || !/^-?\d+$/.test(integerPart)) {
+    throw new Error(`${fieldName} must be stored as an integer string in smallest units. Got: ${value}`);
+  }
+
+  return BigInt(integerPart);
 };
 
 const mapUsageEventRow = (row: UsageEventRow): BillingUsageEvent => ({
@@ -127,6 +145,16 @@ const mapUsageEventRow = (row: UsageEventRow): BillingUsageEvent => ({
   requestId: row.request_id,
   stellarTxHash: row.stellar_tx_hash,
   createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+});
+
+const mapToUsageEvent = (row: UsageEventRow): UsageEvent => ({
+  id: String(row.id),
+  developerId: row.user_id, // For now assuming user_id maps to developerId in this context
+  apiId: row.api_id,
+  endpoint: row.endpoint_id,
+  userId: row.user_id,
+  occurredAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+  revenue: toBigInt(row.amount_usdc, 'amount_usdc'),
 });
 
 const appendDateFilters = (params: unknown[], clauses: string[], from?: Date, to?: Date): void => {
@@ -209,6 +237,27 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     return this.findByColumn('user_id', assertNonEmpty(userId, 'userId'), from, to, limit, offset);
   }
 
+  async findByUser(query: UserUsageEventQuery): Promise<UsageEvent[]> {
+    const events = await this.findByColumn(
+      'user_id',
+      assertNonEmpty(query.userId, 'userId'),
+      query.from,
+      query.to,
+      query.limit,
+      query.offset,
+      query.apiId
+    );
+    return events.map(event => ({
+      id: event.id,
+      developerId: event.userId, // mapped
+      apiId: event.apiId,
+      endpoint: event.endpointId,
+      userId: event.userId,
+      occurredAt: event.createdAt,
+      revenue: event.amount,
+    }));
+  }
+
   async findByApiId(
     apiId: string,
     from?: Date,
@@ -219,12 +268,151 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     return this.findByColumn('api_id', assertNonEmpty(apiId, 'apiId'), from, to, limit, offset);
   }
 
+  async findByDeveloper(query: UsageEventQuery): Promise<UsageEvent[]> {
+    const events = await this.findByColumn(
+      'user_id', // Assuming developer owns these events as userId
+      assertNonEmpty(query.developerId, 'developerId'),
+      query.from,
+      query.to,
+      undefined,
+      undefined,
+      query.apiId
+    );
+    return events.map(event => ({
+      id: event.id,
+      developerId: event.userId,
+      apiId: event.apiId,
+      endpoint: event.endpointId,
+      userId: event.userId,
+      occurredAt: event.createdAt,
+      revenue: event.amount,
+    }));
+  }
+
   async getTotalSpentByUser(userId: string, from?: Date, to?: Date): Promise<bigint> {
     return this.sumByColumn('user_id', assertNonEmpty(userId, 'userId'), from, to);
   }
 
   async getTotalRevenueByApi(apiId: string, from?: Date, to?: Date): Promise<bigint> {
     return this.sumByColumn('api_id', assertNonEmpty(apiId, 'apiId'), from, to);
+  }
+
+  async developerOwnsApi(developerId: string, apiId: string): Promise<boolean> {
+    // This is a simplified check: does the developer have any events for this API?
+    // In a real system, this should check the apis table.
+    const result = await this.db.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM usage_events WHERE user_id = $1 AND api_id = $2 LIMIT 1`,
+      [developerId, apiId]
+    );
+    return parseInt(result.rows[0]?.count ?? '0', 10) > 0;
+  }
+
+  async aggregateByDeveloper(developerId: string): Promise<UsageStats[]> {
+    const result = await this.db.query<{ api_id: string; calls: string; revenue: string }>(
+      `
+        SELECT
+          api_id,
+          COUNT(*)::text AS calls,
+          SUM(amount_usdc)::text AS revenue
+        FROM usage_events
+        WHERE user_id = $1
+        GROUP BY api_id
+      `,
+      [developerId]
+    );
+
+    return result.rows.map(row => ({
+      apiId: row.api_id,
+      calls: parseInt(row.calls, 10),
+      revenue: toBigInt(row.revenue, 'revenue'),
+    }));
+  }
+
+  async aggregateByUser(query: UserUsageEventQuery): Promise<{
+    totalRevenue: bigint;
+    totalCalls: number;
+    breakdownByApi: UsageStats[];
+    buckets?: UsageBucket[];
+  }> {
+    assertValidRange(query.from, query.to);
+    const userId = assertNonEmpty(query.userId, 'userId');
+
+    const params: unknown[] = [userId];
+    const clauses = [`user_id = $1`];
+    appendDateFilters(params, clauses, query.from, query.to);
+
+    if (query.apiId) {
+      params.push(query.apiId);
+      clauses.push(`api_id = $${params.length}`);
+    }
+
+    const whereClause = clauses.join(' AND ');
+
+    // 1. Get totals
+    const totalResult = await this.db.query<{ total: string | null; count: string }>(
+      `
+        SELECT
+          COALESCE(SUM(amount_usdc), 0)::text AS total,
+          COUNT(*)::text AS count
+        FROM usage_events
+        WHERE ${whereClause}
+      `,
+      params,
+    );
+
+    const totalRevenue = toBigInt(totalResult.rows[0]?.total ?? '0', 'total');
+    const totalCalls = parseInt(totalResult.rows[0]?.count ?? '0', 10);
+
+    // 2. Get breakdown by API
+    const breakdownResult = await this.db.query<{ api_id: string; calls: string; revenue: string }>(
+      `
+        SELECT
+          api_id,
+          COUNT(*)::text AS calls,
+          SUM(amount_usdc)::text AS revenue
+        FROM usage_events
+        WHERE ${whereClause}
+        GROUP BY api_id
+      `,
+      params,
+    );
+
+    const breakdownByApi = breakdownResult.rows.map(row => ({
+      apiId: row.api_id,
+      calls: parseInt(row.calls, 10),
+      revenue: toBigInt(row.revenue, 'revenue'),
+    }));
+
+    // 3. Optional bucketing
+    let buckets: UsageBucket[] | undefined;
+    if (query.groupBy) {
+      const bucketResult = await this.db.query<{ period: string | Date; calls: string; revenue: string }>(
+        `
+          SELECT
+            date_trunc($${params.length + 1}, created_at) AS period,
+            COUNT(*)::text AS calls,
+            SUM(amount_usdc)::text AS revenue
+          FROM usage_events
+          WHERE ${whereClause}
+          GROUP BY period
+          ORDER BY period ASC
+        `,
+        [...params, query.groupBy],
+      );
+
+      buckets = bucketResult.rows.map(row => ({
+        period: new Date(row.period).toISOString().slice(0, 10),
+        calls: parseInt(row.calls, 10),
+        revenue: toBigInt(row.revenue, 'revenue'),
+      }));
+    }
+
+    return {
+      totalRevenue,
+      totalCalls,
+      breakdownByApi,
+      buckets,
+    };
   }
 
   private async findByColumn(
@@ -234,6 +422,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     to?: Date,
     limit?: number,
     offset?: number,
+    apiId?: string,
   ): Promise<BillingUsageEvent[]> {
     assertValidRange(from, to);
     const normalizedLimit = normalizeLimit(limit);
@@ -245,6 +434,11 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const params: unknown[] = [value];
     const clauses = [`${column} = $1`];
     appendDateFilters(params, clauses, from, to);
+
+    if (apiId) {
+      params.push(apiId);
+      clauses.push(`api_id = $${params.length}`);
+    }
 
     let sql = `
       SELECT
@@ -290,13 +484,13 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
 
     const result = await this.db.query<TotalRow>(
       `
-        SELECT COALESCE(SUM(amount_usdc), 0) AS total
+        SELECT COALESCE(SUM(amount_usdc), 0)::text AS total
         FROM usage_events
         WHERE ${clauses.join(' AND ')}
       `,
       params,
     );
 
-    return toBigInt(result.rows[0]?.total ?? 0, 'total');
+    return toBigInt(result.rows[0]?.total ?? '0', 'total');
   }
 }
