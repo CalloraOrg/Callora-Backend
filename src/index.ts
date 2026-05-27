@@ -16,11 +16,12 @@ import { createProxyRouter } from './routes/proxyRoutes.js';
 import { defaultDeveloperRepository } from './repositories/developerRepository.js';
 import { createBillingService } from './services/billingService.js';
 import { createRateLimiter } from './services/rateLimiter.js';
-import { createUsageStore } from './services/usageStore.js';
-import { createSettlementStore } from './services/settlementStore.js';
+import { createPostgresUsageStore } from './services/usageStore.js';
+import { createPostgresSettlementStore } from './services/settlementStore.js';
 import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
 import { config } from './config/index.js';
+import { pool } from './db.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution = process.argv[1] && (process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('index.js'));
@@ -118,9 +119,26 @@ if (isDirectExecution) {
 
   const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
   const rateLimiter = createRateLimiter(5, 60_000); // 5 reqs per minute
-  const usageStore = createUsageStore();
-  const settlementStore = createSettlementStore();
+  const usageStore = createPostgresUsageStore(pool);
+  const settlementStore = createPostgresSettlementStore(pool);
   const registry = createApiRegistry();
+  const revenueSettlementService = new RevenueSettlementService(
+    usageStore,
+    settlementStore,
+    registry,
+    {
+      distribute: async () => ({
+        success: false,
+        error: 'Runtime settlement distribution is not configured in this process',
+      }),
+    },
+    {
+      horizonRequestTimeoutMs: config.settlementSync.timeoutMs,
+    },
+  );
+  const settlementStatusSyncJob = createSettlementStatusSyncJob(revenueSettlementService, {
+    intervalMs: config.settlementSync.intervalMs,
+  });
 
   const apiKeys = new Map<string, ApiKey>([
     ['test-key-1', { key: 'test-key-1', developerId: 'dev_001', apiId: 'api_001' }],
@@ -154,6 +172,7 @@ if (isDirectExecution) {
     apiKeys,
     proxyConfig: {
       timeoutMs: config.proxy.timeoutMs,
+      allowedHosts: config.proxy.allowedHosts,
     },
   });
   app.use('/v1/call', proxyRouter);
@@ -167,6 +186,7 @@ if (isDirectExecution) {
   const PORT = config.port;
 
   const closeAllDataResources = async () => {
+    settlementStatusSyncJob.stop();
     await closeDb();
     await Promise.allSettled([
       closePgPool(),
@@ -179,6 +199,7 @@ if (isDirectExecution) {
   async function startServer() {
     try {
       await initializeDb();
+      settlementStatusSyncJob.start();
       
       const server = app.listen(PORT, () => {
         console.log(`Callora backend listening on http://localhost:${PORT}`);

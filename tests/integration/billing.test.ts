@@ -1412,6 +1412,25 @@ class DatabaseSettlementStore implements SettlementStore {
   getDeveloperSettlements(developerId: string): Settlement[] {
     throw new Error("Not implemented for integration test");
   }
+
+  getPendingSettlements(): Settlement[] {
+    const result = this.db.public.query(`
+      SELECT id, developer_id, amount, status, tx_hash, created_at
+      FROM settlements
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+    `);
+
+    return result.rows.map((row: any) => ({
+      id: row.id,
+      developerId: row.developer_id,
+      amount: Number(row.amount),
+      status: row.status,
+      tx_hash: row.tx_hash,
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+      completed_at: null,
+    }));
+  }
 }
 
 class DatabaseApiRegistry implements ApiRegistry {

@@ -120,3 +120,36 @@ describe("env schema — BCRYPT_COST_FACTOR", () => {
     );
   });
 });
+
+describe('env schema — REST rate limit config', () => {
+  it('defaults REST rate limiting values when omitted', () => {
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.REST_RATE_LIMIT_WINDOW_MS).toBe(60_000);
+      expect(result.data.REST_RATE_LIMIT_MAX_REQUESTS).toBe(100);
+    }
+  });
+
+  it('accepts positive integer REST rate limit values', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      REST_RATE_LIMIT_WINDOW_MS: '15000',
+      REST_RATE_LIMIT_MAX_REQUESTS: '12',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.REST_RATE_LIMIT_WINDOW_MS).toBe(15_000);
+      expect(result.data.REST_RATE_LIMIT_MAX_REQUESTS).toBe(12);
+    }
+  });
+
+  it('rejects non-positive REST rate limit values', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      REST_RATE_LIMIT_WINDOW_MS: '0',
+      REST_RATE_LIMIT_MAX_REQUESTS: '-1',
+    });
+    expect(result.success).toBe(false);
+  });
+});

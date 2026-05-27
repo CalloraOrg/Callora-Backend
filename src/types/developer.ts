@@ -1,34 +1,4 @@
-export const developerCategoryEnum = [
-  'ai',
-  'analytics',
-  'data',
-  'developer-tools',
-  'finance',
-  'productivity',
-  'search',
-  'security',
-  'weather',
-] as const;
-
-export type DeveloperCategory = typeof developerCategoryEnum[number];
-
-export interface DeveloperProfile {
-  id: number;
-  user_id: string;
-  name: string | null;
-  website: string | null;
-  description: string | null;
-  category: DeveloperCategory | null;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface UpdateDeveloperProfileInput {
-  name?: string | null;
-  website?: string | null;
-  description?: string | null;
-  category?: DeveloperCategory | null;
-}
+import type { Awaitable } from './awaitable.js';
 
 export interface Settlement {
   id: string;
@@ -37,6 +7,7 @@ export interface Settlement {
   status: 'pending' | 'completed' | 'failed';
   tx_hash: string | null;
   created_at: string; // ISO-8601
+  completed_at?: string | null;
 }
 
 export interface RevenueSummary {
@@ -56,7 +27,7 @@ export interface DeveloperRevenueResponse {
 }
 
 export interface SettlementStore {
-  create(settlement: Settlement): void;
-  updateStatus(id: string, status: Settlement['status'], txHash?: string | null): void;
-  getDeveloperSettlements(developerId: string): Settlement[];
+  create(settlement: Settlement): Awaitable<void>;
+  updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Awaitable<void>;
+  getDeveloperSettlements(developerId: string): Awaitable<Settlement[]>;
 }

@@ -16,6 +16,22 @@ export interface ErrorResponseBody {
   details?: ValidationErrorDetail[];
 }
 
+function extractValidationDetails(err: unknown): ValidationErrorDetail[] | undefined {
+  if (err instanceof ValidationError) {
+    return err.details;
+  }
+
+  if (
+    !!err &&
+    typeof err === 'object' &&
+    Array.isArray((err as { details?: unknown[] }).details)
+  ) {
+    return (err as { details: ValidationErrorDetail[] }).details;
+  }
+
+  return undefined;
+}
+
 function deriveErrorCode(statusCode: number): string {
   switch (statusCode) {
     case 400:
@@ -91,7 +107,8 @@ export function errorHandler(
   }
 
   const body: ErrorResponseBody = { code, message: finalMessage, requestId };
-  if (err instanceof ValidationError) body.details = err.details;
+  const details = extractValidationDetails(err);
+  if (details) body.details = details;
 
   if (!res.headersSent) {
     res.status(statusCode).json(body);

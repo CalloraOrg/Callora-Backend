@@ -314,4 +314,59 @@ describe('performHealthCheck', () => {
     assert.equal(result.checks.soroban_rpc, undefined);
     assert.equal(result.checks.horizon, undefined);
   });
+
+  test('waits only for the slowest configured dependency', async () => {
+    const pool = createMockPool({ rows: [{ result: 1 }] } as QueryResult, 300);
+    const mockFetch = jest.fn(async (url: string | URL | Request) => {
+      const href = url.toString();
+
+      if (href.includes('soroban')) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        return {
+          ok: true,
+          json: async () => ({ status: 'healthy' }),
+        };
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return { ok: true };
+    });
+    global.fetch = mockFetch as unknown as typeof fetch;
+
+    const config: HealthCheckConfig = {
+      database: { pool, timeout: 1000 },
+      sorobanRpc: { url: 'https://soroban-test.stellar.org', timeout: 1000 },
+      horizon: { url: 'https://horizon-testnet.stellar.org', timeout: 1000 },
+    };
+
+    const start = Date.now();
+    const result = await performHealthCheck(config);
+    const duration = Date.now() - start;
+
+    assert.equal(result.status, 'ok');
+    assert.ok(duration < 650, `Expected parallel checks, got ${duration}ms`);
+  });
+
+  test('times out a hung database without blocking optional dependency checks', async () => {
+    const pool = createMockPool({ rows: [{ result: 1 }] } as QueryResult, 3_000);
+    const mockFetch = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({ status: 'healthy' }),
+    }));
+    global.fetch = mockFetch as unknown as typeof fetch;
+
+    const config: HealthCheckConfig = {
+      database: { pool, timeout: 100 },
+      sorobanRpc: { url: 'https://soroban-test.stellar.org', timeout: 1000 },
+    };
+
+    const start = Date.now();
+    const result = await performHealthCheck(config);
+    const duration = Date.now() - start;
+
+    assert.equal(result.status, 'down');
+    assert.equal(result.checks.database, 'down');
+    assert.equal(result.checks.soroban_rpc, 'ok');
+    assert.ok(duration < 500, `Expected timeout-bounded response, got ${duration}ms`);
+  });
 });

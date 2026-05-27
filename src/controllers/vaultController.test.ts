@@ -1,12 +1,24 @@
 import request from 'supertest';
 import express from 'express';
+import { z } from 'zod';
 import { VaultController } from './vaultController.js';
 import { InMemoryVaultRepository } from '../repositories/vaultRepository.js';
 import { errorHandler } from '../middleware/errorHandler.js';
+import { validate } from '../middleware/validate.js';
+import { stellarNetworkQuerySchema } from '../validators/networkSchema.js';
+
+jest.mock('better-sqlite3', () => {
+  return class MockDatabase {
+    prepare() { return { get: () => null }; }
+    exec() { }
+    close() { }
+  };
+});
 
 function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = false) {
   const app = express();
   app.use(express.json());
+  app.use(requestIdMiddleware);
 
   if (useJwtAuth) {
     // Mock JWT authentication for testing token-based auth
@@ -24,23 +36,23 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
             next();
             return;
           } else if (token === 'expired-token') {
-            res.status(401).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
+            next(new UnauthorizedError('Token expired', 'TOKEN_EXPIRED'));
             return;
           } else if (token === 'invalid-token') {
-            res.status(401).json({ error: 'Invalid token', code: 'INVALID_TOKEN' });
+            next(new UnauthorizedError('Invalid token', 'INVALID_TOKEN'));
             return;
           }
         } catch (error) {
-          res.status(401).json({ error: 'Invalid token', code: 'INVALID_TOKEN' });
+          next(new UnauthorizedError('Invalid token', 'INVALID_TOKEN'));
           return;
         }
       }
-      res.status(401).json({ error: 'Authentication required' });
+      next(new UnauthorizedError('Authentication required'));
     });
   } else {
     // Mock requireAuth to accept essentially any user via x-user-id header
     app.use((req, res, next) => {
-      const userId = req.headers['x-user-id'] as string;
+      const userId = (req.headers['x-user-id'] as string | undefined)?.trim();
       if (userId) {
         res.locals.authenticatedUser = {
           id: userId,
@@ -48,13 +60,17 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
         };
         next();
       } else {
-        res.status(401).json({ error: 'Authentication required' });
+        next(new UnauthorizedError('Authentication required'));
       }
     });
   }
 
   const vaultController = new VaultController(vaultRepository);
-  app.get('/api/vault/balance', vaultController.getBalance.bind(vaultController));
+  app.get(
+    '/api/vault/balance',
+    validate({ query: stellarNetworkQuerySchema }),
+    vaultController.getBalance.bind(vaultController),
+  );
 
   app.use(errorHandler);
   return app;
@@ -68,8 +84,7 @@ describe('VaultController - getBalance', () => {
 
       const response = await request(app).get('/api/vault/balance');
       expect(response.status).toBe(401);
-      expect(response.body).toHaveProperty('error');
-      expect(response.body.error).toBe('Authentication required');
+      expectErrorEnvelope(response.body, 'Authentication required', 'UNAUTHORIZED');
     });
 
     it('returns 401 when x-user-id header is empty', async () => {
@@ -81,7 +96,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', '');
 
       expect(response.status).toBe(401);
-      expect(response.body).toHaveProperty('error');
+      expectErrorEnvelope(response.body, 'Authentication required', 'UNAUTHORIZED');
     });
 
     it('accepts valid JWT token authentication', async () => {
@@ -106,8 +121,7 @@ describe('VaultController - getBalance', () => {
         .set('Authorization', 'Bearer expired-token');
 
       expect(response.status).toBe(401);
-      expect(response.body).toHaveProperty('error');
-      expect(response.body).toHaveProperty('code', 'TOKEN_EXPIRED');
+      expectErrorEnvelope(response.body, 'Token expired', 'TOKEN_EXPIRED');
     });
 
     it('returns 401 for invalid JWT token', async () => {
@@ -119,8 +133,7 @@ describe('VaultController - getBalance', () => {
         .set('Authorization', 'Bearer invalid-token');
 
       expect(response.status).toBe(401);
-      expect(response.body).toHaveProperty('error');
-      expect(response.body).toHaveProperty('code', 'INVALID_TOKEN');
+      expectErrorEnvelope(response.body, 'Invalid token', 'INVALID_TOKEN');
     });
 
     it('returns 401 for malformed Authorization header', async () => {
@@ -145,9 +158,9 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('error');
-      expect(response.body.error).toContain('Vault not found');
-      expect(response.body.error).toContain('testnet'); // default network
+      expectErrorEnvelope(response.body, undefined, 'VAULT_NOT_FOUND');
+      expect(response.body.message).toContain('Vault not found');
+      expect(response.body.message).toContain('testnet'); // default network
     });
 
     it('returns 400 for invalid network parameter', async () => {
@@ -159,10 +172,11 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('error');
-      expect(response.body.error).toContain('network must be either');
-      expect(response.body.error).toContain('testnet');
-      expect(response.body.error).toContain('mainnet');
+      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(response.body).toHaveProperty('message', 'Request validation failed');
+      expect(response.body.details[0]).toMatchObject({
+        field: 'query.network',
+      });
     });
 
     it('returns 400 for empty network parameter', async () => {
@@ -174,7 +188,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('error');
+      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('returns 400 for network parameter with only whitespace', async () => {
@@ -186,7 +201,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('error');
+      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('accepts case-sensitive network parameters', async () => {
@@ -310,8 +326,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(500);
-      expect(response.body).toHaveProperty('error');
-      expect(response.body.error).toBe('Failed to retrieve vault balance');
+      expectErrorEnvelope(response.body, 'Failed to retrieve vault balance', 'VAULT_BALANCE_RETRIEVAL_FAILED');
 
       // Restore original method
       repository.findByUserId = originalFindByUserId;
@@ -325,7 +340,7 @@ describe('VaultController - getBalance', () => {
         .get('/api/vault/balance')
         .set('x-user-id', '   '); // whitespace only
 
-      expect(response.status).toBe(404); // Will be treated as authenticated but vault not found
+      expect(response.status).toBe(401);
     });
   });
 
@@ -377,7 +392,7 @@ describe('VaultController - getBalance', () => {
           .set('x-user-id', 'user-1');
 
         expect(response.status).toBe(400);
-        expect(response.body).toHaveProperty('error');
+        expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
       }
     });
 
@@ -440,8 +455,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'nonexistent-user');
       
       expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('error');
-      expect(typeof response.body.error).toBe('string');
+      expectErrorEnvelope(response.body, undefined, 'VAULT_NOT_FOUND');
     });
   });
 
@@ -477,24 +491,23 @@ describe('VaultController - getBalance', () => {
       // Test 401 error
       const authResponse = await request(app).get('/api/vault/balance');
       expect(authResponse.status).toBe(401);
-      expect(authResponse.body).toHaveProperty('error');
-      expect(typeof authResponse.body.error).toBe('string');
+      expectErrorEnvelope(authResponse.body, undefined, 'UNAUTHORIZED');
       
       // Test 404 error
       const notFoundResponse = await request(app)
         .get('/api/vault/balance')
         .set('x-user-id', 'missing-user');
       expect(notFoundResponse.status).toBe(404);
-      expect(notFoundResponse.body).toHaveProperty('error');
-      expect(typeof notFoundResponse.body.error).toBe('string');
+      expectErrorEnvelope(notFoundResponse.body, undefined, 'VAULT_NOT_FOUND');
       
       // Test 400 error
       const validationResponse = await request(app)
         .get('/api/vault/balance?network=invalid')
         .set('x-user-id', 'user-1');
       expect(validationResponse.status).toBe(400);
-      expect(validationResponse.body).toHaveProperty('error');
-      expect(typeof validationResponse.body.error).toBe('string');
+      expect(validationResponse.body).toHaveProperty('message');
+      expect(typeof validationResponse.body.message).toBe('string');
+      expect(validationResponse.body).toHaveProperty('code', 'VALIDATION_ERROR');
     });
   });
 });

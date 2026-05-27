@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { randomBytes, timingSafeEqual } from "crypto";
 import bcrypt from "bcryptjs";
 import { config } from "../config/index.js";
 
@@ -15,6 +15,13 @@ export interface ApiKeyRecord {
 }
 
 const apiKeys: ApiKeyRecord[] = [];
+
+export interface ApiKeyCreateResult {
+  id: string;
+  key: string;
+  prefix: string;
+  createdAt: Date;
+}
 
 function generatePlainKey(): string {
   return `ck_live_${randomBytes(24).toString("hex")}`;
@@ -47,24 +54,35 @@ export const apiKeyRepository = {
     userId: string;
     scopes: string[];
     rateLimitPerMinute: number | null;
-  }): { key: string; prefix: string } {
-    const p = params || {} as any;
+  }): ApiKeyCreateResult {
+    const p = params as any;
     const key = generatePlainKey();
     const prefix = key.slice(0, 16);
+    const id = randomBytes(8).toString('hex');
+    const createdAt = new Date();
 
     apiKeys.push({
-      id: randomBytes(8).toString('hex'),
+      id,
       apiId: p.apiId,
       userId: p.userId,
       prefix,
       keyHash: toHash(key),
       scopes: p.scopes,
       rateLimitPerMinute: p.rateLimitPerMinute,
-      createdAt: new Date(),
+      createdAt,
       revoked: false
     });
 
-    return { key, prefix };
+    return { id, key, prefix, createdAt };
+  },
+  list(params: { userId: string; apiId?: string }): ApiKeyRecord[] {
+    const { userId, apiId } = params;
+    return apiKeys
+      .filter((record) =>
+        record.userId === userId &&
+        (apiId === undefined || record.apiId === apiId)
+      )
+      .map((record) => ({ ...record }));
   },
   revoke(id: string, userId: string): 'success' | 'not_found' | 'forbidden' {
     const key = apiKeys.find(k => k.id === id);

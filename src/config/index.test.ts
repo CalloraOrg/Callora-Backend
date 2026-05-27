@@ -16,13 +16,48 @@ describe('config validation', () => {
     process.env.ADMIN_API_KEY = 'test-admin-key';
     process.env.METRICS_API_KEY = 'test-metrics-key';
 
-    let cfg: { config: { port: unknown; databaseUrl: string } } | undefined;
+    let cfg:
+      | {
+          config: {
+            port: unknown;
+            databaseUrl: string;
+            restRateLimit: { windowMs: number; maxRequests: number };
+          };
+        }
+      | undefined;
     await jest.isolateModulesAsync(async () => {
       cfg = await import('./index.js');
     });
 
     expect(cfg!.config.port).toBeDefined();
     expect(cfg!.config.databaseUrl).toContain('postgresql://');
+    expect(cfg!.config.restRateLimit.windowMs).toBe(60_000);
+    expect(cfg!.config.restRateLimit.maxRequests).toBe(100);
+  });
+
+  it('should expose configured REST rate limit values', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+    process.env.REST_RATE_LIMIT_WINDOW_MS = '30000';
+    process.env.REST_RATE_LIMIT_MAX_REQUESTS = '25';
+
+    let cfg:
+      | {
+          config: {
+            restRateLimit: { windowMs: number; maxRequests: number };
+          };
+        }
+      | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.restRateLimit).toEqual({
+      windowMs: 30_000,
+      maxRequests: 25,
+    });
   });
 
   it('should call process.exit(1) when required env vars are missing', async () => {

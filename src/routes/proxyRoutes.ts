@@ -4,7 +4,12 @@ import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../ty
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import { startUpstreamTimer, type UpstreamOutcome } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
-import { buildHopByHopSet, STATIC_HOP_BY_HOP } from '../lib/hopByHop.js';
+import { buildHopByHopSet } from '../lib/hopByHop.js';
+import {
+  buildUpstreamTargetUrl,
+  DEFAULT_UPSTREAM_HOST_ALLOWLIST,
+  validateResolvedUpstreamTarget,
+} from '../lib/upstreamTarget.js';
 import {
   BadGatewayError,
   GatewayTimeoutError,
@@ -32,6 +37,13 @@ const DEFAULT_STRIP_HEADERS = [
   'trailer',
   'transfer-encoding',
   'upgrade',
+  // Sensitive and gateway-internal headers
+  'host',
+  'x-api-key',
+  'authorization',
+  'cookie',
+  'x-forwarded-for',
+  'x-real-ip',
 ];
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -41,6 +53,7 @@ function resolveConfig(partial?: Partial<ProxyConfig>): ProxyConfig {
     timeoutMs: partial?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     stripHeaders: partial?.stripHeaders ?? DEFAULT_STRIP_HEADERS,
     recordableStatuses: partial?.recordableStatuses ?? ((code) => code >= 200 && code < 300),
+    allowedHosts: partial?.allowedHosts ?? [...DEFAULT_UPSTREAM_HOST_ALLOWLIST],
   };
 }
 
@@ -122,9 +135,19 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       // 5. Build upstream URL & find price
       // req.params[0] captures the wildcard portion after the slug
       const wildcardPath = req.params[0] ?? '';
-      const upstreamTarget = wildcardPath
-        ? `${apiEntry.base_url}/${wildcardPath}`
-        : apiEntry.base_url;
+      const upstreamTarget = buildUpstreamTargetUrl(apiEntry.base_url, wildcardPath);
+      let safeUpstreamTarget: string;
+
+      try {
+        safeUpstreamTarget = await validateResolvedUpstreamTarget(upstreamTarget, {
+          allowedHosts: config.allowedHosts,
+        });
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Configured upstream target is not allowed.';
+        throw new BadGatewayError(message, 'UPSTREAM_TARGET_BLOCKED');
+      }
 
       // 6. Build forwarded headers — strip hop-by-hop and gateway-internal headers.
       // buildHopByHopSet() also strips any additional names listed in the
@@ -149,7 +172,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const timer = startUpstreamTimer(apiEntry.id, req.method);
 
       try {
-        const upstreamRes = await fetch(upstreamTarget, {
+        const upstreamRes = await fetch(safeUpstreamTarget, {
           method: req.method,
           headers: forwardHeaders,
           body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
@@ -202,34 +225,39 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           throw new GatewayTimeoutError('Upstream service timed out');
         } else {
           upstreamStatus = 502;
+          timer.stop(upstreamStatus, outcome);
           throw new BadGatewayError('Bad Gateway: upstream unreachable');
         }
-
-        timer.stop(upstreamStatus, outcome);
       }
 
-      // 8. Record usage & deduct billing (Non-blocking background task)
+      // 8. Keep metering and billing consistent after a recordable response.
       if (config.recordableStatuses(upstreamStatus)) {
         setImmediate(() => {
-          const recorded = usageStore.record({
-            id: randomUUID(), // ID of the usage event itself
-            requestId,        // Idempotency key
-            apiKey: apiKeyHeader,
-            apiKeyId: keyRecord.id,
-            apiId: String(apiEntry.id),
-            endpointId: endpoint.endpointId,
-            userId: keyRecord.userId,
-            amountUsdc: endpoint.priceUsdc,
-            statusCode: upstreamStatus,
-            timestamp: new Date().toISOString(),
-          });
+          void (async () => {
+            try {
+              const recorded = await usageStore.record({
+                id: randomUUID(), // ID of the usage event itself
+                requestId,        // Idempotency key
+                apiKey: apiKeyHeader,
+                apiKeyId: keyRecord.id,
+                apiId: String(apiEntry.id),
+                endpointId: endpoint.endpointId,
+                userId: keyRecord.userId,
+                amountUsdc: endpoint.priceUsdc,
+                statusCode: upstreamStatus,
+                timestamp: new Date().toISOString(),
+              });
 
-          // Only deduct billing if we haven't processed this requestId before
-          if (recorded && endpoint.priceUsdc > 0) {
-            billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
-              console.error('Background billing deduction failed:', err);
-            });
-          }
+              // Only deduct billing if we haven't processed this requestId before
+              if (recorded && endpoint.priceUsdc > 0) {
+                billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
+                  console.error('Background billing deduction failed:', err);
+                });
+              }
+            } catch (err) {
+              console.error('Background usage recording failed:', err);
+            }
+          })();
         });
       }
     } catch (error) {
@@ -238,4 +266,104 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   }
 
   return router;
+}
+
+interface ReconcileUsageAndBillingArgs {
+  billing: ProxyDeps['billing'];
+  usageStore: ProxyDeps['usageStore'];
+  requestId: string;
+  apiKeyHeader: string;
+  keyRecord: { id: string; userId: string; apiId: string };
+  apiEntry: ApiRegistryEntry;
+  endpoint: EndpointPricing;
+  upstreamStatus: number;
+}
+
+async function reconcileUsageAndBilling({
+  billing,
+  usageStore,
+  requestId,
+  apiKeyHeader,
+  keyRecord,
+  apiEntry,
+  endpoint,
+  upstreamStatus,
+}: ReconcileUsageAndBillingArgs): Promise<void> {
+  let chargeResult:
+    | { success: boolean; alreadyProcessed?: boolean; reconciliationRequired?: boolean; error?: string }
+    | undefined;
+
+  if (endpoint.priceUsdc > 0) {
+    if (billing.chargeUsage) {
+      chargeResult = await billing.chargeUsage({
+        requestId,
+        developerId: keyRecord.userId,
+        apiId: String(apiEntry.id),
+        endpointId: endpoint.endpointId,
+        apiKeyId: keyRecord.id,
+        amountUsdc: endpoint.priceUsdc,
+      });
+    } else {
+      const deduction = await billing.deductCredit(keyRecord.userId, endpoint.priceUsdc);
+      chargeResult = {
+        success: deduction.success,
+        alreadyProcessed: false,
+        reconciliationRequired: false,
+      };
+    }
+
+    if (!chargeResult.success) {
+      if (chargeResult.reconciliationRequired) {
+        console.error(
+          '[proxy billing reconciliation] Billing anchor failed after usage write phase started',
+          {
+            requestId,
+            apiId: apiEntry.id,
+            endpointId: endpoint.endpointId,
+            developerId: keyRecord.userId,
+            error: chargeResult.error ?? 'Unknown billing failure',
+          },
+        );
+      }
+      return;
+    }
+  }
+
+  try {
+    const recorded = usageStore.record({
+      id: randomUUID(),
+      requestId,
+      apiKey: apiKeyHeader,
+      apiKeyId: keyRecord.id,
+      apiId: String(apiEntry.id),
+      endpointId: endpoint.endpointId,
+      userId: keyRecord.userId,
+      amountUsdc: endpoint.priceUsdc,
+      statusCode: upstreamStatus,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!recorded && !chargeResult?.alreadyProcessed) {
+      console.error(
+        '[proxy billing reconciliation] Usage view write failed after successful billing charge',
+        {
+          requestId,
+          apiId: apiEntry.id,
+          endpointId: endpoint.endpointId,
+          developerId: keyRecord.userId,
+        },
+      );
+    }
+  } catch (error) {
+    console.error(
+      '[proxy billing reconciliation] Usage view write threw after successful billing charge',
+      {
+        requestId,
+        apiId: apiEntry.id,
+        endpointId: endpoint.endpointId,
+        developerId: keyRecord.userId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
 }

@@ -48,6 +48,24 @@ const DEFAULT_EXTERNAL_TIMEOUT = 2000;
 const DEGRADED_THRESHOLD_DB = 1000;
 const DEGRADED_THRESHOLD_EXTERNAL = 2000;
 
+function createTimeoutPromise(timeoutMs: number, message: string): {
+  promise: Promise<never>;
+  cancel: () => void;
+} {
+  let timeoutId: NodeJS.Timeout | undefined;
+
+  return {
+    promise: new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+    cancel: () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    },
+  };
+}
+
 /**
  * Checks database health by executing SELECT 1
  * Uses connection pool for efficiency
@@ -57,14 +75,11 @@ export async function checkDatabase(
   timeoutMs: number = DEFAULT_DB_TIMEOUT
 ): Promise<ComponentCheck> {
   const startTime = Date.now();
+  const timeout = createTimeoutPromise(timeoutMs, 'Database check timeout');
 
   try {
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Database check timeout')), timeoutMs);
-    });
-
     const queryPromise = pool.query('SELECT 1 as result');
-    const result = await Promise.race([queryPromise, timeoutPromise]);
+    const result = await Promise.race([queryPromise, timeout.promise]);
 
     const responseTime = Date.now() - startTime;
 
@@ -87,6 +102,8 @@ export async function checkDatabase(
       responseTime,
       error: error instanceof Error ? error.message : 'Unknown error',
     };
+  } finally {
+    timeout.cancel();
   }
 }
 
@@ -238,28 +255,23 @@ export async function performHealthCheck(
     database: 'down', // Default to down until checked
   };
 
-  // Check database (critical component)
-  const dbCheck = await checkDatabase(
-    config.database.pool,
-    config.database.timeout
-  );
+  const [dbCheck, sorobanCheck, horizonCheck] = await Promise.all([
+    checkDatabase(config.database.pool, config.database.timeout),
+    config.sorobanRpc
+      ? checkSorobanRpc(config.sorobanRpc.url, config.sorobanRpc.timeout)
+      : Promise.resolve(undefined),
+    config.horizon
+      ? checkHorizon(config.horizon.url, config.horizon.timeout)
+      : Promise.resolve(undefined),
+  ]);
+
   checks.database = dbCheck.status;
 
-  // Check Soroban RPC (optional component)
-  if (config.sorobanRpc) {
-    const sorobanCheck = await checkSorobanRpc(
-      config.sorobanRpc.url,
-      config.sorobanRpc.timeout
-    );
+  if (sorobanCheck) {
     checks.soroban_rpc = sorobanCheck.status;
   }
 
-  // Check Horizon (optional component)
-  if (config.horizon) {
-    const horizonCheck = await checkHorizon(
-      config.horizon.url,
-      config.horizon.timeout
-    );
+  if (horizonCheck) {
     checks.horizon = horizonCheck.status;
   }
 
