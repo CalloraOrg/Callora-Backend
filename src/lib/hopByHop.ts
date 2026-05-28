@@ -35,21 +35,36 @@ export const STATIC_HOP_BY_HOP = new Set([
   'upgrade',
 ]);
 
+/** Headers that MUST NOT be treated as hop-by-hop for security reasons (Request Smuggling prevention). */
+const PROTECTED_HEADERS = new Set(['host', 'content-length']);
+
 /**
  * Build the full set of headers to strip for a given request/response,
  * combining the static hop-by-hop set with any names listed in the
  * `Connection` header value.
  *
  * @param connectionHeaderValue  The raw value of the `Connection` header,
- *   or undefined/null if absent.
+ *   or undefined/null if absent. Supports string or string array (Node.js standard).
  */
-export function buildHopByHopSet(connectionHeaderValue?: string | null): Set<string> {
-  if (!connectionHeaderValue) return STATIC_HOP_BY_HOP;
+export function buildHopByHopSet(
+  connectionHeaderValue?: string | string[] | null,
+): Set<string> {
+  if (!connectionHeaderValue) return new Set(STATIC_HOP_BY_HOP);
 
   const dynamic = new Set(STATIC_HOP_BY_HOP);
-  for (const token of connectionHeaderValue.split(',')) {
-    const name = token.trim().toLowerCase();
-    if (name) dynamic.add(name);
+  const values = Array.isArray(connectionHeaderValue)
+    ? connectionHeaderValue
+    : [connectionHeaderValue];
+
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    for (const token of value.split(',')) {
+      const name = token.trim().toLowerCase();
+      // Prevent stripping of framing headers which could lead to smuggling attacks
+      if (name && !PROTECTED_HEADERS.has(name)) {
+        dynamic.add(name);
+      }
+    }
   }
   return dynamic;
 }
@@ -60,15 +75,30 @@ export function buildHopByHopSet(connectionHeaderValue?: string | null): Set<str
  * @param headers  Plain object of header name → string value pairs.
  */
 export function stripHopByHopHeaders(
-  headers: Record<string, string>,
-): Record<string, string> {
-  const connectionValue = headers['connection'] ?? headers['Connection'];
-  const stripSet = buildHopByHopSet(connectionValue);
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string | string[] | undefined> {
+  // Collect all connection header values case-insensitively to prevent smuggling bypass
+  const connectionValues: string[] = [];
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === 'connection') {
+      const val = headers[key];
+      if (Array.isArray(val)) {
+        connectionValues.push(...val.filter((v): v is string => typeof v === 'string'));
+      } else if (typeof val === 'string') {
+        connectionValues.push(val);
+      }
+    }
+  }
 
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
+  // Pass collected values to build the strip set; returns static set if empty
+  const stripSet = buildHopByHopSet(
+    connectionValues.length > 0 ? connectionValues : undefined,
+  );
+
+  const result: Record<string, string | string[] | undefined> = {};
+  for (const key of Object.keys(headers)) {
     if (!stripSet.has(key.toLowerCase())) {
-      result[key] = value;
+      result[key] = headers[key];
     }
   }
   return result;

@@ -10,15 +10,16 @@ This service uses `helmet` as an Express middleware to apply common security hea
   - Config: provided by Helmet defaults.
 
 - **X-Frame-Options**
-  - **Disabled on purpose** for this API.
-  - Reason: the backend may be called from a frontend that is embedded in an iframe (e.g. in other dashboards). Sending `DENY` or `SAMEORIGIN` from the API is unnecessary for JSON responses and can interfere with those use cases.
+  - Value: `DENY`
+  - Purpose: Prevents clickjacking attacks by disallowing the page to be displayed in an iframe.
+  - Config: Aligned with production security standards defined in `SECURITY_HEADERS_CONFIGURATION.md`.
 
 - **Strict-Transport-Security (HSTS)**
   - Only enabled when `NODE_ENV === 'production'`.
   - Config:
-    - `maxAge`: 15552000 seconds (180 days)
-    - `includeSubDomains`: `false`
-    - `preload`: `false`
+    - `maxAge`: 31536000 seconds (1 year)
+    - `includeSubDomains`: `true`
+    - `preload`: `true`
   - When not in production, HSTS is disabled to avoid issues during local development or when running over plain HTTP.
 
 - **Other default Helmet headers**
@@ -26,6 +27,9 @@ This service uses `helmet` as an Express middleware to apply common security hea
 
 ### Disabled features
 
-- **Content-Security-Policy (CSP)**
-  - Disabled (`contentSecurityPolicy: false`) because this backend is a pure JSON API and does not render HTML. A CSP is typically only useful for mitigating script injection in HTML responses.
+- **X-Powered-By**
+  - Hidden in production to avoid disclosing technology stack information.
 
+### Content Security Policy (CSP)
+
+- **CSP** is configured with strict defaults (e.g., `default-src 'self'`) as defined in `SECURITY_HEADERS_CONFIGURATION.md`. While the API primarily serves JSON, this provides defense-in-depth against accidental HTML rendering or cross-site script injection.
