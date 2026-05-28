@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { z } from 'zod';
 import adminRouter from './routes/admin.js';
-import routes from './routes/index.js';
+import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
 import { pool } from './db.js';
 import {
@@ -263,95 +263,12 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
 
   // Mount all routes including billing
-  app.use('/api', createApiRouter({ restRateLimit }));
-
-  app.get('/api/usage', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
-  const user = res.locals.authenticatedUser;
-  if (!user) {
-    next(new UnauthorizedError());
-    return;
-  }
-
-  // Parse and validate query parameters
-  const from = parseDate(req.query.from);
-  const to = parseDate(req.query.to);
-  
-  // Set default period: last 30 days if not provided
-  const now = new Date();
-  const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
-  const defaultTo = now;
-  
-  let queryFrom = from || defaultFrom;
-  let queryTo = to || defaultTo;
-  
-  if (!from && !to) {
-    // Use default period when neither is specified
-  } else if (from && !to) {
-    // If only from is specified, use current time as to
-    queryTo = now;
-  } else if (!from && to) {
-    // If only to is specified, use 30 days before as from
-    queryFrom = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
-  }
-  
-  if (queryFrom > queryTo) {
-    next(new BadRequestError('from must be before or equal to to'));
-    return;
-  }
-
-  const { limit, offset } = parsePagination(req.query as Record<string, string>);
-
-  const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
-
-  try {
-    // Get usage events for the user
-    const events = await usageEventsRepository.findByUser({
-      userId: user.id,
-      from: queryFrom,
-      to: queryTo,
-      apiId,
-      limit,
-      offset,
-    });
-
-    // Get aggregated statistics
-    const stats = await usageEventsRepository.aggregateByUser({
-      userId: user.id,
-      from: queryFrom,
-      to: queryTo,
-      apiId,
-    });
-
-    // Format response
-    const response = {
-      events: events.map(event => ({
-        id: event.id,
-        apiId: event.apiId,
-        endpoint: event.endpoint,
-        occurredAt: event.occurredAt.toISOString(),
-        revenue: event.revenue.toString(),
-      })),
-      stats: {
-        totalCalls: stats.totalCalls,
-        totalSpent: stats.totalRevenue.toString(),
-        breakdownByApi: stats.breakdownByApi.map(stat => ({
-          apiId: stat.apiId,
-          calls: stat.calls,
-          revenue: stat.revenue.toString(),
-        })),
-      },
-      period: {
-        from: queryFrom.toISOString(),
-        to: queryTo.toISOString(),
-      },
-    };
-
-    res.json(response);
-  } catch (error) {
-    console.error('Error fetching user usage:', error);
-    next(new InternalServerError());
-  }
-});
+  app.use('/api', createApiRouter({ 
+    restRateLimit,
+    usageEventsRepository,
+    apiRepository,
+    developerRepository
+  }));
 
   app.get('/api/developers/apis', requireAuth, async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
     const user = res.locals.authenticatedUser;
