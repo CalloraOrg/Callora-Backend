@@ -15,6 +15,23 @@ describe('Schema Drift Audit', () => {
   const prismaSchemaPath = path.join(projectRoot, 'prisma/schema.prisma');
   const drizzleConfigPath = path.join(projectRoot, 'drizzle.config.ts');
   const prismaConfigPath = path.join(projectRoot, 'prisma.config.ts');
+  const sqliteMigrationsDir = path.join(projectRoot, 'migrations');
+
+  /**
+   * Ownership boundary (single source of truth per table).
+   *
+   * - Drizzle + raw SQLite migrations own the developer dashboard entities.
+   * - Prisma owns the PostgreSQL auth/users domain.
+   * - Other Postgres tables (usage, settlements, etc.) are owned by raw SQL in code
+   *   and are out-of-scope for the SQLite drift checks here.
+   *
+   * Any future change MUST update SCHEMA_DRIFT_AUDIT.md and these expectations.
+   */
+  const OWNERSHIP = {
+    drizzleSqliteTables: new Set(['developers', 'apis', 'api_endpoints']),
+    prismaTables: new Set(['users']),
+    sqliteMigrationsOwnedTables: new Set(['developers', 'apis', 'api_endpoints']),
+  } as const;
 
   describe('ORM Configuration Consistency', () => {
     // KNOWN: This project intentionally uses Drizzle+SQLite for dev/test and
@@ -41,41 +58,46 @@ describe('Schema Drift Audit', () => {
   });
 
   describe('Entity Definition Consistency', () => {
-    // KNOWN: Drizzle defines SQLite entities; Prisma defines PostgreSQL models.
-    // They intentionally use different naming conventions and don't share entity names.
-    // This test is skipped because zero common entities is expected and correct.
-    it.skip('should have matching entity definitions across ORMs', () => {
+    it('should define only the expected Drizzle SQLite tables', () => {
       const drizzleSchema = fs.readFileSync(drizzleSchemaPath, 'utf8');
-      const drizzleEntities = extractDrizzleEntities(drizzleSchema);
-      
-      const prismaSchema = fs.readFileSync(prismaSchemaPath, 'utf8');
-      const prismaEntities = extractPrismaEntities(prismaSchema);
+      const drizzleTableNames = extractDrizzleTableNames(drizzleSchema);
 
-      const commonEntities = findCommonEntities(drizzleEntities, prismaEntities);
-      
-      if (drizzleEntities.length > 0 && prismaEntities.length > 0) {
-        expect(commonEntities.length).toBeGreaterThan(0);
-      }
+      expect(new Set(drizzleTableNames)).toEqual(OWNERSHIP.drizzleSqliteTables);
     });
 
-    it('should not have orphaned schema definitions', () => {
-      // Check for schema definitions without corresponding usage
+    it('should define only the expected Prisma tables (via @@map)', () => {
+      const prismaSchema = fs.readFileSync(prismaSchemaPath, 'utf8');
+      const prismaMappedTables = extractPrismaMappedTableNames(prismaSchema);
+
+      expect(new Set(prismaMappedTables)).toEqual(OWNERSHIP.prismaTables);
+    });
+
+    it('should not define the same table in both ORMs', () => {
+      const drizzleSchema = fs.readFileSync(drizzleSchemaPath, 'utf8');
+      const prismaSchema = fs.readFileSync(prismaSchemaPath, 'utf8');
+      const drizzleTables = new Set(extractDrizzleTableNames(drizzleSchema));
+      const prismaTables = new Set(extractPrismaMappedTableNames(prismaSchema));
+
+      const overlap = [...drizzleTables].filter((t) => prismaTables.has(t));
+      expect(overlap).toEqual([]);
+    });
+
+    it('should keep the developer user_id shape compatible with Prisma User.id (UUID string)', () => {
       const drizzleSchema = fs.readFileSync(drizzleSchemaPath, 'utf8');
       const prismaSchema = fs.readFileSync(prismaSchemaPath, 'utf8');
 
-      // Extract table/model names
-      const drizzleTables = extractDrizzleEntities(drizzleSchema);
-      const prismaModels = extractPrismaEntities(prismaSchema);
+      const prismaUserId = extractPrismaModelField(prismaSchema, 'User', 'id');
+      // Prisma: id String @id ... @db.Uuid
+      expect(prismaUserId).toContain('String');
+      expect(prismaUserId).toContain('@db.Uuid');
 
-      // Both schemas should be used or one should be removed
-      const hasUsage = checkSchemaUsage(drizzleTables, prismaModels, projectRoot);
-      
-      expect(hasUsage).toBe(true);
+      // Drizzle: developers.user_id is stored as text (UUID string).
+      expect(drizzleSchema).toMatch(/developers\s*=\s*sqliteTable\(\s*'developers'[\s\S]*user_id:\s*text\('user_id'\)\.notNull\(\)\.unique\(\)/);
     });
   });
 
   describe('Runtime Usage Consistency', () => {
-    it('should not import unused ORM clients', () => {
+    it('should align runtime ORM usage with the documented ownership boundary', () => {
       const srcDir = path.join(projectRoot, 'src');
       
       // Check for Prisma imports
@@ -84,14 +106,14 @@ describe('Schema Drift Audit', () => {
       // Check for Drizzle imports  
       const drizzleImports = findFileImports(srcDir, ['drizzle-orm']);
       
-      // If both are imported, both should be used
-      if (prismaImports.length > 0 && drizzleImports.length > 0) {
-        // This indicates potential drift - both ORMs being used
-        console.warn('WARNING: Both Prisma and Drizzle are imported. Consider consolidating to one ORM.');
-      }
+      // This repo intentionally uses both systems (SQLite+Drizzle for dashboard entities,
+      // Prisma+Postgres for users). The drift protection is enforced by the ownership
+      // tests above, not by prohibiting either import.
+      expect(drizzleImports.length).toBeGreaterThan(0);
+      expect(prismaImports.length).toBeGreaterThan(0);
     });
 
-    it('should have consistent database connection patterns', () => {
+    it('should have explicit database connection patterns (no accidental extra clients)', () => {
       const dbIndexPath = path.join(projectRoot, 'src/db/index.ts');
       const dbTsPath = path.join(projectRoot, 'src/db.ts');
       const prismaLibPath = path.join(projectRoot, 'src/lib/prisma.ts');
@@ -115,29 +137,42 @@ describe('Schema Drift Audit', () => {
         if (content.includes('PrismaClient')) connections.push('prisma');
       }
 
-      // Multiple connection patterns indicate drift
-      if (connections.length > 1) {
-        console.warn(`WARNING: Multiple database connection patterns detected: ${connections.join(', ')}`);
-      }
+      // By design, we expect these connection patterns to exist in this repo.
+      // This assertion prevents new/accidental clients from being introduced silently.
+      expect(new Set(connections)).toEqual(new Set(['drizzle', 'sqlite', 'postgresql', 'prisma']));
     });
   });
 
   describe('Migration Consistency', () => {
-    it('should have matching migrations with schema definitions', () => {
-      const migrationsDir = path.join(projectRoot, 'migrations');
-      
-      if (fs.existsSync(migrationsDir)) {
-        const migrationFiles = fs.readdirSync(migrationsDir)
-          .filter(file => file.endsWith('.sql'));
-        
-        // Check if migrations reference the correct tables
-        const drizzleSchema = fs.readFileSync(drizzleSchemaPath, 'utf8');
-        const drizzleTables = extractDrizzleEntities(drizzleSchema);
-        
-        // At minimum, migrations should exist for the main entities
-        if (drizzleTables.length > 0 && migrationFiles.length === 0) {
-          console.warn('WARNING: Schema tables exist but no migrations found');
+    it('should have SQLite migrations that only create expected owned tables', () => {
+      if (!fs.existsSync(sqliteMigrationsDir)) {
+        // Repository can still be valid without migrations in some test contexts.
+        return;
+      }
+
+      const drizzleSchema = fs.readFileSync(drizzleSchemaPath, 'utf8');
+      const drizzleTables = new Set(extractDrizzleTableNames(drizzleSchema));
+
+      const migrationFiles = fs
+        .readdirSync(sqliteMigrationsDir)
+        .filter((file) => file.endsWith('.sql'));
+
+      // Defensive: if we have schema tables, we expect some migrations present.
+      expect(migrationFiles.length).toBeGreaterThan(0);
+
+      const createdTables = new Set<string>();
+      for (const file of migrationFiles) {
+        const sql = fs.readFileSync(path.join(sqliteMigrationsDir, file), 'utf8');
+        for (const table of extractSqliteCreatedTableNames(sql)) {
+          createdTables.add(table);
         }
+      }
+
+      // All "owned" SQLite migrations must create only tables that are explicitly
+      // owned by Drizzle+SQLite and represented in the Drizzle schema.
+      for (const table of createdTables) {
+        expect(OWNERSHIP.sqliteMigrationsOwnedTables.has(table)).toBe(true);
+        expect(drizzleTables.has(table)).toBe(true);
       }
     });
   });
@@ -150,8 +185,8 @@ describe('Schema Drift Audit', () => {
       const typeExports = drizzleSchema.match(/export type \w+/g) || [];
       
       // Types should be exported for all main entities
-      const entities = extractDrizzleEntities(drizzleSchema);
-      const expectedTypeExports = entities.map(entity => `export type ${entity}`);
+      const entities = extractDrizzleEntityConstNames(drizzleSchema);
+      const expectedTypeExports = entities.map((entity) => `export type ${entity}`);
       
       // Ensure type consistency
       expect(typeExports.length).toBeGreaterThanOrEqual(entities.length);
@@ -161,7 +196,7 @@ describe('Schema Drift Audit', () => {
 
 // Helper functions for schema analysis
 
-function extractDrizzleEntities(schema: string): string[] {
+function extractDrizzleEntityConstNames(schema: string): string[] {
   const entities: string[] = [];
   const tableMatches = schema.match(/export const \w+ = sqliteTable/g) || [];
   
@@ -175,54 +210,51 @@ function extractDrizzleEntities(schema: string): string[] {
   return entities;
 }
 
-function extractPrismaEntities(schema: string): string[] {
-  const entities: string[] = [];
-  const modelMatches = schema.match(/model \w+ \{/g) || [];
-  
-  for (const match of modelMatches) {
-    const entityName = match.match(/model (\w+) \{/)?.[1];
-    if (entityName) {
-      entities.push(entityName);
-    }
+function extractDrizzleTableNames(schema: string): string[] {
+  const tables: string[] = [];
+  const matches = schema.match(/sqliteTable\(\s*'[^']+'\s*,/g) || [];
+  for (const match of matches) {
+    const tableName = match.match(/sqliteTable\(\s*'([^']+)'\s*,/)?.[1];
+    if (tableName) tables.push(tableName);
   }
-  
-  return entities;
+  return tables;
 }
 
-function findCommonEntities(drizzleEntities: string[], prismaEntities: string[]): string[] {
-  return drizzleEntities.filter(entity => 
-    prismaEntities.some(pEntity => 
-      entity.toLowerCase() === pEntity.toLowerCase()
-    )
-  );
+function extractPrismaMappedTableNames(schema: string): string[] {
+  // We intentionally only treat models with an explicit @@map("table") as "owned",
+  // so renames and mapping decisions are visible and testable.
+  const mapped: string[] = [];
+  const modelBlocks = schema.match(/model\s+\w+\s+\{[\s\S]*?\n\}/g) || [];
+  for (const block of modelBlocks) {
+    const map = block.match(/@@map\("([^"]+)"\)/)?.[1];
+    if (map) mapped.push(map);
+  }
+  return mapped;
 }
 
-function checkSchemaUsage(drizzleTables: string[], prismaModels: string[], projectRoot: string): boolean {
-  const srcDir = path.join(projectRoot, 'src');
-  
-  // Check if schemas are actually used in the codebase
-  let drizzleUsed = false;
-  let prismaUsed = false;
-  
-  // Simple usage check - look for imports and references
-  const files = getAllTsFiles(srcDir);
-  
-  for (const file of files) {
-    const content = fs.readFileSync(file, 'utf8');
-    
-    // Check Drizzle usage
-    if (content.includes('from \'./db/schema.js\'') || content.includes('from \'./db/index.js\'')) {
-      drizzleUsed = true;
-    }
-    
-    // Check Prisma usage  
-    if (content.includes('PrismaClient') || content.includes('from \'../lib/prisma.js\'')) {
-      prismaUsed = true;
-    }
+function extractPrismaModelField(schema: string, modelName: string, fieldName: string): string {
+  const block = schema.match(new RegExp(`model\\s+${modelName}\\s+\\{[\\s\\S]*?\\n\\}`, 'm'))?.[0];
+  if (!block) {
+    throw new Error(`Prisma schema missing model ${modelName}`);
   }
-  
-  // At least one schema should be used
-  return drizzleUsed || prismaUsed;
+  const line = block
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.startsWith(`${fieldName} `));
+  if (!line) {
+    throw new Error(`Prisma schema missing field ${modelName}.${fieldName}`);
+  }
+  return line;
+}
+
+function extractSqliteCreatedTableNames(sql: string): string[] {
+  const tables: string[] = [];
+  const matches = sql.match(/CREATE TABLE(?: IF NOT EXISTS)?\s+`[^`]+`/gi) || [];
+  for (const match of matches) {
+    const name = match.match(/CREATE TABLE(?: IF NOT EXISTS)?\s+`([^`]+)`/i)?.[1];
+    if (name) tables.push(name);
+  }
+  return tables;
 }
 
 function findFileImports(dir: string, imports: string[]): string[] {
