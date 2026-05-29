@@ -53,11 +53,28 @@ describe('GET /api/developers/revenue', () => {
     jest.clearAllMocks();
     mockSettlementStore.getDeveloperSettlements.mockReturnValue([]);
     mockUsageStore.getUnsettledEvents.mockReturnValue([]);
+    // Default: findByUserId returns a developer profile for 'dev-1'
+    mockDeveloperRepository.findByUserId.mockImplementation((userId: string) =>
+      userId === 'dev-1'
+        ? Promise.resolve(makeDeveloper({ user_id: 'dev-1' }))
+        : Promise.resolve(undefined),
+    );
   });
 
   it('returns 401 when unauthenticated', async () => {
     const res = await request(app).get('/api/developers/revenue');
     expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when the authenticated user has no developer profile', async () => {
+    mockDeveloperRepository.findByUserId.mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .get('/api/developers/revenue')
+      .set('x-user-id', 'no-profile-user');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('DEVELOPER_NOT_FOUND');
   });
 
   it('returns correct revenue summary and clamped limit', async () => {
@@ -83,6 +100,27 @@ describe('GET /api/developers/revenue', () => {
     expect(res.body.pagination.limit).toBe(100);
     expect(res.body.pagination.total).toBe(2);
     expect(res.body.settlements.length).toBe(2);
+  });
+
+  it('does not return settlements belonging to another developer', async () => {
+    // dev-1 is authenticated; settlements are scoped to dev-1 by the store
+    mockSettlementStore.getDeveloperSettlements.mockImplementation((devId: string) =>
+      devId === 'dev-1'
+        ? [{ id: 's1', developerId: 'dev-1', amount: 100, status: 'completed' }]
+        : [],
+    );
+    mockUsageStore.getUnsettledEvents.mockReturnValue([]);
+
+    const res = await request(app)
+      .get('/api/developers/revenue')
+      .set('x-user-id', 'dev-1');
+
+    expect(res.status).toBe(200);
+    // getDeveloperSettlements must be called with dev-1's user_id, not another id
+    expect(mockSettlementStore.getDeveloperSettlements).toHaveBeenCalledWith('dev-1');
+    expect(mockSettlementStore.getDeveloperSettlements).not.toHaveBeenCalledWith('other-dev');
+    expect(res.body.settlements).toHaveLength(1);
+    expect(res.body.settlements[0].developerId).toBe('dev-1');
   });
 });
 
