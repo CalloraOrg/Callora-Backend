@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
@@ -8,8 +8,21 @@ import {
   SettlementStore,
 } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
-import { UnauthorizedError } from '../errors/index.js';
+import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
+
+/**
+ * Wraps an async Express route handler so that any thrown error is forwarded
+ * to the next() error-handling middleware. Express 4 does not automatically
+ * catch rejected promises from async handlers.
+ */
+function asyncHandler(
+  fn: (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction) => Promise<void>,
+) {
+  return (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction): void => {
+    fn(req, res, next).catch(next);
+  };
+}
 
 export interface DeveloperRoutesDeps {
   settlementStore: SettlementStore;
@@ -56,7 +69,7 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
   router.get(
     '/me',
     requireAuth,
-    async (_req: Request, res: Response<unknown, AuthenticatedLocals>) => {
+    asyncHandler(async (_req, res) => {
       const user = res.locals.authenticatedUser;
       if (!user) {
         throw new UnauthorizedError();
@@ -64,14 +77,14 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
 
       const profile = await developerRepository.getOrCreateByUserId(user.id);
       res.json(profile);
-    },
+    }),
   );
 
   router.patch(
     '/me',
     requireAuth,
     validate({ body: developerProfilePatchSchema }),
-    async (req: Request, res: Response<unknown, AuthenticatedLocals>) => {
+    asyncHandler(async (req, res) => {
       const user = res.locals.authenticatedUser;
       if (!user) {
         throw new UnauthorizedError();
@@ -80,7 +93,7 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
       const body = developerProfilePatchSchema.parse(req.body);
       const profile = await developerRepository.upsertProfile(user.id, body);
       res.json(profile);
-    },
+    }),
   );
 
   /**
@@ -118,17 +131,34 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
    *   }
    * }
    */
-  router.get('/revenue', 
-    requireAuth, 
-    validate({ query: revenueQuerySchema }), 
-    async (req: Request, res: Response<unknown, AuthenticatedLocals>) => {
+  router.get(
+    '/revenue',
+    requireAuth,
+    validate({ query: revenueQuerySchema }),
+    asyncHandler(async (req, res) => {
+      // requireAuth guarantees this is set; guard is a type-safety belt
       const user = res.locals.authenticatedUser;
       if (!user) {
-        // Fallback for direct testing mock headers if they bypassed standard gateway structure but still need requireAuth defaults
-        if (!req.developerId) throw new UnauthorizedError();
-        req.developerId = req.developerId;
+        throw new UnauthorizedError();
       }
-      const developerId = user ? user.id : req.developerId!;
+
+      // Resolve the developer profile from the authenticated user.
+      // This is the single source of truth for ownership — the developer
+      // record must exist and must belong to the authenticated user.
+      const developer = await developerRepository.findByUserId(user.id);
+      if (!developer) {
+        // The authenticated user has no developer profile → they own nothing.
+        // Return 403 (not 404) to avoid leaking whether a resource exists.
+        throw new ForbiddenError(
+          'No developer profile found for this account',
+          'DEVELOPER_NOT_FOUND',
+        );
+      }
+
+      // Ownership is enforced: developer.user_id === user.id (guaranteed by
+      // findByUserId). All data queries below are scoped to this developer's
+      // user_id, preventing any cross-tenant data access.
+      const developerId = developer.user_id;
 
       const parsedQuery = revenueQuerySchema.parse(req.query);
       const limit = parsedQuery.limit;
@@ -138,38 +168,41 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
         offset = (parsedQuery.page - 1) * limit;
       }
 
-    // Fetch settlements
-    const allSettlements = await settlementStore.getDeveloperSettlements(developerId);
-    const settlements = allSettlements.slice(offset, offset + limit);
-    const total = allSettlements.length;
+      // Fetch settlements scoped to the verified developer
+      const allSettlements = await settlementStore.getDeveloperSettlements(developerId);
+      const settlements = allSettlements.slice(offset, offset + limit);
+      const total = allSettlements.length;
 
-    // Calculate aggregated revenue
-    const completedTotal = allSettlements
-      .filter((s) => s.status === 'completed')
-      .reduce((sum, s) => sum + s.amount, 0);
+      // Calculate aggregated revenue — only positive amounts count
+      const completedTotal = allSettlements
+        .filter((s) => s.status === 'completed' && s.amount > 0)
+        .reduce((sum, s) => sum + s.amount, 0);
 
-    const pendingTotal = allSettlements
-      .filter((s) => s.status === 'pending')
-      .reduce((sum, s) => sum + s.amount, 0);
+      const pendingTotal = allSettlements
+        .filter((s) => s.status === 'pending' && s.amount > 0)
+        .reduce((sum, s) => sum + s.amount, 0);
 
-    // Get unsettled usage to calculate total earned
-    const unsettledEvents = (await usageStore.getUnsettledEvents()).filter((e) => e.userId === developerId);
-    const unsettledRevenue = unsettledEvents.reduce((sum, e) => sum + e.amountUsdc, 0);
+      // Unsettled usage events scoped to the verified developer
+      const unsettledEvents = (await usageStore.getUnsettledEvents()).filter(
+        (e) => e.userId === developerId && e.amountUsdc > 0,
+      );
+      const unsettledRevenue = unsettledEvents.reduce((sum, e) => sum + e.amountUsdc, 0);
 
-    const totalEarned = completedTotal + unsettledRevenue + pendingTotal;
+      const totalEarned = completedTotal + unsettledRevenue + pendingTotal;
 
-    const body: DeveloperRevenueResponse = {
-      summary: {
-        total_earned: totalEarned,
-        pending: pendingTotal,
-        available_to_withdraw: unsettledRevenue,
-      },
-      settlements,
-      pagination: { limit, offset, total },
-    };
+      const body: DeveloperRevenueResponse = {
+        summary: {
+          total_earned: totalEarned,
+          pending: pendingTotal,
+          available_to_withdraw: unsettledRevenue,
+        },
+        settlements,
+        pagination: { limit, offset, total },
+      };
 
-    res.json(body);
-  });
+      res.json(body);
+    }),
+  );
 
   return router;
 }

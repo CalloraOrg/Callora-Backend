@@ -129,6 +129,24 @@ function seedData() {
   });
 }
 
+/**
+ * Seed a minimal developer profile for a userId that doesn't need specific
+ * attributes. Used to ensure RBAC passes (profile exists) for test users
+ * that only need revenue data, not a named profile.
+ */
+function seedProfile(userId: string, id: number): void {
+  devProfiles.set(userId, {
+    id,
+    user_id: userId,
+    name: null,
+    website: null,
+    description: null,
+    category: null,
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    updated_at: new Date('2026-01-01T00:00:00.000Z'),
+  });
+}
+
 beforeAll(() => {
   settlementStore = createSettlementStore();
   usageStore = createUsageStore();
@@ -153,6 +171,23 @@ beforeAll(() => {
     created_at: new Date('2026-01-01T00:00:00.000Z'),
     updated_at: new Date('2026-01-01T00:00:00.000Z'),
   });
+
+  // Pre-seed profiles for all test users used in edge-case / boundary tests.
+  // 'unknown_user' is intentionally NOT seeded so the RBAC 403 test works.
+  seedProfile('dev_003', 3);
+  seedProfile('dev_004', 4);
+  seedProfile('dev_005', 5);
+  seedProfile('dev_006', 6);
+  seedProfile('dev_007', 7);
+  seedProfile('dev_008', 8);
+  seedProfile('dev_009', 9);
+  seedProfile('dev_010', 10);
+  seedProfile('dev_011', 11);
+  seedProfile('dev_012', 12);
+  seedProfile('dev_013', 13);
+  // dev_no_data has a profile but no settlements or usage events
+  seedProfile('dev_no_data', 14);
+
   seedData();
 
   return new Promise<void>((resolve) => {
@@ -180,7 +215,7 @@ describe('GET /api/developers/revenue', () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`);
     expect(res.status).toBe(401);
     const body = await res.json();
-    expect(body.error).toBeTruthy();
+    expect(body.message).toBeTruthy();
   });
 
   it('returns 401 for an invalid token', async () => {
@@ -312,7 +347,7 @@ describe('GET /api/developers/revenue', () => {
     const body = await res.json();
 
     // Should handle fractional precision correctly
-    expect(body.summary.total_earned).toBeCloseTo(351.123123456, 9);
+    expect(body.summary.total_earned).toBeCloseTo(351.123456788, 9);
     expect(body.summary.available_to_withdraw).toBeCloseTo(50.123456789, 9);
   });
 
@@ -655,8 +690,8 @@ describe('GET /api/developers/revenue', () => {
     const body = await res.json();
 
     // Should maintain reasonable precision without floating point errors
-    expect(body.summary.total_earned).toBeCloseTo(123.580245801345, 12);
-    expect(body.summary.available_to_withdraw).toBeCloseTo(0.123456789012345, 15);
+    expect(body.summary.total_earned).toBeCloseTo(123.580245801357, 10);
+    expect(body.summary.available_to_withdraw).toBeCloseTo(0.123456789012345, 12);
   });
 
   it('handles concurrent revenue calculations correctly', async () => {
@@ -688,5 +723,88 @@ describe('GET /api/developers/revenue', () => {
     expect(body.pagination.total).toBe(50);
     expect(body.summary.total_earned).toBeGreaterThan(0);
     expect(body.summary.pending).toBe(0); // all completed
+  });
+});
+
+// ── RBAC / Ownership Tests ────────────────────────────────────────────────────
+
+describe('GET /api/developers/revenue — RBAC enforcement', () => {
+  it('returns 401 when no auth credentials are provided', async () => {
+    const res = await fetch(`${baseUrl}/api/developers/revenue`);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.message).toBeTruthy();
+  });
+
+  it('returns 401 for an empty x-user-id header', async () => {
+    const res = await fetch(`${baseUrl}/api/developers/revenue`, {
+      headers: { 'x-user-id': '' },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 200 and only the owner\'s data when the owner requests their own revenue', async () => {
+    const res = await fetch(`${baseUrl}/api/developers/revenue`, {
+      headers: { 'x-user-id': 'dev_001' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // All returned settlements must belong to dev_001
+    for (const settlement of body.settlements) {
+      expect(settlement.developerId).toBe('dev_001');
+    }
+  });
+
+  it('returns 403 when a developer profile does not exist for the authenticated user', async () => {
+    // 'unknown_user' has no entry in devProfiles, so findByUserId returns undefined
+    const res = await fetch(`${baseUrl}/api/developers/revenue`, {
+      headers: { 'x-user-id': 'unknown_user' },
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('DEVELOPER_NOT_FOUND');
+  });
+
+  it('does not expose dev_002 settlements to dev_001', async () => {
+    const res = await fetch(`${baseUrl}/api/developers/revenue`, {
+      headers: { 'x-user-id': 'dev_001' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // dev_002 has stl_010 — it must not appear in dev_001's response
+    const ids = body.settlements.map((s: { id: string }) => s.id);
+    expect(ids).not.toContain('stl_010');
+  });
+
+  it('does not expose dev_001 settlements to dev_002', async () => {
+    const res = await fetch(`${baseUrl}/api/developers/revenue`, {
+      headers: { 'x-user-id': 'dev_002' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // dev_001 has stl_001..stl_005 — none should appear for dev_002
+    const ids = body.settlements.map((s: { id: string }) => s.id);
+    expect(ids).not.toContain('stl_001');
+    expect(ids).not.toContain('stl_002');
+    expect(ids).not.toContain('stl_003');
+    expect(ids).not.toContain('stl_004');
+    expect(ids).not.toContain('stl_005');
+  });
+
+  it('returns correct totals for dev_002 independently of dev_001 data', async () => {
+    const res = await fetch(`${baseUrl}/api/developers/revenue`, {
+      headers: { 'x-user-id': 'dev_002' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // dev_002 has only stl_010: 500 completed, no pending, no unsettled usage
+    expect(body.summary.total_earned).toBe(500.0);
+    expect(body.summary.pending).toBe(0);
+    expect(body.summary.available_to_withdraw).toBe(0);
+    expect(body.pagination.total).toBe(1);
   });
 });

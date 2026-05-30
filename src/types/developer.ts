@@ -1,4 +1,11 @@
 import type { Awaitable } from './awaitable.js';
+import type { Developer } from '../db/schema.js';
+
+/**
+ * Alias for the Developer DB type, used throughout the application
+ * to represent a developer's profile record.
+ */
+export type DeveloperProfile = Developer;
 
 export const developerCategoryEnum = [
   'analytics',
