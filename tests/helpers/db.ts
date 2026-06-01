@@ -26,9 +26,16 @@ export function createTestDb() {
       user_id UUID REFERENCES users(id),
       api_id TEXT NOT NULL,
       key_hash TEXT NOT NULL,
+      prefix VARCHAR(16),
       revoked BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    -- Partial unique index: only active (non-revoked) keys must have unique prefixes.
+    -- Revoked keys are excluded so a prefix can be reused after revocation.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_api_keys_prefix_active
+      ON api_keys (prefix)
+      WHERE revoked = FALSE;
 
     CREATE TABLE IF NOT EXISTS usage_logs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

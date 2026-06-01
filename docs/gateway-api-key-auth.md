@@ -71,3 +71,16 @@ The database-backed middleware supports:
 To support revocation in environments that do not yet have the column, apply:
 
 - `migrations/0005_add_api_key_revocation.sql`
+
+### Prefix uniqueness guarantee
+
+Migration `0006_api_key_prefix_unique.sql` adds a **partial unique index** on
+`api_keys (prefix) WHERE revoked = FALSE`.  This guarantees that the
+prefix-based lookup in step 3 of the validation flow always returns at most one
+active candidate, eliminating any ambiguity before the full hash comparison.
+
+Revoked keys are excluded from the index so a prefix can be legitimately reused
+after a key is revoked (e.g. after rotation).
+
+Constraint regression tests live in:
+`src/repositories/apiKeyRepository.prefix.test.ts`
