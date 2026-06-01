@@ -1,12 +1,17 @@
 import { Router } from 'express';
 import type { RequestHandler } from 'express';
+import { readFileSync } from 'fs';
+import path from 'path';
 
-import apisRouter from './apis.js';
 import billingRouter from './billing.js';
 import healthRouter from './health.js';
-import usageRouter from './usage.js';
+import { createApisRouter, type ApisRouterDeps } from './apis.js';
+import { createUsageRouter, type UsageRouterDeps } from './usage.js';
 
-export interface ApiRouterDeps extends UsageRouterDeps, ApisRouterDeps {
+const openApiPath = path.join(process.cwd(), 'docs/openapi.json');
+const openApiSpec = JSON.parse(readFileSync(openApiPath, 'utf8'));
+
+export interface ApiRouterDeps extends Partial<UsageRouterDeps>, Partial<ApisRouterDeps> {
   restRateLimit?: RequestHandler;
 }
 
@@ -21,7 +26,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   }));
 
   router.use('/usage', createUsageRouter({
-    usageEventsRepository: deps.usageEventsRepository
+    usageEventsRepository: deps.usageEventsRepository!
   }));
 
   if (deps.restRateLimit) {
@@ -29,6 +34,12 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   } else {
     router.use('/billing', billingRouter);
   }
+
+  // Serve OpenAPI 3.1 JSON contract
+  router.get('/openapi.json', (_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.json(openApiSpec);
+  });
 
   return router;
 }

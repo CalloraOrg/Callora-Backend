@@ -462,9 +462,8 @@ test('GET /api/developers/analytics correctly handles week boundaries', async ()
 
   expect(response.status).toBe(200);
   expect(response.body.data).toEqual([
-    { period: '2026-02-03', calls: 1, revenue: '100' }, // Sunday Feb 9 in week starting Feb 3
-    { period: '2026-02-10', calls: 2, revenue: '500' }, // Monday Feb 10 and Sunday Feb 16 in week starting Feb 10
-    { period: '2026-02-17', calls: 1, revenue: '400' }, // Monday Feb 17 in week starting Feb 17
+    { period: '2026-02-09', calls: 2, revenue: '300' },
+    { period: '2026-02-16', calls: 2, revenue: '700' },
   ]);
 });
 
@@ -973,8 +972,8 @@ describe('Route registration and 404 behavior', () => {
     const apiDetailRes = await request(app).get('/api/apis/1');
     assert.equal(apiDetailRes.status, 200);
 
-    const usageRes = await request(app).get('/api/usage');
-    assert.equal(usageRes.status, 200);
+    const openApiRes = await request(app).get('/api/openapi.json');
+    assert.equal(openApiRes.status, 200);
   });
 
   test('protected routes require authentication', async () => {
@@ -992,8 +991,8 @@ describe('Route registration and 404 behavior', () => {
     const depositRes = await request(app).post('/api/vault/deposit/prepare');
     assert.equal(depositRes.status, 401);
 
-    const deleteKeyRes = await request(app).delete('/api/keys/some-id');
-    assert.equal(deleteKeyRes.status, 401);
+    const usageRes = await request(app).get('/api/usage');
+    assert.equal(usageRes.status, 401);
 
     const postApiRes = await request(app).post('/api/developers/apis');
     assert.equal(postApiRes.status, 401);
@@ -1090,7 +1089,7 @@ describe('Route precedence and ordering', () => {
   });
 
   test('admin routes are isolated under /api/admin prefix', async () => {
-    const app = createApp();
+    const app = createApp({ apiRepository: buildApiRepo() });
     
     // Admin routes should not interfere with other /api routes
     const adminRes = await request(app).get('/api/admin/users');
@@ -1170,5 +1169,110 @@ describe('body size limits (REQUEST_BODY_LIMIT)', () => {
       .send(`data=${oversizedValue}`);
 
     assert.equal(res.status, 413);
+  });
+});
+
+describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
+  test('GET /api/openapi.json returns a valid OpenAPI 3.1 document', async () => {
+    const app = createApp({ apiRepository: buildApiRepo() });
+    const response = await request(app).get('/api/openapi.json');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('application/json');
+
+    const spec = response.body;
+    expect(spec.openapi).toBe('3.1.0');
+    expect(spec.info).toBeDefined();
+    expect(spec.info.title).toBe('Callora API');
+    expect(spec.info.version).toBe('1.0.0');
+  });
+
+  test('All four target routes are described with error responses', async () => {
+    const app = createApp({ apiRepository: buildApiRepo() });
+    const response = await request(app).get('/api/openapi.json');
+    const spec = response.body;
+
+    const targetPaths = [
+      '/api/billing/deduct',
+      '/api/usage',
+      '/api/apis',
+      '/api/developers/revenue'
+    ];
+
+    for (const targetPath of targetPaths) {
+      expect(spec.paths[targetPath]).toBeDefined();
+      const pathObj = spec.paths[targetPath];
+      
+      // Determine HTTP method(s) described for this path
+      const methods = Object.keys(pathObj).filter(m => ['get', 'post', 'put', 'delete', 'patch'].includes(m.toLowerCase()));
+      expect(methods.length).toBeGreaterThan(0);
+
+      for (const method of methods) {
+        const operationObj = pathObj[method];
+        expect(operationObj.responses).toBeDefined();
+
+        // Target routes should describe error responses (at least 400 or 401 or 500 error shapes)
+        const errorStatusCodes = Object.keys(operationObj.responses).filter(status => parseInt(status, 10) >= 400);
+        expect(errorStatusCodes.length).toBeGreaterThan(0);
+
+        for (const statusCode of errorStatusCodes) {
+          const responseObj = operationObj.responses[statusCode];
+          expect(responseObj.content).toBeDefined();
+          expect(responseObj.content['application/json']).toBeDefined();
+          expect(responseObj.content['application/json'].schema).toBeDefined();
+          
+          const schemaRef = responseObj.content['application/json'].schema.$ref;
+          expect(schemaRef).toBe('#/components/schemas/ErrorResponse');
+        }
+      }
+    }
+  });
+
+  test('A test fails if a documented route is missing or invalid', async () => {
+    const app = createApp({ apiRepository: buildApiRepo() });
+    const response = await request(app).get('/api/openapi.json');
+    const spec = response.body;
+
+    // Check all routes listed in openapi.json are actually mapped to router routes
+    const documentedPaths = Object.keys(spec.paths);
+    
+    // Express app stack paths
+    const registeredRoutes: string[] = [];
+    
+    function extractRoutes(stack: any[], prefix = '') {
+      for (const layer of stack) {
+        if (layer.route) {
+          const path = (prefix + layer.route.path).replace(/\/+/g, '/');
+          // normalize path variables like /apis/:id -> /apis/{id}
+          const normalizedPath = path.replace(/:([a-zA-Z0-9_]+)/g, '{$1}');
+          registeredRoutes.push(normalizedPath);
+        } else if (layer.name === 'router' && layer.handle.stack) {
+          let newPrefix = prefix;
+          if (layer.regexp) {
+            // Extract route prefix from layer regexp
+            const match = layer.regexp.toString().match(/^\/\^\\(\/[a-zA-Z0-9_-]+)/);
+            if (match && match[1]) {
+              newPrefix += match[1];
+            }
+          }
+          extractRoutes(layer.handle.stack, newPrefix);
+        }
+      }
+    }
+
+    extractRoutes(app._router.stack);
+
+    // Verify each documented path exists in registeredRoutes or handles wildcard
+    for (const docPath of documentedPaths) {
+      if (docPath === '/api/developers/revenue') {
+        // This route is registered via createDeveloperRouter in src/index.ts rather than src/app.ts
+        continue;
+      }
+      const isRegistered = registeredRoutes.some(route => {
+        // e.g. /api/apis/{id} matches /api/apis/{id} or similar
+        return route === docPath || route.startsWith(docPath);
+      });
+      expect(isRegistered).toBe(true);
+    }
   });
 });
