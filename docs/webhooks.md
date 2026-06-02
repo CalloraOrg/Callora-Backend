@@ -86,20 +86,96 @@ Internal/private IP addresses are blocked. The following ranges are rejected:
 `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `127.x.x.x`, `169.254.x.x`, etc.
 
 ### Signature Verification
-If you provide a `secret` during registration, each POST includes:
+
+If you provide a `secret` during registration, each webhook delivery includes two headers:
+
+| Header                      | Format              | Description                           |
+|-----------------------------|---------------------|---------------------------------------|
+| `X-Callora-Signature-256`   | `sha256=<hex>`      | HMAC-SHA256 of signed payload         |
+| `X-Callora-Timestamp`       | ISO-8601 timestamp  | Delivery timestamp for replay defense |
+
+#### Signed Payload Format
+
+The signed payload combines the timestamp and raw request body:
+
 ```
-X-Callora-Signature: sha256=<HMAC-SHA256 of raw JSON body>
+<timestamp>.<rawBody>
 ```
 
-Verify it on your server:
+For example, if the timestamp is `2026-05-31T10:00:00.000Z` and body is `{"event":"new_api_call"}`:
+
+```
+2026-05-31T10:00:00.000Z.{"event":"new_api_call"}
+```
+
+#### Verification Steps
+
+1. **Extract headers** — Get `X-Callora-Signature-256` and `X-Callora-Timestamp`
+2. **Reconstruct payload** — Combine `<timestamp>.<rawBody>`
+3. **Compute expected signature** — HMAC-SHA256 with your secret
+4. **Timing-safe comparison** — Compare using constant-time method
+5. **Check timestamp** — Reject if outside 5-minute tolerance window (replay protection)
+
+#### Example Implementation
+
 ```typescript
 import crypto from 'crypto';
 
-function verifySignature(secret: string, rawBody: string, signature: string): boolean {
-  const expected = `sha256=${crypto.createHmac('sha256', secret).update(rawBody).digest('hex')}`;
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+function verifyWebhookSignature(
+  secret: string,
+  rawBody: string,
+  signatureHeader: string,
+  timestampHeader: string
+): { valid: boolean; error?: string } {
+  // 1. Validate timestamp format and freshness
+  const deliveryTime = Date.parse(timestampHeader);
+  if (Number.isNaN(deliveryTime)) {
+    return { valid: false, error: 'Invalid timestamp format' };
+  }
+
+  const TOLERANCE_MS = 5 * 60 * 1000; // 5 minutes
+  if (Math.abs(Date.now() - deliveryTime) > TOLERANCE_MS) {
+    return { valid: false, error: 'Timestamp outside tolerance window (replay attack?)' };
+  }
+
+  // 2. Reconstruct the signed payload
+  const signedPayload = `${timestampHeader}.${rawBody}`;
+
+  // 3. Compute expected signature
+  const expectedHex = crypto
+    .createHmac('sha256', secret)
+    .update(signedPayload)
+    .digest('hex');
+  const expected = `sha256=${expectedHex}`;
+
+  // 4. Extract received hex from "sha256=<hex>"
+  const parts = signatureHeader.split('=');
+  if (parts.length !== 2 || parts[0] !== 'sha256') {
+    return { valid: false, error: 'Malformed signature header' };
+  }
+
+  // 5. Timing-safe comparison
+  try {
+    const match = crypto.timingSafeEqual(
+      Buffer.from(expected),
+      Buffer.from(signatureHeader)
+    );
+    return { valid: match };
+  } catch {
+    return { valid: false, error: 'Signature verification failed' };
+  }
 }
 ```
+
+#### Testing
+
+You can test signature verification locally:
+
+```bash
+npm test -- src/webhooks/webhook.signature.test.ts
+```
+
+Minimum test coverage requirement: **90%**
 
 ---
 
