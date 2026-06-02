@@ -42,6 +42,44 @@ export interface SorobanDeductResponse {
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
+/**
+ * Stable error categories for Soroban RPC failures.
+ * - INSUFFICIENT_BALANCE: on-chain balance too low → 402
+ * - TIMEOUT: request timed out → 504
+ * - CONTRACT_ERROR: contract rejected the call → 502
+ * - NETWORK_ERROR: transport / HTTP failure → 502
+ */
+export type SorobanRpcErrorCategory =
+  | 'INSUFFICIENT_BALANCE'
+  | 'TIMEOUT'
+  | 'CONTRACT_ERROR'
+  | 'NETWORK_ERROR';
+
+export class SorobanRpcError extends Error {
+  public readonly category: SorobanRpcErrorCategory;
+
+  constructor(message: string, category: SorobanRpcErrorCategory) {
+    super(message);
+    this.name = 'SorobanRpcError';
+    this.category = category;
+    Object.setPrototypeOf(this, SorobanRpcError.prototype);
+  }
+}
+
+function classifyError(message: string): SorobanRpcErrorCategory {
+  const lower = message.toLowerCase();
+  if (lower.includes('insufficient balance') || lower.includes('insufficient funds')) {
+    return 'INSUFFICIENT_BALANCE';
+  }
+  if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('aborted')) {
+    return 'TIMEOUT';
+  }
+  if (lower.includes('contract') || lower.includes('simulation failed') || lower.includes('wasm')) {
+    return 'CONTRACT_ERROR';
+  }
+  return 'NETWORK_ERROR';
+}
+
 function extractErrorMessage(error: unknown, depth = 0): string | undefined {
   if (depth > 4 || error === null || error === undefined) {
     return undefined;
@@ -274,23 +312,30 @@ export class SorobanRpcBillingClient {
       });
 
       if (!response.ok) {
-        throw new Error(`Soroban RPC request failed: HTTP ${response.status}`);
+        const message = `Soroban RPC request failed: HTTP ${response.status}`;
+        throw new SorobanRpcError(message, 'NETWORK_ERROR');
       }
 
       const payload = await response.json() as Record<string, unknown>;
       const simulationError = extractSimulationError(payload);
       if (simulationError) {
-        throw new Error(normalizeSorobanBillingError(simulationError, 'Simulation failed'));
+        const message = normalizeSorobanBillingError(simulationError, 'Simulation failed');
+        throw new SorobanRpcError(message, classifyError(message));
       }
 
       const result = extractRpcResult(payload);
       if (!result) {
-        throw new Error('Missing result in Soroban RPC response');
+        throw new SorobanRpcError('Missing result in Soroban RPC response', 'NETWORK_ERROR');
       }
 
       return result;
     } catch (error) {
-      throw new Error(normalizeSorobanBillingError(error, 'Soroban RPC request failed'));
+      // Re-throw SorobanRpcError as-is so the category is preserved
+      if (error instanceof SorobanRpcError) {
+        throw error;
+      }
+      const message = normalizeSorobanBillingError(error, 'Soroban RPC request failed');
+      throw new SorobanRpcError(message, classifyError(message));
     } finally {
       clearTimeout(timeout);
     }

@@ -3,7 +3,9 @@ import type { NextFunction, Request, Response } from 'express';
 import type { Pool } from 'pg';
 
 import {
+  BadGatewayError,
   BadRequestError,
+  GatewayTimeoutError,
   InternalServerError,
   NotFoundError,
   PaymentRequiredError,
@@ -12,7 +14,7 @@ import {
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { BillingService } from '../services/billing.js';
-import { createSorobanRpcBillingClient } from '../services/sorobanBilling.js';
+import { createSorobanRpcBillingClient, SorobanRpcError } from '../services/sorobanBilling.js';
 
 const router = Router();
 
@@ -115,11 +117,19 @@ router.post(
 
       if (!result.success) {
         const message = result.error ?? 'Billing deduction failed';
-        if (message.toLowerCase().includes('insufficient balance')) {
-          next(new PaymentRequiredError('Billing deduction failed', 'BILLING_DEDUCTION_FAILED'));
+        const lower = message.toLowerCase();
+        if (lower.includes('insufficient balance') || lower.includes('insufficient funds')) {
+          next(new PaymentRequiredError(message, 'INSUFFICIENT_BALANCE'));
           return;
         }
-
+        if (lower.includes('timeout') || lower.includes('timed out')) {
+          next(new GatewayTimeoutError(message, 'SOROBAN_RPC_TIMEOUT'));
+          return;
+        }
+        if (lower.includes('balance check failed') || lower.includes('contract') || lower.includes('network')) {
+          next(new BadGatewayError(message, 'SOROBAN_RPC_ERROR'));
+          return;
+        }
         next(new InternalServerError('Billing deduction failed', 'BILLING_DEDUCTION_FAILED'));
         return;
       }
@@ -131,6 +141,20 @@ router.post(
         alreadyProcessed: result.alreadyProcessed,
       });
     } catch (error) {
+      if (error instanceof SorobanRpcError) {
+        switch (error.category) {
+          case 'INSUFFICIENT_BALANCE':
+            next(new PaymentRequiredError(error.message, 'INSUFFICIENT_BALANCE'));
+            return;
+          case 'TIMEOUT':
+            next(new GatewayTimeoutError(error.message, 'SOROBAN_RPC_TIMEOUT'));
+            return;
+          case 'CONTRACT_ERROR':
+          case 'NETWORK_ERROR':
+            next(new BadGatewayError(error.message, 'SOROBAN_RPC_ERROR'));
+            return;
+        }
+      }
       next(error);
     }
   }
