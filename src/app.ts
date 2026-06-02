@@ -51,6 +51,7 @@ import {
 } from './errors/index.js';
 import { apiKeyRepository } from './repositories/apiKeyRepository.js';
 import { apiRegistrationSchema } from './validators/apiRegistration.js';
+import { stellarNetworkQuerySchema } from './validators/networkSchema.js';
 
 interface AppDependencies {
   usageEventsRepository?: UsageEventsRepository;
