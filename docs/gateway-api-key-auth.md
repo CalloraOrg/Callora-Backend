@@ -14,17 +14,17 @@ Authorization: Bearer <api_key>
 X-Api-Key: <api_key>
 ```
 
-If both are present, a valid bearer token is preferred. A malformed `Authorization` header returns `401`.
+`X-Api-Key` is read first. If it is absent, the middleware parses `Authorization: Bearer <api_key>`. A malformed `Authorization` header returns `401` only when `X-Api-Key` is not present.
 
 ## Validation flow
 
 For each gateway request, the middleware:
 
-1. Extracts the presented API key from `Authorization` or `X-Api-Key`.
+1. Extracts the presented API key from `X-Api-Key`, or from `Authorization: Bearer <api_key>` when `X-Api-Key` is absent.
 2. Derives the key prefix from the first 16 characters.
 3. Looks up candidate key records by prefix.
 4. Verifies the full key using a timing-safe hash comparison.
-5. Rejects revoked keys with `401 Unauthorized`.
+5. Rejects revoked keys with `403 Forbidden`.
 6. Resolves and attaches:
    - `req.user`
    - `req.vault`
@@ -43,8 +43,11 @@ The middleware returns clear `401` responses for common auth failures:
 - `Unauthorized: malformed Authorization header`
 - `Unauthorized: API key not found`
 - `Unauthorized: invalid API key`
-- `Unauthorized: API key has been revoked`
 - `Unauthorized: API key does not grant access to this API`
+
+If the API key has been revoked, it returns `403 Forbidden` with this message:
+
+- `Unauthorized: API key has been revoked`
 
 If the target API cannot be resolved, it returns:
 

@@ -265,8 +265,10 @@ Application errors are returned through the shared Express `errorHandler` using 
 
 - `code` is a stable machine-readable error code.
 - `message` is the user-facing error message.
-- `requestId` matches the `X-Request-Id` response header for tracing.
+- `requestId` is the tracing id available to the error handler. When no request id is attached to the Express request, the handler returns `"unknown"`.
 - `details` is included for validation failures and contains field paths such as `body.endpoints[0].path` or `query.network`.
+
+For the complete gateway/proxy and billing error-code reference, including `502`/`504` derivation and Soroban billing mappings, see [docs/error-codes.md](./docs/error-codes.md).
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
