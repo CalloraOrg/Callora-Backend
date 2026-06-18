@@ -202,3 +202,20 @@ After 5 failures, the event is dropped and logged server-side.
 | POST   | `/api/webhooks`                   | Register webhook         |
 | GET    | `/api/webhooks/:developerId`      | View current webhook     |
 | DELETE | `/api/webhooks/:developerId`      | Remove webhook           |
+
+---
+
+## Rate Limiting
+
+The webhook management endpoints (`POST /`, `GET /:developerId`, `DELETE /:developerId`) are
+protected by an IP-based rate limiter. The signed inbound delivery route
+(`POST /deliver/:developerId`) is **not** rate-limited here because it is
+protected independently by HMAC signature verification.
+
+| Env variable                      | Default (fallback)                    | Description                          |
+|-----------------------------------|---------------------------------------|--------------------------------------|
+| `WEBHOOK_RATE_LIMIT_WINDOW_MS`    | `REST_RATE_LIMIT_WINDOW_MS` (60 000)  | Window length in milliseconds        |
+| `WEBHOOK_RATE_LIMIT_MAX_REQUESTS` | `REST_RATE_LIMIT_MAX_REQUESTS` (100)  | Max requests per IP per window       |
+
+When the limit is exceeded, the server responds with **HTTP 429** and a
+`Retry-After` header indicating how many seconds to wait before retrying.

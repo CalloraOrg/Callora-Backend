@@ -9,6 +9,7 @@ import { dispatchWebhook } from '../../src/webhooks/webhook.dispatcher.js';
 import { WebhookEventType } from '../../src/webhooks/webhook.types.js';
 import { requestIdMiddleware } from '../../src/middleware/requestId.js';
 import { errorHandler } from '../../src/middleware/errorHandler.js';
+import { InMemoryRestRateLimiter, createRestRateLimitMiddleware } from '../../src/middleware/restRateLimit.js';
 
 // Mock the logger to avoid console output in tests
 // Must use `var` so the variable is hoisted with the jest.mock() call (same as mockDnsLookup below)
@@ -22,6 +23,7 @@ var mockLogger = {
 
 jest.mock('../../src/logger.js', () => ({
   logger: mockLogger,
+  runWithRequestContext: <T>(_ctx: unknown, callback: () => T): T => callback(),
 }));
 
 // Mock DNS resolution for URL validation tests
@@ -30,15 +32,32 @@ jest.mock('../../src/logger.js', () => ({
 // temporal dead zone when Jest runs the factory at module load time.
 // eslint-disable-next-line no-var
 var mockDnsLookup = jest.fn();
-jest.mock('dns/promises', () => ({
-  lookup: mockDnsLookup,
-}));
+jest.mock('dns/promises', () => {
+  // Access mockDnsLookup lazily so the jest.fn() assignment has run by the time
+  // any module requires dns/promises (factory is called lazily, not at hoist time).
+  const lookupFn = (...args: unknown[]) => mockDnsLookup(...args);
+  return { __esModule: true, default: { lookup: lookupFn }, lookup: lookupFn };
+});
 
 function buildWebhookApp() {
   const app = express();
   app.use(requestIdMiddleware);
   app.use(express.json());
   app.use('/api/webhooks', webhookRoutes);
+  app.use(errorHandler);
+  return app;
+}
+
+/**
+ * Builds a test app with an external InMemoryRestRateLimiter scoped to the
+ * webhook router, used to verify 429/Retry-After behaviour.
+ */
+function buildWebhookAppWithRateLimit(windowMs: number, maxRequests: number) {
+  const limiter = new InMemoryRestRateLimiter(windowMs, maxRequests);
+  const rateLimitMiddleware = createRestRateLimitMiddleware({ windowMs, maxRequests }, limiter);
+  const app = express();
+  app.use(requestIdMiddleware);
+  app.use('/api/webhooks', rateLimitMiddleware, webhookRoutes);
   app.use(errorHandler);
   return app;
 }
@@ -674,5 +693,67 @@ describe('URL Validation Security Tests', () => {
     mockDnsLookup.mockResolvedValue([{ address: '192.168.1.100', family: 4 }]);
 
     await expect(validateWebhookUrl('https://localhost:3000/webhook')).resolves.toBeUndefined();
+  });
+});
+
+describe('Webhook Management Rate Limiting Tests', () => {
+  // Uses a real HTTPS URL so the real validator passes without needing the dns mock
+  const validPayload = {
+    developerId: 'dev-rl-test',
+    url: 'https://example.com/webhook',
+    events: ['new_api_call'],
+  };
+
+  beforeEach(() => {
+    WebhookStore.list().forEach(c => WebhookStore.delete(c.developerId));
+    jest.clearAllMocks();
+    // dns/promises is mocked at file level; restore a passing implementation so
+    // validateWebhookUrl succeeds for the public URL used in these tests.
+    mockDnsLookup.mockResolvedValue([{ address: '8.8.8.8', family: 4 }]);
+  });
+
+  it('POST /api/webhooks returns 429 with Retry-After once limit is exceeded', async () => {
+    const app = buildWebhookAppWithRateLimit(60_000, 2);
+
+    await request(app).post('/api/webhooks').send(validPayload).expect(201);
+    await request(app).post('/api/webhooks').send(validPayload).expect(201);
+
+    const res = await request(app).post('/api/webhooks').send(validPayload).expect(429);
+    expect(res.headers['retry-after']).toBeDefined();
+    expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+  });
+
+  it('DELETE /api/webhooks/:developerId returns 429 with Retry-After once limit is exceeded', async () => {
+    const app = buildWebhookAppWithRateLimit(60_000, 1);
+    WebhookStore.register({ developerId: 'dev-rl-del', url: 'https://example.com/wh', events: ['new_api_call'], createdAt: new Date() });
+
+    await request(app).delete('/api/webhooks/dev-rl-del').expect(200);
+
+    const res = await request(app).delete('/api/webhooks/dev-rl-del').expect(429);
+    expect(res.headers['retry-after']).toBeDefined();
+    expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+  });
+
+  it('POST /deliver/:developerId is not rate-limited by the management limiter', async () => {
+    // The webhook.routes.ts applies webhookMgmtRateLimit only to POST /, GET /:id,
+    // DELETE /:id — the deliver route has no rate-limit middleware.
+    // Build an app without global express.json() so captureRawBody can consume
+    // the stream, then confirm deliver returns non-429 (401 for bad signature).
+    const app = express();
+    app.use(requestIdMiddleware);
+    app.use('/api/webhooks', webhookRoutes);
+    app.use(errorHandler);
+
+    WebhookStore.register({ developerId: 'dev-rl-deliver', url: 'https://example.com/wh', events: ['new_api_call'], secret: 'sec', createdAt: new Date() });
+
+    const deliverRes = await request(app)
+      .post('/api/webhooks/deliver/dev-rl-deliver')
+      .set('Content-Type', 'application/json')
+      .set('X-Callora-Timestamp', new Date().toISOString())
+      .set('X-Callora-Signature-256', 'sha256=invalidsignature')
+      .send('{}');
+
+    expect(deliverRes.status).not.toBe(429);
+    expect(deliverRes.status).not.toBe(404);
   });
 });

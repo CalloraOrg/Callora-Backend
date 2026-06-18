@@ -37,9 +37,17 @@ export const envSchema = z
 
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
+    UPSTREAM_HOST_ALLOWLIST: z.string().optional(),
     PROXY_TIMEOUT_MS: z.coerce.number().default(30_000),
     REST_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     REST_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+    WEBHOOK_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
+    WEBHOOK_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().optional(),
+    // Generic rate limiter (optional legacy config)
+    RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().optional(),
+    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
+    RATE_LIMIT_STORE: z.string().optional(),
+    RATE_LIMIT_PG_TABLE: z.string().optional(),
 
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),

@@ -8,8 +8,18 @@ import {
   verifyWebhookSignature,
 } from './webhook.signature.js';
 import { AppError, BadRequestError, NotFoundError } from '../errors/index.js';
+import { createRestRateLimitMiddleware } from '../middleware/restRateLimit.js';
+import { config } from '../config/index.js';
 
 const router = Router();
+
+/**
+ * Rate limiter for webhook management routes (POST /, GET /:id, DELETE /:id).
+ * Keys on client IP (unauthenticated routes). Window and max are configurable
+ * via WEBHOOK_RATE_LIMIT_WINDOW_MS / WEBHOOK_RATE_LIMIT_MAX_REQUESTS, falling
+ * back to the global REST rate-limit settings.
+ */
+const webhookMgmtRateLimit = createRestRateLimitMiddleware(config.webhookRateLimit);
 
 const VALID_EVENTS: WebhookEventType[] = [
   'new_api_call',
@@ -18,7 +28,7 @@ const VALID_EVENTS: WebhookEventType[] = [
 ];
 
 // POST /api/webhooks — Register a webhook
-router.post('/', express.json(), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { developerId, url, events, secret } = req.body;
 
@@ -69,7 +79,7 @@ router.post('/', express.json(), async (req: Request, res: Response, next: NextF
 });
 
 // GET /api/webhooks/:developerId — Get webhook config
-router.get('/:developerId', (req: Request, res: Response) => {
+router.get('/:developerId', webhookMgmtRateLimit, (req: Request, res: Response) => {
   const config = WebhookStore.get(req.params.developerId);
   if (!config) {
     throw new NotFoundError(
@@ -84,7 +94,7 @@ router.get('/:developerId', (req: Request, res: Response) => {
 });
 
 // DELETE /api/webhooks/:developerId — Remove webhook
-router.delete('/:developerId', (req: Request, res: Response) => {
+router.delete('/:developerId', webhookMgmtRateLimit, (req: Request, res: Response) => {
   WebhookStore.delete(req.params.developerId);
   return res.json({ message: 'Webhook removed.' });
 });
