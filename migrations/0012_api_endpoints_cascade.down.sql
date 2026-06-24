@@ -1,0 +1,41 @@
+-- Roll back api_endpoints.api_id to a non-cascading foreign key.
+DROP INDEX IF EXISTS `idx_api_endpoints_api_id`;
+
+CREATE TABLE `api_endpoints_no_cascade_new` (
+  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  `api_id` integer NOT NULL,
+  `path` text NOT NULL,
+  `method` text DEFAULT 'GET' NOT NULL,
+  `price_per_call_usdc` text DEFAULT '0.01' NOT NULL,
+  `description` text,
+  `created_at` integer DEFAULT (unixepoch()) NOT NULL,
+  `updated_at` integer DEFAULT (unixepoch()) NOT NULL,
+  FOREIGN KEY (`api_id`) REFERENCES `apis`(`id`)
+);
+
+INSERT INTO `api_endpoints_no_cascade_new` (
+  `id`,
+  `api_id`,
+  `path`,
+  `method`,
+  `price_per_call_usdc`,
+  `description`,
+  `created_at`,
+  `updated_at`
+)
+SELECT
+  `id`,
+  `api_id`,
+  `path`,
+  `method`,
+  `price_per_call_usdc`,
+  `description`,
+  `created_at`,
+  `updated_at`
+FROM `api_endpoints`;
+
+DROP TABLE `api_endpoints`;
+ALTER TABLE `api_endpoints_no_cascade_new` RENAME TO `api_endpoints`;
+
+CREATE INDEX `idx_api_endpoints_api_id` ON `api_endpoints` (`api_id`);
+

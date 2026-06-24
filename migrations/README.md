@@ -43,6 +43,7 @@ Examples:
 | 0004 | `0004_create_developers.sql` | `developers` profile table |
 | 0005 | `0005_add_api_key_revocation.sql` | Adds `revoked` column to `api_keys` |
 | 0006 | `0006_api_key_prefix_unique.sql` | Partial unique index on `api_keys.prefix` for active keys |
+| 0012 | `0012_api_endpoints_cascade.sql` | Rebuilds `api_endpoints.api_id` with `ON DELETE CASCADE` |
 
 > **Note:** `add_refresh_tokens.sql` lacks a numeric prefix and will be rejected by the runner.
 > It must be renamed to `0006_add_refresh_tokens.sql` (or the next available number) before use.
