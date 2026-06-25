@@ -1,7 +1,8 @@
 export type WebhookEventType =
     | 'new_api_call'
     | 'settlement_completed'
-    | 'low_balance_alert';
+    | 'low_balance_alert'
+    | 'quota.threshold.reached';
 
 export interface WebhookConfig {
     developerId: string;
@@ -21,7 +22,21 @@ export interface WebhookPayload {
     data: Record<string, unknown>;
 }
 
-// Payload shapes per event type (for documentation purposes)
+export type WebhookDeliveryStatus = 'pending' | 'delivered' | 'failed';
+
+export interface DeadLetterEntry {
+    deliveryId: string;
+    config: WebhookConfig;
+    payload: WebhookPayload;
+    failedAt: string;        // ISO 8601
+    lastError: string;
+    attempts: number;
+}
+
+// ---------------------------------------------------------------------------
+// Per-event payload shapes (for documentation and type-safe construction)
+// ---------------------------------------------------------------------------
+
 export interface NewApiCallData {
     apiId: string;
     endpoint: string;
@@ -43,4 +58,18 @@ export interface LowBalanceAlertData {
     currentBalance: string;
     thresholdBalance: string;
     asset: string;
+}
+
+/** Fired when a developer crosses 80%, 95%, or 100% of their monthly call quota. */
+export interface QuotaThresholdReachedData {
+    /** Billing period in YYYY-MM format, e.g. "2026-06". */
+    period: string;
+    /** Threshold percentage that was crossed: 80 | 95 | 100. */
+    threshold: 80 | 95 | 100;
+    /** Total API calls made by the developer this period. */
+    currentUsage: number;
+    /** Configured monthly call quota for this developer. */
+    quotaLimit: number;
+    /** Actual usage as a percentage of quota, rounded to two decimal places. */
+    usagePercent: number;
 }
