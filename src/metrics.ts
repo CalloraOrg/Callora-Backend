@@ -323,10 +323,36 @@ export function recordCacheMiss(): void {
   apisListingCacheMisses.inc();
 }
 
+// ── Proxy premature-abort counter ─────────────────────────────────────────────
+//
+// Metric: proxy_premature_aborts_total
+//   Type:    Counter
+//   Labels:  (none)
+//   Purpose: Count proxy responses that were aborted before the client received
+//            the full body (i.e. the TCP connection closed before the HTTP
+//            response finished).  A non-zero value here indicates callers that
+//            were billed for calls they never fully received — investigate
+//            together with the upstream duration histogram.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const proxyPrematureAbortsTotal = new client.Counter({
+  name: 'proxy_premature_aborts_total',
+  help: 'Total number of proxy responses where the client connection closed before the response finished (premature abort)',
+});
+
+register.registerMetric(proxyPrematureAbortsTotal);
+
+/** Increment the premature-abort counter. Called by proxyRoutes when a response
+ *  emits `close` without a preceding `finish` event. */
+export function recordProxyPrematureAbort(): void {
+  proxyPrematureAbortsTotal.inc();
+}
+
 /** Exposed for testing — reset all metrics including upstream and HTTP. */
 export function resetAllMetrics(): void {
   resetUpstreamMetrics();
   resetHttpMetrics();
   apisListingCacheHits.reset();
   apisListingCacheMisses.reset();
+  proxyPrematureAbortsTotal.reset();
 }
