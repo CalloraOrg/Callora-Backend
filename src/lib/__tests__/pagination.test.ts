@@ -80,6 +80,18 @@ describe('parsePagination', () => {
     assertValidationError(() => parsePagination({ limit: '10.7' }), 'query.limit');
   });
 
+  it('rejects fractional limit even when the fractional part is zero', () => {
+    assertValidationError(() => parsePagination({ limit: '10.0' }), 'query.limit');
+  });
+
+  it('rejects scientific notation for limit', () => {
+    assertValidationError(() => parsePagination({ limit: '1e2' }), 'query.limit');
+  });
+
+  it('rejects hexadecimal notation for limit', () => {
+    assertValidationError(() => parsePagination({ limit: '0x10' }), 'query.limit');
+  });
+
   it('rejects floating-point offset', () => {
     assertValidationError(() => parsePagination({ offset: '5.9' }), 'query.offset');
   });

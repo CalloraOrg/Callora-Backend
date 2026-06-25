@@ -35,7 +35,42 @@ For each gateway request, the middleware:
 
 Rate limiting and balance checks remain separate middleware or route concerns and run after authentication.
 
-## Failure responses
+## Scope-based authorization
+
+The middleware supports optional scope enforcement. When a `requiredScope` is
+configured on the middleware factory, the middleware checks that the presented
+API key includes that scope before allowing the request through.
+
+**Scope resolution rules:**
+
+1. If the key record has no `scopes` array or it is empty, it defaults to
+   `['read']` (backward compatibility for legacy keys).
+2. If the key's scopes include `'*'`, all scopes are allowed (wildcard).
+3. Otherwise, the required scope must appear literally in the key's scopes
+   array.
+
+**Route configuration example:**
+
+```typescript
+// Only allow keys with the 'write' scope
+createGatewayApiKeyAuthMiddleware({
+  requiredScope: 'write',
+  // ... other options
+});
+```
+
+**Scopes at key creation:**
+
+The `POST /apis/:apiId/keys` endpoint accepts a `scopes` field in the request
+body (defaults to `['*']`). The setter can restrict this to any combination of
+`read`, `write`, `gateway`, or any custom string.
+
+### Database
+
+Migration `0007_api_key_scopes.sql` ensures the `scopes TEXT[]` column exists
+on `api_keys` and backfills existing keys with `'{read}'`.
+
+### Failure responses
 
 The middleware returns clear `401` responses for common auth failures:
 
@@ -48,6 +83,10 @@ The middleware returns clear `401` responses for common auth failures:
 If the API key has been revoked, it returns `403 Forbidden` with this message:
 
 - `Unauthorized: API key has been revoked`
+
+If the API key lacks the required scope, it returns `403 Forbidden`:
+
+- `Forbidden: API key lacks required scope`
 
 If the target API cannot be resolved, it returns:
 

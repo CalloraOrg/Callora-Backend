@@ -176,15 +176,16 @@ MAX_REFRESH_TOKENS_PER_USER=5
 
 ## Files Changed
 
-- `src/types/auth.ts` - Added refresh token interfaces
-- `src/services/refreshTokenService.ts` - Core token service
-- `src/repositories/refreshTokenRepository.ts` - Database operations
+- `src/types/auth.ts` - Added refresh token interfaces (updated with `familyId`)
+- `src/services/refreshTokenService.ts` - Core token service (updated with family propagation and `ms` support in parseExpiry)
+- `src/repositories/refreshTokenRepository.ts` - Database operations (updated with reuse detection and family revocation)
 - `src/controllers/authController.ts` - API endpoints
 - `src/routes/authRoutes.ts` - Express routes
 - `src/services/refreshTokenService.test.ts` - Unit tests
-- `tests/integration/refreshToken.test.ts` - Integration tests
+- `tests/integration/refreshToken.test.ts` - Integration tests (added reuse and family revocation scenarios)
 - `docs/auth-refresh-strategy.md` - Documentation
 - `migrations/add_refresh_tokens.sql` - Database schema
+- `migrations/add_refresh_token_family.sql` - Added family_id tracking column and index
 
 ## Testing Commands
 

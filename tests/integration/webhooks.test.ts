@@ -19,10 +19,17 @@ var mockLogger = {
   warn: jest.fn(),
   info: jest.fn(),
   debug: jest.fn(),
+  audit: jest.fn(),
 };
 
 jest.mock('../../src/logger.js', () => ({
-  logger: mockLogger,
+  logger: {
+    error: (...args: unknown[]) => mockLogger.error(...args),
+    warn: (...args: unknown[]) => mockLogger.warn(...args),
+    info: (...args: unknown[]) => mockLogger.info(...args),
+    debug: (...args: unknown[]) => mockLogger.debug(...args),
+    audit: (...args: unknown[]) => mockLogger.audit(...args),
+  },
   runWithRequestContext: <T>(_ctx: unknown, callback: () => T): T => callback(),
 }));
 
@@ -234,6 +241,84 @@ describe('Webhook Routes Security Tests', () => {
 
       expect(response.body.message).toBe('No webhook registered for this developer.');
       expect(response.body.code).toBe('WEBHOOK_NOT_FOUND');
+    });
+  });
+
+  describe('POST /api/webhooks/:developerId/rotate-secret', () => {
+    beforeEach(() => {
+      WebhookStore.register({
+        developerId: 'dev-rotate',
+        url: 'https://example.com/webhook',
+        events: ['new_api_call'],
+        secret: 'old-secret',
+        createdAt: new Date(),
+      });
+    });
+
+    it('returns the new secret exactly once, stores previous secret metadata, and audits rotation', async () => {
+      const response = await request(app)
+        .post('/api/webhooks/dev-rotate/rotate-secret')
+        .expect(200);
+
+      expect(response.body.message).toBe('Webhook secret rotated successfully.');
+      expect(response.body.developerId).toBe('dev-rotate');
+      expect(response.body.secret).toMatch(/^[a-f0-9]{64}$/);
+      expect(response.body.previous_expires_at).toBeDefined();
+
+      const serialized = JSON.stringify(response.body);
+      expect(serialized.match(/[a-f0-9]{64}/g)).toHaveLength(1);
+      expect(serialized).not.toContain('old-secret');
+
+      const stored = WebhookStore.get('dev-rotate');
+      expect(stored?.secret_current).toBe(response.body.secret);
+      expect(stored?.secret_previous).toBe('old-secret');
+      expect(stored?.previous_expires_at).toBeInstanceOf(Date);
+
+      expect(mockLogger.audit).toHaveBeenCalledWith(
+        'WEBHOOK_SECRET_ROTATED',
+        'dev-rotate',
+        expect.objectContaining({
+          developerId: 'dev-rotate',
+          previousExpiresAt: response.body.previous_expires_at,
+          hadPreviousSecret: true,
+        }),
+      );
+    });
+
+    it('does not expose current or previous secrets on subsequent GET', async () => {
+      await request(app)
+        .post('/api/webhooks/dev-rotate/rotate-secret')
+        .expect(200);
+
+      const response = await request(app)
+        .get('/api/webhooks/dev-rotate')
+        .expect(200);
+
+      expect(response.body).not.toHaveProperty('secret');
+      expect(response.body).not.toHaveProperty('secret_current');
+      expect(response.body).not.toHaveProperty('secret_previous');
+    });
+
+    it('returns 404 when rotating a missing webhook', async () => {
+      const response = await request(app)
+        .post('/api/webhooks/missing-dev/rotate-secret')
+        .expect(404);
+
+      expect(response.body.code).toBe('WEBHOOK_NOT_FOUND');
+    });
+
+    it('keeps only the immediately previous secret after a double rotation', async () => {
+      const first = await request(app)
+        .post('/api/webhooks/dev-rotate/rotate-secret')
+        .expect(200);
+      const second = await request(app)
+        .post('/api/webhooks/dev-rotate/rotate-secret')
+        .expect(200);
+
+      const stored = WebhookStore.get('dev-rotate');
+      expect(stored?.secret_current).toBe(second.body.secret);
+      expect(stored?.secret_previous).toBe(first.body.secret);
+      expect(stored?.secret_previous).not.toBe('old-secret');
     });
   });
 

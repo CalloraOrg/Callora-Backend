@@ -31,4 +31,5 @@ export interface RefreshToken {
   createdAt: Date;
   lastUsedAt?: Date;
   isRevoked: boolean;
+  familyId: string;
 }

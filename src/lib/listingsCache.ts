@@ -150,3 +150,73 @@ const envTtl = Number(process.env.APIS_CACHE_TTL_MS);
 export const listingsCache = new ListingsCache({
   ttlMs: Number.isFinite(envTtl) && envTtl > 0 ? envTtl : 30_000,
 });
+
+// ── Warmup ────────────────────────────────────────────────────────────────────
+
+export interface WarmupOptions {
+  /** Maximum time in ms to wait for the warmup query. Default: 5 000. */
+  timeoutMs?: number;
+  /** Logger interface — defaults to console. */
+  logger?: Pick<typeof console, 'log' | 'warn' | 'error'>;
+}
+
+export interface WarmupResult {
+  success: boolean;
+  durationMs: number;
+  entriesLoaded: number;
+  reason?: string;
+}
+
+/**
+ * Prime the listings cache from the repository before the HTTP server starts.
+ *
+ * Design decisions
+ * ────────────────
+ * • Time-bounded: a configurable timeout prevents a slow DB from blocking boot.
+ * • Fail-open: any error (DB unreachable, timeout) is logged and boot continues.
+ * • Default params: seeds the most common page (limit=20, offset=0) so the
+ *   majority of first-hit requests are served from cache after deploy.
+ *
+ * Security notes
+ * ──────────────
+ * • Only calls `listPublic` — no privileged data is loaded into the cache.
+ * • Cache keys are built with `buildCacheKey` — same validated params as
+ *   live requests, preventing any cache-key injection at warmup time.
+ *
+ * @param cache    The ListingsCache instance to prime.
+ * @param listPublic  Function that fetches the public listing (mirrors repository.listPublic).
+ * @param options  Timeout and logger overrides.
+ */
+export async function warmupListingsCache<T>(
+  cache: ListingsCache<T>,
+  listPublic: (params: ListingsCacheKeyParams) => Promise<T>,
+  options: WarmupOptions = {},
+): Promise<WarmupResult> {
+  const { timeoutMs = 5_000, logger = console } = options;
+  const started = Date.now();
+
+  const defaultParams: ListingsCacheKeyParams = { limit: 20, offset: 0 };
+
+  try {
+    const result = await Promise.race([
+      listPublic(defaultParams),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Warmup timed out after ${timeoutMs}ms`)), timeoutMs),
+      ),
+    ]);
+
+    const key = buildCacheKey(defaultParams);
+    cache.set(key, result);
+
+    const durationMs = Date.now() - started;
+    logger.log(`[listingsCache] warmup completed in ${durationMs}ms — 1 entry loaded`);
+
+    return { success: true, durationMs, entriesLoaded: 1 };
+  } catch (err) {
+    const durationMs = Date.now() - started;
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.warn(`[listingsCache] warmup skipped: ${reason} (${durationMs}ms elapsed)`);
+
+    return { success: false, durationMs, entriesLoaded: 0, reason };
+  }
+}

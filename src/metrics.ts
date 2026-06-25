@@ -273,6 +273,123 @@ export const metricsEndpoint = async (
   res.end(await register.metrics());
 };
 
+/**
+ * Get aggregated P50 and P95 latency percentiles for a given API slug.
+ *
+ * Aggregates across all label combinations (method, status_code, outcome)
+ * for that api_id. Returns null for both if no observations exist.
+ *
+ * This function only exposes aggregated summary statistics — never raw
+ * histogram buckets, tenant identifiers, or request paths.
+ */
+/**
+ * Extract individual metric values from the registry JSON for a given metric name.
+ * Matches the pattern used in existing tests (metricsLatency.test.ts).
+ */
+interface MetricEntry {
+  value: number;
+  labels: Record<string, string>;
+  metricName?: string;
+}
+
+async function getUpstreamMetricValues(): Promise<MetricEntry[]> {
+  const metrics = await register.getMetricsAsJSON();
+  const found = metrics.find((m: any) => m.name === 'gateway_upstream_duration_seconds');
+  return (found?.values ?? []) as MetricEntry[];
+}
+
+export async function getUpstreamHealth(apiSlug: string): Promise<{
+  p50: number | null;
+  p95: number | null;
+}> {
+  const values = await getUpstreamMetricValues();
+
+  // Filter values matching this api_id
+  const matchingValues = values.filter((v) => v.labels?.api_id === apiSlug);
+
+  if (matchingValues.length === 0) {
+    return { p50: null, p95: null };
+  }
+
+  // Aggregate bucket counts across all label combinations
+  const bucketCounts = new Map<number, number>();
+  let totalCount = 0;
+
+  for (const v of matchingValues) {
+    if (v.metricName?.endsWith('_bucket')) {
+      const le = v.labels?.le;
+      if (le && le !== '+Inf') {
+        const bound = parseFloat(le);
+        if (!isNaN(bound)) {
+          bucketCounts.set(bound, (bucketCounts.get(bound) ?? 0) + v.value);
+        }
+      }
+    } else if (v.metricName?.endsWith('_count')) {
+      totalCount += v.value;
+    }
+  }
+
+  if (totalCount === 0) {
+    return { p50: null, p95: null };
+  }
+
+  // Sort bucket boundaries
+  const sortedBounds = [...bucketCounts.keys()].sort((a, b) => a - b);
+
+  // Build cumulative counts
+  let cumulativeCount = 0;
+  const cumulativeBuckets: Array<{ bound: number; cumulative: number }> = [];
+
+  for (const bound of sortedBounds) {
+    cumulativeCount += bucketCounts.get(bound) ?? 0;
+    cumulativeBuckets.push({ bound, cumulative: cumulativeCount });
+  }
+
+  const p50 = computePercentile(cumulativeBuckets, totalCount, 0.5);
+  const p95 = computePercentile(cumulativeBuckets, totalCount, 0.95);
+
+  return {
+    p50: p50 !== null ? Math.round(p50 * 1000) / 1000 : null,
+    p95: p95 !== null ? Math.round(p95 * 1000) / 1000 : null,
+  };
+}
+
+/**
+ * Compute a percentile value from cumulative histogram buckets using
+ * linear interpolation within the containing bucket.
+ */
+function computePercentile(
+  cumulativeBuckets: Array<{ bound: number; cumulative: number }>,
+  totalCount: number,
+  percentile: number,
+): number | null {
+  if (totalCount === 0) return null;
+
+  const target = totalCount * percentile;
+  let prevBound = 0;
+  let prevCumulative = 0;
+
+  for (const bucket of cumulativeBuckets) {
+    if (bucket.cumulative >= target) {
+      const bucketWidth = bucket.bound - prevBound;
+      const countInBucket = bucket.cumulative - prevCumulative;
+
+      if (countInBucket <= 0) return bucket.bound;
+
+      const offsetInBucket = (target - prevCumulative) / countInBucket;
+      return prevBound + offsetInBucket * bucketWidth;
+    }
+
+    prevBound = bucket.bound;
+    prevCumulative = bucket.cumulative;
+  }
+
+  // Beyond all buckets — return the last known bound
+  return cumulativeBuckets.length > 0
+    ? cumulativeBuckets[cumulativeBuckets.length - 1].bound
+    : null;
+}
+
 /** Exposed for testing — reset upstream profiling metrics. */
 export function resetUpstreamMetrics(): void {
   gatewayUpstreamDuration.reset();
@@ -323,10 +440,36 @@ export function recordCacheMiss(): void {
   apisListingCacheMisses.inc();
 }
 
+// ── Proxy premature-abort counter ─────────────────────────────────────────────
+//
+// Metric: proxy_premature_aborts_total
+//   Type:    Counter
+//   Labels:  (none)
+//   Purpose: Count proxy responses that were aborted before the client received
+//            the full body (i.e. the TCP connection closed before the HTTP
+//            response finished).  A non-zero value here indicates callers that
+//            were billed for calls they never fully received — investigate
+//            together with the upstream duration histogram.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const proxyPrematureAbortsTotal = new client.Counter({
+  name: 'proxy_premature_aborts_total',
+  help: 'Total number of proxy responses where the client connection closed before the response finished (premature abort)',
+});
+
+register.registerMetric(proxyPrematureAbortsTotal);
+
+/** Increment the premature-abort counter. Called by proxyRoutes when a response
+ *  emits `close` without a preceding `finish` event. */
+export function recordProxyPrematureAbort(): void {
+  proxyPrematureAbortsTotal.inc();
+}
+
 /** Exposed for testing — reset all metrics including upstream and HTTP. */
 export function resetAllMetrics(): void {
   resetUpstreamMetrics();
   resetHttpMetrics();
   apisListingCacheHits.reset();
   apisListingCacheMisses.reset();
+  proxyPrematureAbortsTotal.reset();
 }

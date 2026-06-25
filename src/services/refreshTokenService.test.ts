@@ -115,15 +115,22 @@ describe('RefreshTokenService', () => {
 
       const record = service.createRefreshTokenRecord(userId, tokenPair.refreshToken);
 
+      expect(record.id).toBeDefined();
       expect(record.userId).toBe(userId);
       expect(record.tokenHash).toBeDefined();
       expect(record.expiresAt).toBeInstanceOf(Date);
       expect(record.createdAt).toBeInstanceOf(Date);
       expect(record.isRevoked).toBe(false);
+      expect(record.familyId).toBeDefined();
       
       // Verify token hash is correct
       const isHashValid = service.verifyTokenHash(tokenPair.refreshToken, record.tokenHash);
       expect(isHashValid).toBe(true);
+
+      // Verify explicit familyId propagation
+      const specificFamilyId = 'custom-family-uuid';
+      const record2 = service.createRefreshTokenRecord(userId, tokenPair.refreshToken, specificFamilyId);
+      expect(record2.familyId).toBe(specificFamilyId);
     });
 
     it('should throw error for invalid token', () => {

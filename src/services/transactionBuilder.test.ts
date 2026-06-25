@@ -118,6 +118,7 @@ import {
   InvalidAmountError,
   InvalidMemoError,
   NetworkError,
+  SimulationError,
   SourceAccountNotFoundError,
   TransactionBuildError,
   TransactionBuilderService,
@@ -335,6 +336,55 @@ describe('TransactionBuilderService', () => {
       }),
       TransactionBuildError
     );
+  });
+
+  test('captures structured simulation diagnostics from SDK failures', async () => {
+    const service = new TransactionBuilderService();
+    mockInvokeContractFunction.mockImplementationOnce(() => {
+      throw Object.assign(new Error('simulation rejected'), {
+        details: {
+          result: {
+            error: { code: 'tx_failed', message: 'host function failed' },
+            events: [{ type: 'diagnostic', address: 'GUSERPUBLICKEY123' }],
+            footprint: { readOnly: ['contract-data'], balance: '100' },
+          },
+        },
+      });
+    });
+
+    const error = await service.buildDepositTransaction({
+      userPublicKey: 'GUSERPUBLICKEY123',
+      vaultContractId: 'CVAULTTEST',
+      amountUsdc: '1.0000000',
+    }).catch((err) => err);
+
+    assert.ok(error instanceof SimulationError);
+    assert.deepEqual(error.simulationDetails, {
+      errorCode: 'tx_failed',
+      errorMessage: 'host function failed',
+      events: [{ type: 'diagnostic', address: '[REDACTED]' }],
+      footprint: { readOnly: ['contract-data'], balance: '[REDACTED]' },
+    });
+  });
+
+  test('captures malformed simulation diagnostics safely', async () => {
+    const service = new TransactionBuilderService();
+    mockInvokeContractFunction.mockImplementationOnce(() => {
+      throw Object.assign(new Error('simulation rejected'), {
+        details: 'bad rpc payload',
+      });
+    });
+
+    const error = await service.buildDepositTransaction({
+      userPublicKey: 'GUSERPUBLICKEY123',
+      vaultContractId: 'CVAULTTEST',
+      amountUsdc: '1.0000000',
+    }).catch((err) => err);
+
+    assert.ok(error instanceof SimulationError);
+    assert.deepEqual(error.simulationDetails, {
+      errorMessage: 'bad rpc payload',
+    });
   });
 
   test('rejects invalid fee or timeout overrides', async () => {

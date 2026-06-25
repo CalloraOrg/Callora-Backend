@@ -1,3 +1,8 @@
+import {
+  extractSimulationDetails,
+  type SimulationDetails,
+} from '../lib/simulationDiagnostics.js';
+
 export interface SorobanBillingInvocationArg {
   type: 'string' | 'i128';
   value: string;
@@ -57,11 +62,17 @@ export type SorobanRpcErrorCategory =
 
 export class SorobanRpcError extends Error {
   public readonly category: SorobanRpcErrorCategory;
+  public readonly simulationDetails?: SimulationDetails;
 
-  constructor(message: string, category: SorobanRpcErrorCategory) {
+  constructor(
+    message: string,
+    category: SorobanRpcErrorCategory,
+    simulationDetails?: SimulationDetails
+  ) {
     super(message);
     this.name = 'SorobanRpcError';
     this.category = category;
+    this.simulationDetails = simulationDetails;
     Object.setPrototypeOf(this, SorobanRpcError.prototype);
   }
 }
@@ -320,7 +331,11 @@ export class SorobanRpcBillingClient {
       const simulationError = extractSimulationError(payload);
       if (simulationError) {
         const message = normalizeSorobanBillingError(simulationError, 'Simulation failed');
-        throw new SorobanRpcError(message, classifyError(message));
+        throw new SorobanRpcError(
+          message,
+          classifyError(message),
+          extractSimulationDetails(payload)
+        );
       }
 
       const result = extractRpcResult(payload);

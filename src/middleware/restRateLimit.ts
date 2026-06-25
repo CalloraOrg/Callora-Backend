@@ -1,6 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from '../config/index.js';
-import { TooManyRequestsError } from '../errors/index.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { resolveRequestUserId } from './requireAuth.js';
 
@@ -72,12 +71,16 @@ export function createRestRateLimitMiddleware(
     const result = rateLimiter.check(key);
 
     if (!result.allowed) {
-      const retryAfterSeconds = Math.max(
-        1,
-        Math.ceil((result.retryAfterMs ?? options.windowMs) / 1000),
-      );
+      const retryAfterMs = result.retryAfterMs ?? options.windowMs;
+      const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+      const requestId: string = (req as Request & { id?: string }).id ?? 'unknown';
       res.set('Retry-After', String(retryAfterSeconds));
-      next(new TooManyRequestsError('Too Many Requests'));
+      res.status(429).json({
+        code: 'TOO_MANY_REQUESTS',
+        message: 'Too Many Requests',
+        requestId,
+        retryAfterMs,
+      });
       return;
     }
 

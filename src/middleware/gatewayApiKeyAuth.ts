@@ -43,6 +43,10 @@ export interface GatewayApiKeyAuthOptions<
   getApiKeyCandidates(prefix: string, req: Request): Promise<GatewayAuthCandidate<TUser, TVault>[]>;
   resolveApiContext(req: Request): Promise<GatewayResolvedContext<TApi, TEndpoint> | null> | GatewayResolvedContext<TApi, TEndpoint> | null;
   getApiId(api: TApi): string;
+  /** If set, the middleware rejects keys that do not include this scope.
+   *  Keys with scopes containing '*' are always allowed.
+   *  Keys with empty/null scopes default to ['read']. */
+  requiredScope?: string;
   onUnauthorized?: (next: NextFunction, message: string) => void;
   onNotFound?: (next: NextFunction, message: string) => void;
 }
@@ -58,6 +62,7 @@ export interface InMemoryGatewayApiKey {
   developerId: string;
   apiId: string;
   revoked?: boolean;
+  scopes?: string[];
 }
 
 export interface GatewayAuthQueryable {
@@ -215,6 +220,15 @@ export function createGatewayApiKeyAuthMiddleware<
       return;
     }
 
+    if (options.requiredScope) {
+      const keyScopes = matchedCandidate.apiKeyRecord.scopes ?? [];
+      const effectiveScopes = keyScopes.length === 0 ? ['read'] : keyScopes;
+      if (!effectiveScopes.includes('*') && !effectiveScopes.includes(options.requiredScope)) {
+        handleForbidden(next, 'Forbidden: API key lacks required scope');
+        return;
+      }
+    }
+
     req.apiKeyValue = extracted.apiKey;
     req.apiKeyRecord = matchedCandidate.apiKeyRecord as unknown as Record<string, unknown>;
     req.user = matchedCandidate.user as Record<string, unknown>;
@@ -249,6 +263,7 @@ export function createMapBackedGatewayApiKeyAuthMiddleware<
             prefix: rawKey.slice(0, API_KEY_PREFIX_LENGTH),
             keyHash: sha256Hex(rawKey),
             revoked: record.revoked ?? false,
+            scopes: record.scopes,
           },
           user: { id: record.developerId },
           vault: null,

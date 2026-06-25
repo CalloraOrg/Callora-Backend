@@ -116,6 +116,31 @@ For example, if the timestamp is `2026-05-31T10:00:00.000Z` and body is `{"event
 4. **Timing-safe comparison** — Compare using constant-time method
 5. **Check timestamp** — Reject if outside 5-minute tolerance window (replay protection)
 
+### Signing Secret Rotation
+
+Rotate a webhook signing secret with:
+
+```http
+POST /api/webhooks/:developerId/rotate-secret
+```
+
+The response includes the new secret exactly once:
+
+```json
+{
+  "message": "Webhook secret rotated successfully.",
+  "developerId": "dev_abc123",
+  "secret": "new-secret-value",
+  "previous_expires_at": "2026-06-26T12:00:00.000Z"
+}
+```
+
+During the grace window, signatures made with either the new secret or the
+immediately previous secret are accepted. After `previous_expires_at`, only the
+current secret is accepted. A second rotation replaces the previous secret with
+the formerly current secret. The grace window is configured with
+`WEBHOOK_SECRET_ROTATION_GRACE_MS` and defaults to 24 hours.
+
 #### Example Implementation
 
 ```typescript
@@ -201,6 +226,7 @@ After 5 failures, the event is dropped and logged server-side.
 |--------|-----------------------------------|--------------------------|
 | POST   | `/api/webhooks`                   | Register webhook         |
 | GET    | `/api/webhooks/:developerId`      | View current webhook     |
+| POST   | `/api/webhooks/:developerId/rotate-secret` | Rotate signing secret |
 | DELETE | `/api/webhooks/:developerId`      | Remove webhook           |
 
 ---

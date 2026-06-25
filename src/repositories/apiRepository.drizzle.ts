@@ -1,6 +1,6 @@
-import { eq, and, like, type SQL } from 'drizzle-orm';
-import { db, schema } from '../db/index.js';
-import type { Api, ApiEndpoint, NewApi, NewApiEndpoint } from '../db/schema.js';
+import { eq, and, like, type SQL } from "drizzle-orm";
+import { db, schema } from "../db/index.js";
+import type { Api, ApiEndpoint, NewApi, NewApiEndpoint } from "../db/schema.js";
 import type {
   ApiCreateInput,
   ApiWithEndpoints,
@@ -10,7 +10,7 @@ import type {
   ApiListFilters,
   ApiRepository,
   ApiUpdateInput,
-} from './apiRepository.js';
+} from "./apiRepository.js";
 
 export class DrizzleApiRepository implements ApiRepository {
   async create(api: ApiCreateInput): Promise<Api> {
@@ -23,11 +23,11 @@ export class DrizzleApiRepository implements ApiRepository {
         base_url: api.base_url,
         logo_url: api.logo_url ?? null,
         category: api.category ?? null,
-        status: api.status ?? 'draft',
+        status: api.status ?? "draft",
       } as NewApi)
       .returning();
 
-    if (!created) throw new Error('API insert failed');
+    if (!created) throw new Error("API insert failed");
     return created;
   }
 
@@ -44,12 +44,12 @@ export class DrizzleApiRepository implements ApiRepository {
           base_url: apiData.base_url,
           logo_url: null,
           category: apiData.category ?? null,
-          status: apiData.status ?? 'draft',
+          status: apiData.status ?? "draft",
         } as NewApi)
         .returning();
 
       if (!api) {
-        throw new Error('API insert failed');
+        throw new Error("API insert failed");
       }
 
       let endpointRows: ApiEndpoint[] = [];
@@ -80,15 +80,22 @@ export class DrizzleApiRepository implements ApiRepository {
 
   async update(id: number, data: ApiUpdateInput): Promise<Api | null> {
     const payload: Partial<NewApi> = {};
-    if (typeof data.name === 'string') payload.name = data.name;
-    if (typeof data.description === 'string' || data.description === null) payload.description = data.description;
-    if (typeof data.base_url === 'string') payload.base_url = data.base_url;
-    if (typeof data.logo_url === 'string' || data.logo_url === null) payload.logo_url = data.logo_url;
-    if (typeof data.category === 'string' || data.category === null) payload.category = data.category;
+    if (typeof data.name === "string") payload.name = data.name;
+    if (typeof data.description === "string" || data.description === null)
+      payload.description = data.description;
+    if (typeof data.base_url === "string") payload.base_url = data.base_url;
+    if (typeof data.logo_url === "string" || data.logo_url === null)
+      payload.logo_url = data.logo_url;
+    if (typeof data.category === "string" || data.category === null)
+      payload.category = data.category;
     if (data.status) payload.status = data.status;
 
     if (Object.keys(payload).length === 0) {
-      const rows = await db.select().from(schema.apis).where(eq(schema.apis.id, id)).limit(1);
+      const rows = await db
+        .select()
+        .from(schema.apis)
+        .where(eq(schema.apis.id, id))
+        .limit(1);
       return rows[0] ?? null;
     }
 
@@ -103,7 +110,18 @@ export class DrizzleApiRepository implements ApiRepository {
     return updated ?? null;
   }
 
-  async listByDeveloper(developerId: number, filters: ApiListFilters = {}): Promise<Api[]> {
+  async delete(id: number): Promise<boolean> {
+    const deleted = await db.delete(schema.apis).where(eq(schema.apis.id, id));
+
+    // Drizzle's delete() returns the number of rows deleted.
+    // The database FK with ON DELETE CASCADE will automatically clean up endpoints.
+    return deleted > 0;
+  }
+
+  async listByDeveloper(
+    developerId: number,
+    filters: ApiListFilters = {},
+  ): Promise<Api[]> {
     const conditions: SQL[] = [eq(schema.apis.developer_id, developerId)];
     if (filters.status) {
       conditions.push(eq(schema.apis.status, filters.status));
@@ -115,13 +133,16 @@ export class DrizzleApiRepository implements ApiRepository {
       conditions.push(like(schema.apis.name, `%${filters.search}%`));
     }
 
-    let query = db.select().from(schema.apis).where(and(...conditions));
+    let query = db
+      .select()
+      .from(schema.apis)
+      .where(and(...conditions));
 
-    if (typeof filters.limit === 'number') {
+    if (typeof filters.limit === "number") {
       query = query.limit(filters.limit) as typeof query;
     }
 
-    if (typeof filters.offset === 'number') {
+    if (typeof filters.offset === "number") {
       query = query.offset(filters.offset) as typeof query;
     }
 
@@ -129,11 +150,11 @@ export class DrizzleApiRepository implements ApiRepository {
   }
 
   async listPublic(filters: ApiListFilters = {}): Promise<Api[]> {
-    if (filters.status && filters.status !== 'active') {
+    if (filters.status && filters.status !== "active") {
       return [];
     }
 
-    const conditions: SQL[] = [eq(schema.apis.status, 'active')];
+    const conditions: SQL[] = [eq(schema.apis.status, "active")];
     if (filters.category) {
       conditions.push(eq(schema.apis.category, filters.category));
     }
@@ -141,13 +162,16 @@ export class DrizzleApiRepository implements ApiRepository {
       conditions.push(like(schema.apis.name, `%${filters.search}%`));
     }
 
-    let query = db.select().from(schema.apis).where(and(...conditions));
+    let query = db
+      .select()
+      .from(schema.apis)
+      .where(and(...conditions));
 
-    if (typeof filters.limit === 'number') {
+    if (typeof filters.limit === "number") {
       query = query.limit(filters.limit) as typeof query;
     }
 
-    if (typeof filters.offset === 'number') {
+    if (typeof filters.offset === "number") {
       query = query.offset(filters.offset) as typeof query;
     }
 
@@ -169,8 +193,11 @@ export class DrizzleApiRepository implements ApiRepository {
         developer_description: schema.developers.description,
       })
       .from(schema.apis)
-      .leftJoin(schema.developers, eq(schema.apis.developer_id, schema.developers.id))
-      .where(and(eq(schema.apis.id, id), eq(schema.apis.status, 'active')))
+      .leftJoin(
+        schema.developers,
+        eq(schema.apis.developer_id, schema.developers.id),
+      )
+      .where(and(eq(schema.apis.id, id), eq(schema.apis.status, "active")))
       .limit(1);
 
     const row = rows[0];

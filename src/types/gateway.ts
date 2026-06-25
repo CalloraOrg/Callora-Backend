@@ -119,6 +119,16 @@ export interface GatewayDeps {
   authMiddleware?: RequestHandler;
   /** Maximum allowed request body size (Express size string, e.g. '1mb', '512kb'). Default: '1mb'. */
   maxBodySize?: string;
+  /**
+   * API registry for resolving slugs/IDs to upstream entries.
+   * Used by the health endpoint to validate apiSlug existence.
+   */
+  registry?: ApiRegistry;
+  /**
+   * Circuit breaker registry for retrieving per-slug breaker state.
+   * Defaults to the shared singleton if omitted.
+   */
+  breakerRegistry?: import('../lib/circuitBreaker.js').BreakerRegistry;
 }
 
 /** Dependencies injected into the proxy router factory. */

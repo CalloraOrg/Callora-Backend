@@ -6,6 +6,45 @@
     "description": "API contract covering Callora backend billing, usage, and developer routes."
   },
   "paths": {
+    "/api/gateway/health/{apiSlug}": {
+      "get": {
+        "summary": "Get gateway health for an API",
+        "description": "Returns aggregated upstream latency percentiles and circuit breaker state for a given API slug. Public endpoint — no authentication required. Only aggregated metrics are returned; no tenant identifiers or raw histogram data are exposed. Results are cached in-memory for 5 seconds.",
+        "parameters": [
+          {
+            "name": "apiSlug",
+            "in": "path",
+            "required": true,
+            "description": "The API slug to query health for",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Health data retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayHealthResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API slug not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/billing/deduct": {
       "post": {
         "summary": "Deduct billing balance for an API call",
@@ -978,6 +1017,54 @@
               },
               "total": {
                 "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "GatewayHealthResponse": {
+        "type": "object",
+        "required": [
+          "apiSlug",
+          "latency",
+          "breaker"
+        ],
+        "properties": {
+          "apiSlug": {
+            "type": "string"
+          },
+          "latency": {
+            "type": "object",
+            "required": [
+              "p50",
+              "p95"
+            ],
+            "properties": {
+              "p50": {
+                "type": "number",
+                "nullable": true,
+                "description": "P50 latency in milliseconds (null if no traffic yet)"
+              },
+              "p95": {
+                "type": "number",
+                "nullable": true,
+                "description": "P95 latency in milliseconds (null if no traffic yet)"
+              }
+            }
+          },
+          "breaker": {
+            "type": "object",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "closed",
+                  "open",
+                  "half-open"
+                ]
               }
             }
           }

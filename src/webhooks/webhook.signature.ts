@@ -37,6 +37,7 @@ export function computeSignature(
  */
 export function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
+  if (!/^[0-9a-f]+$/i.test(a) || !/^[0-9a-f]+$/i.test(b)) return false;
   return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
 }
 
@@ -46,6 +47,7 @@ export function safeCompare(a: string, b: string): boolean {
  * Expects:
  *   - `req.webhookSecret` (string)  attached upstream (e.g. by the route handler after
  *     looking up the developer's stored secret).
+ *   - or `req.webhookSecrets` (string[]) containing current and unexpired previous secrets.
  *   - `x-callora-signature-256` header  — `sha256=<hex>`
  *   - `x-callora-timestamp`      header  — ISO-8601 string
  *   - `req.rawBody` (Buffer)             — populated by the `captureRawBody` middleware.
@@ -59,14 +61,14 @@ export function safeCompare(a: string, b: string): boolean {
  *   - Signature does not match
  */
 export function verifyWebhookSignature(
-  req: Request & { webhookSecret?: string; rawBody?: Buffer },
+  req: Request & { webhookSecret?: string; webhookSecrets?: string[]; rawBody?: Buffer },
   _res: Response,
   next: NextFunction
 ): void {
-  const secret = req.webhookSecret;
+  const secrets = req.webhookSecrets ?? (req.webhookSecret ? [req.webhookSecret] : []);
 
   // No secret configured → skip verification (opt-in feature)
-  if (!secret) {
+  if (secrets.length === 0) {
     return next();
   }
 
@@ -111,9 +113,12 @@ export function verifyWebhookSignature(
   const receivedHex = parts[1];
 
   const rawBody = req.rawBody ?? Buffer.alloc(0);
-  const expectedHex = computeSignature(secret, tsHeader, rawBody);
+  const hasValidSignature = secrets.some((secret) => {
+    const expectedHex = computeSignature(secret, tsHeader, rawBody);
+    return safeCompare(expectedHex, receivedHex);
+  });
 
-  if (!safeCompare(expectedHex, receivedHex)) {
+  if (!hasValidSignature) {
     next(new UnauthorizedError(
       'Webhook signature verification failed.',
       'INVALID_WEBHOOK_SIGNATURE'
