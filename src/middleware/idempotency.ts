@@ -47,7 +47,8 @@ export function calculateRequestHash(
 }
 
 /**
- * Express middleware to enforce idempotency using Idempotency-Key header.
+ * Idempotency middleware — caches responses keyed by Idempotency-Key header or
+ * idempotencyKey body field.  See docs/sdk/billing-deduct.md for the full contract.
  */
 export async function idempotencyMiddleware(req: Request, res: Response, next: NextFunction) {
   const db = req.app?.locals?.dbPool ?? pool;

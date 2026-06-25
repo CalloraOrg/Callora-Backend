@@ -268,6 +268,7 @@ Application errors are returned through the shared Express `errorHandler` using 
 - `requestId` is the tracing id available to the error handler. When no request id is attached to the Express request, the handler returns `"unknown"`.
 - `details` is included for validation failures and contains field paths such as `body.endpoints[0].path` or `query.network`.
 
+For the `POST /api/billing/deduct` idempotency contract, response envelope, and retry guidance for SDK authors, see [docs/sdk/billing-deduct.md](./docs/sdk/billing-deduct.md).  
 For the complete gateway/proxy and billing error-code reference, including `502`/`504` derivation and Soroban billing mappings, see [docs/error-codes.md](./docs/error-codes.md).
 
 | Variable | Required | Default | Description |

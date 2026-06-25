@@ -32,6 +32,8 @@ function createRouteBillingService(pool: Pool): BillingService {
   return new BillingService(pool, sorobanClient);
 }
 
+// POST /api/billing/deduct — uses two-layer idempotency: middleware (Idempotency-Key)
+// + service (requestId).  See docs/sdk/billing-deduct.md for the full contract.
 router.post(
   '/deduct',
   requireAuth,
@@ -48,6 +50,7 @@ router.post(
         return;
       }
 
+      // requestId = service-layer dedup key; idempotencyKey = optional middleware cache key
       const {
         requestId,
         apiId,
@@ -134,6 +137,7 @@ router.post(
         return;
       }
 
+      // alreadyProcessed: true when this requestId was previously recorded — no double charge.
       res.status(200).json({
         success: true,
         usageEventId: result.usageEventId,

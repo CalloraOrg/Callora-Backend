@@ -10,6 +10,10 @@
       "post": {
         "summary": "Deduct billing balance for an API call",
         "description": "Deducts USDC from the user's vault balance to pay for an API call. Authenticated and idempotent.",
+        "externalDocs": {
+          "description": "SDK idempotency contract and retry guidance",
+          "url": "./sdk/billing-deduct.md"
+        },
         "security": [
           {
             "bearerAuth": []
