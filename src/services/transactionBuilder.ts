@@ -46,6 +46,10 @@ export interface UnsignedTransaction {
   memo?: TransactionMemo;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Error definitions                                                          */
+/* -------------------------------------------------------------------------- */
+
 export class InvalidContractIdError extends Error {
   constructor(contractId: string) {
     super(`Invalid contract ID format: ${contractId}`);
@@ -88,12 +92,35 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * Base class for all transaction‑building failures.
+ */
 export class TransactionBuildError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'TransactionBuildError';
   }
 }
+
+/**
+ * Thrown when a Soroban simulation (e.g. during contract invocation) fails.
+ * Carries the raw simulation diagnostics so callers can surface them without
+ * exposing secrets.
+ */
+export class SimulationError extends TransactionBuildError {
+  /** Structured diagnostics returned by the Soroban RPC simulation endpoint. */
+  public readonly simulationDetails: unknown;
+
+  constructor(message: string, simulationDetails: unknown) {
+    super(message);
+    this.name = 'SimulationError';
+    this.simulationDetails = simulationDetails;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Service implementation                                                     */
+/* -------------------------------------------------------------------------- */
 
 interface HorizonAccountLoader {
   loadAccount(accountId: string): Promise<unknown>;
@@ -194,6 +221,15 @@ export class TransactionBuilderService {
         ],
       });
     } catch (error) {
+      // If the SDK throws a simulation‑related error we capture its diagnostics.
+      // The SDK currently throws a generic Error with a `details` property.
+      const details = (error as any).details;
+      if (details) {
+        throw new SimulationError(
+          `Soroban simulation failed: ${this.getErrorMessage(error)}`,
+          details
+        );
+      }
       throw new TransactionBuildError(
         `Failed to assemble Stellar contract invocation: ${this.getErrorMessage(error)}`
       );
