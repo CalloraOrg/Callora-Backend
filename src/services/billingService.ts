@@ -3,6 +3,10 @@ import { BillingService, BillingResult, UsageChargeRequest, UsageChargeResult } 
 /**
  * In-memory mock of the Soroban billing contract.
  * Maintains per-developer balances; deductions succeed when balance >= amount.
+ *
+ * Note: production billing uses an internal per-developer semaphore to
+ * serialize deduct operations where required. This mock is used for unit
+ * testing and does not enforce that concurrency policy itself.
  */
 export class MockSorobanBilling implements BillingService {
   private balances: Map<string, number>;

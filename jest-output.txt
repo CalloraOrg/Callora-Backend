@@ -1,0 +1,6 @@
+
+Test Suites: 2 passed, 2 total
+Tests:       7 passed, 7 total
+Snapshots:   0 total
+Time:        8.918 s, estimated 9 s
+Ran all test suites matching src/utils/developerSemaphore.test.ts|src/services/billing.semaphore.test.ts.

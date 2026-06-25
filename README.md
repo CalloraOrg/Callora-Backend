@@ -184,6 +184,8 @@ callora-backend/
 | `HORIZON_URL` | Stellar Horizon endpoint | `https://horizon-testnet.stellar.org` |
 | `STELLAR_BASE_FEE` | Transaction base fee (stroops) | `100` |
 | `STELLAR_TRANSACTION_TIMEOUT` | Transaction timeout (seconds) | `30` |
+| `BILLING_MAX_CONCURRENCY_PER_DEV` | Max concurrent deducts per developer | `1` |
+| `BILLING_SEMAPHORE_TTL_MS` | Idle semaphore state TTL in ms | `300000` |
 | `CIRCUIT_BREAKER_THRESHOLD` | Failures before opening circuit | `5` |
 | `CIRCUIT_BREAKER_COOLDOWN_MS` | Cooldown period (ms) | `30000` |
 | `RETRY_MAX_ATTEMPTS` | Maximum retry attempts | `3` |

@@ -124,6 +124,10 @@ export const envSchema = z
     // Security
     BCRYPT_COST_FACTOR: z.coerce.number().int().min(10).max(31).default(12),
 
+    // Billing concurrency control
+    BILLING_MAX_CONCURRENCY_PER_DEV: z.coerce.number().int().positive().default(1),
+    BILLING_SEMAPHORE_TTL_MS: z.coerce.number().int().positive().default(300000),
+
     // Idempotency
     IDEMPOTENCY_RETENTION_WINDOW_SECONDS: z.coerce.number().int().positive().default(86400),
   })

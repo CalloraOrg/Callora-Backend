@@ -189,6 +189,10 @@ export const config = {
   bcrypt: {
     costFactor: env.BCRYPT_COST_FACTOR,
   },
+  billingConcurrency: {
+    maxPerDeveloper: env.BILLING_MAX_CONCURRENCY_PER_DEV,
+    semaphoreTtlMs: env.BILLING_SEMAPHORE_TTL_MS,
+  },
   idempotency: {
     retentionWindowSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
   },

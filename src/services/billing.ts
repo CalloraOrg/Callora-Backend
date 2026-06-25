@@ -31,8 +31,33 @@
 
 import type { Pool, PoolClient } from 'pg';
 
+import { config } from '../config/index.js';
+import { DeveloperSemaphore } from '../utils/developerSemaphore.js';
+
 const USDC_7_DECIMAL_FACTOR = 10_000_000n;
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
+
+const billingSemaphore = new DeveloperSemaphore(
+  config.billingConcurrency.maxPerDeveloper,
+  config.billingConcurrency.semaphoreTtlMs,
+);
+
+/**
+ * Current billing semaphore activity per developer.
+ *
+ * This returns the number of active slots currently held by each developer.
+ * Hook this into monitoring dashboards or Prometheus gauges to observe
+ * billing deduction concurrency pressure.
+ */
+export function getCurrentBillingConcurrencyPerDeveloper(): Record<string, number> {
+  return billingSemaphore.getCurrentActiveSlotCounts();
+}
+
+export function getTotalBillingConcurrency(): number {
+  return billingSemaphore.getTotalActiveSlotCount();
+}
+
+export const billingConcurrencySemaphore = billingSemaphore;
 
 export interface BillingDeductRequest {
   requestId: string;
@@ -232,164 +257,170 @@ export class BillingService {
   }
 
   async deduct(request: BillingDeductRequest): Promise<BillingDeductResult> {
-    // --- Validate amount before touching the DB ---
-    let amountInContractUnits: bigint;
-    try {
-      amountInContractUnits = parseUsdcToContractUnits(request.amountUsdc);
-    } catch (error) {
-      return {
-        success: false,
-        usageEventId: '',
-        alreadyProcessed: false,
-        deductionApplied: false,
-        reconciliationRequired: false,
-        error: normalizeErrorMessage(error),
-      };
-    }
-
-    // --- Idempotency precheck: return early if request has already been processed ---
-    const existing = await this.getByRequestId(request.requestId);
-    if (existing) {
-      return {
-        ...existing,
-        alreadyProcessed: true,
-      };
-    }
-
-    // --- Phase 2 (pre-flight): balance check outside any DB transaction ---
-    // Soroban is an external ledger; we cannot make this atomic with Postgres.
-    // We check before inserting to avoid creating pending rows for requests
-    // that will obviously fail.
-    let availableBalance: bigint;
-    try {
-      const balanceResult = await this.sorobanClient.getBalance(request.userId);
-      availableBalance = BigInt(balanceResult.balance);
-    } catch (error) {
-      return {
-        success: false,
-        usageEventId: '',
-        alreadyProcessed: false,
-        deductionApplied: false,
-        reconciliationRequired: false,
-        error: `Balance check failed: ${normalizeErrorMessage(error)}`,
-      };
-    }
-
-    if (availableBalance < amountInContractUnits) {
-      return {
-        success: false,
-        usageEventId: '',
-        alreadyProcessed: false,
-        deductionApplied: false,
-        reconciliationRequired: false,
-        error: `Insufficient balance: required ${amountInContractUnits.toString()} units, available ${availableBalance.toString()}`,
-      };
-    }
-
-    // --- Phase 1: idempotency check + INSERT (DB transaction, committed) ---
-    const client = await this.pool.connect();
-    let phase1: Phase1Result;
-    try {
-      phase1 = await runPhase1(client, request, amountInContractUnits);
-    } catch (error) {
-      // Rollback on any Phase 1 failure (INSERT never committed)
+    // The per-developer semaphore ensures that all phases of a single
+    // developer's deduction request run serially up to the configured limit.
+    // This prevents parallel pre-checks from seeing the same available
+    // balance and collectively overdrawing the vault.
+    return billingSemaphore.withSlot(request.userId, async () => {
+      // --- Validate amount before touching the DB ---
+      let amountInContractUnits: bigint;
       try {
-        await client.query('ROLLBACK');
-      } catch {
-        // ignore rollback errors
+        amountInContractUnits = parseUsdcToContractUnits(request.amountUsdc);
+      } catch (error) {
+        return {
+          success: false,
+          usageEventId: '',
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: false,
+          error: normalizeErrorMessage(error),
+        };
       }
 
-      // Unique-constraint race: another concurrent request committed first
-      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === '23505') {
-        const existing = await this.pool.query<{ id: string; stellar_tx_hash: string | null }>(
-          `SELECT id, stellar_tx_hash FROM usage_events WHERE request_id = $1`,
-          [request.requestId],
-        );
-        if (existing.rows.length > 0) {
-          return {
-            success: true,
-            usageEventId: existing.rows[0].id.toString(),
-            stellarTxHash: existing.rows[0].stellar_tx_hash ?? undefined,
-            alreadyProcessed: true,
-            deductionApplied: Boolean(existing.rows[0].stellar_tx_hash),
-            reconciliationRequired: existing.rows[0].stellar_tx_hash === null,
-          };
+      // --- Idempotency precheck: return early if request has already been processed ---
+      const existing = await this.getByRequestId(request.requestId);
+      if (existing) {
+        return {
+          ...existing,
+          alreadyProcessed: true,
+        };
+      }
+
+      // --- Phase 2 (pre-flight): balance check outside any DB transaction ---
+      // Soroban is an external ledger; we cannot make this atomic with Postgres.
+      // We check before inserting to avoid creating pending rows for requests
+      // that will obviously fail.
+      let availableBalance: bigint;
+      try {
+        const balanceResult = await this.sorobanClient.getBalance(request.userId);
+        availableBalance = BigInt(balanceResult.balance);
+      } catch (error) {
+        return {
+          success: false,
+          usageEventId: '',
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: false,
+          error: `Balance check failed: ${normalizeErrorMessage(error)}`,
+        };
+      }
+
+      if (availableBalance < amountInContractUnits) {
+        return {
+          success: false,
+          usageEventId: '',
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: false,
+          error: `Insufficient balance: required ${amountInContractUnits.toString()} units, available ${availableBalance.toString()}`,
+        };
+      }
+
+      // --- Phase 1: idempotency check + INSERT (DB transaction, committed) ---
+      const client = await this.pool.connect();
+      let phase1: Phase1Result;
+      try {
+        phase1 = await runPhase1(client, request, amountInContractUnits);
+      } catch (error) {
+        // Rollback on any Phase 1 failure (INSERT never committed)
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // ignore rollback errors
         }
+
+        // Unique-constraint race: another concurrent request committed first
+        if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === '23505') {
+          const existing = await this.pool.query<{ id: string; stellar_tx_hash: string | null }>(
+            `SELECT id, stellar_tx_hash FROM usage_events WHERE request_id = $1`,
+            [request.requestId],
+          );
+          if (existing.rows.length > 0) {
+            return {
+              success: true,
+              usageEventId: existing.rows[0].id.toString(),
+              stellarTxHash: existing.rows[0].stellar_tx_hash ?? undefined,
+              alreadyProcessed: true,
+              deductionApplied: Boolean(existing.rows[0].stellar_tx_hash),
+              reconciliationRequired: existing.rows[0].stellar_tx_hash === null,
+            };
+          }
+        }
+
+        return {
+          success: false,
+          usageEventId: '',
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: false,
+          error: normalizeErrorMessage(error),
+        };
+      } finally {
+        client.release();
       }
 
-      return {
-        success: false,
-        usageEventId: '',
-        alreadyProcessed: false,
-        deductionApplied: false,
-        reconciliationRequired: false,
-        error: normalizeErrorMessage(error),
-      };
-    } finally {
-      client.release();
-    }
+      // Idempotent early return — event already existed
+      if (phase1.alreadyExists) {
+        return {
+          success: true,
+          usageEventId: phase1.usageEventId!,
+          stellarTxHash: phase1.stellarTxHash,
+          alreadyProcessed: true,
+          deductionApplied: Boolean(phase1.stellarTxHash),
+          reconciliationRequired: phase1.stellarTxHash === undefined,
+        };
+      }
 
-    // Idempotent early return — event already existed
-    if (phase1.alreadyExists) {
+      const usageEventId = phase1.usageEventId!;
+
+      // --- Phase 2: Soroban deduction (external, outside DB transaction) ---
+      // The INSERT is already committed.  If this call succeeds but Phase 3
+      // fails, the row stays pending (stellar_tx_hash = NULL) and can be
+      // reconciled.  If this call fails, the pending row is left in the DB —
+      // operators can detect and void it via the reconciliation job.
+      let deductResult: SorobanDeductResult;
+      try {
+        deductResult = await this.executeDeductWithRetry(
+          request.userId,
+          amountInContractUnits.toString(),
+          request.idempotencyKey ?? request.requestId,
+        );
+      } catch (error) {
+        // Soroban failed — the pending row exists but no on-chain deduction
+        // occurred.  Return failure; the pending row will be reconciled.
+        return {
+          success: false,
+          usageEventId,
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: true,
+          error: normalizeErrorMessage(error),
+        };
+      }
+
+      // --- Phase 3: persist tx hash (best-effort, no transaction needed) ---
+      try {
+        await runPhase3(this.pool, usageEventId, deductResult.txHash);
+      } catch (error) {
+        // The on-chain deduction succeeded.  Failing to persist the tx hash is
+        // a data-integrity concern but NOT a reason to report failure to the
+        // caller — the charge happened.  Log and return success; the
+        // reconciliation job will back-fill the hash.
+        console.error(
+          `[BillingService] Phase 3 UPDATE failed for usageEventId=${usageEventId} ` +
+            `txHash=${deductResult.txHash}: ${normalizeErrorMessage(error)}`,
+        );
+      }
+
       return {
         success: true,
-        usageEventId: phase1.usageEventId!,
-        stellarTxHash: phase1.stellarTxHash,
-        alreadyProcessed: true,
-        deductionApplied: Boolean(phase1.stellarTxHash),
-        reconciliationRequired: phase1.stellarTxHash === undefined,
-      };
-    }
-
-    const usageEventId = phase1.usageEventId!;
-
-    // --- Phase 2: Soroban deduction (external, outside DB transaction) ---
-    // The INSERT is already committed.  If this call succeeds but Phase 3
-    // fails, the row stays pending (stellar_tx_hash = NULL) and can be
-    // reconciled.  If this call fails, the pending row is left in the DB —
-    // operators can detect and void it via the reconciliation job.
-    let deductResult: SorobanDeductResult;
-    try {
-      deductResult = await this.executeDeductWithRetry(
-        request.userId,
-        amountInContractUnits.toString(),
-        request.idempotencyKey ?? request.requestId,
-      );
-    } catch (error) {
-      // Soroban failed — the pending row exists but no on-chain deduction
-      // occurred.  Return failure; the pending row will be reconciled.
-      return {
-        success: false,
         usageEventId,
+        stellarTxHash: deductResult.txHash,
         alreadyProcessed: false,
-        deductionApplied: false,
-        reconciliationRequired: true,
-        error: normalizeErrorMessage(error),
+        deductionApplied: true,
+        reconciliationRequired: false,
       };
-    }
-
-    // --- Phase 3: persist tx hash (best-effort, no transaction needed) ---
-    try {
-      await runPhase3(this.pool, usageEventId, deductResult.txHash);
-    } catch (error) {
-      // The on-chain deduction succeeded.  Failing to persist the tx hash is
-      // a data-integrity concern but NOT a reason to report failure to the
-      // caller — the charge happened.  Log and return success; the
-      // reconciliation job will back-fill the hash.
-      console.error(
-        `[BillingService] Phase 3 UPDATE failed for usageEventId=${usageEventId} ` +
-          `txHash=${deductResult.txHash}: ${normalizeErrorMessage(error)}`,
-      );
-    }
-
-    return {
-      success: true,
-      usageEventId,
-      stellarTxHash: deductResult.txHash,
-      alreadyProcessed: false,
-      deductionApplied: true,
-      reconciliationRequired: false,
-    };
+    });
   }
 
   async getByRequestId(requestId: string): Promise<BillingDeductResult | null> {

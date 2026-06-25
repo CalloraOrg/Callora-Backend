@@ -35,6 +35,23 @@ describe('config validation', () => {
     expect(cfg!.config.restRateLimit.maxRequests).toBe(100);
   });
 
+  it('should expose billing concurrency values from environment variables', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+    process.env.BILLING_MAX_CONCURRENCY_PER_DEV = '3';
+    process.env.BILLING_SEMAPHORE_TTL_MS = '15000';
+
+    let cfg: { config: { billingConcurrency: { maxPerDeveloper: number; semaphoreTtlMs: number } } } | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.billingConcurrency.maxPerDeveloper).toBe(3);
+    expect(cfg!.config.billingConcurrency.semaphoreTtlMs).toBe(15000);
+  });
+
   it('should expose configured REST rate limit values', async () => {
     process.env.NODE_ENV = 'test';
     process.env.JWT_SECRET = 'test-secret';
