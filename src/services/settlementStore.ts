@@ -138,6 +138,25 @@ export class PostgresSettlementStore implements SettlementStore {
 
     return result.rows.map(mapSettlementRow);
   }
+
+  async getPendingSettlements(): Promise<Settlement[]> {
+    const result = await this.db.query<SettlementStoreRow>(
+      `
+        SELECT
+          external_id,
+          developer_id,
+          amount_usdc,
+          status,
+          stellar_tx_hash,
+          created_at
+        FROM settlements
+        WHERE status = 'pending'
+        ORDER BY created_at ASC, id ASC
+      `,
+    );
+
+    return result.rows.map(mapSettlementRow);
+  }
 }
 
 export function createPostgresSettlementStore(db: SettlementStoreQueryable): PostgresSettlementStore {
