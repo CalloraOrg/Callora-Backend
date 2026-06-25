@@ -197,6 +197,158 @@
         }
       }
     },
+    "/api/admin/usage/{developerId}": {
+      "get": {
+        "summary": "Inspect a developer usage aggregate",
+        "description": "Returns a redacted aggregate snapshot for a developer's live usageStore state. Requires admin authentication and the admin IP allowlist.",
+        "security": [
+          {
+            "adminApiKey": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "developerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage aggregate snapshot retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUsageSnapshotResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized admin request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden by admin IP allowlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Usage aggregate not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/usage/{developerId}/reset": {
+      "post": {
+        "summary": "Reset a developer usage aggregate",
+        "description": "Resets a developer's live usageStore aggregate and writes an audit log with the prior aggregate values. Requires admin authentication and the admin IP allowlist.",
+        "security": [
+          {
+            "adminApiKey": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "developerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage aggregate reset successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUsageResetResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized admin request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden by admin IP allowlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Usage aggregate not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/apis": {
       "get": {
         "summary": "List public APIs",
@@ -468,6 +620,11 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT"
+      },
+      "adminApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-admin-api-key"
       }
     },
     "schemas": {
@@ -637,6 +794,110 @@
               "to": {
                 "type": "string",
                 "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "AdminUsageSnapshot": {
+        "type": "object",
+        "required": [
+          "developerId",
+          "totalEvents",
+          "settledEvents",
+          "unsettledEvents",
+          "totalAmountUsdc",
+          "settledAmountUsdc",
+          "unsettledAmountUsdc",
+          "apiCount",
+          "endpointCount",
+          "firstEventAt",
+          "lastEventAt",
+          "statusCodes"
+        ],
+        "properties": {
+          "developerId": {
+            "type": "string"
+          },
+          "totalEvents": {
+            "type": "integer"
+          },
+          "settledEvents": {
+            "type": "integer"
+          },
+          "unsettledEvents": {
+            "type": "integer"
+          },
+          "totalAmountUsdc": {
+            "type": "number"
+          },
+          "settledAmountUsdc": {
+            "type": "number"
+          },
+          "unsettledAmountUsdc": {
+            "type": "number"
+          },
+          "apiCount": {
+            "type": "integer"
+          },
+          "endpointCount": {
+            "type": "integer"
+          },
+          "firstEventAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastEventAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "statusCodes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "AdminUsageSnapshotResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminUsageSnapshot"
+          }
+        }
+      },
+      "AdminUsageResetResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "developerId",
+              "reset",
+              "priorValues"
+            ],
+            "properties": {
+              "developerId": {
+                "type": "string"
+              },
+              "reset": {
+                "type": "boolean"
+              },
+              "priorValues": {
+                "$ref": "#/components/schemas/AdminUsageSnapshot"
               }
             }
           }

@@ -1,10 +1,42 @@
 import { UsageStore, UsageEvent } from '../types/gateway.js';
 
+export interface UsageAggregateSnapshot {
+  developerId: string;
+  totalEvents: number;
+  settledEvents: number;
+  unsettledEvents: number;
+  totalAmountUsdc: number;
+  settledAmountUsdc: number;
+  unsettledAmountUsdc: number;
+  apiCount: number;
+  endpointCount: number;
+  firstEventAt: string | null;
+  lastEventAt: string | null;
+  statusCodes: Record<string, number>;
+}
+
+export interface UsageAdminStore extends UsageStore {
+  getDeveloperUsageSnapshot(developerId: string): Promise<UsageAggregateSnapshot | undefined> | UsageAggregateSnapshot | undefined;
+  resetDeveloperUsage(developerId: string): Promise<UsageAggregateSnapshot | undefined> | UsageAggregateSnapshot | undefined;
+}
+
+const emptyStatusCounts = (): Record<string, number> => ({});
+
+const sumAmounts = (events: UsageEvent[]): number =>
+  events.reduce((total, event) => total + event.amountUsdc, 0);
+
+const toIsoOrNull = (value: Date | string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+};
+
 /**
  * In-memory usage event store with idempotency.
  * In production this would write to a database table.
  */
-export class InMemoryUsageStore implements UsageStore {
+export class InMemoryUsageStore implements UsageAdminStore {
   private events: UsageEvent[] = [];
   private requestIds = new Set<string>();
 
@@ -31,6 +63,52 @@ export class InMemoryUsageStore implements UsageStore {
       return this.events.filter((e) => e.apiKey === apiKey);
     }
     return [...this.events];
+  }
+
+  getDeveloperUsageSnapshot(developerId: string): UsageAggregateSnapshot | undefined {
+    const events = this.events.filter((event) => event.userId === developerId);
+    if (events.length === 0) {
+      return undefined;
+    }
+
+    const settledEvents = events.filter((event) => event.settlementId);
+    const unsettledEvents = events.filter((event) => !event.settlementId);
+    const sortedTimestamps = events
+      .map((event) => event.timestamp)
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+    const statusCodes = emptyStatusCounts();
+
+    for (const event of events) {
+      const statusCode = String(event.statusCode);
+      statusCodes[statusCode] = (statusCodes[statusCode] ?? 0) + 1;
+    }
+
+    return {
+      developerId,
+      totalEvents: events.length,
+      settledEvents: settledEvents.length,
+      unsettledEvents: unsettledEvents.length,
+      totalAmountUsdc: sumAmounts(events),
+      settledAmountUsdc: sumAmounts(settledEvents),
+      unsettledAmountUsdc: sumAmounts(unsettledEvents),
+      apiCount: new Set(events.map((event) => event.apiId)).size,
+      endpointCount: new Set(events.map((event) => event.endpointId)).size,
+      firstEventAt: sortedTimestamps[0] ?? null,
+      lastEventAt: sortedTimestamps[sortedTimestamps.length - 1] ?? null,
+      statusCodes,
+    };
+  }
+
+  resetDeveloperUsage(developerId: string): UsageAggregateSnapshot | undefined {
+    const priorSnapshot = this.getDeveloperUsageSnapshot(developerId);
+    if (!priorSnapshot) {
+      return undefined;
+    }
+
+    const retainedEvents = this.events.filter((event) => event.userId !== developerId);
+    this.events = retainedEvents;
+    this.requestIds = new Set(retainedEvents.map((event) => event.requestId));
+    return priorSnapshot;
   }
 
   /** Retrieve all usage events that haven't been settled yet and have a non-zero price. */
@@ -83,8 +161,29 @@ interface UsageEventRow {
   settlement_external_id: string | null;
 }
 
+interface UsageAggregateRow {
+  total_events: string | number;
+  settled_events: string | number;
+  unsettled_events: string | number;
+  total_amount_usdc: string | number | null;
+  settled_amount_usdc: string | number | null;
+  unsettled_amount_usdc: string | number | null;
+  api_count: string | number;
+  endpoint_count: string | number;
+  first_event_at: Date | string | null;
+  last_event_at: Date | string | null;
+}
+
+interface StatusCodeCountRow {
+  status_code: number;
+  count: string | number;
+}
+
 const toNumber = (value: string | number): number =>
   typeof value === 'number' ? value : Number(value);
+
+const nullableNumber = (value: string | number | null): number =>
+  value === null ? 0 : toNumber(value);
 
 const mapUsageEventRow = (row: UsageEventRow): UsageEvent => ({
   id: String(row.id),
@@ -120,7 +219,7 @@ const usageEventSelect = `
     ON s.id = rl.settlement_id
 `;
 
-export class PostgresUsageStore implements UsageStore {
+export class PostgresUsageStore implements UsageAdminStore {
   constructor(private readonly db: UsageStoreQueryable) {}
 
   async record(event: UsageEvent): Promise<boolean> {
@@ -244,6 +343,122 @@ export class PostgresUsageStore implements UsageStore {
     );
 
     return result.rows.map(mapUsageEventRow);
+  }
+
+  async getDeveloperUsageSnapshot(developerId: string): Promise<UsageAggregateSnapshot | undefined> {
+    const [aggregateResult, statusResult] = await Promise.all([
+      this.db.query<UsageAggregateRow>(
+        `
+          SELECT
+            COUNT(*) AS total_events,
+            COUNT(*) FILTER (WHERE rl.settlement_id IS NOT NULL) AS settled_events,
+            COUNT(*) FILTER (WHERE rl.settlement_id IS NULL) AS unsettled_events,
+            COALESCE(SUM(ue.amount_usdc), 0) AS total_amount_usdc,
+            COALESCE(SUM(ue.amount_usdc) FILTER (WHERE rl.settlement_id IS NOT NULL), 0) AS settled_amount_usdc,
+            COALESCE(SUM(ue.amount_usdc) FILTER (WHERE rl.settlement_id IS NULL), 0) AS unsettled_amount_usdc,
+            COUNT(DISTINCT ue.api_id) AS api_count,
+            COUNT(DISTINCT ue.endpoint_id) AS endpoint_count,
+            MIN(ue.created_at) AS first_event_at,
+            MAX(ue.created_at) AS last_event_at
+          FROM revenue_ledger rl
+          INNER JOIN usage_events ue
+            ON ue.id = rl.usage_event_id
+          WHERE rl.developer_id = $1
+        `,
+        [developerId],
+      ),
+      this.db.query<StatusCodeCountRow>(
+        `
+          SELECT ue.status_code, COUNT(*) AS count
+          FROM revenue_ledger rl
+          INNER JOIN usage_events ue
+            ON ue.id = rl.usage_event_id
+          WHERE rl.developer_id = $1
+          GROUP BY ue.status_code
+          ORDER BY ue.status_code ASC
+        `,
+        [developerId],
+      ),
+    ]);
+
+    const aggregate = aggregateResult.rows[0];
+    if (!aggregate || toNumber(aggregate.total_events) === 0) {
+      return undefined;
+    }
+
+    const statusCodes = emptyStatusCounts();
+    for (const row of statusResult.rows) {
+      statusCodes[String(row.status_code)] = toNumber(row.count);
+    }
+
+    return {
+      developerId,
+      totalEvents: toNumber(aggregate.total_events),
+      settledEvents: toNumber(aggregate.settled_events),
+      unsettledEvents: toNumber(aggregate.unsettled_events),
+      totalAmountUsdc: nullableNumber(aggregate.total_amount_usdc),
+      settledAmountUsdc: nullableNumber(aggregate.settled_amount_usdc),
+      unsettledAmountUsdc: nullableNumber(aggregate.unsettled_amount_usdc),
+      apiCount: toNumber(aggregate.api_count),
+      endpointCount: toNumber(aggregate.endpoint_count),
+      firstEventAt: toIsoOrNull(aggregate.first_event_at),
+      lastEventAt: toIsoOrNull(aggregate.last_event_at),
+      statusCodes,
+    };
+  }
+
+  async resetDeveloperUsage(developerId: string): Promise<UsageAggregateSnapshot | undefined> {
+    const client = await this.db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const snapshotStore = new PostgresUsageStore({
+        query: client.query.bind(client),
+        connect: this.db.connect.bind(this.db),
+      });
+      const priorSnapshot = await snapshotStore.getDeveloperUsageSnapshot(developerId);
+      if (!priorSnapshot) {
+        await client.query('ROLLBACK');
+        return undefined;
+      }
+
+      const deletedLedger = await client.query<{ usage_event_id: string | number | null }>(
+        `
+          DELETE FROM revenue_ledger
+          WHERE developer_id = $1
+          RETURNING usage_event_id
+        `,
+        [developerId],
+      );
+
+      const usageEventIds = deletedLedger.rows
+        .map((row) => row.usage_event_id)
+        .filter((id): id is string | number => id !== null && id !== undefined);
+
+      if (usageEventIds.length > 0) {
+        await client.query(
+          `
+            DELETE FROM usage_events ue
+            WHERE ue.id = ANY($1::bigint[])
+              AND NOT EXISTS (
+                SELECT 1
+                FROM revenue_ledger rl
+                WHERE rl.usage_event_id = ue.id
+              )
+          `,
+          [usageEventIds.map((id) => Number(id))],
+        );
+      }
+
+      await client.query('COMMIT');
+      return priorSnapshot;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async markAsSettled(eventIds: string[], settlementId: string): Promise<void> {
