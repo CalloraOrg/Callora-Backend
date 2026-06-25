@@ -10,7 +10,6 @@ import { InMemoryRateLimiter } from '../services/rateLimiter.js';
 import { InMemoryUsageStore } from '../services/usageStore.js';
 import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { ApiKey, ApiRegistryEntry } from '../types/gateway.js';
-import { errorHandler } from '../middleware/errorHandler.js';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -362,7 +361,6 @@ describe('Proxy /v1/call', () => {
     expect(body.message ?? body.error).toMatch(/bad gateway/i);
 
     await new Promise<void>((resolve) => tmpServer.close(() => resolve()));
-    lookupSpy.mockRestore();
   });
 });
 
