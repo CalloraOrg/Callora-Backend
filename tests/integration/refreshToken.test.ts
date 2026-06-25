@@ -13,7 +13,7 @@ class MockRefreshTokenRepository {
   private tokens: Map<string, any> = new Map();
 
   async createRefreshToken(token: any): Promise<any> {
-    const id = `token-${Date.now()}`;
+    const id = token.id || `token-${Date.now()}`;
     const storedToken = { id, ...token };
     this.tokens.set(id, storedToken);
     return storedToken;
@@ -55,6 +55,14 @@ class MockRefreshTokenRepository {
     }
   }
 
+  async revokeFamily(familyId: string, userId: string): Promise<void> {
+    for (const token of this.tokens.values()) {
+      if (token.familyId === familyId && token.userId === userId) {
+        token.isRevoked = true;
+      }
+    }
+  }
+
   async revokeAllUserTokens(userId: string): Promise<void> {
     for (const token of this.tokens.values()) {
       if (token.userId === userId) {
@@ -85,20 +93,13 @@ class MockRefreshTokenRepository {
   }
 }
 
-function buildTestApp() {
+function buildTestApp(refreshTokenService: RefreshTokenService, mockRepository: MockRefreshTokenRepository) {
   const app = express();
   app.use(express.json());
 
   // Set up JWT secret for testing
   process.env.JWT_SECRET = TEST_JWT_SECRET;
 
-  const refreshTokenService = new RefreshTokenService({
-    jwtSecret: TEST_JWT_SECRET,
-    accessTokenExpiry: '15m',
-    refreshTokenExpiry: '7d'
-  });
-
-  const mockRepository = new MockRefreshTokenRepository();
   const authController = new AuthController({
     refreshTokenService,
     refreshTokenRepository: mockRepository as any
@@ -116,13 +117,13 @@ describe('Refresh Token Integration Tests', () => {
   let mockRepository: MockRefreshTokenRepository;
 
   beforeEach(() => {
-    app = buildTestApp();
     refreshTokenService = new RefreshTokenService({
       jwtSecret: TEST_JWT_SECRET,
       accessTokenExpiry: '15m',
       refreshTokenExpiry: '7d'
     });
     mockRepository = new MockRefreshTokenRepository();
+    app = buildTestApp(refreshTokenService, mockRepository);
   });
 
   describe('POST /auth/refresh', () => {
@@ -154,7 +155,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({});
 
       expect(res.status).toBe(400);
-      expect(res.body.errors).toBeDefined();
+      expect(res.body.details).toBeDefined();
     });
 
     it('should reject invalid refresh token', async () => {
@@ -211,9 +212,11 @@ describe('Refresh Token Integration Tests', () => {
     it('should reject token with wrong hash', async () => {
       const userId = 'test-user-123';
       const tokenPair = refreshTokenService.createTokenPair(userId);
+      const differentTokenPair = refreshTokenService.createTokenPair(userId);
 
       // Store a token with different hash
-      const tokenRecord = refreshTokenService.createRefreshTokenRecord(userId, 'different-token');
+      const tokenRecord = refreshTokenService.createRefreshTokenRecord(userId, differentTokenPair.refreshToken);
+      tokenRecord.id = (refreshTokenService as any).extractTokenId(tokenPair.refreshToken);
       await mockRepository.createRefreshToken(tokenRecord);
 
       const res = await request(app)
@@ -222,6 +225,37 @@ describe('Refresh Token Integration Tests', () => {
 
       expect(res.status).toBe(401);
       expect(res.body.code).toBe('INVALID_REFRESH_TOKEN');
+    });
+
+    it('should revoke entire family atomically on reuse detection', async () => {
+      const userId = 'test-user-123';
+      
+      // Create first token pair
+      const tokenPair1 = refreshTokenService.createTokenPair(userId);
+      const tokenRecord1 = refreshTokenService.createRefreshTokenRecord(userId, tokenPair1.refreshToken);
+      const storedToken1 = await mockRepository.createRefreshToken(tokenRecord1);
+
+      // Create second token pair in the same family
+      const tokenPair2 = refreshTokenService.createTokenPair(userId);
+      const tokenRecord2 = refreshTokenService.createRefreshTokenRecord(userId, tokenPair2.refreshToken, storedToken1.familyId);
+      const storedToken2 = await mockRepository.createRefreshToken(tokenRecord2);
+
+      // Mark first token as revoked (simulating it was already rotated)
+      await mockRepository.revokeRefreshToken(storedToken1.id, userId);
+
+      // Now attempt to refresh using the revoked token (reuse)
+      const res = await request(app)
+        .post('/auth/refresh')
+        .send({ refreshToken: tokenPair1.refreshToken });
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('REVOKED_TOKEN');
+
+      // Verify all tokens in the family are now revoked
+      const dbToken1 = await mockRepository.findRefreshTokenById(storedToken1.id, userId);
+      const dbToken2 = await mockRepository.findRefreshTokenById(storedToken2.id, userId);
+      expect(dbToken1?.isRevoked).toBe(true);
+      expect(dbToken2?.isRevoked).toBe(true);
     });
   });
 
@@ -250,9 +284,12 @@ describe('Refresh Token Integration Tests', () => {
     });
 
     it('should handle non-existent token gracefully', async () => {
+      const userId = 'test-user-123';
+      const tokenPair = refreshTokenService.createTokenPair(userId);
+
       const res = await request(app)
         .post('/auth/revoke')
-        .send({ refreshToken: 'non-existent-token' });
+        .send({ refreshToken: tokenPair.refreshToken });
 
       expect(res.status).toBe(200);
       expect(res.body.message).toBe('Token revoked successfully');
@@ -264,7 +301,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({});
 
       expect(res.status).toBe(400);
-      expect(res.body.errors).toBeDefined();
+      expect(res.body.details).toBeDefined();
     });
   });
 
@@ -306,6 +343,7 @@ describe('Refresh Token Integration Tests', () => {
 
       const res = await request(testApp)
         .post('/auth/revoke-all')
+        .set('x-user-id', userId)
         .send();
 
       expect(res.status).toBe(200);
@@ -352,6 +390,7 @@ describe('Refresh Token Integration Tests', () => {
 
       const res = await request(testApp)
         .get('/auth/tokens')
+        .set('x-user-id', userId)
         .send();
 
       expect(res.status).toBe(200);

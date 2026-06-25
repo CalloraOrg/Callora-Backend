@@ -7,6 +7,7 @@ import type {
   TokenPair, 
   RefreshToken 
 } from '../types/auth.js';
+import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
 
 export interface RefreshTokenServiceOptions {
   jwtSecret: string;
@@ -107,10 +108,7 @@ export class RefreshTokenService {
     }
   }
 
-  /**
-   * Create refresh token record for storage
-   */
-  createRefreshTokenRecord(userId: string, token: string): Omit<RefreshToken, 'id'> {
+  createRefreshTokenRecord(userId: string, token: string, familyId?: string): RefreshToken {
     const tokenId = this.extractTokenId(token);
     if (!tokenId) {
       throw new Error('Invalid refresh token: cannot extract token ID');
@@ -120,11 +118,13 @@ export class RefreshTokenService {
     expiresAt.setSeconds(expiresAt.getSeconds() + this.parseExpiry(this.refreshTokenExpiry));
 
     return {
+      id: tokenId,
       userId,
       tokenHash: this.hashToken(token),
       expiresAt,
       createdAt: new Date(),
-      isRevoked: false
+      isRevoked: false,
+      familyId: familyId || crypto.randomUUID()
     };
   }
 
@@ -144,7 +144,7 @@ export class RefreshTokenService {
    * Parse expiry string to seconds
    */
   private parseExpiry(expiry: string): number {
-    const match = expiry.match(/^(\d+)([smhd])$/);
+    const match = expiry.match(/^(\d+)(ms|[smhd])$/);
     if (!match) {
       throw new Error(`Invalid expiry format: ${expiry}`);
     }
@@ -153,6 +153,7 @@ export class RefreshTokenService {
     const unit = match[2];
 
     switch (unit) {
+      case 'ms': return value / 1000;
       case 's': return value;
       case 'm': return value * 60;
       case 'h': return value * 3600;
@@ -190,5 +191,17 @@ export class RefreshTokenService {
       expiresIn: this.accessTokenExpiry as any,
       algorithm: 'HS256'
     });
+  }
+
+  /**
+   * Handle refresh token reuse: revoke the entire family atomically and log audit event
+   */
+  async handleReuse(storedToken: RefreshToken, repository: RefreshTokenRepository): Promise<void> {
+    logger.warn('[RefreshTokenService] Confirmed refresh token reuse detected. Revoking entire family.', {
+      familyId: storedToken.familyId,
+      userId: storedToken.userId,
+      tokenId: storedToken.id
+    });
+    await repository.revokeFamily(storedToken.familyId, storedToken.userId);
   }
 }

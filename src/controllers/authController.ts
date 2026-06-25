@@ -55,6 +55,7 @@ export class AuthController {
 
       // Check if token is revoked or expired
       if (storedToken.isRevoked) {
+        await this.refreshTokenService.handleReuse(storedToken, this.refreshTokenRepository);
         logger.warn('[AuthController] Attempted to use revoked refresh token', {
           tokenId: tokenPayload.tokenId,
           userId: tokenPayload.userId

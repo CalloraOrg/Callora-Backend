@@ -1,11 +1,12 @@
 import crypto from 'crypto';
 import type { RefreshToken } from '../types/auth.js';
+import { logger } from '../logger.js';
 
 export interface RefreshTokenRepository {
   /**
    * Store a new refresh token in the database
    */
-  createRefreshToken(token: Omit<RefreshToken, 'id'>): Promise<RefreshToken>;
+  createRefreshToken(token: Omit<RefreshToken, 'id'> & { id?: string }): Promise<RefreshToken>;
 
   /**
    * Find refresh token by ID and user ID
@@ -26,6 +27,11 @@ export interface RefreshTokenRepository {
    * Revoke a refresh token
    */
   revokeRefreshToken(tokenId: string, userId: string): Promise<void>;
+
+  /**
+   * Revoke all refresh tokens belonging to a token family atomically
+   */
+  revokeFamily(familyId: string, userId: string): Promise<void>;
 
   /**
    * Revoke all refresh tokens for a user
@@ -50,17 +56,17 @@ export interface RefreshTokenRepository {
 export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
   constructor(private readonly db: any) {}
 
-  async createRefreshToken(token: Omit<RefreshToken, 'id'>): Promise<RefreshToken> {
-    const id = crypto.randomUUID();
+  async createRefreshToken(token: Omit<RefreshToken, 'id'> & { id?: string }): Promise<RefreshToken> {
+    const id = token.id || crypto.randomUUID();
     const refreshToken: RefreshToken = {
       id,
       ...token
     };
 
     await this.db.query(
-      `INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked`,
+      `INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id`,
       [
         refreshToken.id,
         refreshToken.userId,
@@ -68,7 +74,8 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
         refreshToken.expiresAt.toISOString(),
         refreshToken.createdAt.toISOString(),
         refreshToken.lastUsedAt?.toISOString(),
-        refreshToken.isRevoked
+        refreshToken.isRevoked,
+        refreshToken.familyId
       ]
     );
 
@@ -77,7 +84,7 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
 
   async findRefreshTokenById(tokenId: string, userId: string): Promise<RefreshToken | null> {
     const result = await this.db.query(
-      `SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked
+      `SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id
        FROM refresh_tokens
        WHERE id = $1 AND user_id = $2`,
       [tokenId, userId]
@@ -95,13 +102,14 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
       expiresAt: new Date(row.expires_at),
       createdAt: new Date(row.created_at),
       lastUsedAt: row.last_used_at ? new Date(row.last_used_at) : undefined,
-      isRevoked: row.is_revoked
+      isRevoked: row.is_revoked,
+      familyId: row.family_id
     };
   }
 
   async findRefreshTokenByHash(tokenHash: string, userId: string): Promise<RefreshToken | null> {
     const result = await this.db.query(
-      `SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked
+      `SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id
        FROM refresh_tokens
        WHERE token_hash = $1 AND user_id = $2`,
       [tokenHash, userId]
@@ -119,7 +127,8 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
       expiresAt: new Date(row.expires_at),
       createdAt: new Date(row.created_at),
       lastUsedAt: row.last_used_at ? new Date(row.last_used_at) : undefined,
-      isRevoked: row.is_revoked
+      isRevoked: row.is_revoked,
+      familyId: row.family_id
     };
   }
 
@@ -138,6 +147,15 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
        SET is_revoked = true
        WHERE id = $1 AND user_id = $2`,
       [tokenId, userId]
+    );
+  }
+
+  async revokeFamily(familyId: string, userId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE refresh_tokens
+       SET is_revoked = true
+       WHERE family_id = $1 AND user_id = $2`,
+      [familyId, userId]
     );
   }
 
