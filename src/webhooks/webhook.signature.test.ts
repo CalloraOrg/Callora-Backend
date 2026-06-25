@@ -12,6 +12,7 @@ import {
   TIMESTAMP_HEADER,
   SIGNATURE_TOLERANCE_MS,
 } from './webhook.signature.js';
+import { WebhookStore } from './webhook.store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,16 +27,19 @@ function makeReq(
   overrides: Partial<{
     headers: Record<string, string>;
     webhookSecret: string;
+    webhookSecrets: string[];
     rawBody: Buffer;
   }> = {}
-): Request & { webhookSecret?: string; rawBody?: Buffer } {
+): Request & { webhookSecret?: string; webhookSecrets?: string[]; rawBody?: Buffer } {
   const emitter = new EventEmitter() as unknown as Request & {
     webhookSecret?: string;
+    webhookSecrets?: string[];
     rawBody?: Buffer;
     headers: Record<string, string>;
   };
   emitter.headers = overrides.headers ?? {};
   emitter.webhookSecret = overrides.webhookSecret;
+  emitter.webhookSecrets = overrides.webhookSecrets;
   emitter.rawBody = overrides.rawBody;
   return emitter;
 }
@@ -135,6 +139,12 @@ test('safeCompare returns false for different hex strings of the same length', (
 test('safeCompare returns false when lengths differ', () => {
   const a = 'abcd';
   const b = 'abcdef';
+  assert.equal(safeCompare(a, b), false);
+});
+
+test('safeCompare returns false for malformed hex with the expected length', () => {
+  const a = crypto.randomBytes(32).toString('hex');
+  const b = 'z'.repeat(64);
   assert.equal(safeCompare(a, b), false);
 });
 
@@ -328,6 +338,81 @@ test('verifyWebhookSignature calls next() for a valid signature', (done) => {
   });
   const res = makeRes();
   verifyWebhookSignature(req, res, () => { done(); });
+});
+
+test('verifyWebhookSignature accepts a signature from the current secret when multiple secrets are configured', (done) => {
+  const ts = makeTimestamp();
+  const body = Buffer.from('{"event":"new_api_call"}');
+  const sig = computeSignature('current-secret', ts, body);
+
+  const req = makeReq({
+    webhookSecrets: ['current-secret', 'previous-secret'],
+    headers: {
+      [TIMESTAMP_HEADER]: ts,
+      [SIGNATURE_HEADER]: `sha256=${sig}`,
+    },
+    rawBody: body,
+  });
+  const res = makeRes();
+  verifyWebhookSignature(req, res, () => { done(); });
+});
+
+test('verifyWebhookSignature accepts a signature from the unexpired previous secret', (done) => {
+  const ts = makeTimestamp();
+  const body = Buffer.from('{"event":"new_api_call"}');
+  const sig = computeSignature('previous-secret', ts, body);
+
+  const req = makeReq({
+    webhookSecrets: ['current-secret', 'previous-secret'],
+    headers: {
+      [TIMESTAMP_HEADER]: ts,
+      [SIGNATURE_HEADER]: `sha256=${sig}`,
+    },
+    rawBody: body,
+  });
+  const res = makeRes();
+  verifyWebhookSignature(req, res, () => { done(); });
+});
+
+test('verifyWebhookSignature rejects a previous secret after its grace window is removed', () => {
+  const ts = makeTimestamp();
+  const body = Buffer.from('{"event":"new_api_call"}');
+  const sig = computeSignature('previous-secret', ts, body);
+
+  const req = makeReq({
+    webhookSecrets: ['current-secret'],
+    headers: {
+      [TIMESTAMP_HEADER]: ts,
+      [SIGNATURE_HEADER]: `sha256=${sig}`,
+    },
+    rawBody: body,
+  });
+  const res = makeRes();
+  const { nextCalled, error } = collectNextError((next) => verifyWebhookSignature(req, res, next));
+  assert.equal(nextCalled, true);
+  assert.equal((error as { name?: string }).name, 'UnauthorizedError');
+  assert.equal((error as { code?: string }).code, 'INVALID_WEBHOOK_SIGNATURE');
+});
+
+test('WebhookStore.getActiveSecrets excludes the previous secret after previous_expires_at', () => {
+  const config = {
+    developerId: 'dev-expired',
+    url: 'https://example.com/webhook',
+    events: ['new_api_call'],
+    secret_current: 'current-secret',
+    secret_previous: 'previous-secret',
+    previous_expires_at: new Date('2026-06-25T12:00:00.000Z'),
+    createdAt: new Date('2026-06-25T11:00:00.000Z'),
+  };
+
+  assert.deepEqual(
+    WebhookStore.getActiveSecrets(config, new Date('2026-06-25T11:59:59.000Z')),
+    ['current-secret', 'previous-secret'],
+  );
+  assert.deepEqual(
+    WebhookStore.getActiveSecrets(config, new Date('2026-06-25T12:00:01.000Z')),
+    ['current-secret'],
+  );
 });
 
 test('verifyWebhookSignature handles empty rawBody gracefully', (done) => {
