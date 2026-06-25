@@ -225,6 +225,110 @@ describe('gatewayApiKeyAuth middleware', () => {
     expect(res.body.message).toBe('Unauthorized: API key does not grant access to this API');
   });
 
+  describe('scope enforcement', () => {
+    function buildAppWithScope(overrides?: {
+      candidates?: GatewayAuthCandidate[];
+      requiredScope?: string;
+      resolveApiContext?: () => { api: { id: string }; endpoint: { endpointId: string } } | null;
+    }) {
+      const app = express();
+      app.use(express.json());
+
+      app.get(
+        '/gateway/:apiId',
+        createGatewayApiKeyAuthMiddleware({
+          requiredScope: overrides?.requiredScope ?? 'read',
+          async getApiKeyCandidates(prefix) {
+            if (prefix !== validPrefix) return [];
+            return overrides?.candidates ?? [baseCandidate];
+          },
+          resolveApiContext() {
+            if (overrides?.resolveApiContext !== undefined) return overrides.resolveApiContext();
+            return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
+          },
+          getApiId(api) { return api.id; },
+        }),
+        (req, res) => { res.json({ allowed: true }); },
+      );
+
+      app.use(errorHandler);
+      return app;
+    }
+
+    it('allows a key with the required scope', async () => {
+      const app = buildAppWithScope({
+        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: ['read'] } }],
+        requiredScope: 'read',
+      });
+
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+      expect(res.body.allowed).toBe(true);
+    });
+
+    it('allows a key with wildcard scope', async () => {
+      const app = buildAppWithScope({
+        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: ['*'] } }],
+        requiredScope: 'write',
+      });
+
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects a key missing the required scope with 403', async () => {
+      const app = buildAppWithScope({
+        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: ['read'] } }],
+        requiredScope: 'write',
+      });
+
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(403);
+      expect(res.body.message).toBe('Forbidden: API key lacks required scope');
+      expect(res.body.code).toBe('FORBIDDEN');
+    });
+
+    it('allows a legacy key with no scopes (defaults to read-only) for read scope', async () => {
+      const app = buildAppWithScope({
+        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: [] } }],
+        requiredScope: 'read',
+      });
+
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects a legacy key with no scopes for non-read scope', async () => {
+      const app = buildAppWithScope({
+        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: [] } }],
+        requiredScope: 'write',
+      });
+
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(403);
+    });
+
+    it('allows a key with multiple scopes when one matches', async () => {
+      const app = buildAppWithScope({
+        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: ['read', 'write'] } }],
+        requiredScope: 'read',
+      });
+
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+    });
+
+    it('omits scope check when requiredScope is not set (backward compat)', async () => {
+      const app = buildAppWithScope({
+        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: ['read'] } }],
+        requiredScope: undefined,
+      });
+
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+    });
+  });
+
   it('returns 404 when the target API cannot be resolved', async () => {
     const app = buildApp({
       resolveApiContext: () => null,
