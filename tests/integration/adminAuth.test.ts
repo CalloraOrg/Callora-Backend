@@ -181,7 +181,15 @@ describe('adminAuth middleware on /api/admin routes', () => {
     expect(logger.audit).toHaveBeenCalledWith(
       'LIST_USERS',
       'admin-api-key',
-      expect.objectContaining({ count: 0, total: 0 })
+      expect.objectContaining({
+        clientIp: expect.any(String),
+        userAgent: undefined,
+        diff: {
+          query: {},
+        },
+        count: 0,
+        total: 0,
+      })
     );
   });
 
@@ -200,7 +208,15 @@ describe('adminAuth middleware on /api/admin routes', () => {
     expect(logger.audit).toHaveBeenCalledWith(
       'LIST_USERS',
       'admin-1',
-      expect.objectContaining({ count: 0, total: 0 })
+      expect.objectContaining({
+        clientIp: expect.any(String),
+        userAgent: undefined,
+        diff: {
+          query: {},
+        },
+        count: 0,
+        total: 0,
+      })
     );
   });
 
