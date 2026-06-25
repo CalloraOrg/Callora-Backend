@@ -621,3 +621,119 @@ describe('Edge cases', () => {
     expect(cache.size).toBe(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 7. warmupListingsCache
+// ═════════════════════════════════════════════════════════════════════════════
+
+import { warmupListingsCache } from '../lib/listingsCache.js';
+
+describe('warmupListingsCache', () => {
+  const silentLogger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('populates the cache with the default page on success', async () => {
+    const cache = new ListingsCache<string[]>({ ttlMs: 30_000 });
+    const listPublic = jest.fn().mockResolvedValue(['api-1', 'api-2']);
+
+    const result = await warmupListingsCache(cache, listPublic, {
+      timeoutMs: 1_000,
+      logger: silentLogger,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.entriesLoaded).toBe(1);
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+
+    const key = buildCacheKey({ limit: 20, offset: 0 });
+    expect(cache.get(key)).toEqual(['api-1', 'api-2']);
+  });
+
+  it('logs completion with duration on success', async () => {
+    const cache = new ListingsCache<string[]>({ ttlMs: 30_000 });
+    const listPublic = jest.fn().mockResolvedValue([]);
+
+    await warmupListingsCache(cache, listPublic, {
+      timeoutMs: 1_000,
+      logger: silentLogger,
+    });
+
+    expect(silentLogger.log).toHaveBeenCalledWith(
+      expect.stringContaining('warmup completed'),
+    );
+  });
+
+  it('returns success=false and warns when DB is unreachable', async () => {
+    const cache = new ListingsCache<string[]>({ ttlMs: 30_000 });
+    const listPublic = jest.fn().mockRejectedValue(new Error('DB connection refused'));
+
+    const result = await warmupListingsCache(cache, listPublic, {
+      timeoutMs: 1_000,
+      logger: silentLogger,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.entriesLoaded).toBe(0);
+    expect(result.reason).toContain('DB connection refused');
+    expect(cache.size).toBe(0);
+    expect(silentLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('warmup skipped'),
+    );
+  });
+
+  it('times out and returns success=false when listPublic is too slow', async () => {
+    jest.useFakeTimers();
+    const cache = new ListingsCache<string[]>({ ttlMs: 30_000 });
+
+    const listPublic = jest.fn().mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve([]), 10_000)),
+    );
+
+    const warmupPromise = warmupListingsCache(cache, listPublic, {
+      timeoutMs: 500,
+      logger: silentLogger,
+    });
+
+    jest.advanceTimersByTime(600);
+    const result = await warmupPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('timed out');
+    expect(cache.size).toBe(0);
+    expect(silentLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('warmup skipped'),
+    );
+
+    jest.useRealTimers();
+  });
+
+  it('boot continues even when warmup fails', async () => {
+    const cache = new ListingsCache<string[]>({ ttlMs: 30_000 });
+    const listPublic = jest.fn().mockRejectedValue(new Error('DB down'));
+
+    await expect(
+      warmupListingsCache(cache, listPublic, {
+        timeoutMs: 1_000,
+        logger: silentLogger,
+      }),
+    ).resolves.toMatchObject({ success: false });
+  });
+
+  it('does not throw when listPublic returns empty array', async () => {
+    const cache = new ListingsCache<unknown[]>({ ttlMs: 30_000 });
+    const listPublic = jest.fn().mockResolvedValue([]);
+
+    const result = await warmupListingsCache(cache, listPublic, {
+      timeoutMs: 1_000,
+      logger: silentLogger,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.entriesLoaded).toBe(1);
+    const key = buildCacheKey({ limit: 20, offset: 0 });
+    expect(cache.get(key)).toEqual([]);
+  });
+});

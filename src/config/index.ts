@@ -192,4 +192,7 @@ export const config = {
   idempotency: {
     retentionWindowSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
   },
+  listingsCache: {
+    warmupTimeoutMs: env.LISTINGS_CACHE_WARMUP_TIMEOUT_MS,
+  },
 } as const;

@@ -27,7 +27,7 @@ import { createPostgresSettlementStore } from './services/settlementStore.js';
 import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
 import { config } from './config/index.js';
-import { pool } from './db.js';
+import { listingsCache } from './lib/listingsCache.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution = process.argv[1] && (process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('index.js'));
@@ -340,6 +340,22 @@ if (isDirectExecution) {
   async function startServer() {
     try {
       await initializeDb();
+
+      // Warm the listings cache before accepting traffic so the first
+      // request after a deploy is served from cache, not from a cold DB hit.
+      const { warmupListingsCache } = await import('./lib/listingsCache.js');
+      const { defaultApiRepository } = await import('./repositories/apiRepository.js');
+      await warmupListingsCache(
+        listingsCache,
+        (params) => defaultApiRepository.listPublic({
+          limit: params.limit,
+          offset: params.offset,
+          category: params.category,
+          search: params.search,
+        }),
+        { timeoutMs: config.listingsCache.warmupTimeoutMs },
+      );
+
       revenueLedgerIndexerJob.start();
       settlementStatusSyncJob.start();
       
