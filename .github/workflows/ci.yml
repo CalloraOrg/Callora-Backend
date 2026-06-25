@@ -36,6 +36,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Run OpenAPI Contract Test
+        run: npm run test:contract
+
       - name: Run Webhook Dispatch Pipeline Test
         run: NODE_ENV=test npm test -- tests/integration/webhook-dispatch-pipeline.test.ts --runInBand
 

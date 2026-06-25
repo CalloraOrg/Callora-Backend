@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "validate:issue-9": "node scripts/validate-issue-9.mjs",
     "test": "jest --forceExit",
+    "test:contract": "jest --runInBand --forceExit src/__tests__/openapiContract.test.ts",
     "test:serial": "jest --runInBand --forceExit",
     "test:unit": "jest --runInBand --forceExit --testPathIgnorePatterns tests/integration",
     "test:integration": "jest --runInBand --forceExit tests/integration",
