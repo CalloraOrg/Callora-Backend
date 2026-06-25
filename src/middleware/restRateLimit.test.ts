@@ -50,6 +50,9 @@ describe('restRateLimit middleware', () => {
     expect(response.status).toBe(429);
     expect(response.body.code).toBe('TOO_MANY_REQUESTS');
     expect(response.headers['retry-after']).toBe('60');
+    expect(typeof response.body.retryAfterMs).toBe('number');
+    expect(response.body.retryAfterMs).toBeGreaterThan(0);
+    expect(response.body.retryAfterMs).toBeLessThanOrEqual(60_000);
   });
 
   test('tracks limits separately per authenticated user id', async () => {
@@ -89,5 +92,22 @@ describe('restRateLimit middleware', () => {
     expect(response.status).toBe(429);
     expect(response.body.code).toBe('TOO_MANY_REQUESTS');
     expect(response.headers['retry-after']).toBe('60');
+    expect(typeof response.body.retryAfterMs).toBe('number');
+    expect(response.body.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  test('retryAfterMs is consistent with Retry-After header (within same second)', async () => {
+    const app = buildProtectedApp();
+
+    await request(app).get('/protected').set('x-user-id', 'user-boundary').expect(200);
+    await request(app).get('/protected').set('x-user-id', 'user-boundary').expect(200);
+    const response = await request(app).get('/protected').set('x-user-id', 'user-boundary');
+
+    expect(response.status).toBe(429);
+    const retryAfterMs: number = response.body.retryAfterMs;
+    const retryAfterHeader = Number(response.headers['retry-after']) * 1000;
+    // retryAfterMs must round up to the same second as the header
+    expect(Math.ceil(retryAfterMs / 1000) * 1000).toBeLessThanOrEqual(retryAfterHeader);
+    expect(retryAfterMs).toBeGreaterThan(0);
   });
 });
