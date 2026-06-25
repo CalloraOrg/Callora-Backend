@@ -186,3 +186,50 @@ export class CircuitBreaker {
 export function createCircuitBreaker(config: CircuitBreakerConfig = {}): CircuitBreaker {
   return new CircuitBreaker(config);
 }
+
+/**
+ * Registry that maps API slugs to their circuit breaker instances.
+ *
+ * Used by the gateway health endpoint to retrieve per-slug breaker state
+ * without exposing any tenant identifiers.
+ */
+export class BreakerRegistry {
+  private breakers = new Map<string, CircuitBreaker>();
+
+  /**
+   * Returns the existing breaker for the given slug, or creates one.
+   */
+  getOrCreate(slug: string, config?: CircuitBreakerConfig): CircuitBreaker {
+    let breaker = this.breakers.get(slug);
+    if (!breaker) {
+      breaker = new CircuitBreaker(config);
+      this.breakers.set(slug, breaker);
+    }
+    return breaker;
+  }
+
+  /**
+   * Retrieve the current state of the circuit breaker for a given slug.
+   * Returns CLOSED if no breaker exists yet (no failures recorded).
+   */
+  getState(slug: string): CircuitBreakerState {
+    const breaker = this.breakers.get(slug);
+    if (!breaker) {
+      return CircuitBreakerState.CLOSED;
+    }
+    return breaker.getState();
+  }
+}
+
+let _defaultRegistry: BreakerRegistry | undefined;
+
+/**
+ * Returns a lazily-created singleton BreakerRegistry.
+ * Avoids import-time side effects that break test mocks.
+ */
+export function getDefaultBreakerRegistry(): BreakerRegistry {
+  if (!_defaultRegistry) {
+    _defaultRegistry = new BreakerRegistry();
+  }
+  return _defaultRegistry;
+}
