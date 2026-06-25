@@ -15,6 +15,7 @@ import {
 } from '../services/transactionBuilder.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
 import { config } from '../config/index.js';
+import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
 
 export interface DepositPrepareRequest {
   amount_usdc: string;
@@ -210,19 +211,19 @@ export class DepositController {
         code: 'NETWORK_UNAVAILABLE',
         network: error.message,
       });
+    } else if (error instanceof SimulationError) {
+      // Log full diagnostics at warning level, but only expose a redacted summary.
+      console.warn('Soroban simulation diagnostics:', error.simulationDetails);
+      const redacted = redactSimulationDetails(error.simulationDetails);
+      res.status(502).json({
+        error: 'Soroban simulation failed. See diagnostics for details.',
+        code: 'SIMULATION_FAILED',
+        simulationDetails: redacted,
+      });
     } else if (error instanceof TransactionBuildError) {
       res.status(502).json({
         error: 'Failed to build Stellar transaction. Please try again later.',
         code: 'TRANSACTION_BUILD_FAILED',
-      });
-    } else if (error instanceof SimulationError) {
-      // Log full diagnostics at warning level, but only expose a redacted summary.
-      console.warn('Soroban simulation diagnostics:', error.simulationDetails);
-      const redacted = this.redactSimulationDetails(error.simulationDetails);
-      res.status(502).json({
-        error: 'Soroban simulation failed. See diagnostics for details.',
-        code: 'SIMULATION_FAILED',
-        diagnostics: redacted,
       });
     } else {
       // Generic error - don't reveal sensitive details
@@ -233,24 +234,4 @@ export class DepositController {
     }
   }
 
-  /**
-   * Redact any potentially sensitive fields (e.g., full contract state or
-   * account balances) from the simulation details before sending them to the
-   * client. The exact shape depends on the Soroban RPC response, so we perform a
-   * shallow removal of known secret keys.
-   */
-  private redactSimulationDetails(details: unknown): unknown {
-    if (typeof details !== 'object' || details === null) {
-      return details;
-    }
-    const clone: any = Array.isArray(details) ? [] : {};
-    for (const [k, v] of Object.entries(details as any)) {
-      if (k.toLowerCase().includes('secret') || k.toLowerCase().includes('balance')) {
-        clone[k] = '[REDACTED]';
-      } else {
-        clone[k] = v;
-      }
-    }
-    return clone;
-  }
 }

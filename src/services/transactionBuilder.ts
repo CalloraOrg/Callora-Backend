@@ -8,6 +8,10 @@ import {
 } from '@stellar/stellar-sdk';
 import { config } from '../config/index.js';
 import { withRetry } from '../lib/retry.js';
+import {
+  extractSimulationDetails,
+  type SimulationDetails,
+} from '../lib/simulationDiagnostics.js';
 
 export type StellarNetwork = 'testnet' | 'mainnet';
 
@@ -109,12 +113,12 @@ export class TransactionBuildError extends Error {
  */
 export class SimulationError extends TransactionBuildError {
   /** Structured diagnostics returned by the Soroban RPC simulation endpoint. */
-  public readonly simulationDetails: unknown;
+  public readonly simulationDetails: SimulationDetails;
 
   constructor(message: string, simulationDetails: unknown) {
     super(message);
     this.name = 'SimulationError';
-    this.simulationDetails = simulationDetails;
+    this.simulationDetails = extractSimulationDetails(simulationDetails);
   }
 }
 

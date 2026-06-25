@@ -16,6 +16,7 @@ import {
   type BillingDeductRequest,
   type SorobanClient,
 } from './billing.js';
+import { SorobanRpcError } from './sorobanBilling.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -382,6 +383,36 @@ describe('BillingService.deduct - balance and Soroban failures', () => {
     // usageEventId is returned so the pending row can be identified for reconciliation
     assert.equal(result.usageEventId, '5');
     assert.equal(soroban.getDeductCount(), 1);
+  });
+
+  test('preserves simulation diagnostics on permanent Soroban deduct failure', async () => {
+    const client = createMockClient([
+      makeQr(), makeQr(), makeQr(), makeQr([{ id: 6 }]), makeQr(),
+    ]);
+    const pool = createMockPool(client);
+    const soroban = createMockSorobanClient({
+      balance: '500000',
+      deductFailures: [
+        new SorobanRpcError('auth failed', 'CONTRACT_ERROR', {
+          errorCode: 'tx_bad_auth',
+          errorMessage: 'auth failed',
+          events: [{ type: 'diagnostic' }],
+          footprint: { readWrite: ['ledger-key'] },
+        }),
+      ],
+    });
+    const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
+
+    const result = await svc.deduct(baseRequest);
+
+    assert.equal(result.success, false);
+    assert.equal(result.usageEventId, '6');
+    assert.deepEqual(result.simulationDetails, {
+      errorCode: 'tx_bad_auth',
+      errorMessage: 'auth failed',
+      events: [{ type: 'diagnostic' }],
+      footprint: { readWrite: ['ledger-key'] },
+    });
   });
 });
 

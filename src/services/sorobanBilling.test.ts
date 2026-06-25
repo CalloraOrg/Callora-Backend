@@ -133,6 +133,39 @@ describe('SorobanRpcBillingClient', () => {
       /insufficient balance/
     );
   });
+
+  test('attaches structured simulation diagnostics to RPC errors', async () => {
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        result: {
+          error: {
+            code: 'tx_bad_auth',
+            message: 'auth failed',
+          },
+          events: [{ type: 'diagnostic', account: 'GSECRETACCOUNT' }],
+          footprint: { readWrite: ['ledger-key'], balance: '1000' },
+        },
+      }),
+    })) as unknown as typeof fetch;
+
+    const client = createSorobanRpcBillingClient({
+      rpcUrl: 'http://soroban-rpc.internal',
+      contractId: 'contract_abc',
+      fetchImpl,
+    });
+
+    const err = await client.deductBalance('user_123', '1000').catch((e) => e);
+
+    assert.ok(err instanceof SorobanRpcError);
+    assert.deepEqual(err.simulationDetails, {
+      errorCode: 'tx_bad_auth',
+      errorMessage: 'auth failed',
+      events: [{ type: 'diagnostic', account: '[REDACTED]' }],
+      footprint: { readWrite: ['ledger-key'], balance: '[REDACTED]' },
+    });
+  });
 });
 
 describe('SorobanRpcError categories', () => {

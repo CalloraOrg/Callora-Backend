@@ -74,7 +74,11 @@ export class InternalServerError extends AppError {
 }
 
 export class BadGatewayError extends AppError {
-  constructor(message: string = 'Bad Gateway', code?: string) {
+  constructor(
+    message: string = 'Bad Gateway',
+    code?: string,
+    public readonly simulationDetails?: unknown
+  ) {
     super(message, 502, code ?? 'BAD_GATEWAY');
     this.name = 'BadGatewayError';
   }

@@ -30,6 +30,7 @@
  */
 
 import type { Pool, PoolClient } from 'pg';
+import type { SimulationDetails } from '../lib/simulationDiagnostics.js';
 
 const USDC_7_DECIMAL_FACTOR = 10_000_000n;
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
@@ -52,6 +53,7 @@ export interface BillingDeductResult {
   deductionApplied: boolean;
   reconciliationRequired: boolean;
   error?: string;
+  simulationDetails?: SimulationDetails;
 }
 
 export interface SorobanBalanceResult {
@@ -119,6 +121,13 @@ function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
   return 'Unknown error';
+}
+
+function getSimulationDetails(error: unknown): SimulationDetails | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const details = (error as { simulationDetails?: unknown }).simulationDetails;
+  if (!details || typeof details !== 'object') return undefined;
+  return details as SimulationDetails;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -272,6 +281,7 @@ export class BillingService {
         deductionApplied: false,
         reconciliationRequired: false,
         error: `Balance check failed: ${normalizeErrorMessage(error)}`,
+        simulationDetails: getSimulationDetails(error),
       };
     }
 
@@ -365,6 +375,7 @@ export class BillingService {
         deductionApplied: false,
         reconciliationRequired: true,
         error: normalizeErrorMessage(error),
+        simulationDetails: getSimulationDetails(error),
       };
     }
 
