@@ -138,6 +138,10 @@ export const config = {
     maxRequests: env.WEBHOOK_RATE_LIMIT_MAX_REQUESTS ?? env.REST_RATE_LIMIT_MAX_REQUESTS,
   },
 
+  webhooks: {
+    secretRotationGraceMs: env.WEBHOOK_SECRET_ROTATION_GRACE_MS,
+  },
+
   rateLimiter: {
     maxRequests: env.RATE_LIMIT_MAX_REQUESTS,
     windowMs: env.RATE_LIMIT_WINDOW_MS,

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import express from 'express';
+import crypto from 'crypto';
 import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
 import { WebhookStore } from './webhook.store.js';
 import { WebhookEventType } from './webhook.types.js';
@@ -10,6 +11,7 @@ import {
 import { AppError, BadRequestError, NotFoundError } from '../errors/index.js';
 import { createRestRateLimitMiddleware } from '../middleware/restRateLimit.js';
 import { config } from '../config/index.js';
+import { logger } from '../logger.js';
 
 const router = Router();
 
@@ -26,6 +28,10 @@ const VALID_EVENTS: WebhookEventType[] = [
   'settlement_completed',
   'low_balance_alert',
 ];
+
+function generateWebhookSecret(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
 
 // POST /api/webhooks — Register a webhook
 router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res: Response, next: NextFunction) => {
@@ -63,7 +69,7 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       developerId,
       url,
       events: events as WebhookEventType[],
-      secret: secret ?? undefined,
+      secret_current: secret ?? undefined,
       createdAt: new Date(),
     });
 
@@ -89,8 +95,48 @@ router.get('/:developerId', webhookMgmtRateLimit, (req: Request, res: Response) 
   }
   // Never expose the secret
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { secret: _s, ...safeConfig } = config;
+  const {
+    secret: _s,
+    secret_current: _sc,
+    secret_previous: _sp,
+    ...safeConfig
+  } = config;
   return res.json(safeConfig);
+});
+
+// POST /api/webhooks/:developerId/rotate-secret — Rotate webhook signing secret
+router.post('/:developerId/rotate-secret', webhookMgmtRateLimit, (req: Request, res: Response) => {
+  const existing = WebhookStore.get(req.params.developerId);
+  if (!existing) {
+    throw new NotFoundError(
+      'No webhook registered for this developer.',
+      'WEBHOOK_NOT_FOUND'
+    );
+  }
+
+  const newSecret = generateWebhookSecret();
+  const previousExpiresAt = new Date(Date.now() + config.webhooks.secretRotationGraceMs);
+  const rotated = WebhookStore.rotateSecret(req.params.developerId, newSecret, previousExpiresAt);
+
+  if (!rotated) {
+    throw new NotFoundError(
+      'No webhook registered for this developer.',
+      'WEBHOOK_NOT_FOUND'
+    );
+  }
+
+  logger.audit('WEBHOOK_SECRET_ROTATED', req.params.developerId, {
+    developerId: req.params.developerId,
+    previousExpiresAt: rotated.previous_expires_at?.toISOString(),
+    hadPreviousSecret: Boolean(existing.secret_current ?? existing.secret),
+  });
+
+  return res.status(200).json({
+    message: 'Webhook secret rotated successfully.',
+    developerId: req.params.developerId,
+    secret: newSecret,
+    previous_expires_at: rotated.previous_expires_at?.toISOString(),
+  });
 });
 
 // DELETE /api/webhooks/:developerId — Remove webhook
@@ -115,7 +161,7 @@ router.post(
   '/deliver/:developerId',
   captureRawBody,
   // Attach the stored secret so verifyWebhookSignature can read it
-  (req: Request & { webhookSecret?: string }, res: Response, next) => {
+  (req: Request & { webhookSecrets?: string[] }, res: Response, next) => {
     const config = WebhookStore.get(req.params.developerId);
     if (!config) {
       next(new NotFoundError(
@@ -124,7 +170,7 @@ router.post(
       ));
       return;
     }
-    req.webhookSecret = config.secret;
+    req.webhookSecrets = WebhookStore.getActiveSecrets(config);
     next();
   },
   verifyWebhookSignature,

@@ -65,6 +65,10 @@ In production, unexpected non-`AppError` messages are masked to `"Internal serve
 }
 ```
 
+Pagination query validation uses this same envelope. Invalid integer fields such
+as `limit=10.0`, `limit=1e2`, or `limit=0x10` return HTTP 400 with
+`code: "VALIDATION_ERROR"` and a `details` entry for `query.limit`.
+
 ## Error classes from `src/errors/index.ts`
 
 Every subclass accepts an optional custom `code` argument. The table lists the

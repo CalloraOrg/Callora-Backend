@@ -7,7 +7,10 @@ export interface WebhookConfig {
     developerId: string;
     url: string;
     events: string[];
-    secret?: string; // for HMAC signature (optional but recommended)
+    secret?: string; // legacy alias for secret_current
+    secret_current?: string; // for HMAC signature (optional but recommended)
+    secret_previous?: string;
+    previous_expires_at?: Date;
     createdAt: Date;
 }
 
