@@ -15,6 +15,7 @@ export interface GatewayApiKeyRecord {
   rateLimitPerMinute?: number | null;
   createdAt?: Date | string;
   lastUsedAt?: Date | string | null;
+  tier?: string;
 }
 
 export interface GatewayAuthCandidate<
@@ -58,6 +59,7 @@ export interface InMemoryGatewayApiKey {
   developerId: string;
   apiId: string;
   revoked?: boolean;
+  tier?: string;
 }
 
 export interface GatewayAuthQueryable {
@@ -75,6 +77,7 @@ export interface DatabaseGatewayApiKeyRow {
   rate_limit_per_minute: number | null;
   created_at: string | Date | null;
   last_used_at: string | Date | null;
+  plan_tier: string | null;
   user: Record<string, unknown> | null;
   vault: Record<string, unknown> | null;
 }
@@ -222,6 +225,9 @@ export function createGatewayApiKeyAuthMiddleware<
     req.api = resolvedContext.api as Record<string, unknown>;
     req.endpoint = resolvedContext.endpoint as Record<string, unknown>;
 
+    res.locals = res.locals || {};
+    res.locals.apiKeyTier = matchedCandidate.apiKeyRecord.tier;
+
     next();
   };
 }
@@ -249,6 +255,7 @@ export function createMapBackedGatewayApiKeyAuthMiddleware<
             prefix: rawKey.slice(0, API_KEY_PREFIX_LENGTH),
             keyHash: sha256Hex(rawKey),
             revoked: record.revoked ?? false,
+            tier: record.tier,
           },
           user: { id: record.developerId },
           vault: null,
@@ -287,6 +294,7 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
             ak.rate_limit_per_minute,
             ak.created_at,
             ak.last_used_at,
+            ak.plan_tier,
             row_to_json(u) AS "user",
             row_to_json(v) AS vault
           FROM api_keys ak
@@ -318,6 +326,7 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
           rateLimitPerMinute: row.rate_limit_per_minute,
           createdAt: row.created_at ?? undefined,
           lastUsedAt: row.last_used_at ?? undefined,
+          tier: row.plan_tier ?? undefined,
         },
         user: row.user ?? {},
         vault: row.vault,

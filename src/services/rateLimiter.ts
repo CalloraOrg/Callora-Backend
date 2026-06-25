@@ -29,9 +29,23 @@ export interface PersistentRateLimiterStoreOptions {
   tableName?: string;
 }
 
+export type PlanTier = 'free' | 'pro' | 'enterprise';
+
+export interface TierPolicy {
+  maxRequests: number;
+  windowMs: number;
+}
+
+export const DEFAULT_TIER_POLICIES: Record<PlanTier, TierPolicy> = {
+  free:       { maxRequests: 100,  windowMs: 60_000 },
+  pro:        { maxRequests: 500,  windowMs: 60_000 },
+  enterprise: { maxRequests: 5000, windowMs: 60_000 },
+};
+
 export interface ConfiguredRateLimiterOptions {
   maxRequests?: number;
   windowMs?: number;
+  tierPolicies?: Partial<Record<PlanTier, TierPolicy>>;
 }
 
 export interface PersistentRateLimiterConfig extends ConfiguredRateLimiterOptions {
@@ -299,25 +313,42 @@ export class StoreBackedRateLimiter implements RateLimiter {
   protected readonly maxRequests: number;
   protected readonly store: RateLimiterStore;
   protected readonly windowMs: number;
+  protected readonly tierPolicies: Record<PlanTier, TierPolicy>;
 
   constructor(
     maxRequests: number,
     windowMs: number,
     store: RateLimiterStore,
+    tierPolicies?: Partial<Record<PlanTier, TierPolicy>>,
   ) {
     const baseOptions = buildLimiterOptions(maxRequests, windowMs);
 
     this.maxRequests = baseOptions.maxRequests;
     this.windowMs = baseOptions.windowMs;
     this.store = store;
+    this.tierPolicies = {
+      ...DEFAULT_TIER_POLICIES,
+      ...tierPolicies,
+    };
   }
 
-  check(apiKey: string): Promise<RateLimitResult> {
+  check(apiKey: string, tier?: string): Promise<RateLimitResult> {
+    const policy = this.resolvePolicy(tier);
     return this.store.check(apiKey, {
-      maxRequests: this.maxRequests,
+      maxRequests: policy.maxRequests,
       now: Date.now(),
-      windowMs: this.windowMs,
+      windowMs: policy.windowMs,
     });
+  }
+
+  private resolvePolicy(tier?: string): TierPolicy {
+    if (!tier || !(tier in this.tierPolicies)) {
+      if (tier) {
+        console.warn(`[rateLimiter] Unknown tier "${tier}", using default`);
+      }
+      return { maxRequests: this.maxRequests, windowMs: this.windowMs };
+    }
+    return this.tierPolicies[tier as PlanTier]!;
   }
 }
 
@@ -328,9 +359,13 @@ export class StoreBackedRateLimiter implements RateLimiter {
 export class InMemoryRateLimiter extends StoreBackedRateLimiter {
   private readonly inMemoryStore: InMemoryRateLimiterStore;
 
-  constructor(maxRequests: number, windowMs: number) {
+  constructor(
+    maxRequests: number,
+    windowMs: number,
+    tierPolicies?: Partial<Record<PlanTier, TierPolicy>>,
+  ) {
     const inMemoryStore = new InMemoryRateLimiterStore();
-    super(maxRequests, windowMs, inMemoryStore);
+    super(maxRequests, windowMs, inMemoryStore, tierPolicies);
     this.inMemoryStore = inMemoryStore;
   }
 
@@ -348,8 +383,9 @@ export class InMemoryRateLimiter extends StoreBackedRateLimiter {
 export function createRateLimiter(
   maxRequests = DEFAULT_MAX_REQUESTS,
   windowMs = DEFAULT_WINDOW_MS,
+  tierPolicies?: Partial<Record<PlanTier, TierPolicy>>,
 ): InMemoryRateLimiter {
-  return new InMemoryRateLimiter(maxRequests, windowMs);
+  return new InMemoryRateLimiter(maxRequests, windowMs, tierPolicies);
 }
 
 export function createConfiguredRateLimiter(
@@ -358,6 +394,7 @@ export function createConfiguredRateLimiter(
 ): RateLimiter {
   const maxRequests = config.maxRequests ?? DEFAULT_MAX_REQUESTS;
   const windowMs = config.windowMs ?? DEFAULT_WINDOW_MS;
+  const tierPolicies = config.tierPolicies;
 
   if (config.store === 'postgres') {
     if (!persistentPool) {
@@ -372,10 +409,11 @@ export function createConfiguredRateLimiter(
       new PostgresRateLimiterStore(persistentPool, {
         tableName: config.tableName,
       }),
+      tierPolicies,
     );
   }
 
-  return createRateLimiter(maxRequests, windowMs);
+  return createRateLimiter(maxRequests, windowMs, tierPolicies);
 }
 
 export function isPersistentRateLimiterStore(

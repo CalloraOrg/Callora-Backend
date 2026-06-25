@@ -7,6 +7,7 @@ export interface ApiKey {
   developerId: string;
   apiId: string;
   revoked?: boolean;
+  tier?: string;
 }
 
 /** A single recorded usage event from a proxied request. */
@@ -70,7 +71,7 @@ export interface BillingService {
 
 /** Interface for rate limiting. */
 export interface RateLimiter {
-  check(apiKey: string): Promise<RateLimitResult>;
+  check(apiKey: string, tier?: string): Promise<RateLimitResult>;
 }
 
 /** Interface for recording and querying usage events. */
