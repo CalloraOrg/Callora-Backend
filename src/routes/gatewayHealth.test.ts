@@ -7,7 +7,7 @@ import * as metricsModule from '../metrics.js';
 const { startUpstreamTimer, resetUpstreamMetrics, getUpstreamHealth } = metricsModule;
 import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { BreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
-import type { ApiRegistryEntry } from '../types/gateway.js';
+import type { ApiRegistryEntry, GatewayDeps } from '../types/gateway.js';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -29,12 +29,15 @@ const MOCK_ENTRY_NO_TRAFFIC: ApiRegistryEntry = {
 
 function buildDeps(overrides: Record<string, unknown> = {}) {
   return {
-    billing: { deductCredit: async () => ({ success: true }) },
+    billing: {
+      deductCredit: async () => ({ success: true }),
+      checkBalance: async () => 1,
+    },
     rateLimiter: { check: () => ({ allowed: true }) },
     usageStore: { record: () => true },
     upstreamUrl: 'http://example.invalid',
     ...overrides,
-  };
+  } as unknown as GatewayDeps;
 }
 
 // ── Setup / teardown ─────────────────────────────────────────────────────────
@@ -225,10 +228,10 @@ describe('GET /health/:apiSlug', () => {
         cooldownMs: 60_000,
       });
       const failOp = jest.fn().mockRejectedValue(new Error('fail'));
-      await breaker.execute(failOp).catch(() => {});
-      await breaker.execute(failOp).catch(() => {});
+      await breaker.execute(MOCK_ENTRY.slug, failOp).catch(() => {});
+      await breaker.execute(MOCK_ENTRY.slug, failOp).catch(() => {});
 
-      expect(breaker.getState()).toBe(CircuitBreakerState.OPEN);
+      expect(await breaker.getState(MOCK_ENTRY.slug)).toBe(CircuitBreakerState.OPEN);
 
       const app = express();
       app.use(requestIdMiddleware);
@@ -256,9 +259,9 @@ describe('GET /health/:apiSlug', () => {
         cooldownMs: 10_000,
       });
       const failOp = jest.fn().mockRejectedValue(new Error('fail'));
-      await breaker.execute(failOp).catch(() => {});
+      await breaker.execute(MOCK_ENTRY.slug, failOp).catch(() => {});
 
-      expect(breaker.getState()).toBe(CircuitBreakerState.OPEN);
+      expect(await breaker.getState(MOCK_ENTRY.slug)).toBe(CircuitBreakerState.OPEN);
 
       // Advance past cooldown — this will transition to HALF_OPEN on next execute
       jest.advanceTimersByTime(10_000);
@@ -268,7 +271,7 @@ describe('GET /health/:apiSlug', () => {
 
       // Actually, the transition happens when execute() is called. Let me directly manipulate
       // the state by using a spy.
-      jest.spyOn(breaker, 'getState').mockReturnValue(CircuitBreakerState.HALF_OPEN);
+      jest.spyOn(breaker, 'getState').mockResolvedValue(CircuitBreakerState.HALF_OPEN);
 
       const app = express();
       app.use(requestIdMiddleware);

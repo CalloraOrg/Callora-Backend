@@ -31,9 +31,22 @@
 
 import type { Pool, PoolClient } from 'pg';
 import type { SimulationDetails } from '../lib/simulationDiagnostics.js';
+import { DeveloperSemaphore } from '../utils/developerSemaphore.js';
 
 const USDC_7_DECIMAL_FACTOR = 10_000_000n;
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
+
+/**
+ * Per-user FIFO concurrency gate for billing deductions.
+ *
+ * The Soroban balance pre-check and the subsequent deduction are not atomic
+ * with each other (Soroban is an external ledger). Without serialisation, N
+ * concurrent requests for the same user can all observe the same balance and
+ * each pass the pre-check, leading to overdraft. Serialising per user (one slot
+ * each) makes the check-then-deduct sequence effectively atomic per user while
+ * leaving distinct users fully concurrent.
+ */
+export const billingConcurrencySemaphore = new DeveloperSemaphore(1);
 
 export interface BillingDeductRequest {
   requestId: string;
@@ -241,6 +254,14 @@ export class BillingService {
   }
 
   async deduct(request: BillingDeductRequest): Promise<BillingDeductResult> {
+    // Serialise deductions per user so the Soroban balance pre-check and the
+    // deduction cannot interleave across concurrent requests for the same user.
+    return billingConcurrencySemaphore.withSlot(request.userId, () =>
+      this.deductInternal(request),
+    );
+  }
+
+  private async deductInternal(request: BillingDeductRequest): Promise<BillingDeductResult> {
     // --- Validate amount before touching the DB ---
     let amountInContractUnits: bigint;
     try {

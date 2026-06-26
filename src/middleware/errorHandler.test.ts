@@ -139,8 +139,8 @@ describe('Error Handler', () => {
     expect(mockRes.json).not.toHaveBeenCalled();
   });
 
-  it('should include custom code when provided', () => {
-    const error = new AppError('Custom error', 422, 'CUSTOM_CODE');
+  it('should include explicit catalog code when provided', () => {
+    const error = new AppError('Custom error', 422, 'UNPROCESSABLE_ENTITY');
     
     errorHandler(
       error,
@@ -152,7 +152,7 @@ describe('Error Handler', () => {
     expect(mockRes.status).toHaveBeenCalledWith(422);
     expect(mockRes.json).toHaveBeenCalledWith({
       message: 'Custom error',
-      code: 'CUSTOM_CODE',
+      code: 'UNPROCESSABLE_ENTITY',
       requestId: 'test-request-id'
     });
   });

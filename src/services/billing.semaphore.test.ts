@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { Pool } from 'pg';
 import {
   BillingService,
   billingConcurrencySemaphore,
@@ -88,12 +89,12 @@ function createMockBillingPool() {
     },
   };
 
-  return { pool, events };
+  return { pool: pool as unknown as Pool, events };
 }
 
 function createSorobanMock(balances: Record<string, bigint>, failureAfter?: number) {
   const deductCalls: string[] = [];
-  const getBalanceCalls: number[] = [];
+  const getBalanceCalls: string[] = [];
   let failures = 0;
 
   const client: SorobanClient = {

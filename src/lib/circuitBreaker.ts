@@ -406,12 +406,12 @@ export class BreakerRegistry {
    * Retrieve the current state of the circuit breaker for a given slug.
    * Returns CLOSED if no breaker exists yet (no failures recorded).
    */
-  getState(slug: string): CircuitBreakerState {
+  async getState(slug: string): Promise<CircuitBreakerState> {
     const breaker = this.breakers.get(slug);
     if (!breaker) {
       return CircuitBreakerState.CLOSED;
     }
-    return breaker.getState();
+    return breaker.getState(slug);
   }
 }
 

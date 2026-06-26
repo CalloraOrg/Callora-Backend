@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { parsePagination, paginatedResponse } from '../pagination';
-import { ValidationError } from '../../middleware/validate';
+import { parsePagination, paginatedResponse } from '../pagination.js';
+import { ValidationError } from '../../middleware/validate.js';
 
 function assertValidationError(fn: () => unknown, field: string) {
-  assert.throws(fn, (err) => {
+  assert.throws(fn, (err: unknown) => {
     assert.ok(err instanceof ValidationError, `expected ValidationError, got ${err}`);
     assert.ok(
-      err.details.some((d) => d.field === field),
+      err.details.some((d: { field: string }) => d.field === field),
       `expected field "${field}" in details: ${JSON.stringify(err.details)}`,
     );
     return true;

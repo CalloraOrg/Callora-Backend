@@ -33,6 +33,9 @@ function createPrefixTestDb() {
   db.public.registerFunction({
     name: 'gen_random_uuid',
     returns: DataType.uuid,
+    // Mark impure so pg-mem invokes it per row instead of memoizing a single
+    // value — otherwise every DEFAULT id would be identical and collide.
+    impure: true,
     implementation: () => {
       counter++;
       return `00000000-0000-4000-a000-${String(counter).padStart(12, '0')}`;

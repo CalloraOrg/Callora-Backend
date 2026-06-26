@@ -222,19 +222,8 @@ class FakeApiRepository implements ApiRepository {
     return [];
   }
 
-  async delete() {
-    return true;
-  }
-
-  async bulkCreateEndpoints(_apiId: number, endpoints: import('./repositories/apiRepository.js').CreateEndpointInput[]) {
-    return endpoints.map((e, i) => ({
-      id: i + 1,
-      api_id: _apiId,
-      path: e.path,
-      method: e.method,
-      price_per_call_usdc: e.price_per_call_usdc,
-      description: e.description ?? null,
-    }));
+  async delete(_id: number) {
+    return false;
   }
 }
 
