@@ -163,13 +163,13 @@ export const defaultApiRepository: ApiRepository = {
   },
 
   async delete(id) {
-    const deleted = await db.delete(schema.apis).where(eq(schema.apis.id, id));
+    const result = await db.delete(schema.apis).where(eq(schema.apis.id, id));
 
     // Deletion may affect any listing (e.g., removed from public catalog).
     listingsCache.invalidateAll();
 
-    // Drizzle's delete() returns the number of rows deleted
-    return deleted > 0;
+    // Drizzle's delete() with better-sqlite3 returns a RunResult { changes, lastInsertRowid }.
+    return result.changes > 0;
   },
 
   async listByDeveloper(developerId, filters = {}) {
