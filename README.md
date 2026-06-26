@@ -189,6 +189,7 @@ callora-backend/
 | `STELLAR_TRANSACTION_TIMEOUT` | Transaction timeout (seconds) | `30` |
 | `BILLING_MAX_CONCURRENCY_PER_DEV` | Max concurrent deducts per developer | `1` |
 | `BILLING_SEMAPHORE_TTL_MS` | Idle semaphore state TTL in ms | `300000` |
+| `IDEMPOTENCY_SWEEPER_INTERVAL_MS` | Interval for periodic idempotency cleanup in milliseconds | `60000` |
 | `CIRCUIT_BREAKER_THRESHOLD` | Failures before opening circuit | `5` |
 | `CIRCUIT_BREAKER_COOLDOWN_MS` | Cooldown period (ms) | `30000` |
 | `RETRY_MAX_ATTEMPTS` | Maximum retry attempts | `3` |
