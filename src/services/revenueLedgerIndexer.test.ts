@@ -26,10 +26,12 @@ function createIndexerHarness() {
       api_id VARCHAR(255) NOT NULL,
       endpoint_id VARCHAR(255) NOT NULL,
       api_key_id VARCHAR(255) NOT NULL,
+      developer_id VARCHAR(255) NOT NULL DEFAULT '',
       amount_usdc NUMERIC(20, 0) NOT NULL,
-      request_id VARCHAR(255) NOT NULL UNIQUE,
+      request_id VARCHAR(255) NOT NULL,
       stellar_tx_hash VARCHAR(64),
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (request_id, developer_id)
     );
 
     CREATE TABLE apis (
@@ -68,6 +70,7 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
       apiId: 'api-1',
       endpointId: 'endpoint-1',
       apiKeyId: 'key-1',
+      developerId: 'dev-1',
       amount: 100n,
       requestId: 'req-1',
       createdAt: new Date('2026-02-01T10:00:00.000Z'),
@@ -77,6 +80,7 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
       apiId: 'api-2',
       endpointId: 'endpoint-2',
       apiKeyId: 'key-2',
+      developerId: 'dev-1',
       amount: 200n,
       requestId: 'req-2',
       createdAt: new Date('2026-02-02T10:00:00.000Z'),
@@ -86,6 +90,7 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
       apiId: 'api-1',
       endpointId: 'endpoint-3',
       apiKeyId: 'key-3',
+      developerId: 'dev-1',
       amount: 300n,
       requestId: 'req-3',
       createdAt: new Date('2026-02-03T10:00:00.000Z'),

@@ -141,13 +141,17 @@ export class PostgresUsageStore implements UsageStore {
             endpoint_id,
             api_key_id,
             api_key,
+            developer_id,
             amount_usdc,
             request_id,
             status_code,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (request_id) DO NOTHING
+          VALUES ($1, $2, $3, $4, $5, (
+            SELECT COALESCE(a.developer_id::text, '')
+            FROM apis a WHERE a.id = $2 LIMIT 1
+          ), $6, $7, $8, $9)
+          ON CONFLICT (request_id, developer_id) DO NOTHING
           RETURNING id
         `,
         [
