@@ -13,6 +13,12 @@ export interface CreateUsageEventInput {
   apiId: string;
   endpointId: string;
   apiKeyId: string;
+  /**
+   * Partition key for the hash-partitioned usage_events table.
+   * Should be set to the owning developer's ID on every insert.
+   * Defaults to '' for backward compatibility but callers should supply this.
+   */
+  developerId?: string;
   amount: bigint;
   requestId: string;
   stellarTxHash?: string | null;
@@ -25,6 +31,7 @@ export interface BillingUsageEvent {
   apiId: string;
   endpointId: string;
   apiKeyId: string;
+  developerId: string;
   amount: bigint;
   requestId: string;
   stellarTxHash: string | null;
@@ -58,6 +65,7 @@ interface UsageEventRow {
   api_id: string;
   endpoint_id: string;
   api_key_id: string;
+  developer_id: string;
   amount_usdc: string | number | bigint;
   request_id: string;
   stellar_tx_hash: string | null;
@@ -170,6 +178,7 @@ const mapUsageEventRow = (row: UsageEventRow): BillingUsageEvent => ({
   apiId: row.api_id,
   endpointId: row.endpoint_id,
   apiKeyId: row.api_key_id,
+  developerId: row.developer_id,
   amount: toBigInt(row.amount_usdc, 'amount_usdc'),
   requestId: row.request_id,
   stellarTxHash: row.stellar_tx_hash,
@@ -205,6 +214,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const apiId = assertNonEmpty(event.apiId, 'apiId');
     const endpointId = assertNonEmpty(event.endpointId, 'endpointId');
     const apiKeyId = assertNonEmpty(event.apiKeyId, 'apiKeyId');
+    const developerId = (event.developerId ?? '').trim();
     const requestId = assertNonEmpty(event.requestId, 'requestId');
     const amount = assertAmount(event.amount).toString();
 
@@ -215,13 +225,14 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
         api_id,
         endpoint_id,
         api_key_id,
+        developer_id,
         amount_usdc,
         request_id,
         stellar_tx_hash,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, NOW()))
-      ON CONFLICT (request_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()))
+      ON CONFLICT (request_id, developer_id)
       DO UPDATE SET request_id = EXCLUDED.request_id
       RETURNING
         id,
@@ -229,6 +240,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
         api_id,
         endpoint_id,
         api_key_id,
+        developer_id,
         amount_usdc,
         request_id,
         stellar_tx_hash,
@@ -239,6 +251,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
         apiId,
         endpointId,
         apiKeyId,
+        developerId,
         amount,
         requestId,
         event.stellarTxHash ?? null,
@@ -419,6 +432,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
         api_id,
         endpoint_id,
         api_key_id,
+        developer_id,
         amount_usdc,
         request_id,
         stellar_tx_hash,
