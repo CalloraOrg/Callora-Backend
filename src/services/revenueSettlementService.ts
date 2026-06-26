@@ -165,10 +165,12 @@ export class RevenueSettlementService {
         };
       }
 
-      // 3. Update settlement status and events
+      // 3. Record the submitted tx hash and mark events settled. The settlement
+      //    stays 'pending' until reconcilePendingSettlements() confirms the
+      //    transaction on Horizon and promotes it to 'completed'.
       if (result.success && result.txHash) {
         try {
-          await this.settlementStore.updateStatus(settlementId, 'completed', result.txHash);
+          await this.settlementStore.updateStatus(settlementId, 'pending', result.txHash);
           await this.usageStore.markAsSettled(eventIds, settlementId);
 
           processed += events.length;
@@ -209,140 +211,6 @@ export class RevenueSettlementService {
     await previousReconcile;
 
     try {
-      return await this.reconcileOnce();
-    } finally {
-      releaseReconcile();
-    }
-  }
-
-  private async reconcileOnce(): Promise<ReconcileResult> {
-    const pendingSettlements = await this.settlementStore.listPending?.() ?? [];
-
-    const result: ReconcileResult = { checked: 0, completed: 0, failed: 0, errors: 0 };
-
-    if (pendingSettlements.length === 0) return result;
-
-    const horizonBase = (this.options.horizonUrl ?? 'https://horizon-testnet.stellar.org/').replace(/\/$/, '');
-    const fetchFn = this.options.fetchImpl ?? fetch;
-    const timeoutMs = this.options.horizonRequestTimeoutMs ?? 10_000;
-    const maxRetries = this.options.horizonMaxRetries ?? 3;
-    const retryBaseDelayMs = this.options.horizonRetryBaseDelayMs ?? 500;
-
-    for (const settlement of pendingSettlements) {
-      if (!settlement.tx_hash) continue;
-
-      result.checked++;
-
-      try {
-        const horizonResult = await withRetry(
-          async () => {
-            const url = `${horizonBase}/transactions/${encodeURIComponent(settlement.tx_hash!)}`;
-            const res = await fetchFn(url, {
-              signal: AbortSignal.timeout(timeoutMs),
-            });
-
-            // 404 → transaction not found → treat as failed (not retriable)
-            if (res.status === 404) {
-              return { found: false, successful: false } as const;
-            }
-
-            // Transient server errors → throw so withRetry can back off
-            if (RETRIABLE_HTTP_STATUSES.has(res.status)) {
-              throw new TransientError(`Horizon returned ${res.status}`);
-            }
-
-            const body = await res.json() as HorizonTransactionResponse;
-            return { found: true, successful: body.successful === true } as const;
-          },
-          {
-            maxAttempts: maxRetries + 1,
-            baseDelayMs: retryBaseDelayMs,
-            shouldRetry: isTransientNetworkError,
-          },
-        );
-
-        if (horizonResult.successful) {
-          await this.settlementStore.updateStatus(settlement.id, 'completed', settlement.tx_hash);
-          const now = new Date().toISOString();
-          // Best-effort: set completed_at if the store supports it
-          const store = this.settlementStore as SettlementStore & {
-            setCompletedAt?: (id: string, completedAt: string) => void;
-          };
-          store.setCompletedAt?.(settlement.id, now);
-          result.completed++;
-        } else {
-          await this.settlementStore.updateStatus(settlement.id, 'failed', undefined);
-          result.failed++;
-        }
-      } catch (error) {
-        // Transient errors exhausted retries — leave status as pending for next run
-        result.errors++;
-        console.error(
-          `[reconcile] Failed to check Horizon status for settlement ${settlement.id}:`,
-          this.getErrorMessage(error),
-        );
-      }
-    }
-
-    return result;
-  }
-
-  private async recordFailedSettlement(
-    settlementId: string,
-    developerId: string,
-    errorMessage?: string,
-    clearTxHash = false,
-  ): Promise<void> {
-    try {
-      await this.settlementStore.updateStatus(
-        settlementId,
-        'failed',
-        clearTxHash ? null : undefined,
-      );
-    } catch (statusError) {
-      console.error(
-        `Settlement ${settlementId} failed for dev ${developerId} and could not persist failure status:`,
-        this.getErrorMessage(statusError)
-      );
-    }
-
-    console.error(
-      `Settlement ${settlementId} failed for dev ${developerId}:`,
-      errorMessage ?? 'Unknown settlement failure'
-    );
-  }
-
-  private getErrorMessage(error: unknown): string {
-    if (error instanceof Error && error.message.trim()) {
-      return error.message;
-    }
-
-    if (typeof error === 'string' && error.trim()) {
-      return error;
-    }
-
-    return 'Unknown settlement failure';
-  }
-
-  /**
-   * Reconciles pending settlements by querying Horizon for transaction status.
-   * 
-   * Processes each pending settlement individually inside a try/catch so one failure
-   * does not abort the entire batch. Logs warnings at WARN level for expected Horizon
-   * errors (missing result_codes, transient failures). Does not propagate exceptions.
-   * 
-   * Returns summary: { checked, completed, failed, errors }
-   */
-  async reconcilePendingSettlements(): Promise<{ checked: number; completed: number; failed: number; errors: number }> {
-    const previousReconcile = this.reconcileTail.catch(() => undefined);
-    let releaseReconcile!: () => void;
-    this.reconcileTail = new Promise<void>((resolve) => {
-      releaseReconcile = resolve;
-    });
-
-    await previousReconcile;
-
-    try {
       return await this.reconcilePendingSettlementsOnce();
     } finally {
       releaseReconcile();
@@ -357,7 +225,7 @@ export class RevenueSettlementService {
     }
 
     const pendingSettlements = await this.settlementStore.getPendingSettlements();
-    
+
     let checked = 0;
     let completed = 0;
     let failed = 0;
@@ -463,7 +331,7 @@ export class RevenueSettlementService {
     return withRetry(
       async () => {
         const url = `${horizonUrl.endsWith('/') ? horizonUrl : horizonUrl + '/'}transactions/${txHash}`;
-        
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -477,7 +345,7 @@ export class RevenueSettlementService {
 
           if (!response.ok) {
             // For non-404 errors, check if retriable (5xx or specific 4xx)
-            if (RETRIABLE_HTTP_STATUSES.includes(response.status)) {
+            if (RETRIABLE_HTTP_STATUSES.has(response.status)) {
               throw new TransientError(`Horizon returned ${response.status}`);
             }
             // Non-retriable error
@@ -496,6 +364,43 @@ export class RevenueSettlementService {
         shouldRetry: isTransientNetworkError,
       },
     );
+  }
+
+  private async recordFailedSettlement(
+    settlementId: string,
+    developerId: string,
+    errorMessage?: string,
+    clearTxHash = false,
+  ): Promise<void> {
+    try {
+      await this.settlementStore.updateStatus(
+        settlementId,
+        'failed',
+        clearTxHash ? null : undefined,
+      );
+    } catch (statusError) {
+      console.error(
+        `Settlement ${settlementId} failed for dev ${developerId} and could not persist failure status:`,
+        this.getErrorMessage(statusError)
+      );
+    }
+
+    console.error(
+      `Settlement ${settlementId} failed for dev ${developerId}:`,
+      errorMessage ?? 'Unknown settlement failure'
+    );
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message.trim()) {
+      return error.message;
+    }
+
+    if (typeof error === 'string' && error.trim()) {
+      return error;
+    }
+
+    return 'Unknown settlement failure';
   }
 }
 

@@ -412,8 +412,8 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
    *             default: `testnet`
    */
   // Vault balance endpoint
-  app.get('/api/vault/balance', requireAuth, validate({ query: stellarNetworkQuerySchema }), (req, res: express.Response<unknown, AuthenticatedLocals>) => {
-    vaultController.getBalance(req, res);
+  app.get('/api/vault/balance', requireAuth, validate({ query: stellarNetworkQuerySchema }), (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+    vaultController.getBalance(req, res, next);
   });
 
   /**

@@ -5,6 +5,7 @@ import { logger } from '../logger.js';
 
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 1000;
+const MAX_DELAY_MS = 30_000;
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
 

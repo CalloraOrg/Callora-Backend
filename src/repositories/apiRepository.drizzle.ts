@@ -113,9 +113,9 @@ export class DrizzleApiRepository implements ApiRepository {
   async delete(id: number): Promise<boolean> {
     const deleted = await db.delete(schema.apis).where(eq(schema.apis.id, id));
 
-    // Drizzle's delete() returns the number of rows deleted.
+    // better-sqlite3's RunResult exposes the affected row count on `changes`.
     // The database FK with ON DELETE CASCADE will automatically clean up endpoints.
-    return deleted > 0;
+    return deleted.changes > 0;
   }
 
   async listByDeveloper(

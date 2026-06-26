@@ -221,6 +221,10 @@ class FakeApiRepository implements ApiRepository {
   async getEndpoints() {
     return [];
   }
+
+  async delete(_id: number) {
+    return false;
+  }
 }
 
 const createDeveloperRepository = (profile?: Developer): DeveloperRepository => ({

@@ -6,6 +6,90 @@ It documents the shared `errorHandler` response envelope, every error class in
 billing/Soroban error mapping. It is documentation-only and does not describe
 any runtime behavior that is not present in the current source.
 
+<!-- BEGIN GENERATED ERROR CODES -->
+## Canonical error code catalog
+
+This section is generated from `src/errors/errorCatalog.ts`. Run `npm run error-codes:generate` after changing the catalog.
+
+| Code | Catalog section |
+|---|---|
+| `BAD_REQUEST` | HTTP status derived / base app codes |
+| `UNAUTHORIZED` | HTTP status derived / base app codes |
+| `FORBIDDEN` | HTTP status derived / base app codes |
+| `NOT_FOUND` | HTTP status derived / base app codes |
+| `PAYMENT_REQUIRED` | HTTP status derived / base app codes |
+| `TOO_MANY_REQUESTS` | HTTP status derived / base app codes |
+| `CONFLICT` | HTTP status derived / base app codes |
+| `INTERNAL_SERVER_ERROR` | HTTP status derived / base app codes |
+| `BAD_GATEWAY` | HTTP status derived / base app codes |
+| `SERVICE_UNAVAILABLE` | HTTP status derived / base app codes |
+| `GATEWAY_TIMEOUT` | HTTP status derived / base app codes |
+| `VALIDATION_ERROR` | Validation |
+| `INVALID_BODY` | Validation |
+| `INVALID_QUERY` | Validation |
+| `INVALID_PARAMS` | Validation |
+| `INVALID_VALUE` | Validation |
+| `GATEWAY_AUTH_CONTEXT_MISSING` | Gateway / proxy |
+| `UPSTREAM_TARGET_BLOCKED` | Gateway / proxy |
+| `INSUFFICIENT_BALANCE` | Billing / Soroban |
+| `SOROBAN_RPC_TIMEOUT` | Billing / Soroban |
+| `SOROBAN_RPC_ERROR` | Billing / Soroban |
+| `BILLING_DEDUCTION_FAILED` | Billing / Soroban |
+| `BILLING_REQUEST_NOT_FOUND` | Billing request |
+| `DEVELOPER_NOT_FOUND` | Developer / API keys |
+| `API_ACCESS_FORBIDDEN` | Developer / API keys |
+| `API_KEY_NOT_FOUND` | Developer / API keys |
+| `API_KEY_FORBIDDEN` | Developer / API keys |
+| `MISSING_REFRESH_TOKEN` | Refresh-token auth |
+| `INVALID_REFRESH_TOKEN` | Refresh-token auth |
+| `REVOKED_TOKEN` | Refresh-token auth |
+| `EXPIRED_TOKEN` | Refresh-token auth |
+| `REFRESH_FAILED` | Refresh-token auth |
+| `REVOKE_FAILED` | Refresh-token auth |
+| `NOT_AUTHENTICATED` | Refresh-token auth |
+| `TOKEN_INFO_FAILED` | Refresh-token auth |
+| `VAULT_NOT_FOUND` | Vault / deposit |
+| `VAULT_BALANCE_RETRIEVAL_FAILED` | Vault / deposit |
+| `MISSING_AMOUNT` | Vault / deposit |
+| `INVALID_AMOUNT_TYPE` | Vault / deposit |
+| `INVALID_AMOUNT_FORMAT` | Vault / deposit |
+| `INVALID_NETWORK` | Vault / deposit |
+| `NETWORK_MISMATCH` | Vault / deposit |
+| `INVALID_SOURCE_ACCOUNT` | Vault / deposit |
+| `INVALID_TRANSACTION_INPUT` | Vault / deposit |
+| `SOURCE_ACCOUNT_NOT_FOUND` | Vault / deposit |
+| `INVALID_CONTRACT_ID` | Vault / deposit |
+| `NETWORK_UNAVAILABLE` | Vault / deposit |
+| `TRANSACTION_BUILD_FAILED` | Vault / deposit |
+| `INTERNAL_ERROR` | Vault / deposit |
+| `INVALID_WEBHOOK_REGISTRATION` | Webhooks |
+| `INVALID_WEBHOOK_EVENT_TYPES` | Webhooks |
+| `WEBHOOK_NOT_FOUND` | Webhooks |
+| `INVALID_WEBHOOK_URL` | Webhooks |
+| `WEBHOOK_URL_VALIDATION_FAILED` | Webhooks |
+| `MISSING_WEBHOOK_SIGNATURE_HEADERS` | Webhooks |
+| `INVALID_WEBHOOK_TIMESTAMP` | Webhooks |
+| `WEBHOOK_TIMESTAMP_OUT_OF_WINDOW` | Webhooks |
+| `MALFORMED_WEBHOOK_SIGNATURE` | Webhooks |
+| `INVALID_WEBHOOK_SIGNATURE` | Webhooks |
+| `INVALID_IP_FORMAT` | IP allowlist |
+| `IP_NOT_ALLOWED` | IP allowlist |
+| `DATABASE_NOT_AVAILABLE` | DB / infrastructure |
+| `IDEMPOTENCY_CONFLICT` | Idempotency |
+| `IDEMPOTENCY_IN_PROGRESS` | Idempotency |
+| `SIMULATION_FAILED` | Misc / direct middleware responses |
+| `INVALID_AUTH_HEADER` | Route-specific / auth overrides (documented in docs/error-codes.md) |
+| `MISSING_TOKEN` | Route-specific / auth overrides (documented in docs/error-codes.md) |
+| `INVALID_TOKEN` | Route-specific / auth overrides (documented in docs/error-codes.md) |
+| `MISSING_CLAIMS` | Route-specific / auth overrides (documented in docs/error-codes.md) |
+| `TOKEN_EXPIRED` | Route-specific / auth overrides (documented in docs/error-codes.md) |
+| `TOKEN_NOT_ACTIVE` | Route-specific / auth overrides (documented in docs/error-codes.md) |
+| `REQUEST_TIMEOUT` | HTTP fallback derived codes referenced by documentation |
+| `REQUEST_BODY_TOO_LARGE` | HTTP fallback derived codes referenced by documentation |
+| `UNSUPPORTED_MEDIA_TYPE` | HTTP fallback derived codes referenced by documentation |
+| `UNPROCESSABLE_ENTITY` | HTTP fallback derived codes referenced by documentation |
+<!-- END GENERATED ERROR CODES -->
+
 ## Scope and important caveats
 
 The standard envelope applies to errors that reach the shared Express `errorHandler`. It does not wrap every response served by the backend.

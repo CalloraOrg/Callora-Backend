@@ -121,18 +121,9 @@ export const apiKeyRepository = {
     for (const candidate of candidates) {
       if (verifyHash(key, candidate.keyHash)) {
         if (candidate.revoked) {
-          // Prefix + hash matched a revoked key — let the caller handle 403.
-          return {
-            id: candidate.id,
-            apiId: candidate.apiId,
-            userId: candidate.userId,
-            prefix: candidate.prefix,
-            keyHash: '[REDACTED]',
-            scopes: candidate.scopes,
-            rateLimitPerMinute: candidate.rateLimitPerMinute,
-            createdAt: candidate.createdAt,
-            revoked: candidate.revoked,
-          };
+          // A revoked key is not valid — treat it exactly like an unknown key
+          // so callers cannot distinguish "revoked" from "never existed".
+          return null;
         }
         // Return a copy without the raw hash so callers never see the secret.
         return {
@@ -150,11 +141,9 @@ export const apiKeyRepository = {
     }
 
     // Prefix was found in the store but no candidate's hash matched the supplied
-    // key. Throw a typed error so callers can distinguish this from "key not
-    // found" while still mapping both outcomes to the same 401 response — this
-    // avoids leaking whether a prefix exists (timing oracle) while keeping
-    // error-handling explicit.
-    throw new InvalidKeyError();
+    // key. Return null (same as "key not found") so we never leak whether a
+    // prefix exists via a distinct error path (timing/oracle safety).
+    return null;
   },
   rotate(id: string, userId: string): { success: true; newKey: string; prefix: string } | { success: false; error: 'not_found' | 'forbidden' | 'revoked' } {
     const index = apiKeys.findIndex(k => k.id === id);

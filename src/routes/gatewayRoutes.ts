@@ -171,7 +171,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         p50: rawLatency.p50 !== null ? Math.round(rawLatency.p50 * 1000 * 100) / 100 : null,
         p95: rawLatency.p95 !== null ? Math.round(rawLatency.p95 * 1000 * 100) / 100 : null,
       };
-      const breakerState = breakerRegistry.getState(apiSlug);
+      const breakerState = await breakerRegistry.getState(apiSlug);
 
       const data = {
         apiSlug,

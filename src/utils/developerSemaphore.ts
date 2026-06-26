@@ -1,6 +1,4 @@
-interface QueueEntry {
-  resolve: (release: () => void) => void;
-}
+type QueueEntry = (release: () => void) => void;
 
 /**
  * Per-developer in-memory semaphore.

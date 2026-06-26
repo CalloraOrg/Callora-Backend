@@ -12,12 +12,12 @@ import {
 } from '../lib/upstreamTarget.js';
 import {
   BadGatewayError,
-  CircuitBreakerOpenError,
   GatewayTimeoutError,
   InternalServerError,
   PaymentRequiredError,
   TooManyRequestsError,
 } from '../errors/index.js';
+import { CircuitBreakerOpenError } from '../lib/errors.js';
 import { CircuitBreaker, type CircuitBreakerStore } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
 

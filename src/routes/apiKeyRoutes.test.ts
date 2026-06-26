@@ -49,6 +49,12 @@ const createDeveloperRepository = (): DeveloperRepository => ({
   async findByUserId(userId: string) {
     return userId === developerProfile.user_id ? developerProfile : undefined;
   },
+  async getOrCreateByUserId() {
+    return developerProfile;
+  },
+  async upsertProfile() {
+    return developerProfile;
+  },
 });
 
 const createApiRepository = (apis: Api[]): ApiRepository => ({
@@ -69,6 +75,12 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
   },
   async getEndpoints() {
     return [];
+  },
+  async createWithEndpoints() {
+    throw new Error('not implemented');
+  },
+  async delete() {
+    return false;
   },
 });
 

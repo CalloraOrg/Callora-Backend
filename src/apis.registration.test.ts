@@ -34,6 +34,12 @@ const developerRepository: DeveloperRepository = {
   async findByUserId(userId: string) {
     return userId === developerProfile.user_id ? developerProfile : undefined;
   },
+  async getOrCreateByUserId() {
+    return developerProfile;
+  },
+  async upsertProfile() {
+    return developerProfile;
+  },
 };
 
 const validBody = {

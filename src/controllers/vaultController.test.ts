@@ -6,6 +6,16 @@ import { InMemoryVaultRepository } from '../repositories/vaultRepository.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { validate } from '../middleware/validate.js';
 import { stellarNetworkQuerySchema } from '../validators/networkSchema.js';
+import { requestIdMiddleware } from '../middleware/requestId.js';
+import { UnauthorizedError } from '../errors/index.js';
+
+/**
+ * Asserts the standard error envelope shape `{ code, message, requestId }`.
+ */
+function expectErrorEnvelope(body: unknown, message: string | undefined, code: string): void {
+  expect(body).toMatchObject(message === undefined ? { code } : { message, code });
+  expect(typeof (body as { requestId?: unknown }).requestId).toBe('string');
+}
 
 jest.mock('better-sqlite3', () => {
   return class MockDatabase {

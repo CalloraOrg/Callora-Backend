@@ -221,6 +221,9 @@ class StubApiRepository implements ApiRepository {
   async getEndpoints() {
     return [];
   }
+  async delete(_id: number) {
+    return false;
+  }
 }
 
 /**

@@ -155,8 +155,8 @@ export const defaultApiRepository: ApiRepository = {
     // Deletion may affect any listing (e.g., removed from public catalog).
     listingsCache.invalidateAll();
 
-    // Drizzle's delete() returns the number of rows deleted
-    return deleted > 0;
+    // better-sqlite3's RunResult exposes the affected row count on `changes`
+    return deleted.changes > 0;
   },
 
   async listByDeveloper(developerId, filters = {}) {
