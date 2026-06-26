@@ -29,3 +29,14 @@ export const apiRegistrationSchema = z.object({
 });
 
 export type ApiRegistrationInput = z.infer<typeof apiRegistrationSchema>;
+
+const MAX_BULK_ENDPOINTS = 50;
+
+export const bulkEndpointsSchema = z.object({
+  endpoints: z
+    .array(apiEndpointRegistrationSchema)
+    .min(1, 'At least one endpoint is required')
+    .max(MAX_BULK_ENDPOINTS, `Cannot register more than ${MAX_BULK_ENDPOINTS} endpoints at once`),
+});
+
+export type BulkEndpointsInput = z.infer<typeof bulkEndpointsSchema>;

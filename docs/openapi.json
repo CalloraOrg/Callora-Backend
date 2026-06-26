@@ -503,6 +503,90 @@
           }
         }
       }
+    },
+    "/api/apis/{id}/endpoints/bulk": {
+      "post": {
+        "summary": "Bulk register endpoints for an API",
+        "description": "Registers multiple endpoints atomically for the specified API. All endpoints are inserted in a single transaction; if any endpoint is invalid the entire batch is rolled back. Authenticated developer must own the API.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Numerical ID of the API"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkEndpointRegistrationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Endpoints registered successfully — per-row details returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkEndpointRegistrationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid endpoint data, empty array, or too many endpoints",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API not found or does not belong to the developer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -847,6 +931,89 @@
                 },
                 "updated_at": {
                   "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "BulkEndpointRegistrationRequest": {
+        "type": "object",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "method",
+                "price_per_call_usdc"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "URL path starting with /"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+                },
+                "price_per_call_usdc": {
+                  "type": "string",
+                  "description": "Non-negative decimal string (e.g. \"0.01\")"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Optional human-readable description"
+                }
+              }
+            }
+          }
+        }
+      },
+      "BulkEndpointRegistrationResponse": {
+        "type": "object",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "api_id",
+                "path",
+                "method",
+                "price_per_call_usdc"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "description": "Auto-generated endpoint ID"
+                },
+                "api_id": {
+                  "type": "integer",
+                  "description": "Owning API ID"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "method": {
+                  "type": "string"
+                },
+                "price_per_call_usdc": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string",
+                  "nullable": true
                 }
               }
             }

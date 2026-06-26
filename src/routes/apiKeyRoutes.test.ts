@@ -55,8 +55,14 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
   async create() {
     throw new Error('not implemented');
   },
+  async createWithEndpoints() {
+    throw new Error('not implemented');
+  },
   async update() {
     return null;
+  },
+  async delete() {
+    return true;
   },
   async listByDeveloper(developerId: number) {
     return apis.filter((api) => api.developer_id === developerId);
@@ -69,6 +75,16 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
   },
   async getEndpoints() {
     return [];
+  },
+  async bulkCreateEndpoints(_apiId, endpoints) {
+    return endpoints.map((e, i) => ({
+      id: i + 1,
+      api_id: _apiId,
+      path: e.path,
+      method: e.method,
+      price_per_call_usdc: e.price_per_call_usdc,
+      description: e.description ?? null,
+    }));
   },
 });
 

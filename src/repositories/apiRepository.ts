@@ -70,6 +70,15 @@ export interface PaginatedApiListResult {
   total: number;
 }
 
+export interface BulkCreateEndpointResult {
+  id: number;
+  api_id: number;
+  path: string;
+  method: string;
+  price_per_call_usdc: string;
+  description: string | null;
+}
+
 export interface ApiRepository {
   create(api: ApiCreateInput): Promise<Api>;
   createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints>;
@@ -82,6 +91,10 @@ export interface ApiRepository {
   listPublic(filters?: ApiListFilters): Promise<Api[]>;
   findById(id: number): Promise<ApiDetails | null>;
   getEndpoints(apiId: number): Promise<ApiEndpointInfo[]>;
+  bulkCreateEndpoints(
+    apiId: number,
+    endpoints: CreateEndpointInput[],
+  ): Promise<BulkCreateEndpointResult[]>;
 }
 
 export const defaultApiRepository: ApiRepository = {
@@ -273,6 +286,36 @@ export const defaultApiRepository: ApiRepository = {
       price_per_call_usdc: r.price_per_call_usdc,
       description: r.description,
     }));
+  },
+
+  async bulkCreateEndpoints(apiId, endpoints) {
+    return db.transaction(async (tx) => {
+      const rows = await tx
+        .insert(schema.apiEndpoints)
+        .values(
+          endpoints.map(
+            (e) =>
+              ({
+                api_id: apiId,
+                path: e.path,
+                method: e.method,
+                price_per_call_usdc: e.price_per_call_usdc,
+                description: e.description ?? null,
+              }) as NewApiEndpoint,
+          ),
+        )
+        .returning();
+
+      listingsCache.invalidateAll();
+      return rows.map((r) => ({
+        id: r.id,
+        api_id: r.api_id,
+        path: r.path,
+        method: r.method,
+        price_per_call_usdc: r.price_per_call_usdc,
+        description: r.description,
+      }));
+    });
   },
 };
 
@@ -542,6 +585,45 @@ export class InMemoryApiRepository implements ApiRepository {
 
   async getEndpoints(apiId: number): Promise<ApiEndpointInfo[]> {
     return this.endpointsByApiId.get(apiId) ?? [];
+  }
+
+  async bulkCreateEndpoints(
+    apiId: number,
+    endpoints: CreateEndpointInput[],
+  ): Promise<BulkCreateEndpointResult[]> {
+    const existing = this.endpointsByApiId.get(apiId) ?? [];
+    const now = new Date();
+    const nextIds = existing.length + 1;
+
+    const created = endpoints.map((e, i) => ({
+      id: nextIds + i,
+      api_id: apiId,
+      path: e.path,
+      method: e.method,
+      price_per_call_usdc: e.price_per_call_usdc,
+      description: e.description ?? null,
+      created_at: now,
+      updated_at: now,
+    }));
+
+    this.endpointsByApiId.set(apiId, [
+      ...existing,
+      ...created.map((c) => ({
+        path: c.path,
+        method: c.method,
+        price_per_call_usdc: c.price_per_call_usdc,
+        description: c.description,
+      })),
+    ]);
+
+    return created.map((c) => ({
+      id: c.id,
+      api_id: c.api_id,
+      path: c.path,
+      method: c.method,
+      price_per_call_usdc: c.price_per_call_usdc,
+      description: c.description,
+    }));
   }
 }
 

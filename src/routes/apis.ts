@@ -13,7 +13,7 @@ import {
   defaultDeveloperRepository,
   type DeveloperRepository,
 } from '../repositories/developerRepository.js';
-import { apiRegistrationSchema } from '../validators/apiRegistration.js';
+import { apiRegistrationSchema, bulkEndpointsSchema } from '../validators/apiRegistration.js';
 
 export interface ApisRouterDeps {
   apiRepository?: ApiRepository;
@@ -128,6 +128,60 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         });
 
         res.status(201).json(api);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    '/:id/endpoints/bulk',
+    requireAuth,
+    bodyValidator(bulkEndpointsSchema),
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+      try {
+        const user = res.locals.authenticatedUser;
+        if (!user) {
+          next(new UnauthorizedError());
+          return;
+        }
+
+        const apiId = Number(req.params.id);
+        if (!Number.isInteger(apiId) || apiId <= 0) {
+          next(new BadRequestError('id must be a positive integer'));
+          return;
+        }
+
+        const developer = await developerRepository.findByUserId(user.id);
+        if (!developer) {
+          next(
+            new BadRequestError(
+              'Developer profile not found. Create a developer profile first.',
+              'DEVELOPER_NOT_FOUND',
+            ),
+          );
+          return;
+        }
+
+        const developerApis = await apiRepository.listByDeveloper(developer.id);
+        const api = developerApis.find((a) => a.id === apiId);
+        if (!api) {
+          next(new NotFoundError('API not found'));
+          return;
+        }
+
+        const payload = bulkEndpointsSchema.parse(req.body);
+        const endpoints = await apiRepository.bulkCreateEndpoints(
+          apiId,
+          payload.endpoints.map((ep) => ({
+            path: ep.path,
+            method: ep.method,
+            price_per_call_usdc: ep.price_per_call_usdc,
+            description: ep.description ?? null,
+          })),
+        );
+
+        res.status(201).json({ endpoints });
       } catch (error) {
         next(error);
       }
