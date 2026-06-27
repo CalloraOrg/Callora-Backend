@@ -8,6 +8,7 @@ import { createBillingPortalRouter } from './billing/portal.js';
 import healthRouter from './health.js';
 import { createApisRouter, type ApisRouterDeps } from './apis.js';
 import { createUsageRouter, type UsageRouterDeps } from './usage.js';
+import { createUsageCsvRouter } from './usage/csv.js';
 import { createExportSchedulesRouter } from './exports/schedules.js';
 import type { ScheduledExportsService } from '../services/scheduledExports.js';
 
@@ -27,6 +28,11 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use('/apis', createApisRouter({
     apiRepository: deps.apiRepository,
     developerRepository: deps.developerRepository
+  }));
+
+  // Mounted before '/usage' so the more specific CSV export path matches first.
+  router.use('/usage/csv', createUsageCsvRouter({
+    usageEventsRepository: deps.usageEventsRepository!
   }));
 
   router.use('/usage', createUsageRouter({

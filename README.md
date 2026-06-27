@@ -24,6 +24,7 @@ API gateway, usage metering, and billing services for the Callora API marketplac
   - `GET /api/apis/:id`
   - `POST /api/apis` for authenticated developers to register an API with priced endpoints
 - Usage route: `GET /api/usage`
+- Usage CSV export: `GET /api/usage/csv` streams the authenticated user's usage events as CSV (chunked, bounded memory), filterable by `from`/`to`/`apiId`
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - Per-user global REST rate limiting for authenticated `/api/billing`, `/api/usage`, `/api/developers`, `/api/vault`, and `/api/keys` traffic, with IP fallback for unauthenticated requests
 - In-memory `VaultRepository` with:

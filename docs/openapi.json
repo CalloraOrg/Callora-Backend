@@ -275,6 +275,99 @@
         }
       }
     },
+    "/api/usage/csv": {
+      "get": {
+        "summary": "Stream usage events as CSV",
+        "description": "Streams the authenticated user's usage events as a CSV file (chunked transfer encoding) filtered by date range and API. Memory usage is bounded regardless of export size. Defaults to the last 30 days when no range is supplied.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of period (ISO-8601 string). Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of period (ISO-8601 string). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "apiId",
+            "in": "query",
+            "description": "Filter by specific API ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV export streamed successfully. Columns: id,apiId,endpoint,occurredAt,revenue",
+            "headers": {
+              "Content-Disposition": {
+                "description": "attachment; filename=\"usage-export-<date>.csv\"",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "id,apiId,endpoint,occurredAt,revenue\nevt-1,api-1,/v1/resource,2026-03-01T10:00:00.000Z,1500\n"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/usage/{developerId}": {
       "get": {
         "summary": "Inspect a developer usage aggregate",
