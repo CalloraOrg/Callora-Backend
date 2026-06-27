@@ -7,7 +7,7 @@ import {
   type UsageBucket,
   type GroupBy,
 } from './usageEventsRepository.js';
-import { encodeCursor, type CursorPayload } from '../lib/cursorPagination.js';
+import { readQuery, writeQuery } from '../db.js';
 
 export interface CreateUsageEventInput {
   userId: string;
@@ -220,7 +220,26 @@ const appendDateFilters = (params: unknown[], clauses: string[], from?: Date, to
 };
 
 export class PgUsageEventsRepository implements UsageEventsPgRepository {
-  constructor(private readonly db: UsageEventsRepositoryQueryable) { }
+  private readonly readDb: UsageEventsRepositoryQueryable;
+  private readonly writeDb: UsageEventsRepositoryQueryable;
+
+  /**
+   * @param db - Optional injectable queryable used in tests.
+   *   When omitted the module-level routing helpers are used:
+   *   - reads  → readQuery()  (replica-aware)
+   *   - writes → writeQuery() (primary only)
+   */
+  constructor(db?: UsageEventsRepositoryQueryable) {
+    if (db) {
+      // In tests both read and write use the same injected queryable.
+      this.readDb = db;
+      this.writeDb = db;
+    } else {
+      // Production: route reads to replicas and writes to primary.
+      this.readDb = { query: readQuery };
+      this.writeDb = { query: writeQuery };
+    }
+  }
 
   async create(event: CreateUsageEventInput): Promise<BillingUsageEvent> {
     const userId = assertNonEmpty(event.userId, 'userId');
@@ -231,7 +250,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const requestId = assertNonEmpty(event.requestId, 'requestId');
     const amount = assertAmount(event.amount).toString();
 
-    const result = await this.db.query<UsageEventRow>(
+    const result = await this.writeDb.query<UsageEventRow>(
       `
       INSERT INTO usage_events (
         user_id,
@@ -361,7 +380,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       return [];
     }
 
-    const result = await this.db.query<RevenueLedgerUsageEventRow>(
+    const result = await this.readDb.query<RevenueLedgerUsageEventRow>(
       `
         SELECT
           ue.id AS usage_event_id,
@@ -383,7 +402,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
   }
 
   async indexRevenueLedgerEvent(event: RevenueLedgerUsageEvent, developerId: string): Promise<boolean> {
-    const result = await this.db.query<{ inserted: number }>(
+    const result = await this.writeDb.query<{ inserted: number }>(
       `
         INSERT INTO revenue_ledger (
           api_id,
@@ -582,7 +601,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       sql += ` OFFSET $${params.length}`;
     }
 
-    const result = await this.db.query<UsageEventRow>(sql, params);
+    const result = await this.readDb.query<UsageEventRow>(sql, params);
     return result.rows.map(mapUsageEventRow);
   }
 
@@ -598,7 +617,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const clauses = [`${column} = $1`];
     appendDateFilters(params, clauses, from, to);
 
-    const result = await this.db.query<TotalRow>(
+    const result = await this.readDb.query<TotalRow>(
       `
         SELECT COALESCE(SUM(amount_usdc), 0)::text AS total
         FROM usage_events

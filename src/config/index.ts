@@ -97,6 +97,7 @@ export const config = {
   version: env.APP_VERSION,
 
   databaseUrl: env.DATABASE_URL,
+  replicaUrls: env.REPLICA_URLS,
   database: {
     pool: {
       host: env.DB_HOST,
