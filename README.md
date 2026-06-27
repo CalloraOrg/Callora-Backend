@@ -24,6 +24,7 @@ API gateway, usage metering, and billing services for the Callora API marketplac
   - `GET /api/apis/:id`
   - `POST /api/apis` for authenticated developers to register an API with priced endpoints
 - Usage route: `GET /api/usage`
+- Admin usage anomalies: `GET /api/admin/usage/anomalies` returns per-API daily usage anomalies (z-score spikes/drops) for admin review, filterable by `from`/`to`/`apiId`/`threshold`/`limit` (admin auth + IP allowlist)
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - Per-user global REST rate limiting for authenticated `/api/billing`, `/api/usage`, `/api/developers`, `/api/vault`, and `/api/keys` traffic, with IP fallback for unauthenticated requests
 - In-memory `VaultRepository` with:

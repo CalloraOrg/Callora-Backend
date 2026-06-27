@@ -240,6 +240,166 @@
         }
       }
     },
+    "/api/admin/usage/anomalies": {
+      "get": {
+        "summary": "List detected usage anomalies",
+        "description": "Returns per-API daily usage anomalies for admin review. Usage events are aggregated to per-API daily call counts over the requested window, then each API's days are scored against that API's own baseline using a z-score test; days whose absolute z-score meets the threshold are flagged as spikes or drops. Requires admin authentication and the admin IP allowlist.",
+        "security": [
+          {
+            "adminApiKey": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of analysis window (ISO-8601). Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of analysis window (ISO-8601). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "description": "Absolute z-score at/above which a day is flagged.",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 3
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of anomalies to return (most severe first).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "apiId",
+            "in": "query",
+            "description": "Restrict analysis to a single API ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Detected anomalies retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "anomalies": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "apiId": { "type": "string" },
+                              "day": { "type": "string", "example": "2026-03-21" },
+                              "type": { "type": "string", "enum": ["spike", "drop"] },
+                              "calls": { "type": "integer" },
+                              "revenue": { "type": "string" },
+                              "baselineMean": { "type": "number" },
+                              "stdDev": { "type": "number" },
+                              "zScore": { "type": "number" }
+                            }
+                          }
+                        },
+                        "summary": {
+                          "type": "object",
+                          "properties": {
+                            "window": {
+                              "type": "object",
+                              "properties": {
+                                "from": { "type": "string", "format": "date-time" },
+                                "to": { "type": "string", "format": "date-time" }
+                              }
+                            },
+                            "threshold": { "type": "number" },
+                            "minDataPoints": { "type": "integer" },
+                            "seriesAnalyzed": { "type": "integer" },
+                            "anomalyCount": { "type": "integer" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized admin request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden by admin IP allowlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/usage/{developerId}": {
       "get": {
         "summary": "Inspect a developer usage aggregate",

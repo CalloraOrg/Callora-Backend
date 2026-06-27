@@ -18,6 +18,7 @@ import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
 import adminRouter from './routes/admin.js';
+import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
 import { defaultDeveloperRepository } from './repositories/developerRepository.js';
 import { createBillingService } from './services/billingService.js';
 import { createRateLimiter } from './services/rateLimiter.js';
@@ -288,6 +289,9 @@ if (isDirectExecution) {
     developerRepository: defaultDeveloperRepository,
   });
   app.use('/api/developers', developerRouter);
+  // Mounted before the generic admin router so it is not shadowed by
+  // adminRouter's `/usage/:developerId` route.
+  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
   app.use('/api/admin', adminRouter);
 
   // Legacy gateway route (existing)

@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import adminRouter from './routes/admin.js';
 import { createExplainRouter } from './routes/admin/explain.js';
+import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
 import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
 import { pool } from './db.js';
@@ -252,6 +253,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }
   });
 
+  // Mounted before the generic admin router so the specific path is not
+  // shadowed by adminRouter's `/usage/:developerId` route.
+  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
   app.use('/api/admin', adminRouter);
   app.use('/api/admin/db/explain', createExplainRouter({ pool }));
 
