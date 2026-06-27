@@ -7,6 +7,7 @@ import {
   type UsageBucket,
   type GroupBy,
 } from './usageEventsRepository.js';
+import { encodeCursor, type CursorPayload } from '../lib/cursorPagination.js';
 
 export interface CreateUsageEventInput {
   userId: string;
@@ -53,6 +54,18 @@ export interface UsageEventsPgRepository {
   getTotalRevenueByApi(apiId: string, from?: Date, to?: Date): Promise<bigint>;
   findUnindexedRevenueLedgerEvents(cursor?: string, limit?: number): Promise<RevenueLedgerUsageEvent[]>;
   indexRevenueLedgerEvent(event: RevenueLedgerUsageEvent, developerId: string): Promise<boolean>;
+  findByUserIdCursor(params: {
+    userId: string;
+    from?: Date;
+    to?: Date;
+    limit: number;
+    afterCursor?: CursorPayload;
+    beforeCursor?: CursorPayload;
+  }): Promise<{
+    events: BillingUsageEvent[];
+    nextCursor: string | null;
+    prevCursor: string | null;
+  }>;
 }
 
 export interface UsageEventsRepositoryQueryable {
@@ -398,6 +411,123 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     );
 
     return Boolean(result.rows[0]);
+  }
+
+  async findByUserIdCursor(params: {
+    userId: string;
+    from?: Date;
+    to?: Date;
+    limit: number;
+    afterCursor?: CursorPayload;
+    beforeCursor?: CursorPayload;
+  }): Promise<{
+    events: BillingUsageEvent[];
+    nextCursor: string | null;
+    prevCursor: string | null;
+  }> {
+    const { userId, from, to, limit, afterCursor, beforeCursor } = params;
+
+    assertValidRange(from, to);
+
+    const normalizedLimit = normalizeLimit(limit);
+    if (normalizedLimit === undefined || normalizedLimit === 0) {
+      return { events: [], nextCursor: null, prevCursor: null };
+    }
+
+    // We fetch limit+1 to detect whether another page exists beyond this one.
+    const fetchLimit = normalizedLimit + 1;
+
+    // When paging backward we reverse the ORDER BY, collect the results, then
+    // flip them so the caller always receives items in ascending order.
+    const isBackward = beforeCursor !== undefined && afterCursor === undefined;
+    const order = isBackward ? 'DESC' : 'ASC';
+
+    const sqlParams: unknown[] = [assertNonEmpty(userId, 'userId')];
+    const whereClauses: string[] = ['user_id = $1'];
+
+    if (from) {
+      sqlParams.push(from);
+      whereClauses.push(`created_at >= $${sqlParams.length}`);
+    }
+
+    if (to) {
+      sqlParams.push(to);
+      whereClauses.push(`created_at <= $${sqlParams.length}`);
+    }
+
+    if (afterCursor) {
+      // Rows strictly after the cursor (forward pagination).
+      // Expanded form of: (created_at, id) > (cursor.ts, cursor.id)
+      // pg-mem does not support row-value comparisons so we expand manually.
+      sqlParams.push(afterCursor.timestamp);
+      sqlParams.push(BigInt(afterCursor.id));
+      const tsIdx = sqlParams.length - 1;
+      const idIdx = sqlParams.length;
+      whereClauses.push(
+        `(created_at > $${tsIdx} OR (created_at = $${tsIdx} AND id > $${idIdx}))`,
+      );
+    } else if (beforeCursor) {
+      // Rows strictly before the cursor (backward pagination).
+      // Expanded form of: (created_at, id) < (cursor.ts, cursor.id)
+      sqlParams.push(beforeCursor.timestamp);
+      sqlParams.push(BigInt(beforeCursor.id));
+      const tsIdx = sqlParams.length - 1;
+      const idIdx = sqlParams.length;
+      whereClauses.push(
+        `(created_at < $${tsIdx} OR (created_at = $${tsIdx} AND id < $${idIdx}))`,
+      );
+    }
+
+    sqlParams.push(fetchLimit);
+    const limitClause = `LIMIT $${sqlParams.length}`;
+
+    const sql = `
+      SELECT
+        id,
+        user_id,
+        api_id,
+        endpoint_id,
+        api_key_id,
+        developer_id,
+        amount_usdc,
+        request_id,
+        stellar_tx_hash,
+        created_at
+      FROM usage_events
+      WHERE ${whereClauses.join(' AND ')}
+      ORDER BY created_at ${order}, id ${order}
+      ${limitClause}
+    `;
+
+    const result = await this.db.query<UsageEventRow>(sql, sqlParams);
+    const rows = result.rows.map(mapUsageEventRow);
+
+    // Determine whether there is a page beyond what we're returning
+    const hasMore = rows.length > normalizedLimit;
+    const pageRows = hasMore ? rows.slice(0, normalizedLimit) : rows;
+
+    // When fetching backward the DB returns items in reverse order — flip them.
+    if (isBackward) {
+      pageRows.reverse();
+    }
+
+    // Build cursors from the boundary items of this page.
+    const firstItem = pageRows[0];
+    const lastItem = pageRows[pageRows.length - 1];
+
+    // nextCursor: there are items after the last item on this page
+    const nextCursor =
+      lastItem !== undefined && ((!isBackward && hasMore) || isBackward)
+        ? encodeCursor(lastItem.createdAt, lastItem.id)
+        : null;
+
+    // prevCursor: there are items before the first item on this page
+    const prevCursor =
+      firstItem !== undefined && ((isBackward && hasMore) || afterCursor !== undefined)
+        ? encodeCursor(firstItem.createdAt, firstItem.id)
+        : null;
+
+    return { events: pageRows, nextCursor, prevCursor };
   }
 
   private async findByColumn(
