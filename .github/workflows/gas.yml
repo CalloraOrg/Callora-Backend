@@ -1,0 +1,58 @@
+name: Gas Budget Regression
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+jobs:
+  gas-regression:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Check baseline exists
+        run: |
+          if [ ! -f contracts/.gas-baseline.json ]; then
+            echo "::warning::No gas baseline found. Run with --update to create one."
+          fi
+
+      - name: Run gas regression check
+        id: regression
+        run: |
+          bash scripts/gas-regression.sh --json 2>&1 | tee gas-output.json
+          exit ${PIPESTATUS[0]}
+        continue-on-error: true
+
+      - name: Upload gas regression report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-regression-report
+          path: gas-output.json
+        if: always()
+
+      - name: Fail on regression
+        if: steps.regression.outcome == 'failure'
+        run: |
+          echo "::error::Gas budget regression detected (>5% increase in CPU or memory per entrypoint)."
+          echo "Check the artifact for details or update the baseline with --update."
+          exit 1
