@@ -14,6 +14,8 @@
     "seed:dev": "tsx scripts/seed-dev.ts",
     "typecheck": "tsc --noEmit",
     "validate:issue-9": "node scripts/validate-issue-9.mjs",
+    "gas:check": "bash scripts/gas-regression.sh",
+    "gas:update": "bash scripts/gas-regression.sh --update",
     "error-codes:generate": "node scripts/generate-error-codes.mjs",
     "error-codes:check": "node scripts/generate-error-codes.mjs --check",
     "pretest": "npm run error-codes:check",

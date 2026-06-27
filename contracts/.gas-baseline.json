@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "generated_at": "2026-06-27T00:00:00.000Z",
+  "entries": {
+    "GET /api/health": { "cpu_ms": 0.5, "mem_kb": 64 },
+    "GET /api/metrics": { "cpu_ms": 2.0, "mem_kb": 128 },
+    "GET /api/apis": { "cpu_ms": 5.0, "mem_kb": 256 },
+    "GET /api/apis/:id": { "cpu_ms": 3.0, "mem_kb": 192 },
+    "POST /api/apis": { "cpu_ms": 8.0, "mem_kb": 384 },
+    "POST /api/apis/:id/endpoints/bulk": { "cpu_ms": 6.0, "mem_kb": 320 },
+    "GET /api/developers/apis": { "cpu_ms": 4.0, "mem_kb": 256 },
+    "GET /api/developers/analytics": { "cpu_ms": 5.0, "mem_kb": 320 },
+    "POST /api/developers/apis": { "cpu_ms": 8.0, "mem_kb": 384 },
+    "POST /api/vault/deposit/prepare": { "cpu_ms": 3.0, "mem_kb": 192 },
+    "GET /api/vault/balance": { "cpu_ms": 3.0, "mem_kb": 192 },
+    "GET /api/admin/users": { "cpu_ms": 4.0, "mem_kb": 256 },
+    "GET /api/usage": { "cpu_ms": 4.0, "mem_kb": 256 },
+    "GET /api/billing/request/:requestId": { "cpu_ms": 3.0, "mem_kb": 192 },
+    "POST /api/billing/deduct": { "cpu_ms": 8.0, "mem_kb": 384 },
+    "GET /api/openapi.json": { "cpu_ms": 1.0, "mem_kb": 128 }
+  }
+}
