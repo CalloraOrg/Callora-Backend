@@ -22,6 +22,21 @@ export const WebhookStore = {
         return store.get(developerId);
     },
 
+    update(developerId: string, changes: Partial<WebhookConfig>): WebhookConfig | undefined {
+        const currentConfig = store.get(developerId);
+        if (!currentConfig) return undefined;
+
+        const nextConfig = normalizeConfig({
+            ...currentConfig,
+            ...changes,
+            developerId,
+            createdAt: currentConfig.createdAt,
+        });
+
+        store.set(developerId, nextConfig);
+        return nextConfig;
+    },
+
     rotateSecret(
         developerId: string,
         newSecret: string,

@@ -1,9 +1,9 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import express from 'express';
 import crypto from 'crypto';
-import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
+import { validateRetryPolicy, validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
 import { WebhookStore } from './webhook.store.js';
-import { WebhookEventType } from './webhook.types.js';
+import { WebhookConfig, WebhookEventType } from './webhook.types.js';
 import {
   captureRawBody,
   verifyWebhookSignature,
@@ -33,10 +33,21 @@ function generateWebhookSecret(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+async function validateRetryPolicyOverride(retryPolicy: unknown): Promise<WebhookConfig['retryPolicy']> {
+  try {
+    return validateRetryPolicy(retryPolicy);
+  } catch (err: unknown) {
+    if (err instanceof WebhookValidationError) {
+      throw new BadRequestError(err.message, 'INVALID_WEBHOOK_RETRY_POLICY');
+    }
+    throw new AppError('Retry policy validation failed.', 500, 'WEBHOOK_URL_VALIDATION_FAILED');
+  }
+}
+
 // POST /api/webhooks — Register a webhook
 router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { developerId, url, events, secret } = req.body;
+    const { developerId, url, events, secret, retryPolicy } = req.body;
 
     if (!developerId || !url || !Array.isArray(events) || events.length === 0) {
       throw new BadRequestError(
@@ -65,11 +76,18 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       throw new AppError('URL validation failed.', 500, 'WEBHOOK_URL_VALIDATION_FAILED');
     }
 
+    let validatedRetryPolicy: WebhookConfig['retryPolicy'];
+    if (retryPolicy !== undefined) {
+      validatedRetryPolicy = await validateRetryPolicyOverride(retryPolicy);
+    }
+
     WebhookStore.register({
       developerId,
       url,
       events: events as WebhookEventType[],
+      secret: secret ?? undefined,
       secret_current: secret ?? undefined,
+      retryPolicy: validatedRetryPolicy,
       createdAt: new Date(),
     });
 
@@ -78,7 +96,85 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       developerId,
       url,
       events,
+      retryPolicy: validatedRetryPolicy,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PATCH /api/webhooks/:developerId — Update webhook subscription settings
+router.patch('/:developerId', webhookMgmtRateLimit, express.json(), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const existing = WebhookStore.get(req.params.developerId);
+    if (!existing) {
+      throw new NotFoundError(
+        'No webhook registered for this developer.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const { url, events, secret, retryPolicy } = req.body;
+    const changes: Partial<WebhookConfig> = {};
+
+    if (url !== undefined) {
+      try {
+        await validateWebhookUrl(url);
+      } catch (err: unknown) {
+        if (err instanceof WebhookValidationError) {
+          throw new BadRequestError(err.message, 'INVALID_WEBHOOK_URL');
+        }
+
+        throw new AppError('URL validation failed.', 500, 'WEBHOOK_URL_VALIDATION_FAILED');
+      }
+      changes.url = url;
+    }
+
+    if (events !== undefined) {
+      if (!Array.isArray(events) || events.length === 0) {
+        throw new BadRequestError('events must be a non-empty array when provided.', 'INVALID_WEBHOOK_REGISTRATION');
+      }
+
+      const invalidEvents = events.filter(
+        (e: string) => !VALID_EVENTS.includes(e as WebhookEventType)
+      );
+      if (invalidEvents.length > 0) {
+        throw new BadRequestError(
+          `Invalid event types: ${invalidEvents.join(', ')}. Valid: ${VALID_EVENTS.join(', ')}`,
+          'INVALID_WEBHOOK_EVENT_TYPES'
+        );
+      }
+
+      changes.events = events as WebhookEventType[];
+    }
+
+    if (secret !== undefined) {
+      changes.secret = secret;
+      changes.secret_current = secret;
+      changes.secret_previous = undefined;
+      changes.previous_expires_at = undefined;
+    }
+
+    if (retryPolicy !== undefined) {
+      changes.retryPolicy = retryPolicy === null ? undefined : await validateRetryPolicyOverride(retryPolicy);
+    }
+
+    const updated = WebhookStore.update(req.params.developerId, changes);
+    if (!updated) {
+      throw new NotFoundError(
+        'No webhook registered for this developer.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const {
+      secret: _s,
+      secret_current: _sc,
+      secret_previous: _sp,
+      ...safeConfig
+    } = updated;
+
+    return res.status(200).json(safeConfig);
   } catch (error) {
     next(error);
   }

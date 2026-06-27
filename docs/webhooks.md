@@ -19,6 +19,16 @@ when specific events occur on the Callora platform.
 | url         | string     | ✅       | HTTPS endpoint to receive events   |
 | events      | string[]   | ✅       | One or more event types (see below)|
 | secret      | string     | ❌       | Used to sign payloads (recommended)|
+| retryPolicy | object     | ❌       | Per-subscription retry override    |
+
+`retryPolicy` may include one or more of these fields:
+
+| Field             | Type   | Range             | Description                         |
+|-------------------|--------|-------------------|-------------------------------------|
+| `maxAttempts`     | number | integer, 1-20     | Maximum delivery attempts           |
+| `baseDelayMs`     | number | integer, 0-300000 | Initial retry delay in milliseconds |
+| `maxDelayMs`      | number | integer, 0-600000 | Maximum retry delay in milliseconds |
+| `backoffMultiplier` | number | 1-10            | Exponential backoff multiplier      |
 
 ### Supported Events
 
@@ -218,6 +228,23 @@ Failed deliveries (non-2xx, timeout, DNS failure) are retried with **exponential
 
 After 5 failures, the event is dropped and logged server-side.
 
+Subscriptions can override one or more retry settings at registration time or
+with `PATCH /api/webhooks/:developerId`:
+
+```json
+{
+  "retryPolicy": {
+    "maxAttempts": 3,
+    "baseDelayMs": 500,
+    "maxDelayMs": 5000,
+    "backoffMultiplier": 1.5
+  }
+}
+```
+
+Omitted `retryPolicy` fields fall back to the defaults shown above. Send
+`"retryPolicy": null` to clear an existing override.
+
 ---
 
 ## Manage Webhooks
@@ -226,6 +253,7 @@ After 5 failures, the event is dropped and logged server-side.
 |--------|-----------------------------------|--------------------------|
 | POST   | `/api/webhooks`                   | Register webhook         |
 | GET    | `/api/webhooks/:developerId`      | View current webhook     |
+| PATCH  | `/api/webhooks/:developerId`      | Update webhook settings  |
 | POST   | `/api/webhooks/:developerId/rotate-secret` | Rotate signing secret |
 | DELETE | `/api/webhooks/:developerId`      | Remove webhook           |
 
@@ -233,7 +261,7 @@ After 5 failures, the event is dropped and logged server-side.
 
 ## Rate Limiting
 
-The webhook management endpoints (`POST /`, `GET /:developerId`, `DELETE /:developerId`) are
+The webhook management endpoints (`POST /`, `PATCH /:developerId`, `GET /:developerId`, `DELETE /:developerId`) are
 protected by an IP-based rate limiter. The signed inbound delivery route
 (`POST /deliver/:developerId`) is **not** rate-limited here because it is
 protected independently by HMAC signature verification.

@@ -4,6 +4,17 @@ export type WebhookEventType =
     | 'low_balance_alert'
     | 'quota.threshold.reached';
 
+export interface WebhookRetryPolicy {
+    /** Maximum number of delivery attempts (must be >= 1). */
+    maxAttempts?: number;
+    /** Initial delay before the first retry, in milliseconds (must be >= 0). */
+    baseDelayMs?: number;
+    /** Maximum delay between retries, in milliseconds (must be >= 0). */
+    maxDelayMs?: number;
+    /** Exponential backoff multiplier (must be >= 1). */
+    backoffMultiplier?: number;
+}
+
 export interface WebhookConfig {
     developerId: string;
     url: string;
@@ -12,6 +23,8 @@ export interface WebhookConfig {
     secret_current?: string; // for HMAC signature (optional but recommended)
     secret_previous?: string;
     previous_expires_at?: Date;
+    /** Optional per-subscription override of the default webhook retry policy. */
+    retryPolicy?: WebhookRetryPolicy;
     createdAt: Date;
 }
 

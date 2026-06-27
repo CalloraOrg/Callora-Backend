@@ -1,11 +1,15 @@
 import crypto from 'crypto';
-import { WebhookConfig, WebhookPayload, DeadLetterEntry, WebhookDeliveryStatus } from './webhook.types.js';
+import { WebhookConfig, WebhookPayload, DeadLetterEntry, WebhookDeliveryStatus, WebhookRetryPolicy } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 
-const MAX_RETRIES = 5;
-const BASE_DELAY_MS = 1000;
-const MAX_DELAY_MS = 30_000;
+export const DEFAULT_RETRY_POLICY: Required<WebhookRetryPolicy> = {
+    maxAttempts: 5,
+    baseDelayMs: 1000,
+    maxDelayMs: 30_000,
+    backoffMultiplier: 2,
+};
+
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
 
@@ -13,14 +17,23 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function resolveRetryPolicy(config: WebhookConfig): Required<WebhookRetryPolicy> {
+    return {
+        maxAttempts: config.retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts,
+        baseDelayMs: config.retryPolicy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs,
+        maxDelayMs: config.retryPolicy?.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs,
+        backoffMultiplier: config.retryPolicy?.backoffMultiplier ?? DEFAULT_RETRY_POLICY.backoffMultiplier,
+    };
+}
+
 // Calculate exponential backoff with jitter to avoid thundering herd
-function calculateBackoff(attempt: number): number {
-    const exponentialDelay = BASE_DELAY_MS * Math.pow(2, attempt);
+function calculateBackoff(attempt: number, policy: Required<WebhookRetryPolicy>): number {
+    const exponentialDelay = policy.baseDelayMs * Math.pow(policy.backoffMultiplier, attempt);
     // Add jitter: random value between 0-25% of the exponential delay
     const jitter = Math.random() * 0.25 * exponentialDelay;
     const delayWithJitter = exponentialDelay + jitter;
     // Cap at maximum delay
-    return Math.min(delayWithJitter, MAX_DELAY_MS);
+    return Math.min(delayWithJitter, policy.maxDelayMs);
 }
 
 function signPayload(secret: string, body: string): string {
@@ -53,8 +66,8 @@ export function resetWebhookDispatcherForTests(): void {
 
 /**
  * Dispatches a webhook payload to the registered URL.
- * 
- * Operational Limits:
+ *
+ * Operational Limits (defaults; each subscription may override via retryPolicy):
  * - Max retries: 5 attempts
  * - Timeout: 10 seconds per attempt
  * - Backoff: Exponential (1s, 2s, 4s, 8s)
@@ -70,6 +83,7 @@ export async function dispatchWebhook(
     }
 
     return trackDispatch((async () => {
+        const policy = resolveRetryPolicy(config);
         const body = JSON.stringify(payload);
         const deliveryId = crypto.randomUUID();
         const headers: Record<string, string> = {
@@ -86,7 +100,7 @@ export async function dispatchWebhook(
 
         let lastError: unknown;
 
-        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        for (let attempt = 0; attempt < policy.maxAttempts; attempt++) {
             try {
                 const response = await fetch(config.url, {
                     method: 'POST',
@@ -114,15 +128,15 @@ export async function dispatchWebhook(
                 );
             }
 
-            if (attempt < MAX_RETRIES - 1) {
-                const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+            if (attempt < policy.maxAttempts - 1) {
+                const delay = calculateBackoff(attempt, policy);
                 console.log(`[webhook] Retrying in ${delay}ms...`);
                 await sleep(delay);
             }
         }
 
         logger.error(
-            `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after ${MAX_RETRIES} attempts.`,
+            `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after ${policy.maxAttempts} attempts.`,
             lastError
         );
     })());
