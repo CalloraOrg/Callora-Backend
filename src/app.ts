@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { z } from 'zod';
 import adminRouter from './routes/admin.js';
+import { createExplainRouter } from './routes/admin/explain.js';
 import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
 import { pool } from './db.js';
@@ -252,6 +253,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
 
   app.use('/api/admin', adminRouter);
+  app.use('/api/admin/db/explain', createExplainRouter({ pool }));
 
   // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
   app.use('/api/quota/requests', quotaRequestsRouter);
