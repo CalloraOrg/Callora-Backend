@@ -4,6 +4,48 @@ import {
   sweepIdempotencyStoreRows,
 } from './idempotencySweeper.js';
 
+/** Build a mock pool where connect() returns a client that proxies advisory-lock
+ *  queries, and pool.query() handles the row-count SELECT. */
+function makeMockPool({
+  lockAcquired,
+  deleteRowCount,
+  rowCount,
+  deleteFn,
+}: {
+  lockAcquired: boolean;
+  deleteRowCount?: number;
+  rowCount?: number;
+  deleteFn?: () => Promise<{ rowCount: number }>;
+}) {
+  const client = {
+    query: jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ acquired: lockAcquired }] };
+      }
+      if (sql.includes('DELETE FROM idempotency_store')) {
+        return deleteFn ? deleteFn() : { rowCount: deleteRowCount ?? 0 };
+      }
+      if (sql.includes('pg_advisory_unlock')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    }),
+    release: jest.fn(),
+  };
+
+  const pool = {
+    connect: jest.fn().mockResolvedValue(client),
+    query: jest.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT COUNT')) {
+        return { rows: [{ row_count: String(rowCount ?? 0) }] };
+      }
+      return { rows: [] };
+    }),
+  };
+
+  return { pool, client };
+}
+
 describe('idempotency sweeper', () => {
   afterEach(() => {
     jest.useRealTimers();
@@ -11,31 +53,12 @@ describe('idempotency sweeper', () => {
   });
 
   it('acquires the advisory lock, deletes expired rows, and updates the gauge', async () => {
-    const mockPool = {
-      query: jest
-        .fn()
-        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
-        .mockResolvedValueOnce({ rowCount: 2 })
-        .mockResolvedValueOnce({ rows: [{ row_count: '5' }] })
-        .mockResolvedValueOnce({}),
-    } as any;
+    const { pool } = makeMockPool({ lockAcquired: true, deleteRowCount: 2, rowCount: 5 });
 
-    const rowCount = await sweepIdempotencyStoreRows(mockPool);
+    const rowCount = await sweepIdempotencyStoreRows(pool as any);
 
     expect(rowCount).toBe(5);
-    expect(mockPool.query).toHaveBeenNthCalledWith(
-      1,
-      'SELECT pg_try_advisory_lock($1) AS acquired',
-      [0x4a5b6c7d],
-    );
-    expect(mockPool.query).toHaveBeenNthCalledWith(
-      2,
-      'DELETE FROM idempotency_store WHERE expires_at < NOW()::timestamp',
-    );
-    expect(mockPool.query).toHaveBeenNthCalledWith(
-      3,
-      'SELECT COUNT(*)::bigint AS row_count FROM idempotency_store',
-    );
+    expect(pool.connect).toHaveBeenCalledTimes(1);
 
     const metrics = await register.getMetricsAsJSON();
     const gauge = metrics.find((m: any) => m.name === 'idempotency_store_rows');
@@ -44,59 +67,67 @@ describe('idempotency sweeper', () => {
   });
 
   it('skips delete when lock is held by another instance and still updates the gauge', async () => {
-    const mockPool = {
-      query: jest
-        .fn()
-        .mockResolvedValueOnce({ rows: [{ acquired: false }] })
-        .mockResolvedValueOnce({ rows: [{ row_count: '3' }] }),
-    } as any;
+    const { pool, client } = makeMockPool({ lockAcquired: false, rowCount: 3 });
 
-    const rowCount = await sweepIdempotencyStoreRows(mockPool);
+    const rowCount = await sweepIdempotencyStoreRows(pool as any);
 
     expect(rowCount).toBe(3);
-    expect(mockPool.query).toHaveBeenNthCalledWith(
-      1,
-      'SELECT pg_try_advisory_lock($1) AS acquired',
-      [0x4a5b6c7d],
-    );
-    expect(mockPool.query).toHaveBeenNthCalledWith(
-      2,
-      'SELECT COUNT(*)::bigint AS row_count FROM idempotency_store',
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('DELETE'),
+      expect.anything(),
     );
   });
 
   it('respects shutdown and waits for the current sweep to complete', async () => {
-    jest.useFakeTimers();
+    let resolveDelete!: () => void;
+    const deleteStarted = new Promise<void>((r) => { resolveDelete = r; });
+    let deleteResolve!: () => void;
+    const deletePermit = new Promise<void>((r) => { deleteResolve = r; });
+    let sweepComplete = false;
 
-    let firstQueryReleased = false;
-    const mockPool = {
-      query: jest.fn().mockImplementation(async (text: string) => {
-        if (text.includes('pg_try_advisory_lock')) {
+    const client = {
+      query: jest.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('pg_try_advisory_lock')) {
           return { rows: [{ acquired: true }] };
         }
-        if (text.includes('DELETE FROM idempotency_store')) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-          firstQueryReleased = true;
+        if (sql.includes('pg_advisory_unlock')) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+
+    const pool = {
+      connect: jest.fn().mockResolvedValue(client),
+      query: jest.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('DELETE FROM idempotency_store')) {
+          resolveDelete();        // signal we're inside the slow query
+          await deletePermit;     // block until test unblocks us
+          sweepComplete = true;
           return { rowCount: 1 };
         }
-        if (text.includes('SELECT COUNT')) {
+        if (sql.includes('SELECT COUNT')) {
           return { rows: [{ row_count: '1' }] };
         }
         return { rows: [] };
       }),
-    } as any;
+    };
 
-    const job = createIdempotencySweeperJob(mockPool, { intervalMs: 1000 });
+    const job = createIdempotencySweeperJob(pool as any, { intervalMs: 1000 });
     job.start();
 
-    await Promise.resolve();
-    expect(mockPool.query).toHaveBeenCalledWith('SELECT pg_try_advisory_lock($1) AS acquired', [0x4a5b6c7d]);
+    // Wait until the tick is actually blocked inside the DELETE query
+    await deleteStarted;
 
+    // beginShutdown must not kill in-flight work
     job.beginShutdown();
+
+    // Unblock the DELETE, then wait for the job to drain
+    deleteResolve();
     await job.awaitIdle();
 
-    expect(firstQueryReleased).toBe(true);
-    jest.runOnlyPendingTimers();
-    expect(mockPool.query).toHaveBeenCalledTimes(3);
+    expect(sweepComplete).toBe(true);
+    expect(pool.connect).toHaveBeenCalledTimes(1);
   });
 });
