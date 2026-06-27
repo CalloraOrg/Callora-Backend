@@ -84,6 +84,9 @@ This section is generated from `src/errors/errorCatalog.ts`. Run `npm run error-
 | `MISSING_CLAIMS` | Route-specific / auth overrides (documented in docs/error-codes.md) |
 | `TOKEN_EXPIRED` | Route-specific / auth overrides (documented in docs/error-codes.md) |
 | `TOKEN_NOT_ACTIVE` | Route-specific / auth overrides (documented in docs/error-codes.md) |
+| `QUOTA_REQUEST_NOT_FOUND` | Quota self-service |
+| `QUOTA_REQUEST_ALREADY_RESOLVED` | Quota self-service |
+| `INVALID_QUOTA_REQUEST` | Quota self-service |
 | `REQUEST_TIMEOUT` | HTTP fallback derived codes referenced by documentation |
 | `REQUEST_BODY_TOO_LARGE` | HTTP fallback derived codes referenced by documentation |
 | `UNSUPPORTED_MEDIA_TYPE` | HTTP fallback derived codes referenced by documentation |
