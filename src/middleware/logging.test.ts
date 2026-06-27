@@ -39,6 +39,25 @@ describe('structured logger options', () => {
       },
     });
   });
+
+  test('redaction hook injects active request id into structured logs', async () => {
+    const method = jest.fn();
+    const { runWithRequestContext } = await import('../utils/asyncContext.js');
+
+    runWithRequestContext({ requestId: 'req-structured-1' }, () => {
+      structuredLoggerOptions.hooks?.logMethod?.call(
+        {} as never,
+        [{ event: 'webhook_dispatch', requestId: 'wrong-id' }, 'delivered'],
+        method,
+        30,
+      );
+    });
+
+    expect(method).toHaveBeenCalledWith(
+      { event: 'webhook_dispatch', requestId: 'req-structured-1' },
+      'delivered',
+    );
+  });
 });
 
 describe('requestLogger', () => {

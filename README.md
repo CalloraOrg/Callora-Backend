@@ -276,6 +276,7 @@ Application errors are returned through the shared Express `errorHandler` using 
 
 For the `POST /api/billing/deduct` idempotency contract, response envelope, and retry guidance for SDK authors, see [docs/sdk/billing-deduct.md](./docs/sdk/billing-deduct.md).  
 For the complete gateway/proxy and billing error-code reference, including `502`/`504` derivation and Soroban billing mappings, see [docs/error-codes.md](./docs/error-codes.md).
+For request-id validation, AsyncLocalStorage propagation, structured logging, and outbound `X-Request-Id` forwarding, see [docs/request-id-propagation.md](./docs/request-id-propagation.md).
 
 | Variable | Required | Default | Description |
 |---|---|---|---|

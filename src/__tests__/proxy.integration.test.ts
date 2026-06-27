@@ -259,6 +259,32 @@ describe('Proxy /v1/call', () => {
     );
   });
 
+  it('propagates a client-supplied request id to upstream, response, and usage', async () => {
+    const edgeRequestId = 'edge-proxy-request-123';
+    let upstreamRequestId: string | undefined;
+    setUpstreamHandler((req, res) => {
+      upstreamRequestId = req.headers['x-request-id'] as string | undefined;
+      res.status(200).json({ requestId: upstreamRequestId });
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/request-id`, {
+      method: 'GET',
+      headers: {
+        'x-api-key': TEST_API_KEY,
+        'x-request-id': edgeRequestId,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-request-id')).toBe(edgeRequestId);
+    expect(upstreamRequestId).toBe(edgeRequestId);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const events = usageStore.getEvents(TEST_API_KEY);
+    expect(events).toHaveLength(1);
+    expect(events[0].requestId).toBe(edgeRequestId);
+  });
+
   it('strips internal headers from the upstream request', async () => {
     let receivedHeaders: Record<string, string | string[] | undefined> = {};
 

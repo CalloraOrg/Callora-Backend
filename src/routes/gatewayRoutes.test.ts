@@ -200,6 +200,56 @@ describe("gateway route - body size limits", () => {
   });
 });
 
+describe("gateway route - request id propagation", () => {
+  test("reuses the edge request id for upstream calls and response headers", async () => {
+    const apiKey = "test-key";
+    const apiId = "my-api";
+    const edgeRequestId = "edge-request-123";
+    const apiKeys = new Map<string, any>();
+    apiKeys.set(apiKey, { key: "k1", apiId, developerId: "dev1" });
+    const originalFetch = global.fetch;
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      text: async () => JSON.stringify({ ok: true }),
+    } as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const usageStore = { record: jest.fn() };
+      const deps = {
+        billing: { deductCredit: async () => ({ success: true, balance: 100 }) },
+        rateLimiter: { check: async () => ({ allowed: true }) },
+        usageStore,
+        upstreamUrl: "http://example.internal",
+        apiKeys,
+      } as any;
+
+      const app = express();
+      app.use(requestIdMiddleware);
+      app.use("/gateway", createGatewayRouter(deps));
+      app.use(errorHandler);
+
+      const res = await request(app)
+        .post(`/gateway/${apiId}`)
+        .set("x-api-key", apiKey)
+        .set("x-request-id", edgeRequestId)
+        .send({ hello: "world" });
+
+      expect(res.status).toBe(200);
+      expect(res.headers["x-request-id"]).toBe(edgeRequestId);
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect((init.headers as Record<string, string>)["x-request-id"]).toBe(edgeRequestId);
+      expect(usageStore.record).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: edgeRequestId }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Bug #421 — prefix-exists-but-hash-mismatch must return 401, not 500
 // ---------------------------------------------------------------------------

@@ -54,6 +54,23 @@ describe('Webhook Dispatcher', () => {
         expect(headers['X-Callora-Delivery']).toBeDefined();
     });
 
+    it('propagates the active request id to outbound webhook headers', async () => {
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+        } as Response);
+        global.fetch = fetchMock as any;
+        const { runWithRequestContext } = await import('../utils/asyncContext.js');
+
+        await runWithRequestContext({ requestId: 'req-webhook-als' }, async () => {
+            await dispatchWebhook(config, payload);
+        });
+
+        const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+        expect(headers['X-Request-Id']).toBe('req-webhook-als');
+    });
+
     it('retries on non-2xx response and uses same idempotency key', async () => {
         const fetchMock = jest.fn()
             .mockResolvedValueOnce({

@@ -15,6 +15,7 @@ import {
   TooManyRequestsError,
   UnauthorizedError,
 } from '../errors/index.js';
+import { getOrCreateRequestId } from '../utils/asyncContext.js';
 
 /** Length of the key prefix used for candidate pre-filtering (matches repository). */
 const API_KEY_PREFIX_LENGTH = 16;
@@ -196,7 +197,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const apiKeyHeader = req.headers['x-api-key'] as string | undefined;
-        const requestId = randomUUID();
+        const requestId = req.id || getOrCreateRequestId(randomUUID);
 
         if (!apiKeyHeader) {
           next(new UnauthorizedError('Unauthorized: missing x-api-key header'));

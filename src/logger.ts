@@ -1,8 +1,10 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import {
+  getRequestId,
+  runWithRequestContext,
+  type RequestContext,
+} from './utils/asyncContext.js';
 
-type RequestContext = { requestId: string };
-
-const requestContextStorage = new AsyncLocalStorage<RequestContext>();
+export { getRequestId, runWithRequestContext, type RequestContext };
 
 export const REDACTED_LOG_VALUE = '[REDACTED]';
 
@@ -37,11 +39,6 @@ export const PINO_REDACT_PATHS = [
   'req.headers["x-admin-api-key"]',
   'req.headers["proxy-authorization"]',
 ];
-
-export const runWithRequestContext = <T>(context: RequestContext, callback: () => T): T =>
-  requestContextStorage.run(context, callback);
-
-export const getRequestId = (): string | undefined => requestContextStorage.getStore()?.requestId;
 
 const normalizeLogKey = (key: string): string => key.replace(/[^a-z0-9]/gi, '').toLowerCase();
 

@@ -3,6 +3,7 @@ import pino from 'pino';
 import { v4 as uuidv4 } from 'uuid';
 import { PINO_REDACT_PATHS, REDACTED_LOG_VALUE, redactLogArguments } from '../logger.js';
 import { getClientIp } from '../lib/clientIp.js';
+import { getRequestId } from '../utils/asyncContext.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const defaultLevel = isProduction ? 'info' : 'debug';
@@ -16,14 +17,40 @@ export const structuredLoggerOptions: Parameters<typeof pino>[0] = {
   },
   hooks: {
     logMethod(args, method) {
+      const activeRequestId = getRequestId();
+
       if (args.length === 0) {
+        if (activeRequestId) {
+          return method.apply(this, [{ requestId: activeRequestId }]);
+        }
         return method.apply(this, args as [obj: unknown, msg?: string | undefined, ...args: unknown[]]);
       }
 
-      return method.apply(
-        this,
-        redactLogArguments(args) as [obj: unknown, msg?: string | undefined, ...args: unknown[]],
-      );
+      const redactedArgs = redactLogArguments(args);
+      if (!activeRequestId) {
+        return method.apply(
+          this,
+          redactedArgs as [obj: unknown, msg?: string | undefined, ...args: unknown[]],
+        );
+      }
+
+      const [first, ...rest] = redactedArgs;
+      if (
+        first &&
+        typeof first === 'object' &&
+        !Array.isArray(first) &&
+        !(first instanceof Error)
+      ) {
+        return method.apply(this, [
+          { ...(first as Record<string, unknown>), requestId: activeRequestId },
+          ...rest,
+        ] as [obj: unknown, msg?: string | undefined, ...args: unknown[]]);
+      }
+
+      return method.apply(this, [
+        { requestId: activeRequestId },
+        ...redactedArgs,
+      ] as [obj: unknown, msg?: string | undefined, ...args: unknown[]]);
     },
   },
   ...(isProduction
@@ -44,9 +71,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   // Prefer the sanitized ID already set by requestIdMiddleware (req.id).
   // Fall back to the raw header value for contexts where requestIdMiddleware
   // hasn't run (e.g. isolated unit tests), and finally generate a UUID.
-  const reqWithId = req as Request & { id?: string };
-  const requestId =
-    req.id ||
+  const requestId = req.id || getRequestId() ||
     (Array.isArray(req.headers['x-request-id'])
       ? req.headers['x-request-id'][0]
       : req.headers['x-request-id']) ||

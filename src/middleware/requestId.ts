@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { runWithRequestContext } from '../logger.js';
+import { runWithRequestContext } from '../utils/asyncContext.js';
 
 const REQUEST_ID_HEADER = 'x-request-id';
 

@@ -4,6 +4,7 @@ import {
 } from '../lib/simulationDiagnostics.js';
 import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
 import { env } from '../config/env.js';
+import { getOrCreateRequestId } from '../utils/asyncContext.js';
 
 export interface SorobanBillingInvocationArg {
   type: 'string' | 'i128';
@@ -297,9 +298,11 @@ export class SorobanRpcBillingClient {
   }
 
   private async invoke(invocation: SorobanBillingInvocation): Promise<Record<string, unknown>> {
+    const requestId = this.options.requestIdFactory?.() ??
+      getOrCreateRequestId(() => `billing-${Date.now()}`);
     const requestBody: SorobanBillingRpcRequest = {
       jsonrpc: '2.0',
-      id: this.options.requestIdFactory?.() ?? `billing-${Date.now()}`,
+      id: requestId,
       method: 'simulateTransaction',
       params: {
         invocation,
@@ -319,6 +322,7 @@ export class SorobanRpcBillingClient {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
+          'x-request-id': requestId,
         },
         body: JSON.stringify(requestBody),
         signal: controller.signal,

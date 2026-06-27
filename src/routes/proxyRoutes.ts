@@ -20,6 +20,7 @@ import {
 import { CircuitBreakerOpenError } from '../lib/errors.js';
 import { CircuitBreaker, type CircuitBreakerStore } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
+import { getOrCreateRequestId } from '../utils/asyncContext.js';
 
 /**
  * Headers that must never be forwarded to the upstream server.
@@ -108,7 +109,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const requestId = randomUUID();
+      const requestId = req.id || getOrCreateRequestId(randomUUID);
       const apiEntry = req.api as unknown as ApiRegistryEntry | undefined;
       const endpoint = req.endpoint as unknown as EndpointPricing | undefined;
       const apiKeyHeader = req.apiKeyValue;
