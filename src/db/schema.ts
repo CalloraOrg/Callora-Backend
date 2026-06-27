@@ -9,6 +9,7 @@ export const developers = sqliteTable('developers', {
   website: text('website'),
   description: text('description'),
   category: text('category'),
+  plan_overrides: text('plan_overrides'),
   created_at: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 });

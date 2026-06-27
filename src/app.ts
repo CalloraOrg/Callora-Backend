@@ -30,6 +30,7 @@ import { bodyValidator } from './middleware/validate.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { performHealthCheck, type HealthCheckConfig } from './services/healthCheck.js';
+import quotaRequestsRouter from './routes/quota/requests.js';
 import { parsePagination, paginatedResponse } from './lib/pagination.js';
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
 import { DepositController } from './controllers/depositController.js';
@@ -251,6 +252,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
 
   app.use('/api/admin', adminRouter);
+
+  // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
+  app.use('/api/quota/requests', quotaRequestsRouter);
 
   // Prometheus metrics endpoint — auth-gated in production
   app.get('/api/metrics', metricsEndpoint);

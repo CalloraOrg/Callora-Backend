@@ -4,6 +4,7 @@ module.exports = {
   testEnvironment: "node",
   testMatch: ["**/?(*.)+(spec|test).ts"],
   testPathIgnorePatterns: ["/node_modules/"],
+  transformIgnorePatterns: ["node_modules/(?!(uuid)/)"],
   transform: {
     "^.+\\.ts$": [
       "ts-jest",
@@ -15,5 +16,19 @@ module.exports = {
         },
       },
     ],
+    "^.+\\.js$": [
+      "ts-jest",
+      {
+        tsconfig: {
+          module: "commonjs",
+          moduleResolution: "node16",
+          isolatedModules: true,
+          allowJs: true,
+        },
+      },
+    ],
+  },
+  moduleNameMapper: {
+    "^(\\.{1,2}/.*)\\.js$": "$1",
   },
 };

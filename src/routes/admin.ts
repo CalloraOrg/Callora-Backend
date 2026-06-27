@@ -4,9 +4,15 @@ import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
 import { findUsers } from '../repositories/userRepository.js';
 import { parsePagination, paginatedResponse } from '../lib/pagination.js';
 import { getClientIp } from '../lib/clientIp.js';
-import { AppError, InternalServerError, NotFoundError } from '../errors/index.js';
+import { AppError, InternalServerError, NotFoundError, BadRequestError } from '../errors/index.js';
 import { logger } from '../logger.js';
 import { createUsageStore, type UsageAdminStore } from '../services/usageStore.js';
+import {
+  listQuotaRequests,
+  getQuotaRequest,
+  approveQuotaRequest,
+  rejectQuotaRequest,
+} from '../services/quotaService.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -107,6 +113,84 @@ router.post('/usage/:developerId/reset', async (req, res, next) => {
       return;
     }
     logger.error('Failed to reset usage aggregate:', error);
+    next(new InternalServerError());
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Quota request management
+// ---------------------------------------------------------------------------
+
+router.get('/quota/requests', async (req, res, next) => {
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    if (status && !['pending', 'approved', 'rejected'].includes(status)) {
+      next(new BadRequestError('status must be one of: pending, approved, rejected'));
+      return;
+    }
+
+    const requests = await listQuotaRequests(status ? { status: status as 'pending' | 'approved' | 'rejected' } : undefined);
+
+    logger.audit('LIST_QUOTA_REQUESTS', res.locals.adminActor, {
+      clientIp: getClientIp(req, TRUST_PROXY),
+      userAgent: req.get('User-Agent'),
+      filter: { status },
+      count: requests.length,
+    });
+
+    res.json({ data: requests });
+  } catch (error) {
+    if (error instanceof AppError) {
+      next(error);
+      return;
+    }
+    logger.error('Failed to list quota requests:', error);
+    next(new InternalServerError());
+  }
+});
+
+router.post('/quota/requests/:id/approve', async (req, res, next) => {
+  try {
+    const adminNotes = typeof req.body.admin_notes === 'string' ? req.body.admin_notes : undefined;
+    const request = await approveQuotaRequest(req.params.id, res.locals.adminActor, adminNotes);
+
+    logger.audit('APPROVE_QUOTA_REQUEST', res.locals.adminActor, {
+      clientIp: getClientIp(req, TRUST_PROXY),
+      userAgent: req.get('User-Agent'),
+      requestId: req.params.id,
+      developerId: request.developerId,
+    });
+
+    res.json({ data: request });
+  } catch (error) {
+    if (error instanceof AppError) {
+      next(error);
+      return;
+    }
+    logger.error('Failed to approve quota request:', error);
+    next(new InternalServerError());
+  }
+});
+
+router.post('/quota/requests/:id/reject', async (req, res, next) => {
+  try {
+    const adminNotes = typeof req.body.admin_notes === 'string' ? req.body.admin_notes : undefined;
+    const request = await rejectQuotaRequest(req.params.id, res.locals.adminActor, adminNotes);
+
+    logger.audit('REJECT_QUOTA_REQUEST', res.locals.adminActor, {
+      clientIp: getClientIp(req, TRUST_PROXY),
+      userAgent: req.get('User-Agent'),
+      requestId: req.params.id,
+      developerId: request.developerId,
+    });
+
+    res.json({ data: request });
+  } catch (error) {
+    if (error instanceof AppError) {
+      next(error);
+      return;
+    }
+    logger.error('Failed to reject quota request:', error);
     next(new InternalServerError());
   }
 });
