@@ -122,6 +122,11 @@ export const envSchema = z
       .string()
       .transform((v) => v === "true")
       .default(false),
+    // Test-only chaos harness
+    SOROBAN_CHAOS: z
+      .string()
+      .transform((v) => v === "1")
+      .default(false),
 
     // Body size limits
     REQUEST_BODY_LIMIT: z.string().default('100kb'),

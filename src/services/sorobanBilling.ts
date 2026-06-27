@@ -2,6 +2,8 @@ import {
   extractSimulationDetails,
   type SimulationDetails,
 } from '../lib/simulationDiagnostics.js';
+import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
+import { env } from '../config/env.js';
 
 export interface SorobanBillingInvocationArg {
   type: 'string' | 'i128';
@@ -257,7 +259,7 @@ export class SorobanRpcBillingClient {
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: SorobanBillingClientOptions) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? (env.SOROBAN_CHAOS ? withSorobanLatencyWrapper(fetch) : fetch);
   }
 
   async getBalance(userId: string): Promise<SorobanBalanceResponse> {

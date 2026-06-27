@@ -1,4 +1,5 @@
 import { config, type StellarNetwork } from '../config/index.js';
+import { env } from '../config/env.js';
 import {
   withRetry,
   TransientError,
@@ -6,6 +7,7 @@ import {
   isTransientNetworkError,
   type RetryOptions,
 } from '../lib/retry.js';
+import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
 
 export interface PayoutResult {
   success: boolean;
@@ -184,7 +186,7 @@ export class SorobanRpcSettlementClient implements SorobanSettlementClient {
 
   constructor(private readonly options: SorobanRpcSettlementClientOptions) {
     this.resolvedOptions = resolveSorobanRpcOptions(options);
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? (env.SOROBAN_CHAOS ? withSorobanLatencyWrapper(fetch) : fetch);
   }
 
   async distribute(developerAddress: string, amountUsdc: number): Promise<PayoutResult> {
