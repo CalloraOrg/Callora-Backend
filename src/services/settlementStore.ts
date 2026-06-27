@@ -168,6 +168,38 @@ export class PostgresSettlementStore implements SettlementStore {
 
     return result.rows.map(mapSettlementRow);
   }
+
+  async listPending(): Promise<Settlement[]> {
+    return this.getPendingSettlements();
+  }
+
+  /**
+   * Verify ledger consistency invariants.
+   * Returns structured violations found in the settlements table.
+   */
+  async verifyLedger(): Promise<{
+    completedWithoutTxHash: Array<{ external_id: string; developer_id: string; amount_usdc: string; created_at: string }>;
+    totalViolations: number;
+  }> {
+    const result = await this.db.query<SettlementStoreRow & { external_id: string; developer_id: string; amount_usdc: string; created_at: string }>(
+      `
+        SELECT
+          external_id,
+          developer_id,
+          amount_usdc,
+          created_at
+        FROM settlements
+        WHERE status = 'completed'
+          AND stellar_tx_hash IS NULL
+        ORDER BY created_at ASC
+      `,
+    );
+
+    return {
+      completedWithoutTxHash: result.rows,
+      totalViolations: result.rows.length,
+    };
+  }
 }
 
 export function createPostgresSettlementStore(db: SettlementStoreQueryable): PostgresSettlementStore {

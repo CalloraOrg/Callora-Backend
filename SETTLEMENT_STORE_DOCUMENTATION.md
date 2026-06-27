@@ -12,6 +12,12 @@ This document outlines the invariants, persistence semantics, and testing approa
 - **Ordering Guarantee**: Settlements are always returned in descending `created_at` order (newest first)
 - **Developer Isolation**: Settlements are strictly isolated by `developerId`
 
+### 1a. Ledger Consistency Invariants (PostgresSettlementStore)
+- **Completed Transaction Hash Requirement**: All `completed` settlements MUST have a non-NULL `stellar_tx_hash`
+- **DB CHECK Constraint**: Enforced at the database level via `check_completed_has_tx_hash` constraint
+- **Verification Method**: `verifyLedger()` returns structured violations for completed settlements missing `stellar_tx_hash`
+- **Violation Structure**: Returns `{ completedWithoutTxHash: Array, totalViolations: number }`
+
 ### 2. Deduplication Invariants
 - **ID-Based Storage**: The store does not enforce ID uniqueness at the storage layer
 - **Application-Level Deduplication**: ID uniqueness must be enforced by calling code (e.g., `RevenueSettlementService`)
@@ -21,6 +27,8 @@ This document outlines the invariants, persistence semantics, and testing approa
 - **All Transitions Allowed**: The store permits any status transition (`pending` ↔ `completed` ↔ `failed`)
 - **Transaction Hash Preservation**: `tx_hash` is preserved when not explicitly provided in updates
 - **Null Hash Support**: `tx_hash` can be explicitly set to `null`
+- **Completed Requires Hash**: Transitioning to `completed` status requires providing a `stellar_tx_hash` (enforced by DB CHECK constraint)
+- **Pending/Failed Allow Null**: `pending` and `failed` statuses allow NULL `stellar_tx_hash`
 
 ### 4. Data Integrity Invariants
 - **Type Safety**: All fields maintain their TypeScript types
@@ -60,6 +68,12 @@ For production use with concurrent access, the following would be required:
    - No automatic cleanup or archival mechanisms
    - Potential for memory leaks in long-running processes
 
+4. **Ledger Integrity Protection (PostgresSettlementStore)**:
+   - **CHECK Constraint**: Database enforces that completed settlements have `stellar_tx_hash`
+   - **Verification API**: `verifyLedger()` method provides programmatic access to detect violations
+   - **Error Code**: CHECK violations return Postgres error code `23514` (CHECK violation)
+   - **Migration**: Applied via `migrations/0008_settlement_status_check.sql`
+
 ### Recommendations
 
 1. **Add Validation Layer**: Implement settlement validation before storage
@@ -86,6 +100,19 @@ For production use with concurrent access, the following would be required:
 - Transaction hash handling
 - Non-existent settlement handling
 - Hash preservation behavior
+- **CHECK constraint enforcement** (completed requires tx_hash)
+- **Illegal transition detection** (pending/failed allow null hash)
+
+### Ledger Verification Tests ✅
+- `verifyLedger()` returns empty array when no violations
+- `verifyLedger()` detects completed settlements without tx_hash
+- `verifyLedger()` returns structured violation data
+- `verifyLedger()` only flags completed rows with NULL stellar_tx_hash
+
+### listPending() Tests ✅
+- Returns only pending settlements
+- Orders by created_at ASC (oldest first)
+- Returns empty array when no pending settlements
 
 ### Data Integrity Tests ✅
 - Multi-operation consistency
@@ -145,7 +172,7 @@ For production deployment, consider this migration sequence:
 The tests are designed to run in:
 - Node.js with Jest testing framework
 - TypeScript compilation environment
-- In-memory test isolation (each test gets a fresh store)
+- Mock-based test isolation (no real database required)
 
 ### Running Tests
 ```bash
@@ -154,6 +181,17 @@ npm test -- settlementStore # Run only settlement store tests
 npm run lint               # Check code style
 npm run typecheck          # Verify TypeScript types
 ```
+
+### Test File Location
+- **Unit Tests**: `src/services/settlementStore.test.ts`
+- **Coverage**: InMemorySettlementStore and PostgresSettlementStore
+- **Mock Strategy**: Uses `pg` PoolClient mocks to simulate database behavior
+
+### Key Test Scenarios
+1. **verifyLedger()**: Validates ledger consistency, detects missing tx_hash on completed settlements
+2. **Status Transitions**: Tests all legal/illegal state transitions including CHECK constraint enforcement
+3. **listPending()**: Validates pending settlement retrieval and ordering
+4. **CRUD Operations**: create, updateStatus, getDeveloperSettlements, getPendingSettlements
 
 ## Conclusion
 
@@ -164,5 +202,14 @@ Key takeaways:
 - Production use requires database backing and concurrency controls
 - `PostgresSettlementStore` now provides that backing while preserving external settlement IDs through `settlements.external_id`
 - Persistent developer revenue also depends on `revenue_ledger` so unsettled usage continues to satisfy `total_earned = completed + pending + usage` after restarts
-- Security concerns must be addressed at the application layer
-- Test coverage provides confidence in current behavior guarantees
+- **Ledger Consistency**: `verifyLedger()` method provides programmatic verification of settlement ledger integrity
+- **Database Enforcement**: CHECK constraint ensures completed settlements always have a stellar_tx_hash
+- **Security concerns must be addressed at the application layer**
+- **Test coverage provides confidence in current behavior guarantees**
+
+### Recent Enhancements (Issue #391)
+- ✅ Added `verifyLedger()` method to `PostgresSettlementStore`
+- ✅ Added `listPending()` method to both store implementations
+- ✅ Added CHECK constraint migration (`0008_settlement_status_check.sql`)
+- ✅ Comprehensive test coverage for all status transitions and ledger invariants
+- ✅ Documentation updated to reflect new invariants and verification methods
