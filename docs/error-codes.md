@@ -9,7 +9,7 @@ any runtime behavior that is not present in the current source.
 <!-- BEGIN GENERATED ERROR CODES -->
 ## Canonical error code catalog
 
-This section is generated from `src/errors/errorCatalog.ts`. Run `npm run error-codes:generate` after changing the catalog.
+This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes:generate` after changing the catalog.
 
 | Code | Catalog section |
 |---|---|

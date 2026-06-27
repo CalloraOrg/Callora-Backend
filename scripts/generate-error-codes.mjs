@@ -3,7 +3,9 @@ import path from "node:path";
 import process from "node:process";
 
 const root = process.cwd();
-const catalogPath = path.join(root, "src", "errors", "errorCatalog.ts");
+const yamlCatalogPath = path.join(root, "docs", "error-codes.yaml");
+const legacyCatalogPath = path.join(root, "src", "errors", "errorCatalog.ts");
+const generatedCodesPath = path.join(root, "src", "errors", "codes.ts");
 const docsPath = path.join(root, "docs", "error-codes.md");
 const openApiPath = path.join(root, "docs", "openapi.json");
 const checkOnly = process.argv.includes("--check");
@@ -11,37 +13,109 @@ const checkOnly = process.argv.includes("--check");
 const startMarker = "<!-- BEGIN GENERATED ERROR CODES -->";
 const endMarker = "<!-- END GENERATED ERROR CODES -->";
 
-function readCatalog() {
-  const source = fs.readFileSync(catalogPath, "utf8");
+/**
+ * Parse the YAML catalog manually (no external dependencies).
+ * This is a simple parser that works for our specific YAML structure.
+ */
+function parseYamlCatalog(yamlContent) {
   const entries = [];
-  let section = "General";
+  const lines = yamlContent.split(/\r?\n/);
+  let currentEntry = null;
 
-  for (const line of source.split(/\r?\n/)) {
-    const sectionMatch = line.match(/^\s*\/\/\s+(.+)$/);
-    if (sectionMatch) {
-      section = sectionMatch[1].trim();
-      continue;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Start of a new error code entry
+    if (line.match(/^\s*-\s+code:/)) {
+      if (currentEntry && currentEntry.code) {
+        entries.push(currentEntry);
+      }
+      currentEntry = { code: "", section: "", description: "" };
+      const codeMatch = line.match(/code:\s+([A-Z0-9_]+)/);
+      if (codeMatch) {
+        currentEntry.code = codeMatch[1];
+      } else {
+        // Try to capture any code value for validation error
+        const anyCodeMatch = line.match(/code:\s+(\S+)/);
+        if (anyCodeMatch) {
+          currentEntry.code = anyCodeMatch[1];
+        }
+      }
+    } else if (currentEntry) {
+      // Parse section field
+      const sectionMatch = line.match(/^\s+section:\s+(.+)$/);
+      if (sectionMatch) {
+        currentEntry.section = sectionMatch[1].trim();
+      }
+
+      // Parse description field
+      const descMatch = line.match(/^\s+description:\s+(.+)$/);
+      if (descMatch) {
+        currentEntry.description = descMatch[1].trim();
+      }
     }
+  }
 
-    const entryMatch = line.match(/^\s*([A-Z0-9_]+):\s*"([A-Z0-9_]+)",$/);
-    if (!entryMatch) continue;
+  // Don't forget the last entry
+  if (currentEntry && currentEntry.code) {
+    entries.push(currentEntry);
+  }
 
-    const [, key, value] = entryMatch;
-    if (key !== value) {
-      throw new Error(`ErrorCode key/value mismatch: ${key} !== ${value}`);
+  return entries;
+}
+
+function readCatalog() {
+  // Check if YAML catalog exists, otherwise fall back to TS catalog
+  let entries = [];
+
+  if (fs.existsSync(yamlCatalogPath)) {
+    const yamlContent = fs.readFileSync(yamlCatalogPath, "utf8");
+    entries = parseYamlCatalog(yamlContent);
+  } else if (fs.existsSync(legacyCatalogPath)) {
+    // Fallback to legacy TS catalog parsing
+    const source = fs.readFileSync(legacyCatalogPath, "utf8");
+    let section = "General";
+
+    for (const line of source.split(/\r?\n/)) {
+      const sectionMatch = line.match(/^\s*\/\/\s+(.+)$/);
+      if (sectionMatch) {
+        section = sectionMatch[1].trim();
+        continue;
+      }
+
+      const entryMatch = line.match(/^\s*([A-Z0-9_]+):\s*"([A-Z0-9_]+)",$/);
+      if (!entryMatch) continue;
+
+      const [, key, value] = entryMatch;
+      if (key !== value) {
+        throw new Error(`ErrorCode key/value mismatch: ${key} !== ${value}`);
+      }
+      entries.push({ code: value, section, description: "" });
     }
-    entries.push({ code: value, section });
+  } else {
+    throw new Error("No error catalog found. Expected docs/error-codes.yaml or src/errors/errorCatalog.ts");
   }
 
   if (entries.length === 0) {
-    throw new Error(`No error codes found in ${catalogPath}`);
+    throw new Error("No error codes found in catalog");
   }
 
+  // Validate no duplicates
   const duplicates = entries
     .map((entry) => entry.code)
     .filter((code, index, codes) => codes.indexOf(code) !== index);
   if (duplicates.length > 0) {
     throw new Error(`Duplicate error codes: ${[...new Set(duplicates)].join(", ")}`);
+  }
+
+  // Validate code format (SCREAMING_SNAKE_CASE)
+  const invalidCodes = entries.filter(
+    (entry) => !/^[A-Z][A-Z0-9_]*$/.test(entry.code)
+  );
+  if (invalidCodes.length > 0) {
+    throw new Error(
+      `Invalid error code format (must be SCREAMING_SNAKE_CASE): ${invalidCodes.map((e) => e.code).join(", ")}`
+    );
   }
 
   return entries;
@@ -56,12 +130,54 @@ function buildMarkdownBlock(entries) {
     startMarker,
     "## Canonical error code catalog",
     "",
-    "This section is generated from `src/errors/errorCatalog.ts`. Run `npm run error-codes:generate` after changing the catalog.",
+    "This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes:generate` after changing the catalog.",
     "",
     "| Code | Catalog section |",
     "|---|---|",
     rows,
     endMarker,
+  ].join("\n");
+}
+
+function buildTypeScriptEnum(entries) {
+  const enumEntries = entries
+    .map(({ code, section, description }) => {
+      const comment = description ? `  /** ${description} */\n` : "";
+      return `${comment}  ${code}: "${code}"`;
+    })
+    .join(",\n\n");
+
+  return [
+    "/**",
+    " * Canonical Error Code Enum",
+    " *",
+    " * AUTO-GENERATED from docs/error-codes.yaml",
+    " * DO NOT EDIT THIS FILE MANUALLY",
+    " *",
+    " * To add or modify error codes:",
+    " * 1. Edit docs/error-codes.yaml",
+    " * 2. Run: npm run error-codes:generate",
+    " *",
+    " * @module errors/codes",
+    " */",
+    "",
+    "export const ErrorCode = {",
+    enumEntries,
+    "",
+    "} as const;",
+    "",
+    "export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];",
+    "",
+    "/**",
+    " * Type guard to check if a value is a valid ErrorCode",
+    " * @param value - Value to check",
+    " * @returns True if value is a valid error code",
+    " */",
+    "export function isErrorCode(value: unknown): value is ErrorCode {",
+    "  if (typeof value !== \"string\") return false;",
+    "  return Object.values(ErrorCode).includes(value as ErrorCode);",
+    "}",
+    "",
   ].join("\n");
 }
 
@@ -121,19 +237,38 @@ function writeOrCheck(filePath, current, next) {
 }
 
 const entries = readCatalog();
+
+// Generate TypeScript enum
+const tsEnum = buildTypeScriptEnum(entries);
+const tsEnumCurrent = fs.existsSync(generatedCodesPath)
+  ? fs.readFileSync(generatedCodesPath, "utf8")
+  : "";
+const tsEnumChanged = writeOrCheck(generatedCodesPath, tsEnumCurrent, tsEnum);
+
+// Generate markdown documentation
 const docsCurrent = fs.readFileSync(docsPath, "utf8");
 const docsNext = updateGeneratedBlock(docsCurrent, buildMarkdownBlock(entries));
+const docsChanged = writeOrCheck(docsPath, docsCurrent, docsNext);
+
+// Generate OpenAPI schema
 const openApiCurrent = fs.readFileSync(openApiPath, "utf8");
 const openApiNext = updateOpenApi(JSON.parse(openApiCurrent), entries);
-
-const docsChanged = writeOrCheck(docsPath, docsCurrent, docsNext);
 const openApiChanged = writeOrCheck(openApiPath, openApiCurrent, openApiNext);
 
-if (checkOnly && (docsChanged || openApiChanged)) {
+if (checkOnly && (tsEnumChanged || docsChanged || openApiChanged)) {
   process.exit(1);
 }
 
 if (!checkOnly) {
-  const action = docsChanged || openApiChanged ? "Updated" : "Already up to date";
-  console.log(`${action}: docs/error-codes.md, docs/openapi.json`);
+  const changedFiles = [
+    tsEnumChanged && "src/errors/codes.ts",
+    docsChanged && "docs/error-codes.md",
+    openApiChanged && "docs/openapi.json",
+  ].filter(Boolean);
+
+  if (changedFiles.length > 0) {
+    console.log(`Updated: ${changedFiles.join(", ")}`);
+  } else {
+    console.log("Already up to date: src/errors/codes.ts, docs/error-codes.md, docs/openapi.json");
+  }
 }

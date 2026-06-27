@@ -3,9 +3,10 @@
  * Use these in routes/services; the global error handler maps them to status codes and JSON.
  */
 
-import type { ErrorCode as ErrorCodeType } from "./errorCatalog.js";
+import type { ErrorCode as ErrorCodeType } from "./codes.js";
 
-export { ErrorCode, isErrorCode } from "./errorCatalog.js";
+// Re-export ErrorCode from the generated codes module
+export { ErrorCode, isErrorCode, type ErrorCode as ErrorCodeType } from "./codes.js";
 
 export class AppError extends Error {
   public readonly isAppError = true;
