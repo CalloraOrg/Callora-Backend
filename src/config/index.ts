@@ -95,6 +95,13 @@ export const config = {
   port: env.PORT,
   nodeEnv: env.NODE_ENV,
   version: env.APP_VERSION,
+  accessLog: {
+    sampleRate: env.ACCESS_LOG_SAMPLE_RATE,
+    redactFields: (env.ACCESS_LOG_REDACT_FIELDS ?? '')
+      .split(',')
+      .map((field) => field.trim())
+      .filter((field) => field.length > 0),
+  },
 
   databaseUrl: env.DATABASE_URL,
   replicaUrls: env.REPLICA_URLS,

@@ -4,10 +4,13 @@ import helmet from 'helmet';
 import { initializeDb, closeDb } from './db/index.js';
 import { closePgPool, pool } from './db.js';
 import { closeDbPool } from './config/health.js';
+import { config } from './config/index.js';
 import { disconnectPrisma } from './lib/prisma.js';
 import { legacyV1DeprecationMiddleware } from './middleware/deprecation.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { createGatewayIpAllowlist } from './middleware/ipAllowlist.js';
+import { createAccessLogMiddleware } from './middleware/accessLog.js';
+import { requestIdMiddleware } from './middleware/requestId.js';
 import { metricsEndpoint } from './metrics.js';
 import { awaitWebhookDispatcherIdle, stopWebhookDispatching } from './webhooks/webhook.dispatcher.js';
 import {
@@ -36,7 +39,6 @@ import { createPostgresUsageStore } from './services/usageStore.js';
 import { createPostgresSettlementStore } from './services/settlementStore.js';
 import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
-import { config } from './config/index.js';
 import { listingsCache } from './lib/listingsCache.js';
 
 // Helper for Jest/CommonJS compat
@@ -46,6 +48,14 @@ const isDirectExecution = process.argv[1] && (process.argv[1].endsWith('index.ts
 export { createGracefulShutdownHandler, createInFlightDrainTracker, type DrainableSubsystem } from './lifecycle/shutdown.js';
 
 export const app = express();
+
+app.use(requestIdMiddleware);
+app.use(
+  createAccessLogMiddleware({
+    sampleRate: config.accessLog.sampleRate,
+    redactFields: config.accessLog.redactFields,
+  }),
+);
 
 // Standard JSON middleware for non-webhook routes
 app.use((req, res, next) => {

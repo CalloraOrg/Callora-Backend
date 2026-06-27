@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import type { Request, Response } from 'express';
 import { REDACTED_LOG_VALUE, redactLogValue } from '../logger.js';
-import { logger, requestLogger } from '../middleware/logging.js';
+import { logger } from '../middleware/logging.js';
+import { requestLogger } from '../middleware/accessLog.js';
 
 describe('API Key Redaction Regression Tests', () => {
   describe('redactLogValue - common API key formats', () => {
@@ -184,7 +185,12 @@ describe('API Key Redaction Regression Tests', () => {
         assert(!('headers' in payload), 'headers should not be in log payload');
         assert(!('body' in payload), 'body should not be in log payload');
         assert(payload.requestId, 'requestId should be in log payload');
+        assert(payload.correlationId, 'correlationId should be in log payload');
         assert.equal(payload.method, 'POST');
+        assert.equal(payload.status, 200);
+        assert.equal(payload.statusCode, 200);
+        assert.equal(payload.requestBytes, 0);
+        assert.equal(payload.responseBytes, 0);
       } finally {
         infoSpy.mockRestore();
       }
@@ -215,14 +221,20 @@ describe('API Key Redaction Regression Tests', () => {
         res.emit('finish');
 
         // Verify that the authorization header doesn't leak into the request ID or logs
-        expect(infoSpy.mock.calls[0][0]).toEqual({
-          requestId: 'safe-request-id-123',
-          method: 'GET',
-          path: '/api/data',
-          statusCode: 200,
-          durationMs: expect.any(Number),
-          clientIp: expect.any(String),
-        });
+        expect(infoSpy.mock.calls[0][0]).toEqual(
+          expect.objectContaining({
+            requestId: 'safe-request-id-123',
+            correlationId: 'safe-request-id-123',
+            method: 'GET',
+            path: '/api/data',
+            status: 200,
+            statusCode: 200,
+            ms: expect.any(Number),
+            durationMs: expect.any(Number),
+            requestBytes: 0,
+            responseBytes: 0,
+          }),
+        );
       } finally {
         infoSpy.mockRestore();
       }

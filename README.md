@@ -311,6 +311,8 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 | `HEALTH_CHECK_DB_TIMEOUT` | No | `2000` | DB health check timeout (ms) |
 | `APP_VERSION` | No | `1.0.0` | Reported in health check responses |
 | `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
+| `ACCESS_LOG_SAMPLE_RATE` | No | `1` | Fraction of requests logged as access events (`1` = 100%) |
+| `ACCESS_LOG_REDACT_FIELDS` | No | `""` | Comma-separated access-log fields to redact (`path`, `correlationId`, etc.) |
 | `GATEWAY_PROFILING_ENABLED` | No | `false` | Enable request profiling |
 
 ### Health Check Behavior

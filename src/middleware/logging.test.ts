@@ -2,7 +2,8 @@ import { EventEmitter } from 'node:events';
 import type { Request, Response } from 'express';
 
 import { REDACTED_LOG_VALUE } from '../logger.js';
-import { logger, requestLogger, structuredLoggerOptions } from './logging.js';
+import { logger, structuredLoggerOptions } from './logging.js';
+import { requestLogger } from './accessLog.js';
 
 describe('structured logger options', () => {
   test('redaction hook masks sensitive structured fields before logging', () => {
@@ -95,10 +96,15 @@ describe('requestLogger', () => {
       const [payload, message] = infoSpy.mock.calls[0] as [Record<string, unknown>, string];
       expect(message).toBe('request completed');
       expect(payload.requestId).toBe('req-safe-1');
+      expect(payload.correlationId).toBe('req-safe-1');
       expect(payload.method).toBe('POST');
       expect(payload.path).toBe('/api/vault/deposit/prepare');
+      expect(payload.status).toBe(200);
       expect(payload.statusCode).toBe(200);
+      expect(typeof payload.ms).toBe('number');
       expect(typeof payload.durationMs).toBe('number');
+      expect(payload.requestBytes).toBe(0);
+      expect(payload.responseBytes).toBe(0);
       expect('headers' in payload).toBe(false);
       expect('body' in payload).toBe(false);
     } finally {
@@ -130,6 +136,7 @@ describe('requestLogger', () => {
 
       const [payload] = infoSpy.mock.calls[0] as [Record<string, unknown>, string];
       expect(payload.requestId).toBe('req-from-id-property');
+      expect(payload.correlationId).toBe('req-from-id-property');
       expect(res.setHeader).toHaveBeenCalledWith('x-request-id', 'req-from-id-property');
     } finally {
       infoSpy.mockRestore();
@@ -160,6 +167,7 @@ describe('requestLogger', () => {
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [payload, message] = errorSpy.mock.calls[0] as [Record<string, unknown>, string];
       expect(message).toBe('request completed');
+      expect(payload.status).toBe(503);
       expect(payload.statusCode).toBe(503);
     } finally {
       errorSpy.mockRestore();
