@@ -1222,7 +1222,15 @@
                 },
                 "method": {
                   "type": "string",
-                  "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+                  "enum": [
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                    "HEAD",
+                    "OPTIONS"
+                  ]
                 },
                 "price_per_call_usdc": {
                   "type": "string",
