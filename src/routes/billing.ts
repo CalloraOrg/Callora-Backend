@@ -13,6 +13,7 @@ import {
 } from '../errors/index.js';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
+import { billingDeductHistogramMiddleware } from '../middleware/metricsHistogram.js';
 import { BillingService, type BillingDeductResult } from '../services/billing.js';
 import { createSorobanRpcBillingClient, SorobanRpcError } from '../services/sorobanBilling.js';
 import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
@@ -81,6 +82,7 @@ router.post(
   '/deduct',
   requireAuth,
   idempotencyMiddleware,
+  billingDeductHistogramMiddleware,
   async (
     req: Request,
     res: Response<unknown, AuthenticatedLocals>,
