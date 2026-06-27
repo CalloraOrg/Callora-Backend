@@ -1,4 +1,4 @@
-import { eq, and, like, type SQL, count } from "drizzle-orm";
+import { eq, and, like, isNull, isNotNull, type SQL, count } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
 import type {
   Api,
@@ -83,7 +83,16 @@ export interface ApiRepository {
   create(api: ApiCreateInput): Promise<Api>;
   createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints>;
   update(id: number, data: ApiUpdateInput): Promise<Api | null>;
+  /**
+   * Soft-deletes the API by setting `deleted_at` to the current timestamp.
+   * Returns true if the row existed and was not already deleted, false otherwise.
+   */
   delete(id: number): Promise<boolean>;
+  /**
+   * Restores a soft-deleted API by clearing its `deleted_at` field.
+   * Returns the restored Api row, or null if the row was not found / not deleted.
+   */
+  restore(id: number): Promise<Api | null>;
   listByDeveloper(
     developerId: number,
     filters?: ApiListFilters,
@@ -96,6 +105,13 @@ export interface ApiRepository {
     endpoints: CreateEndpointInput[],
   ): Promise<BulkCreateEndpointResult[]>;
 }
+
+// ---------------------------------------------------------------------------
+// Default (Drizzle / SQLite) implementation
+// ---------------------------------------------------------------------------
+
+/** Condition shared by every "live record" query — excludes soft-deleted rows. */
+const notDeleted = isNull(schema.apis.deleted_at);
 
 export const defaultApiRepository: ApiRepository = {
   async create(api) {
@@ -140,20 +156,22 @@ export const defaultApiRepository: ApiRepository = {
     if (data.status) payload.status = data.status;
 
     if (Object.keys(payload).length === 0) {
+      // No-op update: return existing live record (or null if deleted/missing).
       const existing = await db
         .select()
         .from(schema.apis)
-        .where(eq(schema.apis.id, id))
+        .where(and(eq(schema.apis.id, id), notDeleted))
         .limit(1);
       return existing[0] ?? null;
     }
 
     payload.updated_at = new Date();
 
+    // Only update live (non-deleted) rows.
     const [updated] = await db
       .update(schema.apis)
       .set(payload)
-      .where(eq(schema.apis.id, id))
+      .where(and(eq(schema.apis.id, id), notDeleted))
       .returning();
 
     // An updated API (e.g. status change, name change) may affect any listing.
@@ -162,18 +180,56 @@ export const defaultApiRepository: ApiRepository = {
     return updated ?? null;
   },
 
+  /**
+   * Soft-delete: stamp `deleted_at` on the row instead of issuing a hard DELETE.
+   * All normal query paths filter on `deleted_at IS NULL`, so the row immediately
+   * disappears from every public and developer listing without losing audit data.
+   */
   async delete(id) {
-    const result = await db.delete(schema.apis).where(eq(schema.apis.id, id));
+    const now = new Date();
+    const [updated] = await db
+      .update(schema.apis)
+      .set({ deleted_at: now, updated_at: now })
+      // Guard: only soft-delete live records (idempotent-safe, avoids resetting
+      // the tombstone timestamp on a record that was already deleted).
+      .where(and(eq(schema.apis.id, id), notDeleted))
+      .returning();
 
-    // Deletion may affect any listing (e.g., removed from public catalog).
-    listingsCache.invalidateAll();
+    if (updated) {
+      // Deletion removes the API from every listing — flush the cache.
+      listingsCache.invalidateAll();
+      return true;
+    }
+    return false;
+  },
 
-    // better-sqlite3's RunResult exposes the affected row count on `changes`
-    return deleted.changes > 0;
+  /**
+   * Restore a previously soft-deleted API by clearing `deleted_at`.
+   * Only admin-guarded call sites should invoke this.
+   */
+  async restore(id) {
+    const now = new Date();
+    const [restored] = await db
+      .update(schema.apis)
+      .set({ deleted_at: null, updated_at: now })
+      // Guard: only restore rows that are actually deleted.
+      .where(and(eq(schema.apis.id, id), isNotNull(schema.apis.deleted_at)))
+      .returning();
+
+    if (restored) {
+      // Restored API may appear in listings — flush cache.
+      listingsCache.invalidateAll();
+      return restored;
+    }
+    return null;
   },
 
   async listByDeveloper(developerId, filters = {}) {
-    const conditions: SQL[] = [eq(schema.apis.developer_id, developerId)];
+    // Always exclude soft-deleted rows from developer-facing listings.
+    const conditions: SQL[] = [
+      eq(schema.apis.developer_id, developerId),
+      notDeleted,
+    ];
     if (filters.status) {
       conditions.push(eq(schema.apis.status, filters.status));
     }
@@ -201,7 +257,11 @@ export const defaultApiRepository: ApiRepository = {
   },
 
   async listPublic(filters = {}) {
-    const conditions: SQL[] = [eq(schema.apis.status, "active")];
+    // Public catalog: only live, active APIs.
+    const conditions: SQL[] = [
+      eq(schema.apis.status, "active"),
+      notDeleted,
+    ];
     if (filters.category) {
       conditions.push(eq(schema.apis.category, filters.category));
     }
@@ -247,7 +307,14 @@ export const defaultApiRepository: ApiRepository = {
         schema.developers,
         eq(schema.apis.developer_id, schema.developers.id),
       )
-      .where(and(eq(schema.apis.id, id), eq(schema.apis.status, "active")))
+      // Exclude soft-deleted rows and restrict to active status for public view.
+      .where(
+        and(
+          eq(schema.apis.id, id),
+          eq(schema.apis.status, "active"),
+          notDeleted,
+        ),
+      )
       .limit(1);
 
     const row = rows[0];
@@ -319,7 +386,9 @@ export const defaultApiRepository: ApiRepository = {
   },
 };
 
-// --- In-Memory implementation (for testing) ---
+// ---------------------------------------------------------------------------
+// In-Memory implementation (for testing)
+// ---------------------------------------------------------------------------
 
 export class InMemoryApiRepository implements ApiRepository {
   private readonly apis: Api[];
@@ -367,6 +436,7 @@ export class InMemoryApiRepository implements ApiRepository {
       status: api.status as ApiStatus,
       created_at: new Date(0),
       updated_at: new Date(0),
+      deleted_at: null,
     };
   }
 
@@ -383,6 +453,7 @@ export class InMemoryApiRepository implements ApiRepository {
       status: api.status ?? "draft",
       created_at: now,
       updated_at: now,
+      deleted_at: null,
     };
     this.apis.push(created);
     this.detailsById.set(created.id, {
@@ -431,7 +502,7 @@ export class InMemoryApiRepository implements ApiRepository {
   }
 
   async update(id: number, data: ApiUpdateInput): Promise<Api | null> {
-    const index = this.apis.findIndex((a) => a.id === id);
+    const index = this.apis.findIndex((a) => a.id === id && !a.deleted_at);
     if (index === -1) return null;
     const current = this.apis[index];
     const updated: Api = {
@@ -467,25 +538,33 @@ export class InMemoryApiRepository implements ApiRepository {
     return updated;
   }
 
+  /** Soft-delete: stamp deleted_at rather than removing the record. */
   async delete(id: number): Promise<boolean> {
-    const index = this.apis.findIndex((a) => a.id === id);
+    const index = this.apis.findIndex((a) => a.id === id && !a.deleted_at);
     if (index === -1) return false;
-
-    // Remove the API
-    this.apis.splice(index, 1);
-
-    // Remove associated details and endpoints (cascade behavior)
-    this.detailsById.delete(id);
-    this.endpointsByApiId.delete(id);
-
+    const now = new Date();
+    this.apis[index] = { ...this.apis[index], deleted_at: now, updated_at: now };
     return true;
+  }
+
+  /** Restore a soft-deleted record by clearing deleted_at. */
+  async restore(id: number): Promise<Api | null> {
+    const index = this.apis.findIndex((a) => a.id === id && a.deleted_at !== null);
+    if (index === -1) return null;
+    const now = new Date();
+    const restored = { ...this.apis[index], deleted_at: null, updated_at: now };
+    this.apis[index] = restored;
+    return restored;
   }
 
   async listByDeveloper(
     developerId: number,
     filters: ApiListFilters = {},
   ): Promise<Api[]> {
-    let results = this.apis.filter((api) => api.developer_id === developerId);
+    // Exclude soft-deleted rows.
+    let results = this.apis.filter(
+      (api) => api.developer_id === developerId && !api.deleted_at,
+    );
     if (filters.status) {
       results = results.filter((api) => api.status === filters.status);
     }
@@ -509,7 +588,10 @@ export class InMemoryApiRepository implements ApiRepository {
 
   async listPublic(filters: ApiListFilters = {}): Promise<Api[]> {
     if (filters.status && filters.status !== "active") return [];
-    let results = this.apis.filter((api) => api.status === "active");
+    // Only live, active APIs are visible in the public catalog.
+    let results = this.apis.filter(
+      (api) => api.status === "active" && !api.deleted_at,
+    );
     if (filters.category) {
       results = results.filter((api) => api.category === filters.category);
     }
@@ -531,7 +613,7 @@ export class InMemoryApiRepository implements ApiRepository {
   async listPublicDetailed(
     filters: ApiListFilters = {},
   ): Promise<PaginatedApiListResult> {
-    let results = this.apis;
+    let results = this.apis.filter((api) => !api.deleted_at);
     if (filters.status) {
       results = results.filter((api) => api.status === filters.status);
     } else {
@@ -578,9 +660,10 @@ export class InMemoryApiRepository implements ApiRepository {
   }
 
   async findById(id: number): Promise<ApiDetails | null> {
-    const item = this.detailsById.get(id) ?? null;
-    if (!item) return null;
-    return item;
+    // findById is a public endpoint — exclude deleted records.
+    const api = this.apis.find((a) => a.id === id && !a.deleted_at);
+    if (!api) return null;
+    return this.detailsById.get(id) ?? null;
   }
 
   async getEndpoints(apiId: number): Promise<ApiEndpointInfo[]> {
@@ -627,6 +710,10 @@ export class InMemoryApiRepository implements ApiRepository {
   }
 }
 
+// ---------------------------------------------------------------------------
+// listPublicDetailed — works with any ApiRepository implementation
+// ---------------------------------------------------------------------------
+
 export async function listPublicDetailed(
   repository: ApiRepository,
   filters: ApiListFilters = {},
@@ -642,7 +729,7 @@ export async function listPublicDetailed(
   }
 
   if (repository === defaultApiRepository) {
-    const conditions: SQL[] = [];
+    const conditions: SQL[] = [notDeleted];
     if (filters.status) {
       conditions.push(eq(schema.apis.status, filters.status));
     } else {
@@ -735,7 +822,9 @@ export async function listPublicDetailed(
   return { items, total: items.length };
 }
 
-// --- Create API (production) ---
+// ---------------------------------------------------------------------------
+// createApi — transactional helper (production path)
+// ---------------------------------------------------------------------------
 
 export interface CreateEndpointInput {
   path: string;
