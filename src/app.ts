@@ -39,6 +39,7 @@ import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { validate } from './middleware/validate.js';
 import { requestLogger } from './middleware/logging.js';
+import { auditEnrichMiddleware } from './middleware/auditEnrich.js';
 import { createConfiguredRestRateLimitMiddleware } from './middleware/restRateLimit.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 import { config } from './config/index.js';
@@ -202,6 +203,8 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const requestBodyLimit = process.env.REQUEST_BODY_LIMIT ?? '100kb';
   app.use(express.json({ limit: requestBodyLimit }));
   app.use(express.urlencoded({ extended: false, limit: requestBodyLimit }));
+  // Attach req.auditContext (IP, UA, tenantId, correlationId, bodyHash) for all routes.
+  app.use(auditEnrichMiddleware);
 
   /**
    * GET /api/health
