@@ -19,7 +19,13 @@ export class AuthController {
   }
 
   /**
-   * Refresh access token using a valid refresh token
+   * Refresh access token using a valid refresh token.
+   *
+   * On success the consumed refresh token is revoked and a fresh token pair
+   * (access + refresh) is returned. Single-use enforcement means a reused
+   * token is an unambiguous theft signal: all tokens for the user are
+   * immediately revoked and the request is rejected with 401.
+   *
    * POST /auth/refresh
    */
   async refreshToken(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -53,12 +59,15 @@ export class AuthController {
         return;
       }
 
-      // Check if token is revoked or expired
+      // Reuse detection — token is already revoked, which means it was
+      // previously rotated. Presenting it again is a theft signal.
+      // Revoke all user tokens and reject the request.
       if (storedToken.isRevoked) {
         await this.refreshTokenService.handleReuse(storedToken, this.refreshTokenRepository);
-        logger.warn('[AuthController] Attempted to use revoked refresh token', {
+        logger.warn('[AuthController] Theft signal: revoked token presented again — all user tokens revoked', {
           tokenId: tokenPayload.tokenId,
-          userId: tokenPayload.userId
+          userId: tokenPayload.userId,
+          familyId: storedToken.familyId
         });
         next(new UnauthorizedError('Refresh token has been revoked', 'REVOKED_TOKEN'));
         return;
@@ -83,22 +92,24 @@ export class AuthController {
         return;
       }
 
-      // Update last used timestamp
-      await this.refreshTokenRepository.updateLastUsed(storedToken.id, storedToken.userId);
-
-      // Generate new access token
-      const newAccessToken = this.refreshTokenService.refreshAccessToken(
+      // Rotate: revoke consumed token, issue fresh access + refresh token pair
+      // in the same family so the entire lineage is covered by theft detection.
+      const newTokenPair = await this.refreshTokenService.rotateRefreshToken(
+        storedToken,
         storedToken.userId,
-        undefined // walletAddress not available in refresh flow
+        undefined, // walletAddress not available in refresh flow
+        this.refreshTokenRepository
       );
 
-      logger.info('[AuthController] Access token refreshed successfully', {
+      logger.info('[AuthController] Token pair rotated successfully', {
         userId: storedToken.userId,
-        tokenId: storedToken.id
+        consumedTokenId: storedToken.id,
+        familyId: storedToken.familyId
       });
 
       res.json({
-        accessToken: newAccessToken,
+        accessToken: newTokenPair.accessToken,
+        refreshToken: newTokenPair.refreshToken,
         tokenType: 'Bearer'
       });
 
@@ -174,7 +185,6 @@ export class AuthController {
    */
   async revokeAllTokens(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      // This endpoint should be protected by requireAuth middleware
       const userId = (req as any).developerId || res.locals.authenticatedUser?.id;
 
       if (!userId) {
@@ -211,7 +221,7 @@ export class AuthController {
 
       res.json({
         activeRefreshTokens: activeTokenCount,
-        maxAllowedTokens: 5 // Configurable limit
+        maxAllowedTokens: 5
       });
 
     } catch (error) {

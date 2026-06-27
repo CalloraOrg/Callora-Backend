@@ -41,12 +41,13 @@ export class RefreshTokenService {
   }
 
   /**
-   * Create access and refresh token pair
+   * Create access and refresh token pair.
+   * Both tokens share the same tokenId so the refresh token record
+   * can be located by ID during the rotation flow.
    */
   createTokenPair(userId: string, walletAddress?: string): TokenPair {
     const tokenId = this.generateTokenId();
     
-    // Create access token (short-lived)
     const accessTokenPayload: AccessTokenPayload = {
       userId,
       walletAddress,
@@ -58,7 +59,6 @@ export class RefreshTokenService {
       algorithm: 'HS256'
     });
 
-    // Create refresh token (long-lived)
     const refreshTokenPayload: RefreshTokenPayload = {
       userId,
       tokenId,
@@ -70,10 +70,7 @@ export class RefreshTokenService {
       algorithm: 'HS256'
     });
 
-    return {
-      accessToken,
-      refreshToken
-    };
+    return { accessToken, refreshToken };
   }
 
   /**
@@ -194,14 +191,71 @@ export class RefreshTokenService {
   }
 
   /**
-   * Handle refresh token reuse: revoke the entire family atomically and log audit event
+   * Rotate a refresh token — revoke the consumed token and issue a new one
+   * in the same family. This is called on every successful refresh so that
+   * each refresh token can only be used once. Single-use enforcement makes
+   * theft detectable: if the old token is presented again after rotation,
+   * `isRevoked` will be true and `handleReuse` will fire.
+   *
+   * @param consumedToken  - The refresh token record that was just validated
+   * @param userId         - Owner of the token
+   * @param walletAddress  - Optional wallet address to embed in the new access token
+   * @param repository     - Token repository for persistence
+   * @returns A fresh { accessToken, refreshToken } pair in the same family
+   */
+  async rotateRefreshToken(
+    consumedToken: RefreshToken,
+    userId: string,
+    walletAddress: string | undefined,
+    repository: RefreshTokenRepository
+  ): Promise<TokenPair> {
+    // 1. Revoke the consumed token so it cannot be reused
+    await repository.revokeRefreshToken(consumedToken.id, userId);
+
+    // 2. Issue a new token pair — carry the familyId forward so theft
+    //    detection covers the entire lineage
+    const newPair = this.createTokenPair(userId, walletAddress);
+    const newRecord = this.createRefreshTokenRecord(userId, newPair.refreshToken, consumedToken.familyId);
+    await repository.createRefreshToken(newRecord);
+
+    logger.info('[RefreshTokenService] Refresh token rotated', {
+      userId,
+      consumedTokenId: consumedToken.id,
+      newTokenId: newRecord.id,
+      familyId: consumedToken.familyId
+    });
+
+    return newPair;
+  }
+
+  /**
+   * Handle refresh token reuse (theft signal).
+   *
+   * When a token that is already revoked is presented again it means one of:
+   *   a) The legitimate user's token was stolen and the attacker rotated it,
+   *      leaving the victim holding a now-revoked token.
+   *   b) The attacker's rotated token was stolen back by the legitimate user.
+   *
+   * In either case we cannot tell who is legitimate, so the safest response
+   * is to revoke ALL tokens for the user, forcing a full re-authentication.
+   * Revoking only the family is insufficient because an attacker who has
+   * already rotated the token may have started a new family.
+   *
+   * @param storedToken - The revoked token record that was presented again
+   * @param repository  - Token repository for persistence
    */
   async handleReuse(storedToken: RefreshToken, repository: RefreshTokenRepository): Promise<void> {
-    logger.warn('[RefreshTokenService] Confirmed refresh token reuse detected. Revoking entire family.', {
-      familyId: storedToken.familyId,
-      userId: storedToken.userId,
-      tokenId: storedToken.id
-    });
-    await repository.revokeFamily(storedToken.familyId, storedToken.userId);
+    logger.warn(
+      '[RefreshTokenService] Refresh token reuse detected — revoking ALL user tokens as theft countermeasure.',
+      {
+        userId: storedToken.userId,
+        familyId: storedToken.familyId,
+        tokenId: storedToken.id
+      }
+    );
+
+    // Revoke every token for this user, not just the family, because the
+    // attacker may have rotated into a new family after the initial theft.
+    await repository.revokeAllUserTokens(storedToken.userId);
   }
 }
