@@ -6,6 +6,7 @@ import { BadRequestError, InternalServerError, UnauthorizedError } from '../erro
 import { parsePagination } from '../lib/pagination.js';
 import { parseCursor } from '../lib/cursorPagination.js';
 import type { UsageResponse } from '../types/index.js';
+import { createUsageSseRouter } from './usage/sse.js';
 
 export interface UsageRouterDeps {
   usageEventsRepository: UsageEventsRepository & Partial<UsageEventsPgRepository>;
@@ -29,6 +30,9 @@ const parseDate = (value: unknown): Date | null => {
 export function createUsageRouter(deps: UsageRouterDeps): Router {
   const router = Router();
   const { usageEventsRepository } = deps;
+
+  // Server-Sent Events stream for live usage events.
+  router.use('/sse', createUsageSseRouter());
 
   router.get('/', requireAuth, async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
     const user = res.locals.authenticatedUser;

@@ -240,6 +240,63 @@
         }
       }
     },
+    "/api/usage/sse": {
+      "get": {
+        "summary": "Stream live usage events via SSE",
+        "description": "Server-Sent Events stream that pushes new_api_call events for the authenticated developer in real time. Includes periodic heartbeat comments to keep the connection alive behind proxies.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream opened successfully",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "text/event-stream"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-cache, no-transform"
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSseStream"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/usage/{developerId}": {
       "get": {
         "summary": "Inspect a developer usage aggregate",
@@ -1506,6 +1563,35 @@
           }
         }
       },
+      "UsageSseStream": {
+        "type": "string",
+        "description": "Server-Sent Events stream. Each event is formatted as `event: <name>\\ndata: <json>\\n\\n`. The stream begins with a `connected` event, emits `new_api_call` events, and includes `: heartbeat\\n\\n` comments.",
+        "example": "event: connected\\ndata: {\"stream\":\"usage\",\"developerId\":\"dev-1\"}\\n\\nevent: new_api_call\\ndata: {\"apiId\":\"api-1\",\"endpoint\":\"/v1/data\",\"method\":\"GET\",\"statusCode\":200,\"latencyMs\":12,\"creditsUsed\":1}\\n\\n: heartbeat\\n\\n"
+      },
+      "UsageSseEventNewApiCall": {
+        "type": "object",
+        "description": "Payload for a new_api_call SSE event.",
+        "properties": {
+          "apiId": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "statusCode": {
+            "type": "integer"
+          },
+          "latencyMs": {
+            "type": "integer"
+          },
+          "creditsUsed": {
+            "type": "number"
+          }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "required": [
@@ -1605,6 +1691,9 @@
           "MISSING_CLAIMS",
           "TOKEN_EXPIRED",
           "TOKEN_NOT_ACTIVE",
+          "QUOTA_REQUEST_NOT_FOUND",
+          "QUOTA_REQUEST_ALREADY_RESOLVED",
+          "INVALID_QUOTA_REQUEST",
           "REQUEST_TIMEOUT",
           "REQUEST_BODY_TOO_LARGE",
           "UNSUPPORTED_MEDIA_TYPE",
