@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { extractPrefix, discoverMigrations } from './migrate.js';
+import { extractPrefix, discoverMigrations, computeChecksum } from './migrate.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

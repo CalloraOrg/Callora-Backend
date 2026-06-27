@@ -52,6 +52,20 @@ export const apiEndpoints = sqliteTable('api_endpoints', {
   updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`)
 });
 
+// Schema versions table (single source of truth for applied migrations with checksums)
+export const schemaVersions = sqliteTable('schema_versions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  version: integer('version').notNull().unique(),
+  filename: text('filename').notNull(),
+  checksum: text('checksum').notNull(),
+  applied_at: text('applied_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  executed_by: text('executed_by'),
+});
+
+export type SchemaVersion = typeof schemaVersions.$inferSelect;
+export type NewSchemaVersion = typeof schemaVersions.$inferInsert;
+
+
 // Type exports for use in application code
 export type Api = typeof apis.$inferSelect;
 export type NewApi = typeof apis.$inferInsert;

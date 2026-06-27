@@ -53,3 +53,8 @@ jobs:
             exit 1
           fi
           echo "✅ Build artifacts verified"
+
+      - name: Run Schema Versioning Check
+        run: npx tsx scripts/check-migrations.ts
+        env:
+          CHECKSUM_CI_SKIP_MISSING: "1"
