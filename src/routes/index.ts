@@ -4,6 +4,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 
 import billingRouter from './billing.js';
+import { createBillingPortalRouter } from './billing/portal.js';
 import healthRouter from './health.js';
 import { createApisRouter, type ApisRouterDeps } from './apis.js';
 import { createUsageRouter, type UsageRouterDeps } from './usage.js';
@@ -38,8 +39,10 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   if (deps.restRateLimit) {
     router.use('/billing', deps.restRateLimit, billingRouter);
+    router.use('/billing/portal', deps.restRateLimit, createBillingPortalRouter());
   } else {
     router.use('/billing', billingRouter);
+    router.use('/billing/portal', createBillingPortalRouter());
   }
 
   // Serve OpenAPI 3.1 JSON contract
