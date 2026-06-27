@@ -7,12 +7,15 @@ import billingRouter from './billing.js';
 import healthRouter from './health.js';
 import { createApisRouter, type ApisRouterDeps } from './apis.js';
 import { createUsageRouter, type UsageRouterDeps } from './usage.js';
+import { createExportSchedulesRouter } from './exports/schedules.js';
+import type { ScheduledExportsService } from '../services/scheduledExports.js';
 
 const openApiPath = path.join(process.cwd(), 'docs/openapi.json');
 const openApiSpec = JSON.parse(readFileSync(openApiPath, 'utf8'));
 
 export interface ApiRouterDeps extends Partial<UsageRouterDeps>, Partial<ApisRouterDeps> {
   restRateLimit?: RequestHandler;
+  scheduledExportsService?: ScheduledExportsService;
 }
 
 export function createApiRouter(deps: ApiRouterDeps = {}): Router {
@@ -28,6 +31,10 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use('/usage', createUsageRouter({
     usageEventsRepository: deps.usageEventsRepository!
   }));
+
+  if (deps.scheduledExportsService) {
+    router.use('/exports/schedules', createExportSchedulesRouter(deps.scheduledExportsService));
+  }
 
   if (deps.restRateLimit) {
     router.use('/billing', deps.restRateLimit, billingRouter);
