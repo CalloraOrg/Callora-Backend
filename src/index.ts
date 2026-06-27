@@ -30,6 +30,7 @@ import { PgUsageEventsRepository } from './repositories/usageEventsRepository.pg
 import { createRevenueLedgerIndexerJob } from './services/revenueLedgerIndexer.js';
 import { RevenueSettlementService } from './services/revenueSettlementService.js';
 import { createSettlementStatusSyncJob } from './services/settlementStatusSyncJob.js';
+import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
 import { createIdempotencySweeperJob } from './services/idempotencySweeper.js';
 import { createPostgresUsageStore } from './services/usageStore.js';
 import { createPostgresSettlementStore } from './services/settlementStore.js';
@@ -112,6 +113,12 @@ if (isDirectExecution) {
     intervalMs: config.settlementSync.intervalMs,
   });
 
+  const settlementReconJob = createSettlementReconciliationJob(pool, {
+    intervalMs: config.settlementRecon.intervalMs,
+    horizonUrl: config.stellar.horizonUrl,
+    horizonRequestTimeoutMs: config.settlementSync.timeoutMs,
+  });
+
   const idempotencySweeperJob = createIdempotencySweeperJob(pool, {
     intervalMs: config.idempotency.sweeperIntervalMs,
   });
@@ -173,6 +180,11 @@ if (isDirectExecution) {
       beginShutdown: stopWebhookDispatching,
       awaitIdle: awaitWebhookDispatcherIdle,
     },
+    {
+      name: 'settlement-reconciliation',
+      beginShutdown: () => settlementReconJob.beginShutdown(),
+      awaitIdle: () => settlementReconJob.awaitIdle(),
+    },
   ];
   app.use('/v1/call', legacyV1DeprecationMiddleware, proxyDrainTracker.middleware);
   app.use('/v1/call', proxyRouter);
@@ -188,6 +200,7 @@ if (isDirectExecution) {
   const closeAllDataResources = async () => {
     revenueLedgerIndexerJob.stop();
     settlementStatusSyncJob.stop();
+    settlementReconJob.stop();
     idempotencySweeperJob.stop();
     await closeDb();
     await Promise.allSettled([
@@ -219,6 +232,7 @@ if (isDirectExecution) {
 
       revenueLedgerIndexerJob.start();
       settlementStatusSyncJob.start();
+      settlementReconJob.start();
       idempotencySweeperJob.start();
       
       const server = app.listen(PORT, () => {
