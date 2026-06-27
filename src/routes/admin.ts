@@ -1,13 +1,3 @@
-/**
- * src/routes/admin.ts  — UPDATED
- *
- * Diff from original:
- *   + import webhookKeysRouter from './admin/webhookKeys.js';
- *   + router.use('/webhooks', webhookKeysRouter);   ← new line, after quota block
- *
- * All other code is unchanged.
- */
-
 import { Router } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
@@ -23,9 +13,8 @@ import {
   approveQuotaRequest,
   rejectQuotaRequest,
 } from '../services/quotaService.js';
-
-// ✅ NEW IMPORT
 import webhookKeysRouter from './admin/webhookKeys.js';
+import { createAdminApisRouter } from './admin/apis.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -208,10 +197,17 @@ router.post('/quota/requests/:id/reject', async (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// ✅ NEW: Webhook signing-key rotation
+// Webhook signing-key rotation
 // Mounts:  POST /api/admin/webhooks/rotate-key
 //          GET  /api/admin/webhooks/grace-window
 // ---------------------------------------------------------------------------
 router.use('/webhooks', webhookKeysRouter);
+
+// ---------------------------------------------------------------------------
+// API soft-delete and restore
+// Mounts:  DELETE /api/admin/apis/:id
+//          POST   /api/admin/apis/:id/restore
+// ---------------------------------------------------------------------------
+router.use('/apis', createAdminApisRouter());
 
 export default router;

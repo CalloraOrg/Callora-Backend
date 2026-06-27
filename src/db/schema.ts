@@ -36,7 +36,9 @@ export const apis = sqliteTable('apis', {
   category: text('category'),
   status: text('status', { enum: apiStatusEnum }).notNull().default('draft'),
   created_at: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-  updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`)
+  updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  /** Soft-delete tombstone. NULL = live; non-NULL = deleted at that timestamp. */
+  deleted_at: integer('deleted_at', { mode: 'timestamp' }),
 });
 
 // API endpoints table  
