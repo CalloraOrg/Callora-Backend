@@ -5,6 +5,7 @@ import { initializeDb, closeDb } from './db/index.js';
 import { closePgPool, pool } from './db.js';
 import { closeDbPool } from './config/health.js';
 import { disconnectPrisma } from './lib/prisma.js';
+import { legacyV1DeprecationMiddleware } from './middleware/deprecation.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { createGatewayIpAllowlist } from './middleware/ipAllowlist.js';
 import { metricsEndpoint } from './metrics.js';
@@ -330,7 +331,7 @@ if (isDirectExecution) {
       awaitIdle: awaitWebhookDispatcherIdle,
     },
   ];
-  app.use('/v1/call', proxyDrainTracker.middleware);
+  app.use('/v1/call', legacyV1DeprecationMiddleware, proxyDrainTracker.middleware);
   app.use('/v1/call', proxyRouter);
 
 

@@ -3,6 +3,11 @@ import type { Server } from 'node:http';
 import dns from 'node:dns/promises';
 import type { LookupAddress } from 'node:dns';
 import { createProxyRouter } from '../routes/proxyRoutes.js';
+import {
+  legacyV1DeprecationMiddleware,
+  LEGACY_V1_DEPRECATION_HEADER,
+  LEGACY_V1_SUNSET_AT,
+} from '../middleware/deprecation.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import { MockSorobanBilling } from '../services/billingService.js';
@@ -82,6 +87,7 @@ beforeAll(async () => {
     const app = express();
     app.use(express.json());
     app.use(requestIdMiddleware);
+    app.use('/v1/call', legacyV1DeprecationMiddleware);
 
     const proxyRouter = createProxyRouter({
       billing,
@@ -133,6 +139,8 @@ describe('Proxy /v1/call', () => {
     });
 
     expect(res.status).toBe(200);
+    expect(res.headers.get('deprecation')).toBe(LEGACY_V1_DEPRECATION_HEADER);
+    expect(res.headers.get('sunset')).toBe(LEGACY_V1_SUNSET_AT);
     const body = await res.json();
     expect(body.message).toBe('upstream OK');
     expect(body.items).toEqual([1, 2, 3]);
