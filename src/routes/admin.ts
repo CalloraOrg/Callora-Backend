@@ -1,3 +1,13 @@
+/**
+ * src/routes/admin.ts  — UPDATED
+ *
+ * Diff from original:
+ *   + import webhookKeysRouter from './admin/webhookKeys.js';
+ *   + router.use('/webhooks', webhookKeysRouter);   ← new line, after quota block
+ *
+ * All other code is unchanged.
+ */
+
 import { Router } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
@@ -13,6 +23,9 @@ import {
   approveQuotaRequest,
   rejectQuotaRequest,
 } from '../services/quotaService.js';
+
+// ✅ NEW IMPORT
+import webhookKeysRouter from './admin/webhookKeys.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -33,7 +46,6 @@ router.get('/users', async (req, res, next) => {
     const diff: Record<string, unknown> = {
       query: { ...req.query },
     };
-    // Include request body for state-changing methods
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body && typeof req.body === 'object') {
       diff.body = req.body;
     }
@@ -194,5 +206,12 @@ router.post('/quota/requests/:id/reject', async (req, res, next) => {
     next(new InternalServerError());
   }
 });
+
+// ---------------------------------------------------------------------------
+// ✅ NEW: Webhook signing-key rotation
+// Mounts:  POST /api/admin/webhooks/rotate-key
+//          GET  /api/admin/webhooks/grace-window
+// ---------------------------------------------------------------------------
+router.use('/webhooks', webhookKeysRouter);
 
 export default router;
