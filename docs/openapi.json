@@ -109,6 +109,26 @@
               }
             }
           },
+          "409": {
+            "description": "Idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error",
             "content": {
@@ -118,41 +138,99 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/billing/deduct/bulk": {
+      "post": {
+        "summary": "Deduct billing balance for up to 100 API calls in one batch",
+        "description": "Creates usage events for up to 100 billing entries in a single database transaction, then performs one aggregate on-chain deduction for the newly inserted entries. Existing requestIds are treated idempotently and are returned in the per-entry results without being charged again.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingBulkDeductRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk billing deduction successfully processed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingBulkDeductResponse"
+                }
+              }
+            }
           },
-          "responses": {
-            "200": {
-              "description": "Success"
-            },
-            "400": {
-              "description": "Bad Request"
-            },
-            "401": {
-              "description": "Unauthorized"
-            },
-            "402": {
-              "description": "Payment Required"
-            },
-            "409": {
-              "description": "Idempotency conflict",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ErrorResponse"
-                  }
+          "400": {
+            "description": "Invalid request body parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            },
-            "429": {
-              "description": "Rate limit exceeded",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ErrorResponse"
-                  }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            },
-            "500": {}
+            }
+          },
+          "402": {
+            "description": "Payment required (insufficient aggregate balance)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -223,11 +301,7 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": [
-                "day",
-                "week",
-                "month"
-              ]
+              "enum": ["day", "week", "month"]
             }
           }
         ],
@@ -367,10 +441,7 @@
                               },
                               "type": {
                                 "type": "string",
-                                "enum": [
-                                  "spike",
-                                  "drop"
-                                ]
+                                "enum": ["spike", "drop"]
                               },
                               "calls": {
                                 "type": "integer"
@@ -1038,25 +1109,123 @@
           }
         }
       },
-      "UsageResponse": {
+      "BillingBulkDeductEntry": {
         "type": "object",
         "required": [
-          "events",
-          "stats",
-          "period"
+          "requestId",
+          "apiId",
+          "endpointId",
+          "apiKeyId",
+          "amountUsdc"
         ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "apiId": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "apiKeyId": {
+            "type": "string"
+          },
+          "amountUsdc": {
+            "type": "string",
+            "description": "Positive decimal string with up to 7 fractional digits"
+          }
+        }
+      },
+      "BillingBulkDeductRequest": {
+        "type": "object",
+        "required": ["entries"],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/BillingBulkDeductEntry"
+            }
+          },
+          "idempotencyKey": {
+            "type": "string"
+          }
+        }
+      },
+      "BillingBulkDeductEntryResult": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "usageEventId",
+          "alreadyProcessed",
+          "deductionApplied",
+          "reconciliationRequired"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "usageEventId": {
+            "type": "string"
+          },
+          "stellarTxHash": {
+            "type": "string"
+          },
+          "alreadyProcessed": {
+            "type": "boolean"
+          },
+          "deductionApplied": {
+            "type": "boolean"
+          },
+          "reconciliationRequired": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BillingBulkDeductResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "entryCount",
+          "deductedCount",
+          "totalDeductedAmountUsdc",
+          "results"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "entryCount": {
+            "type": "integer"
+          },
+          "deductedCount": {
+            "type": "integer"
+          },
+          "totalDeductedAmountUsdc": {
+            "type": "string"
+          },
+          "stellarTxHash": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BillingBulkDeductEntryResult"
+            }
+          }
+        }
+      },
+      "UsageResponse": {
+        "type": "object",
+        "required": ["events", "stats", "period"],
         "properties": {
           "events": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": [
-                "id",
-                "apiId",
-                "endpoint",
-                "occurredAt",
-                "revenue"
-              ],
+              "required": ["id", "apiId", "endpoint", "occurredAt", "revenue"],
               "properties": {
                 "id": {
                   "type": "string"
@@ -1079,11 +1248,7 @@
           },
           "stats": {
             "type": "object",
-            "required": [
-              "totalCalls",
-              "totalSpent",
-              "breakdownByApi"
-            ],
+            "required": ["totalCalls", "totalSpent", "breakdownByApi"],
             "properties": {
               "totalCalls": {
                 "type": "integer"
@@ -1095,11 +1260,7 @@
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": [
-                    "apiId",
-                    "calls",
-                    "revenue"
-                  ],
+                  "required": ["apiId", "calls", "revenue"],
                   "properties": {
                     "apiId": {
                       "type": "string"
@@ -1117,11 +1278,7 @@
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": [
-                    "period",
-                    "calls",
-                    "revenue"
-                  ],
+                  "required": ["period", "calls", "revenue"],
                   "properties": {
                     "period": {
                       "type": "string"
@@ -1139,10 +1296,7 @@
           },
           "period": {
             "type": "object",
-            "required": [
-              "from",
-              "to"
-            ],
+            "required": ["from", "to"],
             "properties": {
               "from": {
                 "type": "string",
@@ -1201,17 +1355,11 @@
             "type": "integer"
           },
           "firstEventAt": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": ["string", "null"],
             "format": "date-time"
           },
           "lastEventAt": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": ["string", "null"],
             "format": "date-time"
           },
           "statusCodes": {
@@ -1224,9 +1372,7 @@
       },
       "AdminUsageSnapshotResponse": {
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "properties": {
           "data": {
             "$ref": "#/components/schemas/AdminUsageSnapshot"
@@ -1235,17 +1381,11 @@
       },
       "AdminUsageResetResponse": {
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "properties": {
           "data": {
             "type": "object",
-            "required": [
-              "developerId",
-              "reset",
-              "priorValues"
-            ],
+            "required": ["developerId", "reset", "priorValues"],
             "properties": {
               "developerId": {
                 "type": "string"
@@ -1262,10 +1402,7 @@
       },
       "ApisListResponse": {
         "type": "object",
-        "required": [
-          "data",
-          "pagination"
-        ],
+        "required": ["data", "pagination"],
         "properties": {
           "data": {
             "type": "array",
@@ -1275,11 +1412,7 @@
           },
           "pagination": {
             "type": "object",
-            "required": [
-              "limit",
-              "offset",
-              "total"
-            ],
+            "required": ["limit", "offset", "total"],
             "properties": {
               "limit": {
                 "type": "integer"
@@ -1296,12 +1429,7 @@
       },
       "ApiCreateRequest": {
         "type": "object",
-        "required": [
-          "name",
-          "base_url",
-          "category",
-          "endpoints"
-        ],
+        "required": ["name", "base_url", "category", "endpoints"],
         "properties": {
           "name": {
             "type": "string"
@@ -1319,11 +1447,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": [
-                "path",
-                "method",
-                "price_per_call_usdc"
-              ],
+              "required": ["path", "method", "price_per_call_usdc"],
               "properties": {
                 "path": {
                   "type": "string"
@@ -1430,9 +1554,7 @@
       },
       "BulkEndpointRegistrationRequest": {
         "type": "object",
-        "required": [
-          "endpoints"
-        ],
+        "required": ["endpoints"],
         "properties": {
           "endpoints": {
             "type": "array",
@@ -1440,11 +1562,7 @@
             "maxItems": 50,
             "items": {
               "type": "object",
-              "required": [
-                "path",
-                "method",
-                "price_per_call_usdc"
-              ],
+              "required": ["path", "method", "price_per_call_usdc"],
               "properties": {
                 "path": {
                   "type": "string",
@@ -1477,9 +1595,7 @@
       },
       "BulkEndpointRegistrationResponse": {
         "type": "object",
-        "required": [
-          "endpoints"
-        ],
+        "required": ["endpoints"],
         "properties": {
           "endpoints": {
             "type": "array",
@@ -1556,10 +1672,7 @@
           },
           "developer": {
             "type": "object",
-            "required": [
-              "id",
-              "name"
-            ],
+            "required": ["id", "name"],
             "properties": {
               "id": {
                 "type": "integer"
@@ -1607,19 +1720,11 @@
       },
       "DeveloperRevenueResponse": {
         "type": "object",
-        "required": [
-          "summary",
-          "settlements",
-          "pagination"
-        ],
+        "required": ["summary", "settlements", "pagination"],
         "properties": {
           "summary": {
             "type": "object",
-            "required": [
-              "total_earned",
-              "pending",
-              "available_to_withdraw"
-            ],
+            "required": ["total_earned", "pending", "available_to_withdraw"],
             "properties": {
               "total_earned": {
                 "type": "number"
@@ -1669,11 +1774,7 @@
           },
           "pagination": {
             "type": "object",
-            "required": [
-              "limit",
-              "offset",
-              "total"
-            ],
+            "required": ["limit", "offset", "total"],
             "properties": {
               "limit": {
                 "type": "integer"
@@ -1690,21 +1791,14 @@
       },
       "GatewayHealthResponse": {
         "type": "object",
-        "required": [
-          "apiSlug",
-          "latency",
-          "breaker"
-        ],
+        "required": ["apiSlug", "latency", "breaker"],
         "properties": {
           "apiSlug": {
             "type": "string"
           },
           "latency": {
             "type": "object",
-            "required": [
-              "p50",
-              "p95"
-            ],
+            "required": ["p50", "p95"],
             "properties": {
               "p50": {
                 "type": "number",
@@ -1720,17 +1814,11 @@
           },
           "breaker": {
             "type": "object",
-            "required": [
-              "state"
-            ],
+            "required": ["state"],
             "properties": {
               "state": {
                 "type": "string",
-                "enum": [
-                  "closed",
-                  "open",
-                  "half-open"
-                ]
+                "enum": ["closed", "open", "half-open"]
               }
             }
           }
@@ -1738,11 +1826,7 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "required": [
-          "code",
-          "message",
-          "requestId"
-        ],
+        "required": ["code", "message", "requestId"],
         "properties": {
           "code": {
             "$ref": "#/components/schemas/ErrorCode"
