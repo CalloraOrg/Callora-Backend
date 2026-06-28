@@ -8,6 +8,8 @@ import { createBillingPortalRouter } from './billing/portal.js';
 import healthRouter from './health.js';
 import { createApisRouter, type ApisRouterDeps } from './apis.js';
 import { createUsageRouter, type UsageRouterDeps } from './usage.js';
+import { createLimitsRouter } from './limits.js';
+import { InMemoryRestRateLimiter } from '../middleware/restRateLimit.js';
 import { createUsageCsvRouter } from './usage/csv.js';
 import { createExportSchedulesRouter } from './exports/schedules.js';
 import type { ScheduledExportsService } from '../services/scheduledExports.js';
@@ -17,6 +19,7 @@ const openApiSpec = JSON.parse(readFileSync(openApiPath, 'utf8'));
 
 export interface ApiRouterDeps extends Partial<UsageRouterDeps>, Partial<ApisRouterDeps> {
   restRateLimit?: RequestHandler;
+  restRateLimiter?: InMemoryRestRateLimiter;
   scheduledExportsService?: ScheduledExportsService;
 }
 
@@ -49,6 +52,10 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   } else {
     router.use('/billing', billingRouter);
     router.use('/billing/portal', createBillingPortalRouter());
+  }
+
+  if (deps.restRateLimiter) {
+    router.use('/limits', createLimitsRouter(deps.restRateLimiter).router);
   }
 
   // Serve OpenAPI 3.1 JSON contract

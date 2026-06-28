@@ -41,8 +41,9 @@ import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { validate } from './middleware/validate.js';
 import { requestLogger } from './middleware/logging.js';
+import { InMemoryRestRateLimiter, createRestRateLimitMiddleware } from './middleware/restRateLimit.js';
+import type { RestRateLimitOptions } from './middleware/restRateLimit.js';
 import { auditEnrichMiddleware } from './middleware/auditEnrich.js';
-import { createConfiguredRestRateLimitMiddleware } from './middleware/restRateLimit.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 import { config } from './config/index.js';
 import { validateUpstreamBaseUrl } from './lib/upstreamTarget.js';
@@ -92,8 +93,12 @@ const vaultBalanceQuerySchema = z.object({
 
 export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
-  const restRateLimit = createConfiguredRestRateLimitMiddleware();
-
+  const restRateLimitOptions: RestRateLimitOptions = {
+    windowMs: config.restRateLimit.windowMs,
+    maxRequests: config.restRateLimit.maxRequests,
+  };
+  const restRateLimiter = new InMemoryRestRateLimiter(restRateLimitOptions.windowMs, restRateLimitOptions.maxRequests);
+  const restRateLimit = createRestRateLimitMiddleware(restRateLimitOptions, restRateLimiter);
   // Set database pool in locals for billing routes
   app.locals.dbPool = pool;
   const usageEventsRepository =
@@ -287,9 +292,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }),
   );
 
-  // Mount all routes including billing
+  // Mount all routes including billing and limits
   app.use('/api', createApiRouter({
     restRateLimit,
+    restRateLimiter,
     usageEventsRepository,
     apiRepository,
     developerRepository

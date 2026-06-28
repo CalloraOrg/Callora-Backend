@@ -48,6 +48,23 @@ export class InMemoryRestRateLimiter {
     return { allowed: true };
   }
 
+  peek(key: string, now = Date.now()): RateLimitCheckResult {
+    const bucket = this.buckets.get(key);
+
+    if (!bucket || now >= bucket.resetAt) {
+      return { allowed: true };
+    }
+
+    if (bucket.count >= this.maxRequests) {
+      return {
+        allowed: false,
+        retryAfterMs: Math.max(bucket.resetAt - now, 0),
+      };
+    }
+
+    return { allowed: true };
+  }
+
   reset(): void {
     this.buckets.clear();
   }
