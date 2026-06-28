@@ -40,7 +40,7 @@ import { VaultController } from './controllers/vaultController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { validate } from './middleware/validate.js';
-import { requestLogger } from './middleware/logging.js';
+import { createAccessLogMiddleware } from './middleware/accessLog.js';
 import { auditEnrichMiddleware } from './middleware/auditEnrich.js';
 import { createConfiguredRestRateLimitMiddleware } from './middleware/restRateLimit.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
@@ -148,7 +148,12 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   app.use(requestIdMiddleware);
   app.use(metricsMiddleware);
 
-  app.use(requestLogger);
+  app.use(
+    createAccessLogMiddleware({
+      sampleRate: config.accessLog.sampleRate,
+      redactFields: config.accessLog.redactFields,
+    }),
+  );
 
   // Parse allowed origins with validation
   const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173')

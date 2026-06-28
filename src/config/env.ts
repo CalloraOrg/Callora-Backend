@@ -159,6 +159,8 @@ export const envSchema = z
     LOG_LEVEL: z
       .enum(["trace", "debug", "info", "warn", "error", "fatal"])
       .default("info"),
+    ACCESS_LOG_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
+    ACCESS_LOG_REDACT_FIELDS: z.string().optional(),
 
     // Profiling
     GATEWAY_PROFILING_ENABLED: z
