@@ -15,6 +15,7 @@ import {
 } from '../services/quotaService.js';
 import { createAdminWebhooksRouter } from './admin/webhooks.js';
 import { createAdminApisRouter } from './admin/apis.js';
+import { createMaintenanceBannerRouter } from './admin/maintenance/banner.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -210,5 +211,10 @@ router.use('/webhooks', createAdminWebhooksRouter());
 //          POST   /api/admin/apis/:id/restore
 // ---------------------------------------------------------------------------
 router.use('/apis', createAdminApisRouter());
+
+// Admin maintenance banner management
+// Mounts:   POST   /api/admin/maintenance/banner
+// ---------------------------------------------------------------------------
+router.use('/maintenance/banner', createMaintenanceBannerRouter());
 
 export default router;
