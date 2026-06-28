@@ -244,7 +244,10 @@ export const ErrorCode = {
   UNSUPPORTED_MEDIA_TYPE: "UNSUPPORTED_MEDIA_TYPE",
 
   /** Request is syntactically correct but semantically invalid */
-  UNPROCESSABLE_ENTITY: "UNPROCESSABLE_ENTITY"
+  UNPROCESSABLE_ENTITY: "UNPROCESSABLE_ENTITY",
+
+  /** Usage aggregate not found for the given developer */
+  USAGE_AGGREGATE_NOT_FOUND: "USAGE_AGGREGATE_NOT_FOUND"
 
 } as const;
 

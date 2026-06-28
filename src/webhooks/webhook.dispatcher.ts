@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { WebhookConfig, WebhookPayload } from './webhook.types.js';
+import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getRequestId } from '../utils/asyncContext.js';
 
@@ -116,10 +117,25 @@ export async function dispatchWebhook(
             }
         }
 
+        const failedAt = new Date().toISOString();
+        const lastErrorMessage =
+            lastError instanceof Error ? lastError.message : String(lastError);
+
         logger.error(
             `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after ${MAX_RETRIES} attempts.`,
             lastError
         );
+
+        // Persist operational failure metadata (no payload or secrets).
+        WebhookStore.recordFailedDelivery({
+            deliveryId,
+            developerId: config.developerId,
+            event: payload.event,
+            url: config.url,
+            failedAt,
+            lastError: lastErrorMessage,
+            attempts: MAX_RETRIES,
+        });
     })());
 }
 
