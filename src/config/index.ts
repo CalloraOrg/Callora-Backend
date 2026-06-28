@@ -209,4 +209,9 @@ export const config = {
     warmupTimeoutMs: env.LISTINGS_CACHE_WARMUP_TIMEOUT_MS,
   },
   bulkEndpointLimit: env.BULK_ENDPOINT_LIMIT,
+
+  memoryAccounting: {
+    enabled: env.MEMORY_ACCOUNTING_ENABLED,
+    thresholdMb: env.MEMORY_ACCOUNTING_THRESHOLD_MB,
+  },
 } as const;

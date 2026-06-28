@@ -39,6 +39,7 @@ import { DepositController } from './controllers/depositController.js';
 import { VaultController } from './controllers/vaultController.js';
 import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
+import { createMemoryAccountingMiddleware } from './middleware/memoryAccounting.js';
 import { validate } from './middleware/validate.js';
 import { requestLogger } from './middleware/logging.js';
 import { auditEnrichMiddleware } from './middleware/auditEnrich.js';
@@ -146,6 +147,8 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   }));
 
   app.use(requestIdMiddleware);
+  const memoryAccountingMiddleware = createMemoryAccountingMiddleware(config.memoryAccounting);
+  app.use(memoryAccountingMiddleware);
   app.use(metricsMiddleware);
 
   app.use(requestLogger);
