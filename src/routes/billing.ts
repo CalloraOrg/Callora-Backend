@@ -18,11 +18,14 @@ import { BillingService, type BillingDeductResult } from '../services/billing.js
 import { createSorobanRpcBillingClient, SorobanRpcError } from '../services/sorobanBilling.js';
 import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
 import creditsRouter from './billing/credits.js';
+import disputesRouter from './billing/disputes.js';
 
 const router = Router();
 
 // Mount credits sub-router
 router.use('/credits', creditsRouter);
+// Mount disputes sub-router
+router.use('/disputes', disputesRouter);
 
 interface BillingDeductBody {
   requestId?: unknown;
