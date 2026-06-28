@@ -3,6 +3,7 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import { z } from 'zod';
 import { startUpstreamTimer, getUpstreamHealth, type UpstreamOutcome } from '../metrics.js';
 import { validate } from '../middleware/validate.js';
+import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { GatewayDeps, ApiKey } from '../types/gateway.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
@@ -221,6 +222,15 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           return;
         }
 
+        // Check in-memory revocation list for immediate invalidation
+        const tokenRevocationService = getTokenRevocationService();
+        const apiKeyHash = sha256Hex(apiKeyHeader);
+        if (tokenRevocationService.isRevoked(apiKeyHash)) {
+          next(new ForbiddenError('Forbidden: API key has been revoked'));
+          return;
+        }
+
+        // Also check persisted revoked flag
         if (keyRecord.revoked) {
           next(new ForbiddenError('Forbidden: API key has been revoked'));
           return;
