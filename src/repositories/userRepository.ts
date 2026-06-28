@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { NotFoundError } from '../errors/index.js';
-import { pool } from '../db.js';
+import { pool, readQuery, writeQuery } from '../db.js';
 import type { PaginationParams } from '../lib/pagination.js';
 
 export interface UserDto {
@@ -72,11 +72,16 @@ const assertNonEmpty = (value: string, fieldName: string): string => {
 };
 
 export class PgUserRepository implements UserRepository {
-  constructor(private readonly db: UserRepositoryQueryable = pool as Pool) {}
+  /**
+   * @param db - Optional injectable queryable used in tests. When omitted the
+   *   module-level routing helpers (readQuery / writeQuery) are used so that
+   *   reads can be served from replicas when REPLICA_URLS is configured.
+   */
+  constructor(private readonly db?: UserRepositoryQueryable) {}
 
   async create(user: CreateUserInput): Promise<UserDto> {
     const stellarAddress = assertNonEmpty(user.stellarAddress, 'stellarAddress');
-    const result = await this.db.query<UserRow>(
+    const result = await this.write<UserRow>(
       `
         INSERT INTO users (stellar_address)
         VALUES ($1)
@@ -90,7 +95,7 @@ export class PgUserRepository implements UserRepository {
 
   async findByStellarAddress(address: string): Promise<UserDto | null> {
     const stellarAddress = assertNonEmpty(address, 'stellarAddress');
-    const result = await this.db.query<UserRow>(
+    const result = await this.read<UserRow>(
       `
         SELECT id, stellar_address, created_at
         FROM users
@@ -105,7 +110,7 @@ export class PgUserRepository implements UserRepository {
 
   async findById(id: string): Promise<UserDto | null> {
     const userId = assertNonEmpty(id, 'id');
-    const result = await this.db.query<UserRow>(
+    const result = await this.read<UserRow>(
       `
         SELECT id, stellar_address, created_at
         FROM users
@@ -125,7 +130,7 @@ export class PgUserRepository implements UserRepository {
 
     if (data.stellarAddress !== undefined) {
       values.push(assertNonEmpty(data.stellarAddress, 'stellarAddress'));
-      updates.push(`stellar_address = $${values.length}`);
+      updates.push(`stellar_address = ${values.length}`);
     }
 
     if (updates.length === 0) {
@@ -138,7 +143,7 @@ export class PgUserRepository implements UserRepository {
     }
 
     values.push(userId);
-    const result = await this.db.query<UserRow>(
+    const result = await this.write<UserRow>(
       `
         UPDATE users
         SET ${updates.join(', ')}
@@ -157,7 +162,7 @@ export class PgUserRepository implements UserRepository {
 
   async list(params: PaginationParams): Promise<FindUsersResult> {
     const [usersResult, totalResult] = await Promise.all([
-      this.db.query<UserRow>(
+      this.read<UserRow>(
         `
         SELECT id, stellar_address, created_at
         FROM users
@@ -167,13 +172,39 @@ export class PgUserRepository implements UserRepository {
       `,
         [params.offset, params.limit],
       ),
-      this.db.query<CountRow>('SELECT COUNT(*)::text AS count FROM users'),
+      this.read<CountRow>('SELECT COUNT(*)::text AS count FROM users'),
     ]);
 
     return {
       users: usersResult.rows.map(mapUserListRow),
       total: Number(totalResult.rows[0]?.count ?? 0),
     };
+  }
+
+  // ── Private routing helpers ─────────────────────────────────────────────
+
+  /**
+   * Route a read query.
+   * When a custom `db` was injected (e.g. in tests) it is used directly.
+   * Otherwise the module-level `readQuery` helper routes to replica/primary.
+   */
+  private read<T>(text: string, params?: unknown[]): Promise<{ rows: T[] }> {
+    if (this.db) {
+      return this.db.query<T>(text, params);
+    }
+    return readQuery<T>(text, params);
+  }
+
+  /**
+   * Route a write query.
+   * When a custom `db` was injected (e.g. in tests) it is used directly.
+   * Otherwise the module-level `writeQuery` helper always routes to the primary.
+   */
+  private write<T>(text: string, params?: unknown[]): Promise<{ rows: T[] }> {
+    if (this.db) {
+      return this.db.query<T>(text, params);
+    }
+    return writeQuery<T>(text, params);
   }
 }
 

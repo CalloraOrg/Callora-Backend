@@ -28,9 +28,9 @@ describe('Schema Drift Audit', () => {
    * Any future change MUST update SCHEMA_DRIFT_AUDIT.md and these expectations.
    */
   const OWNERSHIP = {
-    drizzleSqliteTables: new Set(['developers', 'apis', 'api_endpoints']),
+    drizzleSqliteTables: new Set(['developers', 'apis', 'api_endpoints', 'schema_versions']),
     prismaTables: new Set(['users']),
-    sqliteMigrationsOwnedTables: new Set(['developers', 'apis', 'api_endpoints']),
+    sqliteMigrationsOwnedTables: new Set(['developers', 'apis', 'api_endpoints', 'schema_versions']),
   } as const;
 
   describe('ORM Configuration Consistency', () => {

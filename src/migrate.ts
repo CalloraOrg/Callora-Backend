@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import { logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
@@ -10,12 +11,21 @@ import { logger } from './logger.js';
 /**
  * Extract the numeric prefix from a migration filename.
  * Accepts formats like: 0001_foo.up.sql, 001_foo.sql, 0000_foo.sql
- * Returns null for filenames without a leading numeric prefix (e.g. add_refresh_tokens.sql).
+ * Returns null for filenames without a leading numeric prefix.
  */
 export function extractPrefix(filename: string): number | null {
   const match = filename.match(/^(\d+)_/);
   if (!match) return null;
   return parseInt(match[1], 10);
+}
+
+/**
+ * Compute the SHA-256 checksum of a file's content.
+ * Returns the hex-encoded digest.
+ */
+export function computeChecksum(filePath: string): string {
+  const content = readFileSync(filePath, 'utf8');
+  return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
 /**
@@ -90,37 +100,67 @@ function ensureMigrationsTable(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS _migrations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
+      checksum TEXT DEFAULT NULL,
       executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Add checksum column for databases created before the column existed
+  const columns = db.prepare("PRAGMA table_info('_migrations')").all() as Array<{ name: string }>;
+  if (!columns.some(c => c.name === 'checksum')) {
+    db.exec("ALTER TABLE _migrations ADD COLUMN checksum TEXT DEFAULT NULL");
+    logger.info('Added checksum column to _migrations table');
+  }
+}
+
+/**
+ * Ensure the schema_versions table exists.
+ * This is the public single-source-of-truth table for migration tracking.
+ * Created by migration 0013 but also created here as a safety net.
+ */
+function ensureSchemaVersionsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_versions (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      version     INTEGER NOT NULL UNIQUE,
+      filename    TEXT    NOT NULL,
+      checksum    TEXT    NOT NULL,
+      applied_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      executed_by TEXT    DEFAULT NULL
     )
   `);
 }
 
 // Guard: only run the migration logic when executed as a script, not when imported.
-// In Jest, require.main is undefined; when run via tsx/node, require.main === module.
 if (require.main === module) {
   const db = new Database(dbPath);
   try {
     ensureMigrationsTable(db);
+    ensureSchemaVersionsTable(db);
     const available = discoverMigrations(migrationDir);
 
     for (const filename of available) {
       const isExecuted = db.prepare('SELECT id FROM _migrations WHERE name = ?').get(filename);
-      if (isExecuted) continue; // idempotent: skip already-applied migrations
+      if (isExecuted) continue;
 
-      logger.info(`🚀 Running migration: ${filename}`);
+      logger.info('Running migration: ' + filename);
       const sql = readFileSync(path.join(migrationDir, filename), 'utf8');
+      const checksum = computeChecksum(path.join(migrationDir, filename));
+      const prefix = extractPrefix(filename)!;
 
-      // Wrap in a transaction so a partial failure leaves the DB unchanged
       const run = db.transaction(() => {
         db.exec(sql);
-        db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+        db.prepare('INSERT INTO _migrations (name, checksum) VALUES (?, ?)').run(filename, checksum);
+        db.prepare(
+          'INSERT INTO schema_versions (version, filename, checksum) VALUES (?, ?, ?)',
+        ).run(prefix, filename, checksum);
       });
 
       run();
-      logger.info(`✅ Finished ${filename}`);
+      logger.info('Finished ' + filename + ' (checksum: ' + checksum.slice(0, 12) + '...)');
     }
   } catch (error) {
-    logger.error('❌ Migration runner failed:', error);
+    logger.error('Migration runner failed:', error);
     process.exit(1);
   } finally {
     db.close();

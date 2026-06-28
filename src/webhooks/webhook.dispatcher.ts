@@ -1,26 +1,15 @@
 import crypto from 'crypto';
-import { WebhookConfig, WebhookPayload, DeadLetterEntry, WebhookDeliveryStatus } from './webhook.types.js';
-import { WebhookStore } from './webhook.store.js';
+import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { logger } from '../logger.js';
+import { getRequestId } from '../utils/asyncContext.js';
 
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 1000;
-const MAX_DELAY_MS = 30_000;
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Calculate exponential backoff with jitter to avoid thundering herd
-function calculateBackoff(attempt: number): number {
-    const exponentialDelay = BASE_DELAY_MS * Math.pow(2, attempt);
-    // Add jitter: random value between 0-25% of the exponential delay
-    const jitter = Math.random() * 0.25 * exponentialDelay;
-    const delayWithJitter = exponentialDelay + jitter;
-    // Cap at maximum delay
-    return Math.min(delayWithJitter, MAX_DELAY_MS);
 }
 
 function signPayload(secret: string, body: string): string {
@@ -72,6 +61,7 @@ export async function dispatchWebhook(
     return trackDispatch((async () => {
         const body = JSON.stringify(payload);
         const deliveryId = crypto.randomUUID();
+        const requestId = getRequestId();
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             'User-Agent': 'Callora-Webhook/1.0',
@@ -79,6 +69,9 @@ export async function dispatchWebhook(
             'X-Callora-Timestamp': payload.timestamp,
             'X-Callora-Delivery': deliveryId,
         };
+        if (requestId) {
+            headers['X-Request-Id'] = requestId;
+        }
 
         if (config.secret) {
             headers['X-Callora-Signature'] = `sha256=${signPayload(config.secret, body)}`;
@@ -96,19 +89,21 @@ export async function dispatchWebhook(
                 });
 
                 if (response.ok) {
-                    console.log(
-                        `[webhook] ✓ Delivered ${payload.event} to ${config.url} (attempt ${attempt + 1})`
+                    logger.info(
+                        `[webhook] ✓ Delivered ${payload.event} to ${config.url}`,
+                        `attempt ${attempt + 1}`
                     );
                     return;
                 }
 
                 lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
-                console.warn(
-                    `[webhook] Non-2xx response (${response.status}) for ${config.url}, attempt ${attempt + 1}`
+                logger.warn(
+                    `[webhook] Non-2xx response (${response.status}) for ${config.url}`,
+                    `attempt ${attempt + 1}`
                 );
             } catch (err) {
                 lastError = err;
-                console.warn(
+                logger.warn(
                     `[webhook] Error delivering to ${config.url}, attempt ${attempt + 1}:`,
                     (err as Error).message
                 );
@@ -116,7 +111,7 @@ export async function dispatchWebhook(
 
             if (attempt < MAX_RETRIES - 1) {
                 const delay = BASE_DELAY_MS * Math.pow(2, attempt);
-                console.log(`[webhook] Retrying in ${delay}ms...`);
+                logger.info(`[webhook] Retrying in ${delay}ms...`);
                 await sleep(delay);
             }
         }

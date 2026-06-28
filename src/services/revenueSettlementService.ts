@@ -11,6 +11,8 @@ import {
   withRetry,
 } from '../lib/retry.js';
 
+const TX_FAILED_TOO_EARLY = 'tx_failed_too_early';
+
 export interface RevenueSettlementOptions {
   /** Minimum accumulated USDC to trigger a payout (default: 5.00) */
   minPayoutUsdc?: number;
@@ -23,6 +25,10 @@ export interface RevenueSettlementOptions {
   horizonMaxRetries?: number;
   /** Base delay in ms for Horizon retry backoff (default: 500). */
   horizonRetryBaseDelayMs?: number;
+  /** How long to wait before re-checking a tx_failed_too_early settlement, in ms (default: 30000). */
+  tooEarlyBackoffMs?: number;
+  /** Maximum tx_failed_too_early retries before permanently failing a settlement (default: 5). */
+  maxTooEarlyRetries?: number;
 }
 
 /**
@@ -39,6 +45,7 @@ export interface ReconcileResult {
   checked: number;
   completed: number;
   failed: number;
+  retried: number;
   errors: number;
 }
 
@@ -225,11 +232,11 @@ export class RevenueSettlementService {
     }
   }
 
-  private async reconcilePendingSettlementsOnce(): Promise<{ checked: number; completed: number; failed: number; errors: number }> {
+  private async reconcilePendingSettlementsOnce(): Promise<ReconcileResult> {
     const horizonUrl = this.options.horizonUrl;
     if (!horizonUrl) {
       // Horizon is not configured; skip reconciliation
-      return { checked: 0, completed: 0, failed: 0, errors: 0 };
+      return { checked: 0, completed: 0, failed: 0, retried: 0, errors: 0 };
     }
 
     const pendingSettlements = await this.settlementStore.getPendingSettlements();
@@ -237,6 +244,7 @@ export class RevenueSettlementService {
     let checked = 0;
     let completed = 0;
     let failed = 0;
+    let retried = 0;
     let errors = 0;
 
     for (const settlement of pendingSettlements) {
@@ -263,24 +271,53 @@ export class RevenueSettlementService {
             );
           }
         } else if (horizonResponse?.successful === false) {
-          // Transaction explicitly failed
-          try {
-            await this.settlementStore.updateStatus(settlement.id, 'failed');
-            failed++;
-          } catch (updateError) {
-            errors++;
-            console.warn(
-              { settlementId: settlement.id, error: updateError },
-              'Failed to update settlement to failed — skipping',
-            );
-          }
+          if (transactionCode === TX_FAILED_TOO_EARLY) {
+            const maxRetries = this.options.maxTooEarlyRetries ?? 5;
+            if ((settlement.retry_count ?? 0) >= maxRetries) {
+              // Max retries exhausted — permanently fail
+              try {
+                await this.settlementStore.updateStatus(settlement.id, 'failed');
+                failed++;
+              } catch (updateError) {
+                errors++;
+                console.warn(
+                  { settlementId: settlement.id, error: updateError },
+                  'Failed to update settlement to failed — skipping',
+                );
+              }
+            } else {
+              const backoffMs = this.options.tooEarlyBackoffMs ?? 30_000;
+              const retryAfter = new Date(Date.now() + backoffMs).toISOString();
+              try {
+                await this.settlementStore.scheduleRetry(settlement.id, retryAfter);
+                retried++;
+              } catch (updateError) {
+                errors++;
+                console.warn(
+                  { settlementId: settlement.id, error: updateError },
+                  'Failed to schedule retry for settlement — skipping',
+                );
+              }
+            }
+          } else {
+            // Other explicit failure
+            try {
+              await this.settlementStore.updateStatus(settlement.id, 'failed');
+              failed++;
+            } catch (updateError) {
+              errors++;
+              console.warn(
+                { settlementId: settlement.id, error: updateError },
+                'Failed to update settlement to failed — skipping',
+              );
+            }
 
-          // Log the failure reason if available
-          if (!transactionCode) {
-            console.warn(
-              { settlementId: settlement.id },
-              'Horizon returned tx_failed but missing result_codes',
-            );
+            if (!transactionCode) {
+              console.warn(
+                { settlementId: settlement.id },
+                'Horizon returned tx_failed but missing result_codes',
+              );
+            }
           }
         } else if (horizonResponse === null) {
           // Transaction not found in Horizon — treat as failed
@@ -317,7 +354,7 @@ export class RevenueSettlementService {
       }
     }
 
-    return { checked, completed, failed, errors };
+    return { checked, completed, failed, retried, errors };
   }
 
   /**

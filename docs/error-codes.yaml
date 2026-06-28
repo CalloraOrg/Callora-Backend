@@ -1,0 +1,343 @@
+# Canonical Error Code Catalog
+#
+# This is the single source of truth for all error codes in the Callora backend.
+# The TypeScript enum in src/errors/codes.ts is auto-generated from this file.
+#
+# DO NOT edit src/errors/codes.ts manually. Instead, update this file and run:
+#   npm run error-codes:generate
+#
+# Each entry must have:
+#   - code: The error code identifier (SCREAMING_SNAKE_CASE)
+#   - section: Category for documentation grouping
+#   - description: Human-readable explanation of when this error occurs
+#
+# The 'code' field becomes both the TypeScript enum key and value.
+
+error_codes:
+  # HTTP status derived / base app codes
+  - code: BAD_REQUEST
+    section: HTTP status derived / base app codes
+    description: The request is malformed, missing required input, or otherwise invalid
+
+  - code: UNAUTHORIZED
+    section: HTTP status derived / base app codes
+    description: Authentication is missing, malformed, or invalid
+
+  - code: FORBIDDEN
+    section: HTTP status derived / base app codes
+    description: The caller is authenticated but not allowed to perform the action
+
+  - code: NOT_FOUND
+    section: HTTP status derived / base app codes
+    description: The requested resource does not exist
+
+  - code: PAYMENT_REQUIRED
+    section: HTTP status derived / base app codes
+    description: The caller has insufficient balance or payment is otherwise required
+
+  - code: TOO_MANY_REQUESTS
+    section: HTTP status derived / base app codes
+    description: The caller exceeded a rate limit
+
+  - code: CONFLICT
+    section: HTTP status derived / base app codes
+    description: The request conflicts with existing state
+
+  - code: INTERNAL_SERVER_ERROR
+    section: HTTP status derived / base app codes
+    description: An internal service or invariant failed
+
+  - code: BAD_GATEWAY
+    section: HTTP status derived / base app codes
+    description: The gateway could not obtain a valid upstream or dependency response
+
+  - code: SERVICE_UNAVAILABLE
+    section: HTTP status derived / base app codes
+    description: A dependency or service is temporarily unavailable
+
+  - code: GATEWAY_TIMEOUT
+    section: HTTP status derived / base app codes
+    description: A dependency or upstream service did not respond before its timeout
+
+  # Validation
+  - code: VALIDATION_ERROR
+    section: Validation
+    description: Request validation failed due to invalid input
+
+  - code: INVALID_BODY
+    section: Validation
+    description: Request body is invalid or malformed
+
+  - code: INVALID_QUERY
+    section: Validation
+    description: Query parameters are invalid
+
+  - code: INVALID_PARAMS
+    section: Validation
+    description: URL parameters are invalid
+
+  - code: INVALID_VALUE
+    section: Validation
+    description: A specific field contains an invalid value
+
+  # Gateway / proxy
+  - code: GATEWAY_AUTH_CONTEXT_MISSING
+    section: Gateway / proxy
+    description: Gateway authentication context is unexpectedly missing after auth middleware
+
+  - code: UPSTREAM_TARGET_BLOCKED
+    section: Gateway / proxy
+    description: Resolved upstream target fails validation or allowlist checks
+
+  # Billing / Soroban
+  - code: INSUFFICIENT_BALANCE
+    section: Billing / Soroban
+    description: On-chain or pre-flight balance is too low
+
+  - code: SOROBAN_RPC_TIMEOUT
+    section: Billing / Soroban
+    description: The Soroban RPC request timed out or was aborted
+
+  - code: SOROBAN_RPC_ERROR
+    section: Billing / Soroban
+    description: The contract rejected the call, simulation failed, or network error occurred
+
+  - code: BILLING_DEDUCTION_FAILED
+    section: Billing / Soroban
+    description: Billing deduction operation failed
+
+  # Billing request
+  - code: BILLING_REQUEST_NOT_FOUND
+    section: Billing request
+    description: The requested billing record was not found
+
+  # Developer / API keys
+  - code: DEVELOPER_NOT_FOUND
+    section: Developer / API keys
+    description: Developer profile not found
+
+  - code: API_ACCESS_FORBIDDEN
+    section: Developer / API keys
+    description: Access to the API is forbidden for this developer
+
+  - code: API_KEY_NOT_FOUND
+    section: Developer / API keys
+    description: API key not found
+
+  - code: API_KEY_FORBIDDEN
+    section: Developer / API keys
+    description: API key is not authorized for this operation
+
+  # Refresh-token auth
+  - code: MISSING_REFRESH_TOKEN
+    section: Refresh-token auth
+    description: Refresh token is missing from the request
+
+  - code: INVALID_REFRESH_TOKEN
+    section: Refresh-token auth
+    description: Refresh token is invalid or malformed
+
+  - code: REVOKED_TOKEN
+    section: Refresh-token auth
+    description: The token has been revoked
+
+  - code: EXPIRED_TOKEN
+    section: Refresh-token auth
+    description: The token has expired
+
+  - code: REFRESH_FAILED
+    section: Refresh-token auth
+    description: Token refresh operation failed
+
+  - code: REVOKE_FAILED
+    section: Refresh-token auth
+    description: Token revocation operation failed
+
+  - code: NOT_AUTHENTICATED
+    section: Refresh-token auth
+    description: User is not authenticated
+
+  - code: TOKEN_INFO_FAILED
+    section: Refresh-token auth
+    description: Failed to retrieve token information
+
+  # Vault / deposit
+  - code: VAULT_NOT_FOUND
+    section: Vault / deposit
+    description: Vault account not found
+
+  - code: VAULT_BALANCE_RETRIEVAL_FAILED
+    section: Vault / deposit
+    description: Failed to retrieve vault balance
+
+  - code: MISSING_AMOUNT
+    section: Vault / deposit
+    description: Amount parameter is missing
+
+  - code: INVALID_AMOUNT_TYPE
+    section: Vault / deposit
+    description: Amount has invalid type
+
+  - code: INVALID_AMOUNT_FORMAT
+    section: Vault / deposit
+    description: Amount has invalid format
+
+  - code: INVALID_NETWORK
+    section: Vault / deposit
+    description: Network parameter is invalid
+
+  - code: NETWORK_MISMATCH
+    section: Vault / deposit
+    description: Network mismatch between request and resource
+
+  - code: INVALID_SOURCE_ACCOUNT
+    section: Vault / deposit
+    description: Source account is invalid
+
+  - code: INVALID_TRANSACTION_INPUT
+    section: Vault / deposit
+    description: Transaction input is invalid
+
+  - code: SOURCE_ACCOUNT_NOT_FOUND
+    section: Vault / deposit
+    description: Source account not found
+
+  - code: INVALID_CONTRACT_ID
+    section: Vault / deposit
+    description: Contract ID is invalid
+
+  - code: NETWORK_UNAVAILABLE
+    section: Vault / deposit
+    description: Network is unavailable
+
+  - code: TRANSACTION_BUILD_FAILED
+    section: Vault / deposit
+    description: Failed to build transaction
+
+  - code: INTERNAL_ERROR
+    section: Vault / deposit
+    description: Internal error occurred during vault operation
+
+  # Webhooks
+  - code: INVALID_WEBHOOK_REGISTRATION
+    section: Webhooks
+    description: Webhook registration is invalid
+
+  - code: INVALID_WEBHOOK_EVENT_TYPES
+    section: Webhooks
+    description: Webhook event types are invalid
+
+  - code: WEBHOOK_NOT_FOUND
+    section: Webhooks
+    description: Webhook not found
+
+  - code: INVALID_WEBHOOK_URL
+    section: Webhooks
+    description: Webhook URL is invalid
+
+  - code: WEBHOOK_URL_VALIDATION_FAILED
+    section: Webhooks
+    description: Webhook URL validation failed
+
+  - code: MISSING_WEBHOOK_SIGNATURE_HEADERS
+    section: Webhooks
+    description: Webhook signature headers are missing
+
+  - code: INVALID_WEBHOOK_TIMESTAMP
+    section: Webhooks
+    description: Webhook timestamp is invalid
+
+  - code: WEBHOOK_TIMESTAMP_OUT_OF_WINDOW
+    section: Webhooks
+    description: Webhook timestamp is outside acceptable window
+
+  - code: MALFORMED_WEBHOOK_SIGNATURE
+    section: Webhooks
+    description: Webhook signature is malformed
+
+  - code: INVALID_WEBHOOK_SIGNATURE
+    section: Webhooks
+    description: Webhook signature verification failed
+
+  # IP allowlist
+  - code: INVALID_IP_FORMAT
+    section: IP allowlist
+    description: IP address format is invalid
+
+  - code: IP_NOT_ALLOWED
+    section: IP allowlist
+    description: IP address is not in the allowlist
+
+  # DB / infrastructure
+  - code: DATABASE_NOT_AVAILABLE
+    section: DB / infrastructure
+    description: Database is not available
+
+  # Idempotency
+  - code: IDEMPOTENCY_CONFLICT
+    section: Idempotency
+    description: Idempotency key conflict with different request
+
+  - code: IDEMPOTENCY_IN_PROGRESS
+    section: Idempotency
+    description: Request with this idempotency key is still in progress
+
+  # Misc / direct middleware responses
+  - code: SIMULATION_FAILED
+    section: Misc / direct middleware responses
+    description: Soroban simulation failed
+
+  # Route-specific / auth overrides
+  - code: INVALID_AUTH_HEADER
+    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    description: Authorization header is invalid
+
+  - code: MISSING_TOKEN
+    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    description: Authentication token is missing
+
+  - code: INVALID_TOKEN
+    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    description: Authentication token is invalid
+
+  - code: MISSING_CLAIMS
+    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    description: Token claims are missing
+
+  - code: TOKEN_EXPIRED
+    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    description: Authentication token has expired
+
+  - code: TOKEN_NOT_ACTIVE
+    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    description: Authentication token is not yet active
+
+  # Quota self-service
+  - code: QUOTA_REQUEST_NOT_FOUND
+    section: Quota self-service
+    description: Quota request not found
+
+  - code: QUOTA_REQUEST_ALREADY_RESOLVED
+    section: Quota self-service
+    description: Quota request has already been resolved
+
+  - code: INVALID_QUOTA_REQUEST
+    section: Quota self-service
+    description: Quota request is invalid
+
+  # HTTP fallback derived codes
+  - code: REQUEST_TIMEOUT
+    section: HTTP fallback derived codes referenced by documentation
+    description: Request timeout
+
+  - code: REQUEST_BODY_TOO_LARGE
+    section: HTTP fallback derived codes referenced by documentation
+    description: Request body exceeds size limit
+
+  - code: UNSUPPORTED_MEDIA_TYPE
+    section: HTTP fallback derived codes referenced by documentation
+    description: Media type is not supported
+
+  - code: UNPROCESSABLE_ENTITY
+    section: HTTP fallback derived codes referenced by documentation
+    description: Request is syntactically correct but semantically invalid

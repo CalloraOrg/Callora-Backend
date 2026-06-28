@@ -497,4 +497,79 @@ export function resetAllMetrics(): void {
   proxyPrematureAbortsTotal.reset();
   idempotencyStoreRows.reset();
   gatewayUpstreamBreakerState.reset();
+  resetReplicaMetrics();
+}
+
+// ── Replica routing metrics ───────────────────────────────────────────────────
+//
+// Metric: db_replica_queries_total
+//   Type:    Counter
+//   Purpose: Count read queries successfully served by a replica.
+//
+// Metric: db_primary_queries_total
+//   Type:    Counter
+//   Purpose: Count all queries routed to the primary (writes + no-replica reads
+//            + fallbacks after replica failure).
+//
+// Metric: db_replica_fallbacks_total
+//   Type:    Counter
+//   Purpose: Count replica queries that failed and were retried on the primary.
+//            A rising value warrants investigation of replica health.
+//
+// Metric: db_replica_failures_total
+//   Type:    Counter
+//   Purpose: Count individual replica connection/query errors (before fallback).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const dbReplicaQueriesTotal = new client.Counter({
+  name: 'db_replica_queries_total',
+  help: 'Total number of read queries served by a PostgreSQL replica',
+});
+
+const dbPrimaryQueriesTotal = new client.Counter({
+  name: 'db_primary_queries_total',
+  help: 'Total number of queries routed to the primary PostgreSQL database (writes, fallbacks, and no-replica reads)',
+});
+
+const dbReplicaFallbacksTotal = new client.Counter({
+  name: 'db_replica_fallbacks_total',
+  help: 'Total number of replica queries that failed and were retried against the primary database',
+});
+
+const dbReplicaFailuresTotal = new client.Counter({
+  name: 'db_replica_failures_total',
+  help: 'Total number of individual replica connection or query errors',
+});
+
+register.registerMetric(dbReplicaQueriesTotal);
+register.registerMetric(dbPrimaryQueriesTotal);
+register.registerMetric(dbReplicaFallbacksTotal);
+register.registerMetric(dbReplicaFailuresTotal);
+
+/** Increment the replica query counter. Called by ReplicaPool on successful replica reads. */
+export function recordReplicaQuery(): void {
+  dbReplicaQueriesTotal.inc();
+}
+
+/** Increment the primary query counter. Called by ReplicaPool on primary reads and all writes. */
+export function recordPrimaryQuery(): void {
+  dbPrimaryQueriesTotal.inc();
+}
+
+/** Increment the fallback counter. Called by ReplicaPool when a replica error causes a primary retry. */
+export function recordReplicaFallback(): void {
+  dbReplicaFallbacksTotal.inc();
+}
+
+/** Increment the replica failure counter. Called by ReplicaPool on each replica-level error. */
+export function recordReplicaFailure(): void {
+  dbReplicaFailuresTotal.inc();
+}
+
+/** Reset all replica routing metrics. Used in tests to isolate metric state. */
+export function resetReplicaMetrics(): void {
+  dbReplicaQueriesTotal.reset();
+  dbPrimaryQueriesTotal.reset();
+  dbReplicaFallbacksTotal.reset();
+  dbReplicaFailuresTotal.reset();
 }

@@ -14,6 +14,7 @@ Owned tables:
 - `developers`
 - `apis`
 - `api_endpoints`
+- `schema_versions`
 
 ### Prisma + PostgreSQL (schema: `prisma/schema.prisma`)
 
@@ -30,7 +31,7 @@ Some services use `pg` directly (see `src/db.ts`) and have their own raw SQL / o
 ## Drift prevention rules (enforced by tests)
 
 The Jest drift test (`src/__tests__/schema-drift.test.ts`) enforces:
-- **Exact Drizzle table set**: Drizzle may only define `developers`, `apis`, `api_endpoints`
+- **Exact Drizzle table set**: Drizzle may only define `developers`, `apis`, `api_endpoints`, `schema_versions`
 - **Exact Prisma table set (via `@@map`)**: Prisma may only define `users`
 - **No overlap**: a table name may not appear as owned by both ORMs
 - **SQLite migrations consistency**: SQL migrations must not create tables outside the SQLite-owned set, and every created table must exist in Drizzle

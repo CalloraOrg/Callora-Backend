@@ -24,10 +24,15 @@ export interface Settlement {
   id: string;
   developerId: string; // the dev receiving the payout
   amount: number;
-  status: 'pending' | 'completed' | 'failed';
+  /** pending → retryable (tx_failed_too_early) → completed | failed */
+  status: 'pending' | 'retryable' | 'completed' | 'failed';
   tx_hash: string | null;
   created_at: string; // ISO-8601
   completed_at?: string | null;
+  /** ISO-8601: earliest time the reconciler should re-check this settlement. */
+  retry_after?: string | null;
+  /** Number of tx_failed_too_early retries already attempted. */
+  retry_count?: number;
 }
 
 export interface RevenueSummary {
@@ -56,6 +61,7 @@ export interface UpdateDeveloperProfileInput {
 export interface SettlementStore {
   create(settlement: Settlement): Awaitable<void>;
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Awaitable<void>;
+  scheduleRetry(id: string, retryAfter: string): Awaitable<void>;
   getDeveloperSettlements(developerId: string): Awaitable<Settlement[]>;
   getPendingSettlements(): Awaitable<Settlement[]>;
   listPending?(): Awaitable<Settlement[]>;

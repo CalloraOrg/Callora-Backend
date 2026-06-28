@@ -43,6 +43,7 @@ Examples:
 | 0004 | `0004_create_developers.sql` | `developers` profile table |
 | 0005 | `0005_add_api_key_revocation.sql` | Adds `revoked` column to `api_keys` |
 | 0006 | `0006_api_key_prefix_unique.sql` | Partial unique index on `api_keys.prefix` for active keys |
+| 0013 | `0013_schema_versions.sql` | Schema versioning table with checksums for drift detection |
 
 > **Note:** `add_refresh_tokens.sql` lacks a numeric prefix and will be rejected by the runner.
 > It must be renamed to `0006_add_refresh_tokens.sql` (or the next available number) before use.
@@ -73,3 +74,5 @@ Roll back in **reverse** order (highest prefix first).
 2. Create `migrations/NNNN_description.sql` with the forward SQL.
 3. Create `migrations/NNNN_description.down.sql` with the rollback SQL.
 4. Run `npm test -- src/migrate.runner.test.ts` to verify the runner still passes.
+5. Run `npm run db:check-migrations` to verify the checksum gate passes.
+6. Commit both migration files.

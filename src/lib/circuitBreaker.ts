@@ -1,5 +1,5 @@
 /**
- * Circuit Breaker pattern implementation for protecting against cascading failures.
+ * Circuit breaker pattern implementation for protecting against cascading failures.
  * 
  * States:
  * - CLOSED: Normal operation, requests pass through
@@ -12,8 +12,11 @@
  * - successThreshold: Consecutive successes in HALF_OPEN to close (default: 1)
  */
 
-import { CircuitBreakerOpenError } from './errors.js';
+import { CircuitBreakerOpenError, BadRequestError } from './errors.js';
+import { logger } from '../logger.js';
 import type { PersistentRateLimiterPool } from '../services/rateLimiter.js';
+import client from 'prom-client';
+import { register } from '../metrics.js';
 
 export enum CircuitBreakerState {
   CLOSED = 'CLOSED',
@@ -67,13 +70,48 @@ const DEFAULT_CONFIG: Required<CircuitBreakerConfig> = {
 const DEFAULT_PERSISTENT_TABLE = 'gateway_circuit_breakers';
 const TABLE_NAME_PATTERN = /^[a-z_][a-z0-9_]*$/i;
 
+// Prometheus metrics
+const circuitBreakerStateGauge = new client.Gauge({
+  name: 'circuit_breaker_state',
+  help: 'Current state of the circuit breaker (0=CLOSED, 1=OPEN, 2=HALF_OPEN)',
+  labelNames: ['breaker_key'],
+  registers: [register],
+});
+
+const circuitBreakerTransitionsCounter = new client.Counter({
+  name: 'circuit_breaker_transitions_total',
+  help: 'Total number of circuit breaker state transitions',
+  labelNames: ['breaker_key', 'from', 'to'],
+  registers: [register],
+});
+
 function assertSafeTableName(tableName: string): string {
   if (!TABLE_NAME_PATTERN.test(tableName)) {
-    throw new Error(
+    throw new BadRequestError(
       'Circuit breaker tableName must contain only letters, numbers, and underscores.',
     );
   }
   return tableName;
+}
+
+function validateConfig(config: Partial<CircuitBreakerConfig>): void {
+  if (config.failureThreshold !== undefined && (typeof config.failureThreshold !== 'number' || config.failureThreshold <= 0 || !Number.isInteger(config.failureThreshold))) {
+    throw new BadRequestError('failureThreshold must be a positive integer');
+  }
+  if (config.cooldownMs !== undefined && (typeof config.cooldownMs !== 'number' || config.cooldownMs <= 0 || !Number.isFinite(config.cooldownMs))) {
+    throw new BadRequestError('cooldownMs must be a positive number');
+  }
+  if (config.successThreshold !== undefined && (typeof config.successThreshold !== 'number' || config.successThreshold <= 0 || !Number.isInteger(config.successThreshold))) {
+    throw new BadRequestError('successThreshold must be a positive integer');
+  }
+}
+
+function stateToNumber(state: CircuitBreakerState): number {
+  switch (state) {
+    case CircuitBreakerState.CLOSED: return 0;
+    case CircuitBreakerState.OPEN: return 1;
+    case CircuitBreakerState.HALF_OPEN: return 2;
+  }
 }
 
 async function rollbackQuietly(client: { query: (text: string) => Promise<unknown>; release: () => void }): Promise<void> {
@@ -233,8 +271,11 @@ const DEFAULT_METRICS: CircuitBreakerMetrics = {
 export class CircuitBreaker {
   private readonly store: CircuitBreakerStore;
   private readonly config: Required<CircuitBreakerConfig>;
+  // Tracks which breakers have an active trial call in half-open state
+  private readonly activeTrials = new Set<string>();
 
   constructor(config: CircuitBreakerConfig = {}, store?: CircuitBreakerStore) {
+    validateConfig(config);
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.store = store || new InMemoryCircuitBreakerStore();
   }
@@ -255,7 +296,8 @@ export class CircuitBreaker {
     if (metrics.state === CircuitBreakerState.OPEN) {
       const timeSinceFailure = now - (metrics.lastFailureTime ?? 0);
       if (timeSinceFailure >= this.config.cooldownMs) {
-        metrics = this.transitionTo(metrics, CircuitBreakerState.HALF_OPEN, now);
+        metrics = this.transitionTo(metrics, CircuitBreakerState.HALF_OPEN, now, breakerKey);
+        await this.store.set(breakerKey, metrics);
       } else {
         throw new CircuitBreakerOpenError(
           `Circuit breaker is open. Cooldown remaining: ${
@@ -265,22 +307,36 @@ export class CircuitBreaker {
       }
     }
 
+    // Enforce exactly one trial call in HALF_OPEN state
+    if (metrics.state === CircuitBreakerState.HALF_OPEN) {
+      if (this.activeTrials.has(breakerKey)) {
+        throw new CircuitBreakerOpenError(
+          'Circuit breaker is in half-open state. Only one trial call allowed at a time.'
+        );
+      }
+      this.activeTrials.add(breakerKey);
+    }
+
     try {
       const result = await operation();
-      metrics = this.onSuccess(metrics, now);
+      metrics = this.onSuccess(metrics, now, breakerKey);
       await this.store.set(breakerKey, metrics);
       return result;
     } catch (error) {
-      metrics = this.onFailure(metrics, now);
+      metrics = this.onFailure(metrics, now, breakerKey);
       await this.store.set(breakerKey, metrics);
       throw error;
+    } finally {
+      if (metrics.state === CircuitBreakerState.HALF_OPEN) {
+        this.activeTrials.delete(breakerKey);
+      }
     }
   }
 
   /**
    * Handle successful operation execution.
    */
-  private onSuccess(metrics: CircuitBreakerMetrics, now: number): CircuitBreakerMetrics {
+  private onSuccess(metrics: CircuitBreakerMetrics, now: number, breakerKey: string): CircuitBreakerMetrics {
     const nextMetrics = {
       ...metrics,
       totalSuccesses: metrics.totalSuccesses + 1,
@@ -290,7 +346,7 @@ export class CircuitBreaker {
 
     if (nextMetrics.state === CircuitBreakerState.HALF_OPEN) {
       if (nextMetrics.consecutiveSuccesses >= this.config.successThreshold) {
-        return this.transitionTo({ ...nextMetrics, consecutiveSuccesses: 0 }, CircuitBreakerState.CLOSED, now);
+        return this.transitionTo({ ...nextMetrics, consecutiveSuccesses: 0 }, CircuitBreakerState.CLOSED, now, breakerKey);
       }
     }
 
@@ -300,7 +356,7 @@ export class CircuitBreaker {
   /**
    * Handle failed operation execution.
    */
-  private onFailure(metrics: CircuitBreakerMetrics, now: number): CircuitBreakerMetrics {
+  private onFailure(metrics: CircuitBreakerMetrics, now: number, breakerKey: string): CircuitBreakerMetrics {
     const nextMetrics = {
       ...metrics,
       totalFailures: metrics.totalFailures + 1,
@@ -311,10 +367,10 @@ export class CircuitBreaker {
 
     if (nextMetrics.state === CircuitBreakerState.HALF_OPEN) {
       // Immediate transition back to OPEN on any failure in HALF_OPEN
-      return this.transitionTo(nextMetrics, CircuitBreakerState.OPEN, now);
+      return this.transitionTo(nextMetrics, CircuitBreakerState.OPEN, now, breakerKey);
     } else if (nextMetrics.state === CircuitBreakerState.CLOSED) {
       if (nextMetrics.consecutiveFailures >= this.config.failureThreshold) {
-        return this.transitionTo(nextMetrics, CircuitBreakerState.OPEN, now);
+        return this.transitionTo(nextMetrics, CircuitBreakerState.OPEN, now, breakerKey);
       }
     }
 
@@ -324,7 +380,7 @@ export class CircuitBreaker {
   /**
    * Transition to a new circuit breaker state.
    */
-  private transitionTo(metrics: CircuitBreakerMetrics, newState: CircuitBreakerState, now: number): CircuitBreakerMetrics {
+  private transitionTo(metrics: CircuitBreakerMetrics, newState: CircuitBreakerState, now: number, breakerKey: string): CircuitBreakerMetrics {
     const oldState = metrics.state;
     const nextMetrics = {
       ...metrics,
@@ -332,10 +388,16 @@ export class CircuitBreaker {
       lastStateChange: now,
     };
 
-    console.log(
+    // Log transition with structured logger
+    logger.info(
       `Circuit breaker state transition: ${oldState} → ${newState} ` +
-      `(failures: ${nextMetrics.consecutiveFailures}, successes: ${nextMetrics.consecutiveSuccesses})`
+      `(failures: ${nextMetrics.consecutiveFailures}, successes: ${nextMetrics.consecutiveSuccesses})`,
+      { breakerKey, oldState, newState }
     );
+
+    // Update metrics
+    circuitBreakerTransitionsCounter.inc({ breaker_key: breakerKey, from: oldState, to: newState });
+    circuitBreakerStateGauge.set({ breaker_key: breakerKey }, stateToNumber(newState));
 
     // Reset consecutive counters on state change to CLOSED
     if (newState === CircuitBreakerState.CLOSED) {
@@ -366,11 +428,13 @@ export class CircuitBreaker {
    */
   async reset(breakerKey: string): Promise<void> {
     const now = Date.now();
-    await this.store.set(breakerKey, {
-      ...DEFAULT_METRICS,
-      lastStateChange: now,
-    });
-    console.log('Circuit breaker manually reset to CLOSED state');
+    const metrics = await this.getMetrics(breakerKey);
+    const oldState = metrics.state;
+    const newMetrics = { ...DEFAULT_METRICS, lastStateChange: now };
+    await this.store.set(breakerKey, newMetrics);
+    this.activeTrials.delete(breakerKey);
+    logger.info('Circuit breaker manually reset to CLOSED state', { breakerKey, oldState });
+    circuitBreakerStateGauge.set({ breaker_key: breakerKey }, stateToNumber(CircuitBreakerState.CLOSED));
   }
 }
 

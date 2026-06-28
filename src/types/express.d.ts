@@ -1,4 +1,5 @@
 import type { AuthenticatedUser } from "./auth";
+import type { AuditContext } from "../middleware/auditEnrich.js";
 
 declare global {
   namespace Express {
@@ -21,6 +22,8 @@ declare global {
       endpoint?: Record<string, unknown>;
       apiKeyRecord?: Record<string, unknown>;
       apiKeyValue?: string;
+      /** Enriched forensic context attached by auditEnrichMiddleware. */
+      auditContext: AuditContext;
     }
   }
 }

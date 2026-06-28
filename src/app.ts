@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { z } from 'zod';
 import adminRouter from './routes/admin.js';
+import { createExplainRouter } from './routes/admin/explain.js';
+import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
 import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
 import { pool } from './db.js';
@@ -30,6 +32,7 @@ import { bodyValidator } from './middleware/validate.js';
 import { buildDeveloperAnalytics } from './services/developerAnalytics.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { performHealthCheck, type HealthCheckConfig } from './services/healthCheck.js';
+import quotaRequestsRouter from './routes/quota/requests.js';
 import { parsePagination, paginatedResponse } from './lib/pagination.js';
 import { InMemoryVaultRepository, type VaultRepository } from './repositories/vaultRepository.js';
 import { DepositController } from './controllers/depositController.js';
@@ -38,6 +41,7 @@ import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { validate } from './middleware/validate.js';
 import { requestLogger } from './middleware/logging.js';
+import { auditEnrichMiddleware } from './middleware/auditEnrich.js';
 import { createConfiguredRestRateLimitMiddleware } from './middleware/restRateLimit.js';
 import { metricsMiddleware, metricsEndpoint } from './metrics.js';
 import { config } from './config/index.js';
@@ -52,6 +56,8 @@ import {
 import { apiKeyRepository } from './repositories/apiKeyRepository.js';
 import { apiRegistrationSchema } from './validators/apiRegistration.js';
 import { stellarNetworkQuerySchema } from './validators/networkSchema.js';
+import path from 'path';
+import OpenApiValidator from 'express-openapi-validator';
 
 interface AppDependencies {
   usageEventsRepository?: UsageEventsRepository;
@@ -87,7 +93,7 @@ const vaultBalanceQuerySchema = z.object({
 export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const app = express();
   const restRateLimit = createConfiguredRestRateLimitMiddleware();
-  
+
   // Set database pool in locals for billing routes
   app.locals.dbPool = pool;
   const usageEventsRepository =
@@ -107,7 +113,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   // Production-safe security headers with environment-based configuration
   const isProduction = process.env.NODE_ENV === 'production';
   const isDevelopment = process.env.NODE_ENV === 'development';
-  
+
   // Apply Helmet with production-safe defaults
   app.use(helmet({
     // Content Security Policy - stricter in production
@@ -186,8 +192,8 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       },
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: [
-        'Content-Type', 
-        'Authorization', 
+        'Content-Type',
+        'Authorization',
         'x-admin-api-key',
         'x-user-id', // Added for authentication
         'x-request-id' // Added for tracing
@@ -201,6 +207,17 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const requestBodyLimit = process.env.REQUEST_BODY_LIMIT ?? '100kb';
   app.use(express.json({ limit: requestBodyLimit }));
   app.use(express.urlencoded({ extended: false, limit: requestBodyLimit }));
+  // Attach req.auditContext (IP, UA, tenantId, correlationId, bodyHash) for all routes.
+  app.use(auditEnrichMiddleware);
+
+  // OpenAPI contract validation
+  app.use(
+    OpenApiValidator.middleware({
+      apiSpec: path.resolve(process.cwd(), 'docs/openapi.json'),
+      validateRequests: true,
+      validateResponses: true,
+    }),
+  );
 
   /**
    * GET /api/health
@@ -250,7 +267,14 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }
   });
 
+  // Mounted before the generic admin router so the specific path is not
+  // shadowed by adminRouter's `/usage/:developerId` route.
+  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
   app.use('/api/admin', adminRouter);
+  app.use('/api/admin/db/explain', createExplainRouter({ pool }));
+
+  // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
+  app.use('/api/quota/requests', quotaRequestsRouter);
 
   // Prometheus metrics endpoint — auth-gated in production
   app.get('/api/metrics', metricsEndpoint);
@@ -264,7 +288,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
 
   // Mount all routes including billing
-  app.use('/api', createApiRouter({ 
+  app.use('/api', createApiRouter({
     restRateLimit,
     usageEventsRepository,
     apiRepository,
@@ -502,6 +526,30 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }
   });
 
+  // OpenAPI validation errors
+  app.use(
+    (
+      err: Error & {
+        status?: number;
+        errors?: unknown[];
+      },
+      _req: express.Request,
+      res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      if (!err.status) {
+        return next(err);
+      }
+
+      res.status(err.status).json({
+        success: false,
+        error: err.message,
+        details: err.errors ?? [],
+      });
+    },
+  );
+
   app.use(errorHandler);
+
   return app;
 };

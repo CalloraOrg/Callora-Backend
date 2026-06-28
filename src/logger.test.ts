@@ -93,4 +93,16 @@ describe('logger redaction helpers', () => {
       jest.resetModules();
     }
   });
+
+  test('request context is available from the dedicated async context utility', async () => {
+    const {
+      getRequestId,
+      runWithRequestContext,
+    } = await import('./utils/asyncContext.js');
+
+    await runWithRequestContext({ requestId: 'req-from-utils' }, async () => {
+      await Promise.resolve();
+      assert.equal(getRequestId(), 'req-from-utils');
+    });
+  });
 });

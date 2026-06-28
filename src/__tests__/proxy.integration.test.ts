@@ -3,6 +3,11 @@ import type { Server } from 'node:http';
 import dns from 'node:dns/promises';
 import type { LookupAddress } from 'node:dns';
 import { createProxyRouter } from '../routes/proxyRoutes.js';
+import {
+  legacyV1DeprecationMiddleware,
+  LEGACY_V1_DEPRECATION_HEADER,
+  LEGACY_V1_SUNSET_AT,
+} from '../middleware/deprecation.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import { MockSorobanBilling } from '../services/billingService.js';
@@ -82,6 +87,7 @@ beforeAll(async () => {
     const app = express();
     app.use(express.json());
     app.use(requestIdMiddleware);
+    app.use('/v1/call', legacyV1DeprecationMiddleware);
 
     const proxyRouter = createProxyRouter({
       billing,
@@ -133,6 +139,8 @@ describe('Proxy /v1/call', () => {
     });
 
     expect(res.status).toBe(200);
+    expect(res.headers.get('deprecation')).toBe(LEGACY_V1_DEPRECATION_HEADER);
+    expect(res.headers.get('sunset')).toBe(LEGACY_V1_SUNSET_AT);
     const body = await res.json();
     expect(body.message).toBe('upstream OK');
     expect(body.items).toEqual([1, 2, 3]);
@@ -249,6 +257,32 @@ describe('Proxy /v1/call', () => {
     expect(requestId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
+  });
+
+  it('propagates a client-supplied request id to upstream, response, and usage', async () => {
+    const edgeRequestId = 'edge-proxy-request-123';
+    let upstreamRequestId: string | undefined;
+    setUpstreamHandler((req, res) => {
+      upstreamRequestId = req.headers['x-request-id'] as string | undefined;
+      res.status(200).json({ requestId: upstreamRequestId });
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/request-id`, {
+      method: 'GET',
+      headers: {
+        'x-api-key': TEST_API_KEY,
+        'x-request-id': edgeRequestId,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-request-id')).toBe(edgeRequestId);
+    expect(upstreamRequestId).toBe(edgeRequestId);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const events = usageStore.getEvents(TEST_API_KEY);
+    expect(events).toHaveLength(1);
+    expect(events[0].requestId).toBe(edgeRequestId);
   });
 
   it('strips internal headers from the upstream request', async () => {

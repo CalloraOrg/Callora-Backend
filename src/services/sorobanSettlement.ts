@@ -1,4 +1,5 @@
 import { config, type StellarNetwork } from '../config/index.js';
+import { env } from '../config/env.js';
 import {
   withRetry,
   TransientError,
@@ -6,6 +7,8 @@ import {
   isTransientNetworkError,
   type RetryOptions,
 } from '../lib/retry.js';
+import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
+import { getOrCreateRequestId } from '../utils/asyncContext.js';
 
 export interface PayoutResult {
   success: boolean;
@@ -184,7 +187,7 @@ export class SorobanRpcSettlementClient implements SorobanSettlementClient {
 
   constructor(private readonly options: SorobanRpcSettlementClientOptions) {
     this.resolvedOptions = resolveSorobanRpcOptions(options);
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? (env.SOROBAN_CHAOS ? withSorobanLatencyWrapper(fetch) : fetch);
   }
 
   async distribute(developerAddress: string, amountUsdc: number): Promise<PayoutResult> {
@@ -203,9 +206,11 @@ export class SorobanRpcSettlementClient implements SorobanSettlementClient {
       };
     }
 
+    const requestId = this.options.requestIdFactory?.() ??
+      getOrCreateRequestId(() => `soroban-settlement-${Date.now()}`);
     const requestBody: SorobanSimulationRequest = {
       jsonrpc: '2.0',
-      id: this.options.requestIdFactory?.() ?? `soroban-settlement-${Date.now()}`,
+      id: requestId,
       method: 'simulateTransaction',
       params: {
         invocation,
@@ -233,6 +238,7 @@ export class SorobanRpcSettlementClient implements SorobanSettlementClient {
             method: 'POST',
             headers: {
               'content-type': 'application/json',
+              'x-request-id': requestId,
             },
             body: JSON.stringify(requestBody),
             signal: controller.signal,

@@ -66,7 +66,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       const result = await service.reconcilePendingSettlements();
 
-      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, errors: 0 });
+      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, retried: 0, errors: 0 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'failed',
         tx_hash: 'tx-with-codes',
@@ -104,7 +104,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       const result = await service.reconcilePendingSettlements();
 
-      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, errors: 0 });
+      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, retried: 0, errors: 0 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'failed',
         tx_hash: 'tx-no-codes',
@@ -145,7 +145,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       const result = await service.reconcilePendingSettlements();
 
-      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, errors: 0 });
+      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, retried: 0, errors: 0 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'failed',
       });
@@ -179,7 +179,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       const result = await service.reconcilePendingSettlements();
 
-      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, errors: 0 });
+      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, retried: 0, errors: 0 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'failed',
       });
@@ -242,7 +242,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       const result = await service.reconcilePendingSettlements();
 
       // stl_5a and stl_5c should be completed, stl_5b should error but not abort
-      expect(result).toEqual({ checked: 3, completed: 2, failed: 0, errors: 1 });
+      expect(result).toEqual({ checked: 3, completed: 2, failed: 0, retried: 0, errors: 1 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         id: 'stl_5c',
         status: 'completed',
@@ -285,7 +285,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       const result = await service.reconcilePendingSettlements();
 
-      expect(result).toEqual({ checked: 1, completed: 1, failed: 0, errors: 0 });
+      expect(result).toEqual({ checked: 1, completed: 1, failed: 0, retried: 0, errors: 0 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'completed',
         tx_hash: 'tx-success',
@@ -318,7 +318,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       const result = await service.reconcilePendingSettlements();
 
       // Should not crash, settlement stays pending, error counted
-      expect(result).toEqual({ checked: 1, completed: 0, failed: 0, errors: 1 });
+      expect(result).toEqual({ checked: 1, completed: 0, failed: 0, retried: 0, errors: 1 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'pending',
       });
@@ -371,7 +371,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       const result = await service.reconcilePendingSettlements();
 
-      expect(result).toEqual({ checked: 2, completed: 1, failed: 0, errors: 1 });
+      expect(result).toEqual({ checked: 2, completed: 1, failed: 0, retried: 0, errors: 1 });
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         id: 'stl_8b',
         status: 'completed',
@@ -408,10 +408,82 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       const result = await service.reconcilePendingSettlements();
 
       // Skipped because Horizon not configured
-      expect(result).toEqual({ checked: 0, completed: 0, failed: 0, errors: 0 });
+      expect(result).toEqual({ checked: 0, completed: 0, failed: 0, retried: 0, errors: 0 });
       // Settlement still pending
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'pending',
+      });
+    });
+  });
+
+  describe('h) tx_failed_too_early — schedules retry', () => {
+    it('marks settlement retryable and increments retried counter on first occurrence', async () => {
+      settlementStore.create({
+        id: 'stl_11',
+        developerId: 'dev_1',
+        amount: 12,
+        status: 'pending',
+        tx_hash: 'tx-too-early',
+        created_at: '2026-04-01T00:00:00.000Z',
+      });
+
+      const frozenNow = Date.now();
+      jest.spyOn(Date, 'now').mockReturnValue(frozenNow);
+
+      service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+        fetchImpl: jest.fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            successful: false,
+            result_codes: { transaction: 'tx_failed_too_early' },
+          }),
+        })) as unknown as typeof fetch,
+        horizonUrl: 'https://horizon-testnet.stellar.org/',
+        tooEarlyBackoffMs: 30_000,
+      });
+
+      const result = await service.reconcilePendingSettlements();
+
+      expect(result).toEqual({ checked: 1, completed: 0, failed: 0, retried: 1, errors: 0 });
+      const s = settlementStore.getDeveloperSettlements('dev_1')[0];
+      expect(s.status).toBe('retryable');
+      expect(s.retry_count).toBe(1);
+      expect(new Date(s.retry_after!).getTime()).toBeGreaterThan(frozenNow);
+
+      jest.restoreAllMocks();
+    });
+
+    it('permanently fails settlement when max retries are exhausted', async () => {
+      settlementStore.create({
+        id: 'stl_12',
+        developerId: 'dev_1',
+        amount: 12,
+        status: 'retryable',
+        tx_hash: 'tx-too-early-exhausted',
+        created_at: '2026-04-01T00:00:00.000Z',
+        retry_after: '2026-04-01T00:00:00.000Z', // in the past — eligible for re-check
+        retry_count: 5,
+      });
+
+      service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+        fetchImpl: jest.fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            successful: false,
+            result_codes: { transaction: 'tx_failed_too_early' },
+          }),
+        })) as unknown as typeof fetch,
+        horizonUrl: 'https://horizon-testnet.stellar.org/',
+        maxTooEarlyRetries: 5,
+      });
+
+      const result = await service.reconcilePendingSettlements();
+
+      expect(result).toEqual({ checked: 1, completed: 0, failed: 1, retried: 0, errors: 0 });
+      expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
+        status: 'failed',
       });
     });
   });
@@ -456,7 +528,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       const result = await service.reconcilePendingSettlements();
 
-      expect(result).toEqual({ checked: 1, completed: 1, failed: 0, errors: 0 });
+      expect(result).toEqual({ checked: 1, completed: 1, failed: 0, retried: 0, errors: 0 });
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
         status: 'completed',

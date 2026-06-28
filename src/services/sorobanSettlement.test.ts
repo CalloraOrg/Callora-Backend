@@ -82,6 +82,7 @@ describe('SorobanRpcSettlementClient', () => {
     assert.equal(url, 'http://soroban-rpc.internal');
     assert.equal(init.method, 'POST');
     assert.equal((init.headers as Record<string, string>)['content-type'], 'application/json');
+    assert.equal((init.headers as Record<string, string>)['x-request-id'], 'req-fixed');
 
     assert.deepEqual(JSON.parse(String(init.body)), {
       jsonrpc: '2.0',
@@ -100,6 +101,29 @@ describe('SorobanRpcSettlementClient', () => {
         networkPassphrase: 'Test SDF Network ; September 2015',
       },
     });
+  });
+
+  test('uses active request context for JSON-RPC id and X-Request-Id header', async () => {
+    const fetchImpl = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ result: { transactionHash: '0xctx' } }),
+    }));
+    const { runWithRequestContext } = await import('../utils/asyncContext.js');
+
+    const client = createSorobanRpcSettlementClient({
+      rpcUrl: 'http://soroban-rpc.internal',
+      contractId: 'contract_abc',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await runWithRequestContext({ requestId: 'req-settlement-als' }, async () => {
+      await client.distribute('G_DEVELOPER_ACCOUNT', 1);
+    });
+
+    const [, requestInit] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    assert.equal((requestInit.headers as Record<string, string>)['x-request-id'], 'req-settlement-als');
+    assert.equal(JSON.parse(String(requestInit.body)).id, 'req-settlement-als');
   });
 
   test('normalizes simulation failures returned by Soroban RPC', async () => {

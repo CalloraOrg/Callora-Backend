@@ -9,6 +9,7 @@ export const developers = sqliteTable('developers', {
   website: text('website'),
   description: text('description'),
   category: text('category'),
+  plan_overrides: text('plan_overrides'),
   created_at: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 });
@@ -35,7 +36,9 @@ export const apis = sqliteTable('apis', {
   category: text('category'),
   status: text('status', { enum: apiStatusEnum }).notNull().default('draft'),
   created_at: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
-  updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`)
+  updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  /** Soft-delete tombstone. NULL = live; non-NULL = deleted at that timestamp. */
+  deleted_at: integer('deleted_at', { mode: 'timestamp' }),
 });
 
 // API endpoints table  
@@ -51,6 +54,20 @@ export const apiEndpoints = sqliteTable('api_endpoints', {
   created_at: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`)
 });
+
+// Schema versions table (single source of truth for applied migrations with checksums)
+export const schemaVersions = sqliteTable('schema_versions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  version: integer('version').notNull().unique(),
+  filename: text('filename').notNull(),
+  checksum: text('checksum').notNull(),
+  applied_at: text('applied_at').notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  executed_by: text('executed_by'),
+});
+
+export type SchemaVersion = typeof schemaVersions.$inferSelect;
+export type NewSchemaVersion = typeof schemaVersions.$inferInsert;
+
 
 // Type exports for use in application code
 export type Api = typeof apis.$inferSelect;

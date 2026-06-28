@@ -400,13 +400,13 @@ describe('Webhook Signature Verification Tests', () => {
     expect(mockFetch).toHaveBeenCalledWith(testConfig.url, {
       method: 'POST',
       body: JSON.stringify(testPayload),
-      headers: {
+      headers: expect.objectContaining({
         'Content-Type': 'application/json',
         'User-Agent': 'Callora-Webhook/1.0',
         'X-Callora-Event': testPayload.event,
         'X-Callora-Timestamp': testPayload.timestamp,
         'X-Callora-Signature': `sha256=${expectedSignature}`,
-      },
+      }),
       signal: expect.any(AbortSignal),
     });
   });
@@ -570,13 +570,13 @@ describe('Webhook Logging Security Tests', () => {
 
     await dispatchWebhook(testConfig, testPayload);
 
-    expect(consoleSpy.log).toHaveBeenCalledWith(
+    expect(mockLogger.info).toHaveBeenCalledWith(
       expect.stringContaining('[webhook] ✓ Delivered new_api_call to https://example.com/webhook'),
       expect.stringContaining('attempt 1')
     );
 
     // Verify that sensitive data is not logged
-    const logCalls = consoleSpy.log.mock.calls.flat();
+    const logCalls = mockLogger.info.mock.calls.flat();
     const allLoggedText = logCalls.join(' ');
     expect(allLoggedText).not.toContain('sensitive-secret-key');
     expect(allLoggedText).not.toContain('this-should-not-be-logged');
@@ -585,11 +585,16 @@ describe('Webhook Logging Security Tests', () => {
   it('should not log sensitive payload data in error cases', async () => {
     mockFetch.mockRejectedValue(new Error('Network error'));
 
-    await dispatchWebhook(testConfig, testPayload);
+    jest.useFakeTimers();
+    const dispatchPromise = dispatchWebhook(testConfig, testPayload);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await jest.advanceTimersByTimeAsync(1000 * Math.pow(2, attempt));
+    }
+    await dispatchPromise;
 
     // Check that error logs don't contain sensitive information
-    const warnCalls = consoleSpy.warn.mock.calls.flat();
-    const errorCalls = consoleSpy.error.mock.calls.flat();
+    const warnCalls = mockLogger.warn.mock.calls.flat();
+    const errorCalls = mockLogger.error.mock.calls.flat();
     const allLoggedText = [...warnCalls, ...errorCalls].join(' ');
 
     expect(allLoggedText).not.toContain('sensitive-secret-key');
@@ -602,9 +607,14 @@ describe('Webhook Logging Security Tests', () => {
       status: 500,
     });
 
-    await dispatchWebhook(testConfig, testPayload);
+    jest.useFakeTimers();
+    const dispatchPromise = dispatchWebhook(testConfig, testPayload);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await jest.advanceTimersByTimeAsync(1000 * Math.pow(2, attempt));
+    }
+    await dispatchPromise;
 
-    expect(consoleSpy.warn).toHaveBeenCalledWith(
+    expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining('[webhook] Non-2xx response (500) for https://example.com/webhook'),
       expect.stringContaining('attempt 1')
     );

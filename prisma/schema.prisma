@@ -12,5 +12,46 @@ model User {
   stellar_address String   @unique
   created_at      DateTime @default(now())
 
+  invoices Invoice[]
+
   @@map("users")
+}
+
+model Invoice {
+  id               String   @id @default(uuid()) @db.Uuid
+  user_id          String   @db.Uuid
+  invoice_number   String   @unique
+  status           String   @default("pending") // pending | paid | void | canceled
+  total_amount_usdc Decimal @default(0) @db.Decimal(20, 7)
+  currency         String   @default("USDC")
+  description      String?
+  period_start     DateTime?
+  period_end       DateTime?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+  pdf_generated_at DateTime?
+
+  user      User              @relation(fields: [user_id], references: [id])
+  line_items InvoiceLineItem[]
+
+  @@index([user_id])
+  @@index([status])
+  @@index([created_at])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id              String   @id @default(uuid()) @db.Uuid
+  invoice_id      String   @db.Uuid
+  description     String
+  amount_usdc     Decimal  @db.Decimal(20, 7)
+  quantity        Int      @default(1)
+  unit_price_usdc Decimal  @db.Decimal(20, 7)
+  item_type       String   @default("usage") // usage | fee | credit | adjustment
+  created_at      DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+
+  @@index([invoice_id])
+  @@map("invoice_line_items")
 }

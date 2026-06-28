@@ -23,6 +23,48 @@ export const envSchema = z
     DB_IDLE_TIMEOUT_MS: z.coerce.number().default(30_000),
     DB_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
 
+    /**
+     * REPLICA_URLS — optional comma-separated list of PostgreSQL read-replica
+     * connection strings.
+     *
+     * Format:
+     *   REPLICA_URLS=postgresql://user:pass@replica1:5432/db,postgresql://user:pass@replica2:5432/db
+     *
+     * Behaviour:
+     *   - When set, read-only repository queries are routed round-robin to the
+     *     listed replicas. Write queries always use DATABASE_URL (primary).
+     *   - On replica failure the query is automatically retried against the
+     *     primary; see src/db/replicaPool.ts for details.
+     *   - When absent or empty, all queries continue to use the primary pool.
+     *
+     * Each URL must use the postgresql:// or postgres:// scheme. Individual
+     * URL validation (scheme, format) is performed at application startup by
+     * the replica pool initialisation code in src/db/replicaPool.ts.
+     */
+    REPLICA_URLS: z
+      .string()
+      .optional()
+      .refine(
+        (val) => {
+          if (!val || val.trim() === '') return true;
+          // Validate that each entry is a parseable postgresql:// URL
+          return val.split(',').every((raw) => {
+            const url = raw.trim();
+            if (!url) return false;
+            try {
+              const parsed = new URL(url);
+              return parsed.protocol === 'postgresql:' || parsed.protocol === 'postgres:';
+            } catch {
+              return false;
+            }
+          });
+        },
+        {
+          message:
+            'REPLICA_URLS must be a comma-separated list of valid postgresql:// or postgres:// connection strings.',
+        },
+      ),
+
     // Database (individual fields for health checks)
     DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().default(5432),
@@ -73,6 +115,7 @@ export const envSchema = z
     HORIZON_TIMEOUT: z.coerce.number().default(2_000),
     SETTLEMENT_STATUS_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
     SETTLEMENT_STATUS_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+    SETTLEMENT_RECON_INTERVAL_MS: z.coerce.number().int().positive().default(86_400_000),
     REVENUE_LEDGER_INDEXER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
     REVENUE_LEDGER_INDEXER_BATCH_SIZE: z.coerce.number().int().positive().default(500),
 
@@ -121,6 +164,11 @@ export const envSchema = z
     GATEWAY_PROFILING_ENABLED: z
       .string()
       .transform((v) => v === "true")
+      .default(false),
+    // Test-only chaos harness
+    SOROBAN_CHAOS: z
+      .string()
+      .transform((v) => v === "1")
       .default(false),
 
     // Body size limits
