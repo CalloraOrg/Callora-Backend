@@ -1841,7 +1841,8 @@
           "REQUEST_TIMEOUT",
           "REQUEST_BODY_TOO_LARGE",
           "UNSUPPORTED_MEDIA_TYPE",
-          "UNPROCESSABLE_ENTITY"
+          "UNPROCESSABLE_ENTITY",
+          "USAGE_AGGREGATE_NOT_FOUND"
         ],
         "description": "Canonical Callora backend error code."
       }
