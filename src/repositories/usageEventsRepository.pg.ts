@@ -726,4 +726,44 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
 
     return toBigInt(result.rows[0]?.total ?? '0', 'total');
   }
+
+  async getTopEndpoints(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+    apiId?: string;
+    limit: number;
+  }): Promise<Array<{ endpoint: string; calls: number; revenue: bigint }>> {
+    assertValidRange(query.from, query.to);
+    const normalizedLimit = normalizeLimit(query.limit) ?? 5;
+
+    const params: unknown[] = [assertNonEmpty(query.userId, 'userId')];
+    const clauses = ['user_id = $1'];
+    appendDateFilters(params, clauses, query.from, query.to);
+
+    if (query.apiId) {
+      params.push(query.apiId);
+      clauses.push(`api_id = $${params.length}`);
+    }
+
+    params.push(normalizedLimit);
+    const sql = `
+      SELECT
+        endpoint_id AS endpoint,
+        COUNT(*)::int AS calls,
+        COALESCE(SUM(amount_usdc), 0)::text AS revenue
+      FROM usage_events
+      WHERE ${clauses.join(' AND ')}
+      GROUP BY endpoint_id
+      ORDER BY calls DESC, endpoint_id ASC
+      LIMIT $${params.length}
+    `;
+
+    const result = await this.readDb.query<{ endpoint: string; calls: number; revenue: string }>(sql, params);
+    return result.rows.map((row) => ({
+      endpoint: row.endpoint,
+      calls: row.calls,
+      revenue: toBigInt(row.revenue, 'revenue'),
+    }));
+  }
 } 

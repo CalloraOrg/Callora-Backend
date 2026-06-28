@@ -11,6 +11,7 @@ import { createUsageRouter, type UsageRouterDeps } from './usage.js';
 import { createLimitsRouter } from './limits.js';
 import { InMemoryRestRateLimiter } from '../middleware/restRateLimit.js';
 import { createUsageCsvRouter } from './usage/csv.js';
+import { createUsageByEndpointRouter } from './usage/byEndpoint.js';
 import { createExportSchedulesRouter } from './exports/schedules.js';
 import type { ScheduledExportsService } from '../services/scheduledExports.js';
 
@@ -35,6 +36,10 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   // Mounted before '/usage' so the more specific CSV export path matches first.
   router.use('/usage/csv', createUsageCsvRouter({
+    usageEventsRepository: deps.usageEventsRepository!
+  }));
+
+  router.use('/usage/by-endpoint', createUsageByEndpointRouter({
     usageEventsRepository: deps.usageEventsRepository!
   }));
 
