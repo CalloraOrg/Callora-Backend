@@ -25,7 +25,7 @@ export interface UserUsageEventQuery {
   limit?: number;
   offset?: number;
   groupBy?: GroupBy;
-}
+  cursor?: string;}
 
 export interface UsageStats {
   apiId: string;
@@ -216,3 +216,4 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
     return d.toISOString().slice(0, 10);
   }
 }
+
