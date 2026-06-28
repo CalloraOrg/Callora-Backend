@@ -64,6 +64,19 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/BillingDeductRequest"
+              },
+              "examples": {
+                "deductRequest": {
+                  "summary": "Deduct billing request",
+                  "value": {
+                    "requestId": "req-123e4567-e89b-12d3-a456-426614174000",
+                    "apiId": "api-123",
+                    "endpointId": "endpoint-456",
+                    "apiKeyId": "key-789",
+                    "amountUsdc": "0.01",
+                    "idempotencyKey": "idem-abc123"
+                  }
+                }
               }
             }
           }
@@ -75,6 +88,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BillingDeductResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Successful deduction",
+                    "value": {
+                      "success": true,
+                      "usageEventId": "evt-123e4567-e89b-12d3-a456-426614174000",
+                      "stellarTxHash": "abc123def456...",
+                      "alreadyProcessed": false
+                    }
+                  },
+                  "alreadyProcessed": {
+                    "summary": "Already processed (idempotent)",
+                    "value": {
+                      "success": true,
+                      "usageEventId": "evt-123e4567-e89b-12d3-a456-426614174000",
+                      "stellarTxHash": "abc123def456...",
+                      "alreadyProcessed": true
+                    }
+                  }
                 }
               }
             }
@@ -85,6 +118,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidAmount": {
+                    "summary": "Invalid amount format",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "amountUsdc must be a positive number with at most 7 decimal places",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -95,6 +138,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Authentication required",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -105,6 +158,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "insufficientBalance": {
+                    "summary": "Insufficient balance",
+                    "value": {
+                      "code": "INSUFFICIENT_BALANCE",
+                      "message": "Vault balance too low for deduction",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "idempotencyConflict": {
+                    "summary": "Idempotency key already used with different parameters",
+                    "value": {
+                      "code": "IDEMPOTENCY_CONFLICT",
+                      "message": "Idempotency key conflict: different request parameters",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "description": "Seconds until the rate limit expires"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "summary": "Too many requests",
+                    "value": {
+                      "code": "TOO_MANY_REQUESTS",
+                      "message": "Too Many Requests",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -118,41 +229,6 @@
                 }
               }
             }
-          },
-          "responses": {
-            "200": {
-              "description": "Success"
-            },
-            "400": {
-              "description": "Bad Request"
-            },
-            "401": {
-              "description": "Unauthorized"
-            },
-            "402": {
-              "description": "Payment Required"
-            },
-            "409": {
-              "description": "Idempotency conflict",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ErrorResponse"
-                  }
-                }
-              }
-            },
-            "429": {
-              "description": "Rate limit exceeded",
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ErrorResponse"
-                  }
-                }
-              }
-            },
-            "500": {}
           }
         }
       }
