@@ -3,7 +3,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
 import { WebhookStore } from './webhook.store.js';
-import { WebhookEventType } from './webhook.types.js';
+import { WebhookEventType, type RetryPolicy } from './webhook.types.js';
 import {
   captureRawBody,
   verifyWebhookSignature,
@@ -12,6 +12,7 @@ import { AppError, BadRequestError, NotFoundError } from '../errors/index.js';
 import { createRestRateLimitMiddleware } from '../middleware/restRateLimit.js';
 import { config } from '../config/index.js';
 import { logger } from '../logger.js';
+import { validateRetryPolicy } from '../services/webhookRetry.js';
 
 const router = Router();
 
@@ -36,7 +37,7 @@ function generateWebhookSecret(): string {
 // POST /api/webhooks — Register a webhook
 router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { developerId, url, events, secret } = req.body;
+    const { developerId, url, events, secret, retryPolicy } = req.body;
 
     if (!developerId || !url || !Array.isArray(events) || events.length === 0) {
       throw new BadRequestError(
@@ -55,6 +56,14 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       );
     }
 
+    const validation = validateRetryPolicy(retryPolicy);
+    if (!validation.valid) {
+      throw new BadRequestError(
+        validation.error!,
+        'INVALID_RETRY_POLICY'
+      );
+    }
+
     try {
       await validateWebhookUrl(url);
     } catch (err: unknown) {
@@ -70,6 +79,7 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       url,
       events: events as WebhookEventType[],
       secret_current: secret ?? undefined,
+      retryPolicy: retryPolicy as RetryPolicy | undefined,
       createdAt: new Date(),
     });
 
@@ -143,6 +153,54 @@ router.post('/:developerId/rotate-secret', webhookMgmtRateLimit, (req: Request, 
 router.delete('/:developerId', webhookMgmtRateLimit, (req: Request, res: Response) => {
   WebhookStore.delete(req.params.developerId);
   return res.json({ message: 'Webhook removed.' });
+});
+
+// PATCH /api/webhooks/:developerId/retry-policy — Update retry policy for subscription
+router.patch('/:developerId/retry-policy', webhookMgmtRateLimit, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { retryPolicy } = req.body;
+
+    const validation = validateRetryPolicy(retryPolicy);
+    if (!validation.valid) {
+      throw new BadRequestError(
+        validation.error!,
+        'INVALID_RETRY_POLICY'
+      );
+    }
+
+    const updated = WebhookStore.updateRetryPolicy(
+      req.params.developerId,
+      retryPolicy as RetryPolicy | undefined
+    );
+
+    if (!updated) {
+      throw new NotFoundError(
+        'No webhook registered for this developer.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    logger.audit('WEBHOOK_RETRY_POLICY_UPDATED', req.params.developerId, {
+      developerId: req.params.developerId,
+      retryPolicy: updated.retryPolicy,
+    });
+
+    // Never expose the secret
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const {
+      secret: _s,
+      secret_current: _sc,
+      secret_previous: _sp,
+      ...safeConfig
+    } = updated;
+
+    return res.status(200).json({
+      message: 'Webhook retry policy updated successfully.',
+      ...safeConfig,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 /**

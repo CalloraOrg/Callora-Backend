@@ -3,9 +3,7 @@ import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getRequestId } from '../utils/asyncContext.js';
-
-const MAX_RETRIES = 5;
-const BASE_DELAY_MS = 1000;
+import { getEffectiveRetryPolicy } from '../services/webhookRetry.js';
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
 
@@ -45,9 +43,9 @@ export function resetWebhookDispatcherForTests(): void {
  * Dispatches a webhook payload to the registered URL.
  * 
  * Operational Limits:
- * - Max retries: 5 attempts
+ * - Max retries: Uses subscription's retryPolicy.maxRetries (defaults to 5)
  * - Timeout: 10 seconds per attempt
- * - Backoff: Exponential (1s, 2s, 4s, 8s)
+ * - Backoff: Exponential using subscription's retryPolicy.baseDelayMs (defaults to 1s)
  * - Idempotency: Uses a deterministic Deduplication key (X-Callora-Delivery) per dispatch call
  */
 export async function dispatchWebhook(
@@ -58,6 +56,8 @@ export async function dispatchWebhook(
         logger.warn(`[webhook] Skipping ${payload.event} dispatch during shutdown for ${config.url}`);
         return;
     }
+
+    const { maxRetries, baseDelayMs } = getEffectiveRetryPolicy(config.retryPolicy);
 
     return trackDispatch((async () => {
         const body = JSON.stringify(payload);
@@ -80,7 +80,7 @@ export async function dispatchWebhook(
 
         let lastError: unknown;
 
-        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
             try {
                 const response = await fetch(config.url, {
                     method: 'POST',
@@ -110,8 +110,8 @@ export async function dispatchWebhook(
                 );
             }
 
-            if (attempt < MAX_RETRIES - 1) {
-                const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+            if (attempt < maxRetries - 1) {
+                const delay = baseDelayMs * Math.pow(2, attempt);
                 logger.info(`[webhook] Retrying in ${delay}ms...`);
                 await sleep(delay);
             }
@@ -122,7 +122,7 @@ export async function dispatchWebhook(
             lastError instanceof Error ? lastError.message : String(lastError);
 
         logger.error(
-            `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after ${MAX_RETRIES} attempts.`,
+            `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after ${maxRetries} attempts.`,
             lastError
         );
 
@@ -134,7 +134,7 @@ export async function dispatchWebhook(
             url: config.url,
             failedAt,
             lastError: lastErrorMessage,
-            attempts: MAX_RETRIES,
+            attempts: maxRetries,
         });
     })());
 }

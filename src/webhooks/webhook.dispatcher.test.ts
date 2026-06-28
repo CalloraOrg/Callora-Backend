@@ -1,4 +1,5 @@
 import { dispatchWebhook, dispatchToAll, resetWebhookDispatcherForTests, stopWebhookDispatching } from './webhook.dispatcher.js';
+import { WebhookStore } from './webhook.store.js';
 import type { WebhookConfig, WebhookPayload } from './webhook.types.js';
 
 describe('Webhook Dispatcher', () => {
@@ -188,5 +189,105 @@ describe('Webhook Dispatcher', () => {
 
         const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
         expect(headers['X-Callora-Event']).toBe('settlement_completed');
+    });
+
+    describe('per-subscription retry policy', () => {
+        it('uses custom maxRetries override when configured', async () => {
+            const fetchMock = jest.fn().mockResolvedValue({
+                ok: false,
+                status: 503,
+                statusText: 'Service Unavailable',
+            } as Response);
+            global.fetch = fetchMock as any;
+
+            const customConfig: WebhookConfig = {
+                ...config,
+                retryPolicy: { maxRetries: 2 },
+            };
+
+            WebhookStore.register(customConfig);
+
+            const promise = dispatchWebhook(customConfig, payload);
+
+            for (let i = 0; i < 2; i++) {
+                await Promise.resolve();
+                await Promise.resolve();
+                await Promise.resolve();
+                jest.runOnlyPendingTimers();
+            }
+
+            await promise;
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
+
+        it('uses custom baseDelayMs override for exponential backoff', async () => {
+            const fetchMock = jest.fn()
+                .mockResolvedValueOnce({
+                    ok: false,
+                    status: 500,
+                    statusText: 'Internal Server Error',
+                } as Response)
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    statusText: 'OK',
+                } as Response);
+
+            global.fetch = fetchMock as any;
+
+            const customConfig: WebhookConfig = {
+                ...config,
+                retryPolicy: { maxRetries: 3, baseDelayMs: 500 },
+            };
+
+            const promise = dispatchWebhook(customConfig, payload);
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            jest.runOnlyPendingTimers();
+            await promise;
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
+
+        it('respects maxRetries of 0 (no retry attempts)', async () => {
+            const fetchMock = jest.fn().mockResolvedValue({
+                ok: false,
+                status: 503,
+                statusText: 'Service Unavailable',
+            } as Response);
+            global.fetch = fetchMock as any;
+
+            const customConfig: WebhookConfig = {
+                ...config,
+                retryPolicy: { maxRetries: 0 },
+            };
+
+            const promise = dispatchWebhook(customConfig, payload);
+            await promise;
+
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+        });
+
+        it('uses default retry policy when subscription has no override', async () => {
+            const fetchMock = jest.fn().mockResolvedValue({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+            } as Response);
+            global.fetch = fetchMock as any;
+
+            const defaultConfig: WebhookConfig = {
+                ...config,
+            };
+
+            const promise = dispatchWebhook(defaultConfig, payload);
+            await Promise.resolve();
+            await promise;
+
+            // Default should be 5 retries but succeed on first attempt
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
     });
 });

@@ -2,8 +2,19 @@ export type WebhookEventType =
     | 'new_api_call'
     | 'settlement_completed'
     | 'low_balance_alert'
-    | 'quota.threshold.reached';
-    | 'invoice_created'
+    | 'quota.threshold.reached'
+    | 'invoice_created';
+
+/** Default retry policy constants (used when subscription has no override). */
+export const DEFAULT_RETRY_POLICY = {
+    maxRetries: 5,
+    baseDelayMs: 1000,
+} as const;
+
+export interface RetryPolicy {
+    maxRetries?: number;
+    baseDelayMs?: number;
+}
 
 export interface WebhookConfig {
     developerId: string;
@@ -14,6 +25,7 @@ export interface WebhookConfig {
     secret_previous?: string;
     previous_expires_at?: Date;
     createdAt: Date;
+    retryPolicy?: RetryPolicy; // Per-subscription override for retry behavior
 }
 
 export interface WebhookPayload {
