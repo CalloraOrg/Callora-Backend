@@ -41,6 +41,7 @@ import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
 import { listingsCache } from './lib/listingsCache.js';
 import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
+import { createAnomalyDetectorJob } from './workers/anomalyDetector.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution = process.argv[1] && (process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('index.js'));
@@ -143,6 +144,18 @@ if (isDirectExecution) {
       })
     : null;
 
+  const anomalyDetectorJob = config.usageAnomalyDetector.enabled
+    ? createAnomalyDetectorJob(pool, {
+        intervalMs: config.usageAnomalyDetector.pollIntervalMs,
+        dedupWindowMs: config.usageAnomalyDetector.dedupWindowMs,
+        config: {
+          multiplier: config.usageAnomalyDetector.multiplier,
+          baselineWindows: config.usageAnomalyDetector.baselineWindows,
+          windowMs: config.usageAnomalyDetector.windowMs,
+        },
+      })
+    : null;
+
   const apiKeys = new Map<string, ApiKey>([
     ['test-key-1', { key: 'test-key-1', developerId: 'dev_001', apiId: 'api_001' }],
     ['test-key-2', { key: 'test-key-2', developerId: 'dev_002', apiId: 'api_002' }],
@@ -214,6 +227,14 @@ if (isDirectExecution) {
       awaitIdle: () => slowQueryAlerterJob.awaitIdle(),
     });
   }
+
+  if (anomalyDetectorJob) {
+    shutdownSubsystems.push({
+      name: 'usage-anomaly-detector',
+      beginShutdown: () => anomalyDetectorJob.beginShutdown(),
+      awaitIdle: () => anomalyDetectorJob.awaitIdle(),
+    });
+  }
   app.use('/v1/call', legacyV1DeprecationMiddleware, proxyDrainTracker.middleware);
   app.use('/v1/call', proxyRouter);
 
@@ -231,6 +252,7 @@ if (isDirectExecution) {
     settlementReconJob.stop();
     idempotencySweeperJob.stop();
     slowQueryAlerterJob?.stop();
+    anomalyDetectorJob?.stop();
     await closeDb();
     await Promise.allSettled([
       closePgPool(),
@@ -264,6 +286,7 @@ if (isDirectExecution) {
       settlementReconJob.start();
       idempotencySweeperJob.start();
       slowQueryAlerterJob?.start();
+      anomalyDetectorJob?.start();
       
       const server = app.listen(PORT, () => {
         console.log(`Callora backend listening on http://localhost:${PORT}`);

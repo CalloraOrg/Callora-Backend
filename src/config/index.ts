@@ -221,4 +221,20 @@ export const config = {
     enabled: env.MEMORY_ACCOUNTING_ENABLED,
     thresholdMb: env.MEMORY_ACCOUNTING_THRESHOLD_MB,
   },
+
+  slowQueryAlerter: {
+    webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
+    p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
+    pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
+    dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
+  },
+
+  usageAnomalyDetector: {
+    enabled: env.USAGE_ANOMALY_DETECTOR_ENABLED,
+    multiplier: env.USAGE_ANOMALY_MULTIPLIER,
+    pollIntervalMs: env.USAGE_ANOMALY_POLL_INTERVAL_MS,
+    windowMs: env.USAGE_ANOMALY_WINDOW_MS,
+    baselineWindows: env.USAGE_ANOMALY_BASELINE_WINDOWS,
+    dedupWindowMs: env.USAGE_ANOMALY_DEDUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
+  },
 } as const;
