@@ -5,6 +5,7 @@ import { startUpstreamTimer, getUpstreamHealth, type UpstreamOutcome } from '../
 import { validate } from '../middleware/validate.js';
 import type { GatewayDeps, ApiKey } from '../types/gateway.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
+import { defaultUsageSseBroadcaster } from './usage/sse.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
 import {
   BadGatewayError,
@@ -298,7 +299,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           }
         }
 
-        await usageStore.record({
+        const recorded = await usageStore.record({
           id: randomUUID(),
           requestId,
           apiKey: apiKeyHeader,
@@ -310,6 +311,21 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           statusCode: upstreamStatus,
           timestamp: new Date().toISOString(),
         });
+
+        if (recorded) {
+          defaultUsageSseBroadcaster.emitForUser(keyRecord.developerId, {
+            id: randomUUID(),
+            requestId,
+            apiKey: apiKeyHeader,
+            apiKeyId: keyRecord.key,
+            apiId: keyRecord.apiId,
+            endpointId: 'legacy',
+            userId: keyRecord.developerId,
+            amountUsdc: CREDIT_COST_PER_CALL,
+            statusCode: upstreamStatus,
+            timestamp: new Date().toISOString(),
+          });
+        }
 
         res.set('x-request-id', requestId);
         // Forward safe upstream response headers (hop-by-hop already stripped above)

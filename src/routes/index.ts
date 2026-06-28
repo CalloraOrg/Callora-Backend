@@ -8,6 +8,7 @@ import { createBillingPortalRouter } from './billing/portal.js';
 import healthRouter from './health.js';
 import { createApisRouter, type ApisRouterDeps } from './apis.js';
 import { createUsageRouter, type UsageRouterDeps } from './usage.js';
+import { createUsageSseRouter } from './usage/sse.js';
 import { createLimitsRouter } from './limits.js';
 import { InMemoryRestRateLimiter } from '../middleware/restRateLimit.js';
 import { createUsageCsvRouter } from './usage/csv.js';
@@ -37,6 +38,8 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use('/usage/csv', createUsageCsvRouter({
     usageEventsRepository: deps.usageEventsRepository!
   }));
+
+  router.use('/usage/sse', createUsageSseRouter());
 
   router.use('/usage', createUsageRouter({
     usageEventsRepository: deps.usageEventsRepository!
