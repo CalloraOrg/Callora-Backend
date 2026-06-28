@@ -15,6 +15,7 @@ import {
 } from '../services/quotaService.js';
 import { createAdminWebhooksRouter } from './admin/webhooks.js';
 import { createAdminApisRouter } from './admin/apis.js';
+import { createAdminAuditRouter } from './admin/audit.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -210,5 +211,11 @@ router.use('/webhooks', createAdminWebhooksRouter());
 //          POST   /api/admin/apis/:id/restore
 // ---------------------------------------------------------------------------
 router.use('/apis', createAdminApisRouter());
+
+// ---------------------------------------------------------------------------
+// Audit log listing (cursor pagination)
+// Mounts:  GET /api/admin/audit
+// ---------------------------------------------------------------------------
+router.use('/audit', createAdminAuditRouter());
 
 export default router;
