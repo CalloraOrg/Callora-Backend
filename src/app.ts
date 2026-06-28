@@ -7,6 +7,7 @@ import { createExplainRouter } from './routes/admin/explain.js';
 import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
 import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
+import { createPluginsRouter } from './routes/marketplace/plugins.js';
 import { pool } from './db.js';
 import {
   InMemoryUsageEventsRepository,
@@ -299,6 +300,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       developerRepository,
     }),
   );
+
+  // Plugin marketplace — community-developed billing rule plugins
+  app.use('/api/marketplace/plugins', createPluginsRouter());
 
   // Mount all routes including billing and limits
   app.use('/api', createApiRouter({
