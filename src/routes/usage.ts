@@ -3,9 +3,8 @@ import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth
 import { type UsageEventsRepository, type GroupBy } from '../repositories/usageEventsRepository.js';
 import { type UsageEventsPgRepository } from '../repositories/usageEventsRepository.pg.js';
 import { BadRequestError, InternalServerError, UnauthorizedError } from '../errors/index.js';
-import { parsePagination, parseCursorPagination, decodeCursor, cursorPaginatedResponse } from '../lib/pagination.js';
+import { parsePagination, parseCursorPagination, decodeCursor } from '../lib/pagination.js';
 import { parseCursor } from '../lib/cursorPagination.js';
-import type { UsageResponse } from '../types/index.js';
 
 export interface UsageRouterDeps {
   usageEventsRepository: UsageEventsRepository & Partial<UsageEventsPgRepository>;
@@ -43,7 +42,7 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
     
     // Set default period: last 30 days if not provided
     const now = new Date();
-    const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
+    const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const defaultTo = now;
     
     let queryFrom = from || defaultFrom;
@@ -71,6 +70,9 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
       }
       queryGroupBy = groupBy;
     }
+
+    // Parse limit for cursor branch
+    const limit = parseInt((req.query.limit as string) || '20', 10);
 
     // -----------------------------------------------------------------------
     // Cursor pagination branch — activated when `cursor`, `after`, or `before`
@@ -143,7 +145,7 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
         // Validate cursor format first
         try {
           const cursorStr = req.query.cursor as string;
-          decodeCursor(cursorStr); // This will throw if invalid
+          decodeCursor(cursorStr);
         } catch (error) {
           next(new BadRequestError('Invalid cursor format. Cursor must be base64 encoded created_at|id'));
           return;
@@ -160,19 +162,14 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
           cursor: cursor || undefined,
         });
 
-        // Extract cursor info from the result
         events = result;
         nextCursor = (result as any)._nextCursor;
         hasMore = (result as any)._hasMore || false;
-        
-        // Get total for response (optional, might be expensive)
-        // We'll omit total for cursor pagination for performance
         total = undefined;
       } else {
         // Legacy offset/limit pagination
         const { limit, offset } = parsePagination(req.query as Record<string, string>);
         
-        // Get usage events for the user with offset/limit
         events = await usageEventsRepository.findByUser({
           userId: user.id,
           from: queryFrom,
@@ -182,10 +179,8 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
           offset,
         });
         
-        // For offset pagination, we can get total count
-        // This is a simplified approach - ideally we'd have a count method
-        hasMore = events.length === limit; // Approximation
-        total = undefined; // Could be added if needed
+        hasMore = events.length === limit;
+        total = undefined;
       }
 
       // Get aggregated statistics (independent of pagination)
@@ -198,7 +193,7 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
       });
 
       // Format events
-      const formattedEvents = events.map(event => ({
+      const formattedEvents = events.map((event: any) => ({
         id: event.id,
         apiId: event.apiId,
         endpoint: event.endpoint,
@@ -212,12 +207,12 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
         stats: {
           totalCalls: stats.totalCalls,
           totalSpent: stats.totalRevenue.toString(),
-          breakdownByApi: stats.breakdownByApi.map(stat => ({
+          breakdownByApi: stats.breakdownByApi.map((stat: any) => ({
             apiId: stat.apiId,
             calls: stat.calls,
             revenue: stat.revenue.toString(),
           })),
-          buckets: stats.buckets?.map(bucket => ({
+          buckets: stats.buckets?.map((bucket: any) => ({
             period: bucket.period,
             calls: bucket.calls,
             revenue: bucket.revenue.toString(),
@@ -232,11 +227,10 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
       // Add pagination metadata
       if (hasCursor) {
         response.pagination = {
-          limit: parseInt((req.query.limit as string) || '20'),
+          limit: parseInt((req.query.limit as string) || '20', 10),
           nextCursor,
           hasMore,
         };
-        // Remove _cursor and _hasMore from events if they were attached
         formattedEvents.forEach((e: any) => {
           delete e._cursor;
           delete e._hasMore;
@@ -261,4 +255,4 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
   return router;
 }
 
-export default createUsageRouter; 
+export default createUsageRouter;
