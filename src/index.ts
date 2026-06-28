@@ -38,6 +38,7 @@ import { createApiRegistry } from './data/apiRegistry.js';
 import { ApiKey } from './types/gateway.js';
 import { config } from './config/index.js';
 import { listingsCache } from './lib/listingsCache.js';
+import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution = process.argv[1] && (process.argv[1].endsWith('index.ts') || process.argv[1].endsWith('index.js'));
@@ -123,6 +124,15 @@ if (isDirectExecution) {
     intervalMs: config.idempotency.sweeperIntervalMs,
   });
 
+  const slowQueryAlerterJob = config.slowQueryAlerter.webhookUrl
+    ? createSlowQueryAlerterJob(pool, {
+        webhookUrl: config.slowQueryAlerter.webhookUrl,
+        p95ThresholdMs: config.slowQueryAlerter.p95ThresholdMs,
+        pollIntervalMs: config.slowQueryAlerter.pollIntervalMs,
+        dedupWindowMs: config.slowQueryAlerter.dedupWindowMs,
+      })
+    : null;
+
   const apiKeys = new Map<string, ApiKey>([
     ['test-key-1', { key: 'test-key-1', developerId: 'dev_001', apiId: 'api_001' }],
     ['test-key-2', { key: 'test-key-2', developerId: 'dev_002', apiId: 'api_002' }],
@@ -186,6 +196,14 @@ if (isDirectExecution) {
       awaitIdle: () => settlementReconJob.awaitIdle(),
     },
   ];
+
+  if (slowQueryAlerterJob) {
+    shutdownSubsystems.push({
+      name: 'slow-query-alerter',
+      beginShutdown: () => slowQueryAlerterJob.beginShutdown(),
+      awaitIdle: () => slowQueryAlerterJob.awaitIdle(),
+    });
+  }
   app.use('/v1/call', legacyV1DeprecationMiddleware, proxyDrainTracker.middleware);
   app.use('/v1/call', proxyRouter);
 
@@ -202,6 +220,7 @@ if (isDirectExecution) {
     settlementStatusSyncJob.stop();
     settlementReconJob.stop();
     idempotencySweeperJob.stop();
+    slowQueryAlerterJob?.stop();
     await closeDb();
     await Promise.allSettled([
       closePgPool(),
@@ -234,6 +253,7 @@ if (isDirectExecution) {
       settlementStatusSyncJob.start();
       settlementReconJob.start();
       idempotencySweeperJob.start();
+      slowQueryAlerterJob?.start();
       
       const server = app.listen(PORT, () => {
         console.log(`Callora backend listening on http://localhost:${PORT}`);

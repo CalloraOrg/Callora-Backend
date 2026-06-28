@@ -497,6 +497,7 @@ export function resetAllMetrics(): void {
   proxyPrematureAbortsTotal.reset();
   idempotencyStoreRows.reset();
   gatewayUpstreamBreakerState.reset();
+  resetSlowQueryAlerterMetrics();
   resetReplicaMetrics();
 }
 
@@ -564,6 +565,62 @@ export function recordReplicaFallback(): void {
 /** Increment the replica failure counter. Called by ReplicaPool on each replica-level error. */
 export function recordReplicaFailure(): void {
   dbReplicaFailuresTotal.inc();
+}
+
+// ── Slow Query Alerter metrics ────────────────────────────────────────────────
+//
+// Metric: slow_query_alerter_runs_total
+//   Type:    Counter
+//   Labels:  (none)
+//   Purpose: Total number of poll cycles the slow query alerter has completed.
+//
+// Metric: slow_query_alerter_alerts_total
+//   Type:    Counter
+//   Labels:  (none)
+//   Purpose: Total number of webhook alerts fired.
+//
+// Metric: slow_query_alerter_queries_above_threshold
+//   Type:    Gauge
+//   Labels:  (none)
+//   Purpose: Number of queries exceeding the threshold in the most recent poll.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const slowQueryAlerterRunsTotal = new client.Counter({
+  name: 'slow_query_alerter_runs_total',
+  help: 'Total number of slow query alerter poll cycles',
+});
+
+const slowQueryAlerterAlertsTotal = new client.Counter({
+  name: 'slow_query_alerter_alerts_total',
+  help: 'Total number of slow query alerts fired',
+});
+
+const slowQueryAlerterQueriesAboveThreshold = new client.Gauge({
+  name: 'slow_query_alerter_queries_above_threshold',
+  help: 'Number of queries exceeding the threshold in the most recent poll',
+});
+
+register.registerMetric(slowQueryAlerterRunsTotal);
+register.registerMetric(slowQueryAlerterAlertsTotal);
+register.registerMetric(slowQueryAlerterQueriesAboveThreshold);
+
+export function recordSlowQueryAlerterRun(): void {
+  slowQueryAlerterRunsTotal.inc();
+}
+
+export function recordSlowQueryAlerterAlert(): void {
+  slowQueryAlerterAlertsTotal.inc();
+}
+
+export function recordSlowQueryAlerterQueriesAboveThreshold(count: number): void {
+  slowQueryAlerterQueriesAboveThreshold.set(count);
+}
+
+/** Reset slow query alerter metrics. Used in tests to isolate metric state. */
+export function resetSlowQueryAlerterMetrics(): void {
+  slowQueryAlerterRunsTotal.reset();
+  slowQueryAlerterAlertsTotal.reset();
+  slowQueryAlerterQueriesAboveThreshold.reset();
 }
 
 /** Reset all replica routing metrics. Used in tests to isolate metric state. */

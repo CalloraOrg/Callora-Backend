@@ -209,4 +209,11 @@ export const config = {
     warmupTimeoutMs: env.LISTINGS_CACHE_WARMUP_TIMEOUT_MS,
   },
   bulkEndpointLimit: env.BULK_ENDPOINT_LIMIT,
+
+  slowQueryAlerter: {
+    webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
+    p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
+    pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
+    dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
+  },
 } as const;
