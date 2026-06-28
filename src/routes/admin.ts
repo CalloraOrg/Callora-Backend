@@ -15,6 +15,7 @@ import {
 } from '../services/quotaService.js';
 import { createAdminWebhooksRouter } from './admin/webhooks.js';
 import { createAdminApisRouter } from './admin/apis.js';
+import { createAdminHealthProbesRouter } from './admin/health/probes.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -210,5 +211,12 @@ router.use('/webhooks', createAdminWebhooksRouter());
 //          POST   /api/admin/apis/:id/restore
 // ---------------------------------------------------------------------------
 router.use('/apis', createAdminApisRouter());
+
+// ---------------------------------------------------------------------------
+// Admin health probes (per-component)
+// Mounts:  GET /api/admin/health/probes
+//          GET /api/admin/health/probes/:component
+// ---------------------------------------------------------------------------
+router.use('/health/probes', createAdminHealthProbesRouter());
 
 export default router;
