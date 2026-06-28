@@ -150,6 +150,11 @@ export const config = {
     secretRotationGraceMs: env.WEBHOOK_SECRET_ROTATION_GRACE_MS,
   },
 
+  loginRateLimit: {
+    windowMs: env.LOGIN_RATE_LIMIT_WINDOW_MS,
+    maxRequests: env.LOGIN_RATE_LIMIT_MAX_REQUESTS,
+  },
+
   rateLimiter: {
     maxRequests: env.RATE_LIMIT_MAX_REQUESTS,
     windowMs: env.RATE_LIMIT_WINDOW_MS,

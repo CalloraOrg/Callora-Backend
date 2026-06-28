@@ -3,6 +3,7 @@ import { RefreshTokenService } from '../services/refreshTokenService.js';
 import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
 import { logger } from '../logger.js';
 import { UnauthorizedError } from '../errors/index.js';
+import { getClientIp, DEFAULT_PROXY_HEADERS } from '../lib/clientIp.js';
 
 export interface AuthControllerOptions {
   refreshTokenService: RefreshTokenService;
@@ -19,7 +20,43 @@ export class AuthController {
   }
 
   /**
-   * Refresh access token using a valid refresh token.
+   * Wallet-based login with IP-based rate limiting applied at the route level.
+   * Returns JWT on successful signature verification.
+   *
+   * POST /auth/wallet
+   * Rate limited to 5 requests per minute per IP by loginThrottle middleware.
+   */
+  async walletLogin(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { walletAddress, signature, message } = req.body;
+
+      if (!walletAddress || !signature || !message) {
+        next(new UnauthorizedError('Missing required fields', 'MISSING_AUTH_FIELDS'));
+        return;
+      }
+
+      // Extract client IP for structured logging
+      const clientIp = getClientIp(req, process.env.TRUST_PROXY_HEADERS === 'true', DEFAULT_PROXY_HEADERS);
+
+      logger.info('[AuthController] Wallet login attempt', {
+        walletAddress,
+        clientIp,
+      });
+
+      // TODO: Implement actual Stellar signature verification
+      // This would typically call a service to verify the wallet signature
+      // against the message and derive a user ID for JWT generation
+
+      next(new UnauthorizedError('Wallet login not fully implemented', 'AUTH_NOT_IMPLEMENTED'));
+
+    } catch (error) {
+      logger.error('[AuthController] Error during wallet login', { error });
+      next(new UnauthorizedError('Login failed', 'REFRESH_FAILED'));
+    }
+  }
+
+  /**
+    * Refresh access token using a valid refresh token.
    *
    * On success the consumed refresh token is revoked and a fresh token pair
    * (access + refresh) is returned. Single-use enforcement means a reused

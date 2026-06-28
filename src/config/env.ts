@@ -89,11 +89,14 @@ export const envSchema = z
     WEBHOOK_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
     WEBHOOK_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().optional(),
     WEBHOOK_SECRET_ROTATION_GRACE_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
-    // Generic rate limiter (optional legacy config)
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().optional(),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
     RATE_LIMIT_STORE: z.string().optional(),
     RATE_LIMIT_PG_TABLE: z.string().optional(),
+
+    // Login rate limiting (IP-based throttling for auth attempts)
+    LOGIN_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(5),
+    LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000), // 1 minute sliding window
 
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
