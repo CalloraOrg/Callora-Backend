@@ -1,3 +1,4 @@
+import { adminLogMiddleware } from '../middleware/adminLog.js';
 import { Router, type Response } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
@@ -24,7 +25,7 @@ const router = Router();
 // Apply IP allowlist check before authentication
 router.use(createAdminIpAllowlist());
 router.use(adminAuth);
-
+router.use(adminLogMiddleware); // <--- Add this line here!
 router.get('/users', async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);
