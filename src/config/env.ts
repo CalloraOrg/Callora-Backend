@@ -187,6 +187,12 @@ export const envSchema = z
     // Idempotency
     IDEMPOTENCY_RETENTION_WINDOW_SECONDS: z.coerce.number().int().positive().default(86400),
     IDEMPOTENCY_SWEEPER_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+
+    // Slow query alerting
+    SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),
+    SLOW_QUERY_P95_THRESHOLD_MS: z.coerce.number().positive().default(500),
+    SLOW_QUERY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+    SLOW_QUERY_DEDUP_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
   })
   .superRefine((values, ctx) => {
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
