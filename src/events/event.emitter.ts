@@ -5,6 +5,7 @@ import type {
   LowBalanceAlertData,
   NewApiCallData,
   SettlementCompletedData,
+  InvoiceCreatedData,
   WebhookPayload,
 } from '../webhooks/webhook.types.js';
 
@@ -12,8 +13,8 @@ export interface CalloraEventPayloadMap {
   new_api_call: NewApiCallData;
   settlement_completed: SettlementCompletedData;
   low_balance_alert: LowBalanceAlertData;
+  invoice_created: InvoiceCreatedData;
 }
-
 export type CalloraEventName = keyof CalloraEventPayloadMap;
 
 export type CalloraEventListener<K extends CalloraEventName> = (
@@ -31,6 +32,7 @@ const createListenerSetMap = (): ListenerSetMap => ({
   new_api_call: new Set<CalloraEventListener<'new_api_call'>>(),
   settlement_completed: new Set<CalloraEventListener<'settlement_completed'>>(),
   low_balance_alert: new Set<CalloraEventListener<'low_balance_alert'>>(),
+  invoice_created: new Set<CalloraEventListener<'invoice_created'>>(),
 });
 
 async function handleEvent<K extends CalloraEventName>(
@@ -111,4 +113,7 @@ calloraEvents.on('settlement_completed', (developerId, data) => {
 
 calloraEvents.on('low_balance_alert', (developerId, data) => {
   return handleEvent('low_balance_alert', developerId, data);
+});
+calloraEvents.on('invoice_created', (developerId, data) => {
+  return handleEvent('invoice_created', developerId, data);
 });
