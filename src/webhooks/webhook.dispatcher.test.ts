@@ -71,6 +71,48 @@ describe('Webhook Dispatcher', () => {
         expect(headers['X-Request-Id']).toBe('req-webhook-als');
     });
 
+    it('omits X-Request-Id header when no request context is set', async () => {
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+        } as Response);
+        global.fetch = fetchMock as any;
+
+        await dispatchWebhook(config, payload);
+
+        const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+        expect(headers['X-Request-Id']).toBeUndefined();
+    });
+
+    it('includes all expected webhook headers on dispatch', async () => {
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+        } as Response);
+        global.fetch = fetchMock as any;
+        const { runWithRequestContext } = await import('../utils/asyncContext.js');
+
+        const configWithSecret: WebhookConfig = {
+            ...config,
+            secret: 'test-secret',
+        };
+
+        await runWithRequestContext({ requestId: 'req-test-123' }, async () => {
+            await dispatchWebhook(configWithSecret, payload);
+        });
+
+        const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+        expect(headers['Content-Type']).toBe('application/json');
+        expect(headers['User-Agent']).toBe('Callora-Webhook/1.0');
+        expect(headers['X-Callora-Event']).toBe(payload.event);
+        expect(headers['X-Callora-Timestamp']).toBe(payload.timestamp);
+        expect(headers['X-Callora-Delivery']).toBeDefined();
+        expect(headers['X-Request-Id']).toBe('req-test-123');
+        expect(headers['X-Callora-Signature']).toMatch(/^sha256=/);
+    });
+
     it('retries on non-2xx response and uses same idempotency key', async () => {
         const fetchMock = jest.fn()
             .mockResolvedValueOnce({

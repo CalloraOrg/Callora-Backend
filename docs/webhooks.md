@@ -87,12 +87,17 @@ Internal/private IP addresses are blocked. The following ranges are rejected:
 
 ### Signature Verification
 
-If you provide a `secret` during registration, each webhook delivery includes two headers:
+If you provide a `secret` during registration, each webhook delivery includes these headers:
 
 | Header                      | Format              | Description                           |
 |-----------------------------|---------------------|---------------------------------------|
+| `X-Request-Id`              | string              | Correlation ID from the triggering request |
 | `X-Callora-Signature-256`   | `sha256=<hex>`      | HMAC-SHA256 of signed payload         |
 | `X-Callora-Timestamp`       | ISO-8601 timestamp  | Delivery timestamp for replay defense |
+| `X-Callora-Event`           | string              | Event type being delivered |
+| `X-Callora-Delivery`        | UUID                | Unique delivery identifier for idempotency |
+| `User-Agent`                | `Callora-Webhook/1.0` | Identifies Callora as the sender |
+| `Content-Type`              | `application/json`  | Payload content type |
 
 #### Signed Payload Format
 
