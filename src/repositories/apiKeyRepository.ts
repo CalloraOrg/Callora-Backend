@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from "crypto";
 import bcrypt from "bcryptjs";
 import { config } from "../config/index.js";
+import { decodeCursor, encodeCursor } from "../lib/cursorPagination.js";
 
 /**
  * Typed error returned when an API key prefix is found in the store but the
@@ -27,6 +28,8 @@ export interface ApiKeyRecord {
   rateLimitPerMinute: number | null;
   createdAt: Date;
   revoked: boolean;
+  lastUsedAt?: Date | null;
+  revokedAt?: Date | null;
 }
 
 const apiKeys: ApiKeyRecord[] = [];
@@ -85,7 +88,9 @@ export const apiKeyRepository = {
       scopes: p.scopes,
       rateLimitPerMinute: p.rateLimitPerMinute,
       createdAt,
-      revoked: false
+      revoked: false,
+      lastUsedAt: null,
+      revokedAt: null
     });
 
     return { id, key, prefix, createdAt };
@@ -99,12 +104,64 @@ export const apiKeyRepository = {
       )
       .map((record) => ({ ...record }));
   },
+  listWithCursor(params: {
+    userId: string;
+    limit: number;
+    cursor?: string;
+  }): { keys: ApiKeyRecord[]; nextCursor: string | null; hasMore: boolean } {
+    const { userId, limit, cursor } = params;
+
+    let filteredKeys = apiKeys.filter((record) => record.userId === userId);
+
+    // Sort descending by createdAt, then descending by id
+    filteredKeys.sort((a, b) => {
+      const timeA = a.createdAt.getTime();
+      const timeB = b.createdAt.getTime();
+      if (timeB !== timeA) {
+        return timeB - timeA;
+      }
+      return b.id.localeCompare(a.id);
+    });
+
+    if (cursor) {
+      const decoded = decodeCursor(cursor);
+      if (decoded) {
+        const targetTime = decoded.timestamp.getTime();
+        filteredKeys = filteredKeys.filter((k) => {
+          const kTime = k.createdAt.getTime();
+          if (kTime < targetTime) {
+            return true;
+          }
+          if (kTime === targetTime) {
+            return k.id < decoded.id;
+          }
+          return false;
+        });
+      }
+    }
+
+    const hasMore = filteredKeys.length > limit;
+    const results = hasMore ? filteredKeys.slice(0, limit) : filteredKeys;
+
+    let nextCursor: string | null = null;
+    if (hasMore && results.length > 0) {
+      const last = results[results.length - 1];
+      nextCursor = encodeCursor(last.createdAt, last.id);
+    }
+
+    return {
+      keys: results.map((record) => ({ ...record })),
+      nextCursor,
+      hasMore,
+    };
+  },
   revoke(id: string, userId: string): 'success' | 'not_found' | 'forbidden' {
     const key = apiKeys.find(k => k.id === id);
     if (!key) return 'not_found';
     if (key.userId !== userId) return 'forbidden';
 
     key.revoked = true;
+    key.revokedAt = new Date();
     return 'success';
   },
   verify(key: string): ApiKeyRecord | null {
@@ -136,6 +193,8 @@ export const apiKeyRepository = {
           rateLimitPerMinute: candidate.rateLimitPerMinute,
           createdAt: candidate.createdAt,
           revoked: candidate.revoked,
+          lastUsedAt: candidate.lastUsedAt,
+          revokedAt: candidate.revokedAt,
         };
       }
     }
