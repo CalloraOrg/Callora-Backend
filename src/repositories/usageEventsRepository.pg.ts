@@ -7,7 +7,10 @@ import {
   type UsageBucket,
   type GroupBy,
 } from './usageEventsRepository.js';
+ feature/usage-cursor-pagination
+import { generateCursor, getNextCursor, decodeCursor } from '../lib/pagination.js';
 import { readQuery, writeQuery } from '../db.js';
+ main
 
 export interface CreateUsageEventInput {
   userId: string;
@@ -311,6 +314,11 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
   }
 
   async findByUser(query: UserUsageEventQuery): Promise<UsageEvent[]> {
+    // Check if cursor pagination is requested
+    if (query.cursor) {
+      return this.findByUserWithCursor(query);
+    }
+
     const events = await this.findByColumn(
       'user_id',
       assertNonEmpty(query.userId, 'userId'),
@@ -329,6 +337,96 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       occurredAt: event.createdAt,
       revenue: event.amount,
     }));
+  }
+
+  /**
+   * Cursor-based pagination for findByUser using keyset pagination
+   * Uses (created_at, id) index for O(log n) performance on deep pages
+   */
+  private async findByUserWithCursor(query: UserUsageEventQuery): Promise<UsageEvent[]> {
+    const userId = assertNonEmpty(query.userId, 'userId');
+    assertValidRange(query.from, query.to);
+    
+    // Decode cursor if provided
+    let cursorCondition = '';
+    const params: unknown[] = [userId];
+    let paramIndex = 2;
+    
+    if (query.cursor) {
+      const decoded = decodeCursor(query.cursor);
+      // Keyset condition: (created_at, id) < (cursor.created_at, cursor.id)
+      cursorCondition = ` AND (created_at, id) < ($${paramIndex}, $${paramIndex + 1})`;
+      params.push(decoded.created_at, decoded.id);
+      paramIndex += 2;
+    }
+
+    const normalizedLimit = normalizeLimit(query.limit) ?? 20;
+    // Fetch one extra to check for more
+    const fetchLimit = normalizedLimit + 1;
+
+    const clauses: string[] = [`user_id = $1`];
+    appendDateFilters(params, clauses, query.from, query.to);
+
+    if (query.apiId) {
+      params.push(query.apiId);
+      clauses.push(`api_id = $${params.length}`);
+    }
+
+    const sql = `
+      SELECT
+        id,
+        user_id,
+        api_id,
+        endpoint_id,
+        api_key_id,
+        developer_id,
+        amount_usdc,
+        request_id,
+        stellar_tx_hash,
+        created_at
+      FROM usage_events
+      WHERE ${clauses.join(' AND ')}
+      ${cursorCondition}
+      ORDER BY created_at DESC, id DESC
+      LIMIT $${params.length + 1}
+    `;
+    params.push(fetchLimit);
+
+    const result = await this.db.query<UsageEventRow>(sql, params);
+    const rows = result.rows;
+
+    // Check if there are more results
+    const hasMore = rows.length > normalizedLimit;
+    const items = hasMore ? rows.slice(0, normalizedLimit) : rows;
+
+    // Generate next cursor if there are more
+    let nextCursor: string | undefined;
+    if (hasMore && items.length > 0) {
+      const lastItem = items[items.length - 1];
+      nextCursor = generateCursor(
+        lastItem.created_at instanceof Date ? lastItem.created_at.toISOString() : lastItem.created_at,
+        String(lastItem.id)
+      );
+    }
+
+    // Return mapped events with cursor info
+    const events = items.map(event => ({
+      id: String(event.id),
+      developerId: event.user_id,
+      apiId: event.api_id,
+      endpoint: event.endpoint_id,
+      userId: event.user_id,
+      occurredAt: event.created_at instanceof Date ? event.created_at : new Date(event.created_at),
+      revenue: toBigInt(event.amount_usdc, 'amount_usdc'),
+      // Attach cursor info for response
+      _cursor: nextCursor,
+    }));
+
+    // Store cursor info for route to use
+    (events as any)._nextCursor = nextCursor;
+    (events as any)._hasMore = hasMore;
+
+    return events;
   }
 
   async findByApiId(
@@ -628,4 +726,4 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
 
     return toBigInt(result.rows[0]?.total ?? '0', 'total');
   }
-}
+} 

@@ -3,8 +3,11 @@ import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth
 import { type UsageEventsRepository, type GroupBy } from '../repositories/usageEventsRepository.js';
 import { type UsageEventsPgRepository } from '../repositories/usageEventsRepository.pg.js';
 import { BadRequestError, InternalServerError, UnauthorizedError } from '../errors/index.js';
+ feature/usage-cursor-pagination
+import { parsePagination, parseCursorPagination, decodeCursor, cursorPaginatedResponse } from '../lib/pagination.js';
 import { parsePagination } from '../lib/pagination.js';
 import { parseCursor } from '../lib/cursorPagination.js';
+ main
 import type { UsageResponse } from '../types/index.js';
 
 export interface UsageRouterDeps {
@@ -60,7 +63,6 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
       return;
     }
 
-    const { limit, offset } = parsePagination(req.query as Record<string, string>);
     const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
     
     const groupBy = req.query.groupBy;
@@ -131,17 +133,65 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
     // Legacy offset pagination — unchanged, fully backward compatible.
     // -----------------------------------------------------------------------
     try {
-      // Get usage events for the user
-      const events = await usageEventsRepository.findByUser({
-        userId: user.id,
-        from: queryFrom,
-        to: queryTo,
-        apiId,
-        limit,
-        offset,
-      });
+      // Check if cursor pagination is requested
+      const hasCursor = req.query.cursor !== undefined && req.query.cursor !== '';
+      
+      let events: any[];
+      let nextCursor: string | undefined;
+      let hasMore = false;
+      let total: number | undefined;
 
-      // Get aggregated statistics
+      if (hasCursor) {
+        // Cursor-based pagination
+        // Validate cursor format first
+        try {
+          const cursorStr = req.query.cursor as string;
+          decodeCursor(cursorStr); // This will throw if invalid
+        } catch (error) {
+          next(new BadRequestError('Invalid cursor format. Cursor must be base64 encoded created_at|id'));
+          return;
+        }
+
+        const { limit, cursor } = parseCursorPagination(req.query as Record<string, string>);
+        
+        const result = await usageEventsRepository.findByUser({
+          userId: user.id,
+          from: queryFrom,
+          to: queryTo,
+          apiId,
+          limit,
+          cursor: cursor || undefined,
+        });
+
+        // Extract cursor info from the result
+        events = result;
+        nextCursor = (result as any)._nextCursor;
+        hasMore = (result as any)._hasMore || false;
+        
+        // Get total for response (optional, might be expensive)
+        // We'll omit total for cursor pagination for performance
+        total = undefined;
+      } else {
+        // Legacy offset/limit pagination
+        const { limit, offset } = parsePagination(req.query as Record<string, string>);
+        
+        // Get usage events for the user with offset/limit
+        events = await usageEventsRepository.findByUser({
+          userId: user.id,
+          from: queryFrom,
+          to: queryTo,
+          apiId,
+          limit,
+          offset,
+        });
+        
+        // For offset pagination, we can get total count
+        // This is a simplified approach - ideally we'd have a count method
+        hasMore = events.length === limit; // Approximation
+        total = undefined; // Could be added if needed
+      }
+
+      // Get aggregated statistics (independent of pagination)
       const stats = await usageEventsRepository.aggregateByUser({
         userId: user.id,
         from: queryFrom,
@@ -150,15 +200,18 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
         groupBy: queryGroupBy,
       });
 
-      // Format response
-      const response: UsageResponse = {
-        events: events.map(event => ({
-          id: event.id,
-          apiId: event.apiId,
-          endpoint: event.endpoint,
-          occurredAt: event.occurredAt.toISOString(),
-          revenue: event.revenue.toString(),
-        })),
+      // Format events
+      const formattedEvents = events.map(event => ({
+        id: event.id,
+        apiId: event.apiId,
+        endpoint: event.endpoint,
+        occurredAt: event.occurredAt instanceof Date ? event.occurredAt.toISOString() : new Date(event.occurredAt).toISOString(),
+        revenue: event.revenue?.toString() || '0',
+      }));
+
+      // Build response
+      const response: any = {
+        events: formattedEvents,
         stats: {
           totalCalls: stats.totalCalls,
           totalSpent: stats.totalRevenue.toString(),
@@ -179,6 +232,28 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
         },
       };
 
+      // Add pagination metadata
+      if (hasCursor) {
+        response.pagination = {
+          limit: parseInt((req.query.limit as string) || '20'),
+          nextCursor,
+          hasMore,
+        };
+        // Remove _cursor and _hasMore from events if they were attached
+        formattedEvents.forEach((e: any) => {
+          delete e._cursor;
+          delete e._hasMore;
+        });
+      } else {
+        const { limit, offset } = parsePagination(req.query as Record<string, string>);
+        response.pagination = {
+          limit,
+          offset,
+          hasMore,
+          ...(total !== undefined ? { total } : {}),
+        };
+      }
+
       res.json(response);
     } catch (error) {
       console.error('Error fetching user usage:', error);
@@ -189,4 +264,4 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
   return router;
 }
 
-export default createUsageRouter;
+export default createUsageRouter; 
