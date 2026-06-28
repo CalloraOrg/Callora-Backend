@@ -1,7 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { errorHandler } from './errorHandler.js';
-import { createRestRateLimitMiddleware } from './restRateLimit.js';
+import { InMemoryRestRateLimiter, createRestRateLimitMiddleware } from './restRateLimit.js';
 import { requireAuth, type AuthenticatedLocals } from './requireAuth.js';
 import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
 
@@ -109,5 +109,64 @@ describe('restRateLimit middleware', () => {
     // retryAfterMs must round up to the same second as the header
     expect(Math.ceil(retryAfterMs / 1000) * 1000).toBeLessThanOrEqual(retryAfterHeader);
     expect(retryAfterMs).toBeGreaterThan(0);
+  });
+});
+
+describe('InMemoryRestRateLimiter.peek', () => {
+  let now: number;
+
+  beforeEach(() => {
+    now = 100_000;
+  });
+
+  test('returns allowed=true when no bucket exists (would create on check)', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 5);
+    expect(limiter.peek('new-key', now)).toEqual({ allowed: true });
+  });
+
+  test('returns allowed=true when bucket is expired', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 5);
+    limiter.check('key', now);
+    expect(limiter.peek('key', now + 2000)).toEqual({ allowed: true });
+  });
+
+  test('returns allowed=true when count is under the limit', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 5);
+    limiter.check('key', now);
+    limiter.check('key', now);
+    expect(limiter.peek('key', now)).toEqual({ allowed: true });
+  });
+
+  test('returns allowed=false with retryAfterMs when limit is exceeded', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 2);
+    limiter.check('key', now);
+    limiter.check('key', now);
+    const peekResult = limiter.peek('key', now);
+    expect(peekResult).toEqual({ allowed: false, retryAfterMs: 1000 });
+  });
+
+  test('does NOT consume a token (peek is idempotent)', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 2);
+    limiter.check('key', now);
+    limiter.check('key', now);
+
+    // Peek should return deny
+    expect(limiter.peek('key', now)).toEqual({ allowed: false, retryAfterMs: 1000 });
+    // Additional peeks should still return deny (not consuming tokens)
+    expect(limiter.peek('key', now)).toEqual({ allowed: false, retryAfterMs: 1000 });
+    expect(limiter.peek('key', now)).toEqual({ allowed: false, retryAfterMs: 1000 });
+
+    // check should still also deny (tokens not consumed by peek)
+    expect(limiter.check('key', now)).toEqual({ allowed: false, retryAfterMs: 1000 });
+  });
+
+  test('returns accurate retryAfterMs as window elapses', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 1);
+    limiter.check('elapsing-key', now);
+
+    expect(limiter.peek('elapsing-key', now + 250)).toEqual({ allowed: false, retryAfterMs: 750 });
+    expect(limiter.peek('elapsing-key', now + 500)).toEqual({ allowed: false, retryAfterMs: 500 });
+    expect(limiter.peek('elapsing-key', now + 999)).toEqual({ allowed: false, retryAfterMs: 1 });
+    expect(limiter.peek('elapsing-key', now + 1000)).toEqual({ allowed: true });
   });
 });
