@@ -26,6 +26,7 @@ const developerProfile: Developer = {
   website: null,
   description: null,
   category: null,
+  plan_overrides: null,
   created_at: new Date(0),
   updated_at: new Date(0),
 };

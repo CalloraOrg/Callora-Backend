@@ -41,7 +41,7 @@ import { TransactionBuilderService } from './services/transactionBuilder.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { createMemoryAccountingMiddleware } from './middleware/memoryAccounting.js';
 import { validate } from './middleware/validate.js';
-import { requestLogger } from './middleware/logging.js';
+import { createAccessLogMiddleware, requestLogger } from './middleware/accessLog.js';
 import { InMemoryRestRateLimiter, createRestRateLimitMiddleware } from './middleware/restRateLimit.js';
 import type { RestRateLimitOptions } from './middleware/restRateLimit.js';
 import { auditEnrichMiddleware } from './middleware/auditEnrich.js';

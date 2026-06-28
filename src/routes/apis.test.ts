@@ -21,6 +21,7 @@ const developerProfile: Developer = {
   website: null,
   description: null,
   category: null,
+  plan_overrides: null,
   created_at: new Date(1000),
   updated_at: new Date(1000),
 };
@@ -160,6 +161,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
       status: 'active',
       created_at: new Date(1000),
       updated_at: new Date(1000),
+      deleted_at: null,
     };
 
     const unownedApi: Api = {
@@ -173,6 +175,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
       status: 'active',
       created_at: new Date(1000),
       updated_at: new Date(1000),
+      deleted_at: null,
     };
 
     const repo = new InMemoryApiRepository(

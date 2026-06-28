@@ -16,9 +16,9 @@ function makeDb(
   ledgerRows: { developer_id: string; total: string }[],
 ): ReconciliationQueryable {
   return {
-    async query(sql: string) {
-      if (sql.includes('usage_events')) return { rows: usageRows };
-      if (sql.includes('revenue_ledger')) return { rows: ledgerRows };
+    async query<T = unknown>(sql: string, _params?: unknown[]): Promise<{ rows: T[] }> {
+      if (sql.includes('usage_events')) return { rows: usageRows as T[] };
+      if (sql.includes('revenue_ledger')) return { rows: ledgerRows as T[] };
       return { rows: [] };
     },
   };

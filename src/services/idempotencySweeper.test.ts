@@ -40,7 +40,7 @@ describe('idempotency sweeper', () => {
     const metrics = await register.getMetricsAsJSON();
     const gauge = metrics.find((m: any) => m.name === 'idempotency_store_rows');
     expect(gauge).toBeDefined();
-    expect(gauge.values.some((value: any) => Number(value.value) === 5)).toBe(true);
+    expect(gauge!.values.some((value: any) => Number(value.value) === 5)).toBe(true);
   });
 
   it('skips delete when lock is held by another instance and still updates the gauge', async () => {

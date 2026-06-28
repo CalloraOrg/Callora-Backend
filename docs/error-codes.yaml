@@ -345,3 +345,11 @@ error_codes:
   - code: USAGE_AGGREGATE_NOT_FOUND
     section: Admin usage management
     description: Usage aggregate not found for the given developer
+
+  - code: INVALID_EXPORT_SCHEDULE
+    section: Export schedules
+    description: Export schedule payload or configuration is invalid
+
+  - code: EXPORT_SCHEDULE_NOT_FOUND
+    section: Export schedules
+    description: Export schedule not found

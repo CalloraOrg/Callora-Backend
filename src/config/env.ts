@@ -153,6 +153,7 @@ export const envSchema = z
     HEALTH_CHECK_DB_TIMEOUT: z.coerce.number().default(2_000),
     APIS_CACHE_TTL_MS: z.coerce.number().int().positive().optional(),
     LISTINGS_CACHE_WARMUP_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+    BULK_ENDPOINT_LIMIT: z.coerce.number().int().positive().default(100),
     APP_VERSION: z.string().default("1.0.0"),
 
     // Logging

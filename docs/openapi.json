@@ -1842,7 +1842,9 @@
           "REQUEST_BODY_TOO_LARGE",
           "UNSUPPORTED_MEDIA_TYPE",
           "UNPROCESSABLE_ENTITY",
-          "USAGE_AGGREGATE_NOT_FOUND"
+          "USAGE_AGGREGATE_NOT_FOUND",
+          "INVALID_EXPORT_SCHEDULE",
+          "EXPORT_SCHEDULE_NOT_FOUND"
         ],
         "description": "Canonical Callora backend error code."
       }

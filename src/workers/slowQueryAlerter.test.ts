@@ -407,19 +407,19 @@ describe('slowQueryAlerter', () => {
         (m: any) => m.name === 'slow_query_alerter_runs_total',
       );
       expect(runsMetric).toBeDefined();
-      expect(runsMetric.values[0].value).toBe(1);
+      expect(runsMetric!.values[0].value).toBe(1);
 
       const alertsMetric = metrics.find(
         (m: any) => m.name === 'slow_query_alerter_alerts_total',
       );
       expect(alertsMetric).toBeDefined();
-      expect(alertsMetric.values[0].value).toBe(1);
+      expect(alertsMetric!.values[0].value).toBe(1);
 
       const gaugeMetric = metrics.find(
         (m: any) => m.name === 'slow_query_alerter_queries_above_threshold',
       );
       expect(gaugeMetric).toBeDefined();
-      expect(gaugeMetric.values[0].value).toBe(2);
+      expect(gaugeMetric!.values[0].value).toBe(2);
 
       job.stop();
     });

@@ -15,6 +15,7 @@ const developerProfile: Developer = {
   website: null,
   description: null,
   category: null,
+  plan_overrides: null,
   created_at: new Date(1000),
   updated_at: new Date(1000),
 };
@@ -30,6 +31,7 @@ const ownedApi: Api = {
   status: 'active',
   created_at: new Date(1000),
   updated_at: new Date(1000),
+  deleted_at: null,
 };
 
 const otherApi: Api = {
@@ -43,6 +45,7 @@ const otherApi: Api = {
   status: 'active',
   created_at: new Date(1000),
   updated_at: new Date(1000),
+  deleted_at: null,
 };
 
 const createDeveloperRepository = (): DeveloperRepository => ({
@@ -68,7 +71,13 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
     return null;
   },
   async delete() {
-    return true;
+    return false;
+  },
+  async restore() {
+    return null;
+  },
+  async bulkCreateEndpoints() {
+    return [];
   },
   async listByDeveloper(developerId: number) {
     return apis.filter((api) => api.developer_id === developerId);
@@ -81,12 +90,6 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
   },
   async getEndpoints() {
     return [];
-  },
-  async createWithEndpoints() {
-    throw new Error('not implemented');
-  },
-  async delete() {
-    return false;
   },
 });
 

@@ -1,4 +1,4 @@
-import { eq, and, like, type SQL } from "drizzle-orm";
+import { eq, and, like, isNotNull, type SQL } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
 import type { Api, ApiEndpoint, NewApi, NewApiEndpoint } from "../db/schema.js";
 import type {
@@ -118,6 +118,17 @@ export class DrizzleApiRepository implements ApiRepository {
     // better-sqlite3's RunResult exposes the affected row count on `changes`.
     // The database FK with ON DELETE CASCADE will automatically clean up endpoints.
     return result.changes > 0;
+  }
+
+  async restore(id: number): Promise<Api | null> {
+    const now = new Date();
+    const [restored] = await db
+      .update(schema.apis)
+      .set({ deleted_at: null, updated_at: now })
+      .where(and(eq(schema.apis.id, id), isNotNull(schema.apis.deleted_at)))
+      .returning();
+
+    return restored ?? null;
   }
 
   async listByDeveloper(
