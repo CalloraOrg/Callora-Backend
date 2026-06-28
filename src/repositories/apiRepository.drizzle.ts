@@ -117,7 +117,7 @@ export class DrizzleApiRepository implements ApiRepository {
 
     // better-sqlite3's RunResult exposes the affected row count on `changes`.
     // The database FK with ON DELETE CASCADE will automatically clean up endpoints.
-    return deleted.changes > 0;
+    return result.changes > 0;
   }
 
   async listByDeveloper(
@@ -232,7 +232,7 @@ export class DrizzleApiRepository implements ApiRepository {
       .from(schema.apiEndpoints)
       .where(eq(schema.apiEndpoints.api_id, apiId));
 
-    return rows.map((r) => ({
+    return rows.map((r: ApiEndpointInfo) => ({
       path: r.path,
       method: r.method,
       price_per_call_usdc: r.price_per_call_usdc,
