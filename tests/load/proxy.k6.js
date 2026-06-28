@@ -75,7 +75,7 @@ export const options = {
 
 // ── Helper functions ────────────────────────────────────────────────────────
 
-function randomPathComponent(): string {
+function randomPathComponent() {
   // Use realistic paths matching the Weather API endpoints from apiRegistry
   const components = ['current', 'forecast', 'historical', 'alerts', 'status'];
   return components[Math.floor(Math.random() * components.length)];
