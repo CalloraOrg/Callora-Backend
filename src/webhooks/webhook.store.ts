@@ -3,6 +3,34 @@ import { WebhookConfig, WebhookEventType, DeadLetterEntry } from './webhook.type
 const store = new Map<string, WebhookConfig>();
 const deadLetterStore = new Map<string, DeadLetterEntry>();
 
+/**
+ * Lightweight record written by the dispatcher when a delivery exhausts all
+ * retry attempts. Intentionally omits raw payload/secrets — only operational
+ * metadata is stored.
+ */
+export interface FailedDeliveryEntry {
+    /** Unique ID generated per dispatch call (X-Callora-Delivery header value). */
+    deliveryId: string;
+    /** Subscription owner. */
+    developerId: string;
+    /** Event type that was being delivered. */
+    event: string;
+    /** Target URL. */
+    url: string;
+    /** ISO-8601 timestamp of the final failure. */
+    failedAt: string;
+    /** Last error message (non-sensitive). */
+    lastError: string;
+    /** Total delivery attempts made (always equal to MAX_RETRIES). */
+    attempts: number;
+}
+
+/** Ordered list of failed deliveries (most-recent last; reversed on read). */
+const failedDeliveryLog: FailedDeliveryEntry[] = [];
+
+/** Maximum failed-delivery entries retained in memory. */
+const MAX_FAILED_LOG = 200; // keep 2× the read limit for ring-buffer headroom
+
 function normalizeConfig(config: WebhookConfig): WebhookConfig {
     const secret_current = config.secret_current ?? config.secret;
 
@@ -77,5 +105,49 @@ export const WebhookStore = {
     /** Clear all webhook configurations - for testing only */
     clear(): void {
         store.clear();
+    },
+
+    // ── Dead-Letter Queue (DLQ) ─────────────────────────────────────────────
+
+    /** Add an entry to the DLQ (keyed by deliveryId). */
+    addToDlq(entry: DeadLetterEntry): void {
+        deadLetterStore.set(entry.deliveryId, entry);
+    },
+
+    /** Current number of entries in the DLQ. Accurate at call time. */
+    dlqDepth(): number {
+        return deadLetterStore.size;
+    },
+
+    /** Clear the DLQ — for testing only. */
+    clearDlq(): void {
+        deadLetterStore.clear();
+    },
+
+    // ── Failed-delivery log ─────────────────────────────────────────────────
+
+    /**
+     * Record a final delivery failure. Keeps at most MAX_FAILED_LOG entries
+     * by evicting the oldest entry when the buffer is full.
+     */
+    recordFailedDelivery(entry: FailedDeliveryEntry): void {
+        if (failedDeliveryLog.length >= MAX_FAILED_LOG) {
+            failedDeliveryLog.shift(); // drop oldest
+        }
+        failedDeliveryLog.push(entry);
+    },
+
+    /**
+     * Return the most-recent `limit` failed-delivery entries, newest first.
+     * Defaults to 100; hard-capped at 100.
+     */
+    getRecentFailures(limit: number = 100): FailedDeliveryEntry[] {
+        const cap = Math.min(limit, 100);
+        return failedDeliveryLog.slice(-cap).reverse();
+    },
+
+    /** Clear the failed-delivery log — for testing only. */
+    clearFailedDeliveries(): void {
+        failedDeliveryLog.splice(0, failedDeliveryLog.length);
     },
 };

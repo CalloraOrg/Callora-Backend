@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
 import { findUsers } from '../repositories/userRepository.js';
@@ -13,7 +13,7 @@ import {
   approveQuotaRequest,
   rejectQuotaRequest,
 } from '../services/quotaService.js';
-import webhookKeysRouter from './admin/webhookKeys.js';
+import { createAdminWebhooksRouter } from './admin/webhooks.js';
 import { createAdminApisRouter } from './admin/apis.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
@@ -60,7 +60,7 @@ router.get('/users', async (req, res, next) => {
   }
 });
 
-router.get('/usage/:developerId', async (req, res, next) => {
+router.get('/usage/:developerId', async (req, res: Response, next) => {
   try {
     const snapshot = await usageStore.getDeveloperUsageSnapshot(req.params.developerId);
     if (!snapshot) {
@@ -197,11 +197,12 @@ router.post('/quota/requests/:id/reject', async (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Webhook signing-key rotation
+// Webhook signing-key rotation + delivery monitoring
 // Mounts:  POST /api/admin/webhooks/rotate-key
 //          GET  /api/admin/webhooks/grace-window
+//          GET  /api/admin/webhooks/monitor
 // ---------------------------------------------------------------------------
-router.use('/webhooks', webhookKeysRouter);
+router.use('/webhooks', createAdminWebhooksRouter());
 
 // ---------------------------------------------------------------------------
 // API soft-delete and restore
