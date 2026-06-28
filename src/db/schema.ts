@@ -67,6 +67,18 @@ export type SchemaVersion = typeof schemaVersions.$inferSelect;
 export type NewSchemaVersion = typeof schemaVersions.$inferInsert;
 
 
+// Credits table for prepaid balance tracking per developer
+export const credits = sqliteTable('credits', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  user_id: text('user_id').notNull().unique(),
+  balance_usdc: text('balance_usdc').notNull().default('0.00'), // Using text for precise decimal handling
+  created_at: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updated_at: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+});
+
+export type Credit = typeof credits.$inferSelect;
+export type NewCredit = typeof credits.$inferInsert;
+
 // Type exports for use in application code
 export type Api = typeof apis.$inferSelect;
 export type NewApi = typeof apis.$inferInsert;
