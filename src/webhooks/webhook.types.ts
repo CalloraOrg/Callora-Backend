@@ -3,6 +3,7 @@ export type WebhookEventType =
     | 'settlement_completed'
     | 'low_balance_alert'
     | 'quota.threshold.reached';
+    | 'invoice_created'
 
 export interface WebhookConfig {
     developerId: string;
@@ -53,7 +54,14 @@ export interface SettlementCompletedData {
     txHash: string;
     settledAt: string;
 }
-
+export interface InvoiceCreatedData {
+    invoiceId: string;
+    developerId: string;
+    periodId: string;
+    totalAmount: string;
+    currency: string;
+    createdAt: string;
+}
 export interface LowBalanceAlertData {
     currentBalance: string;
     thresholdBalance: string;
