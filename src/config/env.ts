@@ -167,6 +167,13 @@ export const envSchema = z
       .string()
       .transform((v) => v === "true")
       .default(false),
+
+    // Memory accounting
+    MEMORY_ACCOUNTING_ENABLED: z
+      .string()
+      .transform((v) => v === "true")
+      .default(false),
+    MEMORY_ACCOUNTING_THRESHOLD_MB: z.coerce.number().nonnegative().default(50),
     // Test-only chaos harness
     SOROBAN_CHAOS: z
       .string()
