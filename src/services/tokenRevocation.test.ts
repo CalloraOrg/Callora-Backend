@@ -125,6 +125,11 @@ describe('TokenRevocationService', () => {
       service.reinstate(tokenHash);
       assert.equal(service.isRevoked(tokenHash), false);
     });
+
+    it('handles reinstate on non-existent token gracefully', () => {
+      service.reinstate('non_existent_hash');
+      assert.equal(service.isRevoked('non_existent_hash'), false);
+    });
   });
 
   describe('revokeAll', () => {
@@ -148,6 +153,34 @@ describe('TokenRevocationService', () => {
       const count = service.getRevokedCount();
 
       assert.equal(count, 1);
+    });
+
+    it('returns zero when no tokens revoked', () => {
+      const count = service.getRevokedCount();
+      assert.equal(count, 0);
+    });
+  });
+
+  describe('clear', () => {
+    it('removes all revoked tokens', () => {
+      service.revoke('hash1');
+      service.revoke('hash2');
+      service.revoke('hash3');
+
+      assert.equal(service.getRevokedCount(), 3);
+
+      service.clear();
+
+      assert.equal(service.getRevokedCount(), 0);
+    });
+  });
+
+  describe('stopSweeper', () => {
+    it('handles calling stopSweeper when no timer exists', () => {
+      const noTimerService = new TokenRevocationService(1000, 500);
+      noTimerService.stopSweeper();
+      noTimerService.stopSweeper();
+      noTimerService.clear();
     });
   });
 
