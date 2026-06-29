@@ -886,6 +886,90 @@
         }
       }
     },
+    "/api/developers/me/keys": {
+      "get": {
+        "summary": "List developer's own API keys",
+        "description": "Returns a paginated list of the authenticated developer's API keys using cursor-based pagination.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of API keys to return per page (max 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Base64 encoded cursor from a previous response to paginate forward",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API keys retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeveloperApiKeysResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden (no developer profile)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/apis/{id}/endpoints/bulk": {
       "post": {
         "summary": "Bulk register endpoints for an API",
@@ -1829,6 +1913,73 @@
               },
               "total": {
                 "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "DeveloperApiKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "prefix",
+          "created_at",
+          "last_used_at",
+          "revoked_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "DeveloperApiKeysResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeveloperApiKey"
+            }
+          },
+          "meta": {
+            "type": "object",
+            "required": [
+              "limit",
+              "nextCursor",
+              "hasMore"
+            ],
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "nextCursor": {
+                "type": "string",
+                "nullable": true
+              },
+              "hasMore": {
+                "type": "boolean"
               }
             }
           }
