@@ -2,6 +2,17 @@
 
 API gateway, usage metering, and billing services for the Callora API marketplace. Talks to Soroban contracts and Horizon for on-chain settlement.
 
+## Fee Abstraction
+
+Developers can pay Stellar transaction fees using app tokens. The backend wraps their inner transaction in a Stellar fee-bump envelope signed by the platform fee account.
+
+- `POST /api/billing/fee-abstraction/quote` – returns estimated XLM fee and app-token equivalent.
+- `POST /api/billing/fee-abstraction` – accepts app-token payment reference and returns a signed fee-bump XDR.
+
+Requires `FEE_BUMPER_SECRET_KEY` environment variable (Stellar secret key `S...`).
+
+See [docs/fee-abstraction.md](./docs/fee-abstraction.md) for full API reference, security considerations, rate limits, and emitted events.
+
 ## Developer Profile Endpoints
 
 - `GET /api/developers/me` returns the authenticated developer profile and auto-creates a blank profile row on first access.

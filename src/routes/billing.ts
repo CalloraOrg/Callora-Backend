@@ -18,11 +18,15 @@ import { BillingService, type BillingDeductResult } from '../services/billing.js
 import { createSorobanRpcBillingClient, SorobanRpcError } from '../services/sorobanBilling.js';
 import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
 import creditsRouter from './billing/credits.js';
+import { createFeeAbstractionRouter } from './billing/feeAbstraction.js';
 
 const router = Router();
 
 // Mount credits sub-router
 router.use('/credits', creditsRouter);
+
+// Mount fee-abstraction sub-router
+router.use('/fee-abstraction', createFeeAbstractionRouter());
 
 interface BillingDeductBody {
   requestId?: unknown;

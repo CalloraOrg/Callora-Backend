@@ -969,6 +969,122 @@
           }
         }
       }
+    },
+    "/api/billing/fee-abstraction/quote": {
+      "post": {
+        "summary": "Get fee-abstraction quote",
+        "description": "Returns the estimated XLM fee and equivalent app-token amount for wrapping a given inner Stellar transaction with a fee-bump.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeeAbstractionQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Quote calculated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeAbstractionQuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid inner transaction XDR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/billing/fee-abstraction": {
+      "post": {
+        "summary": "Execute fee abstraction",
+        "description": "Accepts the app-token payment and performs server-side fee bumping on the supplied inner Stellar transaction. Returns the signed fee-bump XDR ready for submission to Horizon.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeeAbstractionExecuteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fee-bump transaction created and signed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeAbstractionExecuteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or inner transaction XDR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Fee-bumper configuration or signing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -985,6 +1101,92 @@
       }
     },
     "schemas": {
+      "FeeAbstractionQuoteRequest": {
+        "type": "object",
+        "required": [
+          "innerXdr"
+        ],
+        "properties": {
+          "innerXdr": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Base64-encoded XDR of the inner Stellar transaction"
+          }
+        }
+      },
+      "FeeAbstractionQuoteResponse": {
+        "type": "object",
+        "required": [
+          "baseFeeStroops",
+          "feeBumpFeeStroops",
+          "feeBumpFeeXlm",
+          "appTokenAmount",
+          "network"
+        ],
+        "properties": {
+          "baseFeeStroops": {
+            "type": "number",
+            "description": "Base fee per operation in stroops"
+          },
+          "feeBumpFeeStroops": {
+            "type": "number",
+            "description": "Total fee-bump outer fee in stroops"
+          },
+          "feeBumpFeeXlm": {
+            "type": "string",
+            "description": "Fee-bump fee expressed in XLM"
+          },
+          "appTokenAmount": {
+            "type": "string",
+            "description": "Equivalent app-token amount to charge the developer"
+          },
+          "network": {
+            "type": "string",
+            "description": "Active Stellar network (testnet or mainnet)"
+          }
+        }
+      },
+      "FeeAbstractionExecuteRequest": {
+        "type": "object",
+        "required": [
+          "innerXdr",
+          "appTokenPaymentTxId"
+        ],
+        "properties": {
+          "innerXdr": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Base64-encoded XDR of the inner Stellar transaction to wrap"
+          },
+          "appTokenPaymentTxId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Transaction ID confirming the developer's app-token payment"
+          }
+        }
+      },
+      "FeeAbstractionExecuteResponse": {
+        "type": "object",
+        "required": [
+          "feeBumpXdr",
+          "feeAccountPublicKey",
+          "feeStroops"
+        ],
+        "properties": {
+          "feeBumpXdr": {
+            "type": "string",
+            "description": "Signed fee-bump transaction XDR ready for submission to Horizon"
+          },
+          "feeAccountPublicKey": {
+            "type": "string",
+            "description": "Stellar public key of the fee-paying account"
+          },
+          "feeStroops": {
+            "type": "number",
+            "description": "Total fee charged in stroops"
+          }
+        }
+      },
       "BillingDeductRequest": {
         "type": "object",
         "required": [

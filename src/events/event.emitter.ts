@@ -9,11 +9,20 @@ import type {
   WebhookPayload,
 } from '../webhooks/webhook.types.js';
 
+export interface FeeAbstractionExecutedData {
+  userId: string;
+  appTokenPaymentTxId: string;
+  feeAccountPublicKey: string;
+  feeStroops: number;
+  feeBumpXdr: string;
+}
+
 export interface CalloraEventPayloadMap {
   new_api_call: NewApiCallData;
   settlement_completed: SettlementCompletedData;
   low_balance_alert: LowBalanceAlertData;
   invoice_created: InvoiceCreatedData;
+  'fee_abstraction.executed': FeeAbstractionExecutedData;
 }
 export type CalloraEventName = keyof CalloraEventPayloadMap;
 
@@ -33,6 +42,7 @@ const createListenerSetMap = (): ListenerSetMap => ({
   settlement_completed: new Set<CalloraEventListener<'settlement_completed'>>(),
   low_balance_alert: new Set<CalloraEventListener<'low_balance_alert'>>(),
   invoice_created: new Set<CalloraEventListener<'invoice_created'>>(),
+  'fee_abstraction.executed': new Set<CalloraEventListener<'fee_abstraction.executed'>>(),
 });
 
 async function handleEvent<K extends CalloraEventName>(
@@ -116,4 +126,8 @@ calloraEvents.on('low_balance_alert', (developerId, data) => {
 });
 calloraEvents.on('invoice_created', (developerId, data) => {
   return handleEvent('invoice_created', developerId, data);
+});
+
+calloraEvents.on('fee_abstraction.executed', (developerId, data) => {
+  return handleEvent('fee_abstraction.executed', developerId, data);
 });
