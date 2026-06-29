@@ -381,3 +381,6 @@ Notes:
 This repo is part of [Callora](https://github.com/your-org/callora):
 - Frontend: `callora-frontend`
 - Contracts: `callora-contracts`
+
+## Security Audit Logging
+Admin events are routed into an isolated, structured Pino log stream containing the channel label `admin_action` for clean alerting profiles.
