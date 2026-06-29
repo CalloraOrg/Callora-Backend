@@ -17,6 +17,40 @@ describe('TokenRevocationService', () => {
     service.clear();
   });
 
+  it('uses default TTL when constructed without config', () => {
+    const defaultService = new TokenRevocationService();
+    defaultService.revoke('default_ttl_test_hash');
+    assert.equal(defaultService.isRevoked('default_ttl_test_hash'), true);
+    defaultService.stopSweeper();
+    defaultService.clear();
+  });
+
+  it('uses custom TTL when provided via constructor', () => {
+    const shortService = new TokenRevocationService(500);
+    shortService.revoke('custom_ttl_test_hash', Date.now() + 100);
+    assert.equal(shortService.isRevoked('custom_ttl_test_hash'), true);
+    shortService.stopSweeper();
+    shortService.clear();
+  });
+
+  it('falls back to default TTL when expiresAt is not provided', () => {
+    const longLivedService = new TokenRevocationService(1000);
+    longLivedService.revoke('no_expires_at_hash');
+    assert.equal(longLivedService.isRevoked('no_expires_at_hash'), true);
+    longLivedService.stopSweeper();
+    longLivedService.clear();
+  });
+
+  it('falls back to default TTL when expiresAt is zero or negative', () => {
+    const testService = new TokenRevocationService(1000);
+    testService.revoke('zero_expires_at_hash', 0);
+    testService.revoke('negative_expires_at_hash', -100);
+    assert.equal(testService.isRevoked('zero_expires_at_hash'), true);
+    assert.equal(testService.isRevoked('negative_expires_at_hash'), true);
+    testService.stopSweeper();
+    testService.clear();
+  });
+
   describe('revoke and isRevoked', () => {
     it('marks a token as revoked', () => {
       const tokenHash = 'a'.repeat(64);
@@ -53,6 +87,28 @@ describe('TokenRevocationService', () => {
       return new Promise<void>((resolve) => {
         setTimeout(() => {
           assert.equal(service.isRevoked(tokenHash), true);
+          resolve();
+        }, 100);
+      });
+    });
+  });
+
+  describe('sweeper', () => {
+    it('removes expired entries via automatic sweeper', () => {
+      const shortLivedService = new TokenRevocationService(100, 50);
+      const tokenHash = 'sweep_test_hash_'.repeat(8).slice(0, 64);
+
+      shortLivedService.revoke(tokenHash, Date.now() + 10);
+
+      assert.equal(shortLivedService.isRevoked(tokenHash), true);
+      assert.equal(shortLivedService.getRevokedCount(), 1);
+
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          assert.equal(shortLivedService.isRevoked(tokenHash), false);
+          assert.equal(shortLivedService.getRevokedCount(), 0);
+          shortLivedService.stopSweeper();
+          shortLivedService.clear();
           resolve();
         }, 100);
       });

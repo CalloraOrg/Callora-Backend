@@ -143,6 +143,7 @@ export const apiKeyRepository = {
           userId: candidate.userId,
           prefix: candidate.prefix,
           keyHash: '[REDACTED]',
+          sha256Hash: candidate.sha256Hash,
           scopes: candidate.scopes,
           rateLimitPerMinute: candidate.rateLimitPerMinute,
           createdAt: candidate.createdAt,

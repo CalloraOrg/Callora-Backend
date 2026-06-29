@@ -2,7 +2,7 @@ export type WebhookEventType =
     | 'new_api_call'
     | 'settlement_completed'
     | 'low_balance_alert'
-    | 'quota.threshold.reached';
+    | 'quota.threshold.reached'
     | 'invoice_created'
 
 export interface WebhookConfig {
