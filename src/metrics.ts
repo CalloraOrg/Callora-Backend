@@ -525,6 +525,7 @@ export function resetAllMetrics(): void {
   idempotencyStoreRows.reset();
   gatewayUpstreamBreakerState.reset();
   resetSlowQueryAlerterMetrics();
+  resetUsageAnomalyDetectorMetrics();
   resetReplicaMetrics();
   resetApiKeyLookupMetrics();
 }
@@ -649,6 +650,34 @@ export function resetSlowQueryAlerterMetrics(): void {
   slowQueryAlerterRunsTotal.reset();
   slowQueryAlerterAlertsTotal.reset();
   slowQueryAlerterQueriesAboveThreshold.reset();
+}
+
+// ── Usage anomaly detector metrics ────────────────────────────────────────────
+
+const usageAnomalyDetectorRunsTotal = new client.Counter({
+  name: 'usage_anomaly_detector_runs_total',
+  help: 'Total number of usage anomaly detector scan cycles',
+});
+
+const usageAnomalyDetectorAnomaliesTotal = new client.Counter({
+  name: 'usage_anomaly_detector_anomalies_total',
+  help: 'Total number of usage anomalies emitted',
+});
+
+register.registerMetric(usageAnomalyDetectorRunsTotal);
+register.registerMetric(usageAnomalyDetectorAnomaliesTotal);
+
+export function recordUsageAnomalyDetectorRun(): void {
+  usageAnomalyDetectorRunsTotal.inc();
+}
+
+export function recordUsageAnomalyDetectorAnomaly(): void {
+  usageAnomalyDetectorAnomaliesTotal.inc();
+}
+
+export function resetUsageAnomalyDetectorMetrics(): void {
+  usageAnomalyDetectorRunsTotal.reset();
+  usageAnomalyDetectorAnomaliesTotal.reset();
 }
 
 /** Reset all replica routing metrics. Used in tests to isolate metric state. */

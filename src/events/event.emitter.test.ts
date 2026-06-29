@@ -31,6 +31,8 @@ describe('calloraEvents', () => {
     expect(calloraEvents.listenerCount('new_api_call')).toBe(1);
     expect(calloraEvents.listenerCount('settlement_completed')).toBe(1);
     expect(calloraEvents.listenerCount('low_balance_alert')).toBe(1);
+    expect(calloraEvents.listenerCount('invoice_created')).toBe(1);
+    expect(calloraEvents.listenerCount('usage.anomaly.detected')).toBe(1);
   });
 
   it('dispatches registered webhook configs with the correct typed payload', async () => {

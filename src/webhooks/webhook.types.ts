@@ -69,6 +69,24 @@ export interface LowBalanceAlertData {
     asset: string;
 }
 
+/** Fired when a developer's 5-minute traffic exceeds baseline * multiplier. */
+export interface UsageAnomalyDetectedData {
+    /** ISO 8601 start of the anomalous window (UTC). */
+    windowStart: string;
+    /** ISO 8601 end of the anomalous window (UTC). */
+    windowEnd: string;
+    /** Call count in the anomalous window. */
+    currentCalls: number;
+    /** Mean call count across the trailing baseline windows. */
+    baselineMean: number;
+    /** Configured multiplier threshold that was exceeded. */
+    multiplier: number;
+    /** currentCalls / baselineMean (Infinity when baselineMean is 0). */
+    ratio: number;
+    /** Window size in milliseconds. */
+    windowMs: number;
+}
+
 /** Fired when a developer crosses 80%, 95%, or 100% of their monthly call quota. */
 export interface QuotaThresholdReachedData {
     /** Billing period in YYYY-MM format, e.g. "2026-06". */

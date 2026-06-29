@@ -204,6 +204,17 @@ export const envSchema = z
     SLOW_QUERY_P95_THRESHOLD_MS: z.coerce.number().positive().default(500),
     SLOW_QUERY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
     SLOW_QUERY_DEDUP_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+    // Usage anomaly detector (5-minute rolling baseline)
+    USAGE_ANOMALY_DETECTOR_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    USAGE_ANOMALY_MULTIPLIER: z.coerce.number().positive().default(5),
+    USAGE_ANOMALY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+    USAGE_ANOMALY_WINDOW_MS: z.coerce.number().int().positive().default(300_000),
+    USAGE_ANOMALY_BASELINE_WINDOWS: z.coerce.number().int().positive().default(12),
+    USAGE_ANOMALY_DEDUP_WINDOW_MS: z.coerce.number().int().positive().optional(),
   })
   .superRefine((values, ctx) => {
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
