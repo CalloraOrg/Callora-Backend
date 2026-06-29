@@ -1,6 +1,9 @@
+import { logger, getRequestId } from '../logger.js';
+
 export interface ValidationResult {
   valid: boolean;
   error?: string;
+  code?: string;
   normalizedAmount?: string;
 }
 
@@ -18,16 +21,29 @@ export class AmountValidator {
   private static readonly MAX_STROOPS =
     BigInt(AmountValidator.MAX_AMOUNT) * BigInt(10 ** AmountValidator.USDC_DECIMALS);
 
+  /**
+   * Validates a USDC amount string and normalizes it.
+   * Implements boundary validation and returns a standardized error envelope on failure.
+   * Logs validation failures with correlation IDs for tracing.
+   *
+   * @param amount The USDC amount string to validate
+   * @returns ValidationResult with standard error code or normalized amount
+   */
   static validateUsdcAmount(amount: string): ValidationResult {
+    const correlationId = getRequestId() ?? 'unknown';
+
     if (typeof amount !== 'string') {
-      return { valid: false, error: 'Amount must be a string' };
+      logger.warn('[AmountValidator] Validation failed: Amount must be a string', { correlationId, amountType: typeof amount });
+      return { valid: false, error: 'Amount must be a string', code: 'INVALID_AMOUNT_TYPE' };
     }
 
     // Reject scientific notation and any non-canonical form before parsing.
     if (!this.AMOUNT_PATTERN.test(amount)) {
+      logger.warn('[AmountValidator] Validation failed: Invalid amount format', { correlationId, provided: amount });
       return {
         valid: false,
         error: 'Amount must have exactly 7 decimal places (e.g., "100.0000000")',
+        code: 'INVALID_AMOUNT_FORMAT'
       };
     }
 
@@ -36,13 +52,16 @@ export class AmountValidator {
     const stroops = BigInt(whole) * BigInt(10 ** this.USDC_DECIMALS) + BigInt(frac);
 
     if (stroops <= 0n) {
-      return { valid: false, error: 'Amount must be greater than zero' };
+      logger.warn('[AmountValidator] Validation failed: Amount is zero or negative', { correlationId, provided: amount });
+      return { valid: false, error: 'Amount must be greater than zero', code: 'INVALID_AMOUNT_RANGE' };
     }
 
     if (stroops > this.MAX_STROOPS) {
+      logger.warn('[AmountValidator] Validation failed: Amount exceeds maximum', { correlationId, provided: amount });
       return {
         valid: false,
         error: 'Amount exceeds maximum limit of 1,000,000,000 USDC',
+        code: 'AMOUNT_EXCEEDS_MAXIMUM'
       };
     }
 
@@ -60,6 +79,8 @@ export class AmountValidator {
   static toSmallestUnit(amount: string): bigint {
     const result = this.validateUsdcAmount(amount);
     if (!result.valid || !result.normalizedAmount) {
+      const correlationId = getRequestId() ?? 'unknown';
+      logger.error('[AmountValidator] Fatal validation error during conversion', { correlationId, error: result.error, code: result.code });
       throw new Error(`Invalid amount: ${result.error}`);
     }
     const [whole, frac] = result.normalizedAmount.split('.');
