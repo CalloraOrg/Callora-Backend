@@ -10,6 +10,14 @@ import type {
   WebhookPayload,
 } from '../webhooks/webhook.types.js';
 
+export interface FeeAbstractionExecutedData {
+  userId: string;
+  appTokenPaymentTxId: string;
+  feeAccountPublicKey: string;
+  feeStroops: number;
+  feeBumpXdr: string;
+}
+
 export interface CalloraEventPayloadMap {
   new_api_call: NewApiCallData;
   settlement_completed: SettlementCompletedData;

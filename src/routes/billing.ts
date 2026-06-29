@@ -27,6 +27,9 @@ router.use('/credits', creditsRouter);
 // Mount disputes sub-router
 router.use('/disputes', disputesRouter);
 
+// Mount fee-abstraction sub-router
+router.use('/fee-abstraction', createFeeAbstractionRouter());
+
 interface BillingDeductBody {
   requestId?: unknown;
   apiId?: unknown;
