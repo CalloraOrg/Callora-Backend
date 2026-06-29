@@ -378,6 +378,38 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
     expect(res.body).toHaveProperty("code", "FORBIDDEN");
   });
 
+  test("returns 403 when key is in revocation list", async () => {
+    const validKey = "test-key-abcdefgh";
+    const apiKeys = new Map<string, ApiKey>();
+    apiKeys.set(validKey, {
+      key: "k1",
+      apiId: API_ID,
+      developerId: "dev1",
+      revoked: false,
+    });
+
+    const { resetTokenRevocationService, getTokenRevocationService } = await import("../services/tokenRevocation.js");
+    resetTokenRevocationService();
+    const tokenRevocation = getTokenRevocationService({ defaultTtlMs: 60000 });
+    
+    const { createHash } = await import("node:crypto");
+    const sha256Hex = (v: string) => createHash("sha256").update(v).digest("hex");
+    tokenRevocation.revoke(sha256Hex(validKey));
+
+    try {
+      const app = buildApp(apiKeys);
+
+      const res = await request(app)
+        .get(`/gateway/${API_ID}`)
+        .set("x-api-key", validKey);
+
+      expect(res.status).toBe(403);
+      expect(res.body).toHaveProperty("code", "FORBIDDEN");
+    } finally {
+      resetTokenRevocationService();
+    }
+  });
+
   test("401 response body is identical for both mismatch and no-prefix cases (no timing oracle via body)", async () => {
     const validKey = "test-key-abcdefgh";
     const apiKeys = new Map<string, ApiKey>();

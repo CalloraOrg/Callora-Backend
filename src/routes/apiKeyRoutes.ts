@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
 import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
+import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import {
@@ -141,6 +142,10 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       }
 
       const { id } = keyIdParamsSchema.parse(req.params);
+      
+      // Get the SHA-256 hash BEFORE revoking (while key still exists)
+      const sha256Hash = apiKeyRepository.getSha256Hash(id);
+      
       const result = apiKeyRepository.revoke(id, user.id);
 
       if (result === 'not_found') {
@@ -151,6 +156,11 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       if (result === 'forbidden') {
         next(new ForbiddenError('Forbidden: API key does not belong to authenticated developer', 'API_KEY_FORBIDDEN'));
         return;
+      }
+
+      // Add to in-memory revocation list for immediate invalidation
+      if (sha256Hash) {
+        getTokenRevocationService().revoke(sha256Hash);
       }
 
       res.status(204).send();

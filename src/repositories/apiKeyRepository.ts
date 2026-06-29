@@ -1,7 +1,11 @@
-import { randomBytes, timingSafeEqual } from "crypto";
+import { randomBytes, timingSafeEqual, createHash } from "crypto";
 import bcrypt from "bcryptjs";
 import { config } from "../config/index.js";
 import { decodeCursor, encodeCursor } from "../lib/cursorPagination.js";
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 /**
  * Typed error returned when an API key prefix is found in the store but the
@@ -24,6 +28,7 @@ export interface ApiKeyRecord {
   userId: string;
   prefix: string;
   keyHash: string;
+  sha256Hash: string;
   scopes: string[];
   rateLimitPerMinute: number | null;
   createdAt: Date;
@@ -67,17 +72,18 @@ function constantTimeCompare(a: string, b: string): boolean {
 }
 
 export const apiKeyRepository = {
-  create(params: {
-    apiId: string;
-    userId: string;
-    scopes: string[];
-    rateLimitPerMinute: number | null;
-  }): ApiKeyCreateResult {
-    const p = params as any;
-    const key = generatePlainKey();
-    const prefix = key.slice(0, 16);
-    const id = randomBytes(8).toString('hex');
-    const createdAt = new Date();
+   create(params: {
+     apiId: string;
+     userId: string;
+     scopes: string[];
+     rateLimitPerMinute: number | null;
+   }): ApiKeyCreateResult {
+     const p = params as any;
+     const key = generatePlainKey();
+     const prefix = key.slice(0, 16);
+     const id = randomBytes(8).toString('hex');
+     const createdAt = new Date();
+     const sha256Hash = sha256Hex(key);
 
     apiKeys.push({
       id,
@@ -93,8 +99,8 @@ export const apiKeyRepository = {
       revokedAt: null
     });
 
-    return { id, key, prefix, createdAt };
-  },
+     return { id, key, prefix, createdAt };
+   },
   list(params: { userId: string; apiId?: string }): ApiKeyRecord[] {
     const { userId, apiId } = params;
     return apiKeys
@@ -164,6 +170,10 @@ export const apiKeyRepository = {
     key.revokedAt = new Date();
     return 'success';
   },
+  getSha256Hash(id: string): string | null {
+    const key = apiKeys.find(k => k.id === id);
+    return key?.sha256Hash ?? null;
+  },
   verify(key: string): ApiKeyRecord | null {
     if (typeof key !== 'string') return null;
     // Find potential matches by prefix first for efficiency
@@ -189,6 +199,7 @@ export const apiKeyRepository = {
           userId: candidate.userId,
           prefix: candidate.prefix,
           keyHash: '[REDACTED]',
+          sha256Hash: candidate.sha256Hash,
           scopes: candidate.scopes,
           rateLimitPerMinute: candidate.rateLimitPerMinute,
           createdAt: candidate.createdAt,
