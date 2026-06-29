@@ -7,10 +7,9 @@ import {
   type UsageBucket,
   type GroupBy,
 } from './usageEventsRepository.js';
- feature/usage-cursor-pagination
+import { encodeCursor, type CursorPayload } from '../lib/cursorPagination.js';
 import { generateCursor, getNextCursor, decodeCursor } from '../lib/pagination.js';
 import { readQuery, writeQuery } from '../db.js';
- main
 
 export interface CreateUsageEventInput {
   userId: string;
@@ -392,7 +391,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     `;
     params.push(fetchLimit);
 
-    const result = await this.db.query<UsageEventRow>(sql, params);
+    const result = await this.readDb.query<UsageEventRow>(sql, params);
     const rows = result.rows;
 
     // Check if there are more results
@@ -616,7 +615,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       ${limitClause}
     `;
 
-    const result = await this.db.query<UsageEventRow>(sql, sqlParams);
+    const result = await this.readDb.query<UsageEventRow>(sql, sqlParams);
     const rows = result.rows.map(mapUsageEventRow);
 
     // Determine whether there is a page beyond what we're returning

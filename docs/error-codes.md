@@ -91,6 +91,9 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `REQUEST_BODY_TOO_LARGE` | HTTP fallback derived codes referenced by documentation |
 | `UNSUPPORTED_MEDIA_TYPE` | HTTP fallback derived codes referenced by documentation |
 | `UNPROCESSABLE_ENTITY` | HTTP fallback derived codes referenced by documentation |
+| `USAGE_AGGREGATE_NOT_FOUND` | Admin usage management |
+| `INVALID_EXPORT_SCHEDULE` | Export schedules |
+| `EXPORT_SCHEDULE_NOT_FOUND` | Export schedules |
 <!-- END GENERATED ERROR CODES -->
 
 ## Scope and important caveats

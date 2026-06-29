@@ -411,6 +411,21 @@ export class RevenueSettlementService {
     );
   }
 
+  private async emitSettlementCompleted(
+    settlementId: string,
+    developerId: string,
+    amount: number,
+    txHash: string,
+  ): Promise<void> {
+    calloraEvents.emit('settlement_completed', developerId, {
+      settlementId,
+      amount: amount.toFixed(7),
+      asset: 'USDC',
+      txHash,
+      settledAt: new Date().toISOString(),
+    });
+  }
+
   private async recordFailedSettlement(
     settlementId: string,
     developerId: string,
@@ -426,13 +441,13 @@ export class RevenueSettlementService {
     } catch (statusError) {
       console.error(
         `Settlement ${settlementId} failed for dev ${developerId} and could not persist failure status:`,
-        this.getErrorMessage(statusError)
+        this.getErrorMessage(statusError),
       );
     }
 
     console.error(
       `Settlement ${settlementId} failed for dev ${developerId}:`,
-      errorMessage ?? 'Unknown settlement failure'
+      errorMessage ?? 'Unknown settlement failure',
     );
   }
 

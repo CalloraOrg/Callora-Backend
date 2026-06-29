@@ -149,6 +149,7 @@ const testDeveloper: Developer = {
   website: null,
   description: null,
   category: null,
+  plan_overrides: null,
   created_at: new Date(0),
   updated_at: new Date(0),
 };
@@ -189,6 +190,7 @@ class StubApiRepository implements ApiRepository {
       status: 'draft' as const,
       created_at: new Date(),
       updated_at: new Date(),
+      deleted_at: null,
     };
   }
   async update() {
@@ -206,6 +208,7 @@ class StubApiRepository implements ApiRepository {
       status: input.status ?? 'draft',
       created_at: new Date(),
       updated_at: new Date(),
+      deleted_at: null,
       endpoints: [],
     };
   }
@@ -223,6 +226,12 @@ class StubApiRepository implements ApiRepository {
   }
   async delete(_id: number) {
     return false;
+  }
+  async restore() {
+    return null;
+  }
+  async bulkCreateEndpoints() {
+    return [];
   }
 }
 

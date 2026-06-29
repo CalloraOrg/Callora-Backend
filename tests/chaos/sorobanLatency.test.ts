@@ -1,4 +1,4 @@
-import { injectLatency, withSorobanLatencyWrapper } from './sorobanLatency';
+import { injectLatency, withSorobanLatencyWrapper } from './sorobanLatency.js';
 
 describe('Soroban Latency Chaos Harness', () => {
   beforeEach(() => {

@@ -447,6 +447,33 @@ export function recordCacheMiss(): void {
   apisListingCacheMisses.inc();
 }
 
+// ── Gateway API key lookup counter ────────────────────────────────────────────
+//
+// Metric: gateway_api_key_lookup_total
+//   Type:    Counter
+//   Labels:  outcome — hit | miss | revoked | expired
+//   Purpose: Track API key lookup outcomes in gateway auth middleware.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const gatewayApiKeyLookupTotal = new client.Counter({
+  name: 'gateway_api_key_lookup_total',
+  help: 'Total API key lookups in gateway auth middleware',
+  labelNames: ['outcome'] as const,
+});
+
+register.registerMetric(gatewayApiKeyLookupTotal);
+
+export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired';
+
+export function recordApiKeyLookup(outcome: ApiKeyLookupOutcome): void {
+  gatewayApiKeyLookupTotal.inc({ outcome });
+}
+
+/** Reset gateway API key lookup metrics. Used in tests to isolate metric state. */
+export function resetApiKeyLookupMetrics(): void {
+  gatewayApiKeyLookupTotal.reset();
+}
+
 // ── Proxy premature-abort counter ─────────────────────────────────────────────
 //
 // Metric: proxy_premature_aborts_total
@@ -499,6 +526,7 @@ export function resetAllMetrics(): void {
   gatewayUpstreamBreakerState.reset();
   resetSlowQueryAlerterMetrics();
   resetReplicaMetrics();
+  resetApiKeyLookupMetrics();
 }
 
 // ── Replica routing metrics ───────────────────────────────────────────────────

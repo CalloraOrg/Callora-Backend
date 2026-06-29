@@ -27,6 +27,7 @@ const makeDeveloper = (overrides: Partial<Developer> = {}): Developer => ({
   website: null,
   description: null,
   category: null,
+  plan_overrides: null,
   created_at: new Date('2026-01-01T00:00:00.000Z'),
   updated_at: new Date('2026-01-01T00:00:00.000Z'),
   ...overrides,

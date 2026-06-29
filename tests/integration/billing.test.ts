@@ -1431,6 +1431,14 @@ class DatabaseSettlementStore implements SettlementStore {
       completed_at: null,
     }));
   }
+
+  scheduleRetry(settlementId: string, retryAfter: string): void {
+    this.db.public.none(`
+      UPDATE settlements
+      SET status = 'retryable', retry_after = '${escapeSqlLiteral(retryAfter)}'
+      WHERE id = '${escapeSqlLiteral(settlementId)}'
+    `);
+  }
 }
 
 class DatabaseApiRegistry implements ApiRegistry {

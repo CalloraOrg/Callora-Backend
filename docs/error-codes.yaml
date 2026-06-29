@@ -341,3 +341,15 @@ error_codes:
   - code: UNPROCESSABLE_ENTITY
     section: HTTP fallback derived codes referenced by documentation
     description: Request is syntactically correct but semantically invalid
+
+  - code: USAGE_AGGREGATE_NOT_FOUND
+    section: Admin usage management
+    description: Usage aggregate not found for the given developer
+
+  - code: INVALID_EXPORT_SCHEDULE
+    section: Export schedules
+    description: Export schedule payload or configuration is invalid
+
+  - code: EXPORT_SCHEDULE_NOT_FOUND
+    section: Export schedules
+    description: Export schedule not found
