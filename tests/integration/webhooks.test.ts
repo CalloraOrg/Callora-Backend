@@ -357,6 +357,152 @@ describe('Webhook Routes Security Tests', () => {
   });
 });
 
+describe('PATCH /api/webhooks/:developerId/retry-policy - Retry Policy Management', () => {
+  let app: express.Express;
+
+  beforeEach(() => {
+    app = buildWebhookApp();
+    WebhookStore.list().forEach(config => {
+      WebhookStore.delete(config.developerId);
+    });
+    jest.clearAllMocks();
+    mockDnsLookup.mockResolvedValue([{ address: '8.8.8.8', family: 4 }]);
+  });
+
+  it('should update retry policy with valid values', async () => {
+    WebhookStore.register({
+      developerId: 'dev-retry',
+      url: 'https://example.com/webhook',
+      events: ['new_api_call'],
+      secret: 'test-secret',
+      createdAt: new Date(),
+    });
+
+    const response = await request(app)
+      .patch('/api/webhooks/dev-retry/retry-policy')
+      .send({ retryPolicy: { maxRetries: 3, baseDelayMs: 500 } })
+      .expect(200);
+
+    expect(response.body.message).toBe('Webhook retry policy updated successfully.');
+    expect(response.body.retryPolicy).toEqual({ maxRetries: 3, baseDelayMs: 500 });
+    
+    const stored = WebhookStore.get('dev-retry');
+    expect(stored?.retryPolicy?.maxRetries).toBe(3);
+    expect(stored?.retryPolicy?.baseDelayMs).toBe(500);
+    
+    expect(mockLogger.audit).toHaveBeenCalledWith(
+      'WEBHOOK_RETRY_POLICY_UPDATED',
+      'dev-retry',
+      expect.objectContaining({
+        developerId: 'dev-retry',
+        retryPolicy: expect.objectContaining({ maxRetries: 3, baseDelayMs: 500 }),
+      }),
+    );
+  });
+
+  it('should reject invalid maxRetries values', async () => {
+    WebhookStore.register({
+      developerId: 'dev-invalid-retry',
+      url: 'https://example.com/webhook',
+      events: ['new_api_call'],
+      createdAt: new Date(),
+    });
+
+    const response = await request(app)
+      .patch('/api/webhooks/dev-invalid-retry/retry-policy')
+      .send({ retryPolicy: { maxRetries: 15 } })
+      .expect(400);
+
+    expect(response.body.message).toContain('maxRetries must be an integer between 0 and 10');
+    expect(response.body.code).toBe('INVALID_RETRY_POLICY');
+  });
+
+  it('should reject invalid baseDelayMs values', async () => {
+    WebhookStore.register({
+      developerId: 'dev-invalid-delay',
+      url: 'https://example.com/webhook',
+      events: ['new_api_call'],
+      createdAt: new Date(),
+    });
+
+    const response = await request(app)
+      .patch('/api/webhooks/dev-invalid-delay/retry-policy')
+      .send({ retryPolicy: { baseDelayMs: 50 } })
+      .expect(400);
+
+    expect(response.body.message).toContain('baseDelayMs must be an integer between 100 and 60000');
+    expect(response.body.code).toBe('INVALID_RETRY_POLICY');
+  });
+
+  it('should return 404 when updating retry policy for non-existent webhook', async () => {
+    const response = await request(app)
+      .patch('/api/webhooks/non-existent/retry-policy')
+      .send({ retryPolicy: { maxRetries: 2 } })
+      .expect(404);
+
+    expect(response.body.code).toBe('WEBHOOK_NOT_FOUND');
+  });
+
+  it('should allow clearing retry policy with null', async () => {
+    WebhookStore.register({
+      developerId: 'dev-clear-retry',
+      url: 'https://example.com/webhook',
+      events: ['new_api_call'],
+      secret: 'test-secret',
+      retryPolicy: { maxRetries: 5, baseDelayMs: 2000 },
+      createdAt: new Date(),
+    });
+
+    const response = await request(app)
+      .patch('/api/webhooks/dev-clear-retry/retry-policy')
+      .send({})
+      .expect(200);
+
+    expect(response.body.message).toBe('Webhook retry policy updated successfully.');
+  });
+
+  it('should not expose secrets in retry policy update response', async () => {
+    WebhookStore.register({
+      developerId: 'dev-secret-retry',
+      url: 'https://example.com/webhook',
+      events: ['new_api_call'],
+      secret: 'my-secret-key',
+      secret_current: 'current-secret',
+      secret_previous: 'previous-secret',
+      createdAt: new Date(),
+    });
+
+    const response = await request(app)
+      .patch('/api/webhooks/dev-secret-retry/retry-policy')
+      .send({ retryPolicy: { maxRetries: 1 } })
+      .expect(200);
+
+    expect(response.body).not.toHaveProperty('secret');
+    expect(response.body).not.toHaveProperty('secret_current');
+    expect(response.body).not.toHaveProperty('secret_previous');
+  });
+
+  it('should accept partial retry policy updates', async () => {
+    WebhookStore.register({
+      developerId: 'dev-partial-retry',
+      url: 'https://example.com/webhook',
+      events: ['new_api_call'],
+      createdAt: new Date(),
+    });
+
+    const response = await request(app)
+      .patch('/api/webhooks/dev-partial-retry/retry-policy')
+      .send({ retryPolicy: { maxRetries: 7 } })
+      .expect(200);
+
+    expect(response.body.retryPolicy).toEqual({ maxRetries: 7 });
+    
+    const stored = WebhookStore.get('dev-partial-retry');
+    expect(stored?.retryPolicy?.maxRetries).toBe(7);
+    expect(stored?.retryPolicy?.baseDelayMs).toBeUndefined();
+  });
+});
+
 describe('Webhook Signature Verification Tests', () => {
   const testPayload = {
     event: 'new_api_call' as WebhookEventType,

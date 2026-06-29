@@ -9,6 +9,7 @@
  */
 
 import { WebhookStore, type FailedDeliveryEntry } from '../webhooks/webhook.store.js';
+import { getEffectiveRetryPolicy } from '../services/webhookRetry.js';
 
 /** Operational stats for a single subscription. */
 export interface SubscriptionStats {
@@ -16,6 +17,10 @@ export interface SubscriptionStats {
     url: string;
     events: string[];
     registeredAt: string; // ISO-8601
+    retryPolicy?: {
+        maxRetries: number;
+        baseDelayMs: number;
+    };
 }
 
 export interface WebhookMonitorSnapshot {
@@ -38,12 +43,28 @@ export function getWebhookMonitorSnapshot(): WebhookMonitorSnapshot {
     const dlqDepth = WebhookStore.dlqDepth();
 
     // Build per-subscription stats; strip secrets before returning.
-    const subscriptions: SubscriptionStats[] = WebhookStore.list().map((cfg) => ({
-        developerId: cfg.developerId,
-        url: cfg.url,
-        events: cfg.events,
-        registeredAt: cfg.createdAt.toISOString(),
-    }));
+    const subscriptions: SubscriptionStats[] = WebhookStore.list().map((cfg) => {
+        const base: SubscriptionStats = {
+            developerId: cfg.developerId,
+            url: cfg.url,
+            events: cfg.events,
+            registeredAt: cfg.createdAt.toISOString(),
+        };
+
+        // Include retry policy if overridden (show effective values)
+        if (cfg.retryPolicy) {
+            const effective = getEffectiveRetryPolicy(cfg.retryPolicy);
+            return {
+                ...base,
+                retryPolicy: {
+                    maxRetries: effective.maxRetries,
+                    baseDelayMs: effective.baseDelayMs,
+                },
+            };
+        }
+
+        return base;
+    });
 
     return { failedDeliveries, dlqDepth, subscriptions };
 }

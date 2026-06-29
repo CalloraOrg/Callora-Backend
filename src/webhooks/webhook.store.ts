@@ -1,4 +1,4 @@
-import { WebhookConfig, WebhookEventType, DeadLetterEntry } from './webhook.types.js';
+import { WebhookConfig, WebhookEventType, DeadLetterEntry, type RetryPolicy } from './webhook.types.js';
 
 const store = new Map<string, WebhookConfig>();
 const deadLetterStore = new Map<string, DeadLetterEntry>();
@@ -48,6 +48,22 @@ export const WebhookStore = {
 
     get(developerId: string): WebhookConfig | undefined {
         return store.get(developerId);
+    },
+
+    updateRetryPolicy(
+        developerId: string,
+        retryPolicy: RetryPolicy | undefined,
+    ): WebhookConfig | undefined {
+        const currentConfig = store.get(developerId);
+        if (!currentConfig) return undefined;
+
+        const nextConfig = normalizeConfig({
+            ...currentConfig,
+            retryPolicy,
+        });
+
+        store.set(developerId, nextConfig);
+        return nextConfig;
     },
 
     rotateSecret(

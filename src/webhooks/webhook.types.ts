@@ -14,6 +14,7 @@ export interface WebhookConfig {
     secret_previous?: string;
     previous_expires_at?: Date;
     createdAt: Date;
+    retryPolicy?: RetryPolicy; // Per-subscription override for retry behavior
 }
 
 export interface WebhookPayload {
