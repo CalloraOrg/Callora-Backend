@@ -86,3 +86,16 @@ export type Api = typeof apis.$inferSelect;
 export type NewApi = typeof apis.$inferInsert;
 export type ApiEndpoint = typeof apiEndpoints.$inferSelect;
 export type NewApiEndpoint = typeof apiEndpoints.$inferInsert;
+
+// Developer exports table — persists metadata for scheduled daily CSV/JSON artifacts
+export const developerExports = sqliteTable('developer_exports', {
+  id: text('id').primaryKey(),                                               // UUID v4 generated at insert time
+  developer_id: text('developer_id').notNull(),                              // developer user_id
+  format: text('format', { enum: ['csv', 'json'] as const }).notNull(),      // export file format
+  s3_key: text('s3_key').notNull(),                                          // object storage key / path
+  exported_at: text('exported_at').notNull(),                                // ISO-8601 UTC timestamp of export
+  expires_at: text('expires_at').notNull(),                                  // ISO-8601 UTC; row valid until this time
+});
+
+export type DeveloperExport = typeof developerExports.$inferSelect;
+export type NewDeveloperExport = typeof developerExports.$inferInsert;

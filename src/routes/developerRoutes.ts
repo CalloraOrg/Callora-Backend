@@ -10,6 +10,7 @@ import {
 import { UsageStore } from '../types/gateway.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
+import type { ReportExporterService } from '../services/reportExporter.js';
 
 /**
  * Wraps an async Express route handler so that any thrown error is forwarded
@@ -28,11 +29,12 @@ export interface DeveloperRoutesDeps {
   settlementStore: SettlementStore;
   usageStore: UsageStore;
   developerRepository: DeveloperRepository;
+  reportExporterService?: ReportExporterService;
 }
 
 export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
   const router = Router();
-  const { settlementStore, usageStore, developerRepository } = deps;
+  const { settlementStore, usageStore, developerRepository, reportExporterService } = deps;
 
   // Validation schema for revenue query parameters
   const revenueQuerySchema = z.object({
@@ -203,6 +205,51 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
       res.json(body);
     }),
   );
+
+  // Validation schema for exports query parameters
+  const exportsQuerySchema = z.object({
+    limit: z
+      .string()
+      .optional()
+      .transform((val) => (val ? parseInt(val, 10) : 20))
+      .pipe(z.number().int())
+      .transform((val) => Math.min(Math.max(val, 1), 100)),
+    offset: z
+      .string()
+      .optional()
+      .transform((val) => (val ? parseInt(val, 10) : 0))
+      .pipe(z.number().int().min(0)),
+  });
+
+  if (reportExporterService) {
+    router.get(
+      '/exports',
+      requireAuth,
+      validate({ query: exportsQuerySchema }),
+      asyncHandler(async (req, res) => {
+        const user = res.locals.authenticatedUser;
+        if (!user) throw new UnauthorizedError();
+        const developer = await developerRepository.findByUserId(user.id);
+        if (!developer)
+          throw new ForbiddenError('No developer profile found for this account', 'DEVELOPER_NOT_FOUND');
+
+        const parsedQuery = exportsQuerySchema.parse(req.query);
+        const { limit, offset } = parsedQuery;
+        const ttl = Number(process.env.EXPORT_SIGNED_URL_TTL_SECONDS ?? '900');
+
+        const records = await reportExporterService.listExportsForDeveloper(developer.user_id, { limit, offset });
+        const data = records.map((r) => ({
+          id: r.id,
+          format: r.format,
+          exportedAt: r.exportedAt.toISOString(),
+          expiresAt: r.expiresAt.toISOString(),
+          downloadUrl: reportExporterService.getSignedUrl(r, ttl),
+        }));
+
+        res.json({ data, pagination: { limit, offset, total: data.length } });
+      }),
+    );
+  }
 
   return router;
 }
