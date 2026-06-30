@@ -168,7 +168,12 @@ When refreshing it:
 
 Run `npm run lint`, `npm run typecheck`, and `npm test` after editing the fixture.
 
-### Observability (Prometheus Metrics)
+### Observability (Prometheus Metrics & Dashboards)
+
+Grafana dashboards are committed under [`docs/dashboards/`](./docs/dashboards/README.md):
+
+- **[Soroban Billing](./docs/dashboards/soroban-billing.json)** — P50/P95 deduction latency, error category breakdown by `SorobanRpcErrorCategory`, and call rate panels. Import via Grafana → Dashboards → Import.
+- **[Billing Deduct HTTP Latency](./docs/grafana-dashboard-billing-deduct.json)** — HTTP-level latency percentiles for `POST /api/billing/deduct`.
 
 The application exposes a standard Prometheus text-format metrics endpoint at `GET /api/metrics`.
 It automatically tracks:
