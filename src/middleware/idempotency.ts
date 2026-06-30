@@ -6,6 +6,13 @@ import { pool } from '../db.js';
 import { logger } from '../logger.js';
 
 /**
+ * Error code returned when a client reuses an idempotency key with a
+ * different request payload. Distinct from IDEMPOTENCY_IN_PROGRESS so
+ * callers can distinguish a body mismatch from a concurrent duplicate.
+ */
+export const IDEMPOTENCY_KEY_REUSE_MISMATCH = 'IDEMPOTENCY_KEY_REUSE_MISMATCH' as const;
+
+/**
  * Recursively sort keys of an object to ensure stable stringification.
  */
 function sortObjectKeys(obj: any): any {
@@ -90,11 +97,35 @@ export async function idempotencyMiddleware(req: Request, res: Response, next: N
 
       if (expiresAt > now) {
         if (record.request_hash !== requestHash) {
-          logger.warn(`Idempotency key mismatch for key: ${idempotencyKey}`);
+          // The client is reusing an idempotency key with a different payload.
+          // Return 409 with a stable machine-readable code so callers can
+          // distinguish this from a concurrent-duplicate 409.
+          logger.warn(`Idempotency key reuse with mismatched payload for key: ${idempotencyKey}`, {
+            idempotencyKey,
+            storedHash: record.request_hash,
+            incomingHash: requestHash,
+          });
+
+          // Build a redacted conflicting-fields summary so the client knows
+          // which top-level body keys differ without exposing stored values.
+          const incomingKeys = Object.keys(
+            typeof req.body === 'object' && req.body !== null ? req.body : {}
+          ).sort();
+
           res.status(409).json({
             error: 'Conflict',
-            message: 'Idempotency key conflict: payload mismatch',
-            code: 'IDEMPOTENCY_CONFLICT',
+            message:
+              'Idempotency key has already been used with a different request payload. ' +
+              'Use a new idempotency key for a different request.',
+            code: IDEMPOTENCY_KEY_REUSE_MISMATCH,
+            conflictingSummary: {
+              idempotencyKey,
+              incomingPayloadFingerprint: requestHash,
+              storedPayloadFingerprint: record.request_hash,
+              // Surface top-level field names only — no values — to help debug
+              // without leaking previously-stored sensitive data.
+              incomingFields: incomingKeys,
+            },
           });
           return;
         }
