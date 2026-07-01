@@ -29,9 +29,10 @@
  *   an operator reconciliation job can detect and either confirm or void.
  */
 
-import type { Pool, PoolClient } from 'pg';
-import type { SimulationDetails } from '../lib/simulationDiagnostics.js';
-import { DeveloperSemaphore } from '../utils/developerSemaphore.js';
+import { createHash } from "crypto";
+import type { Pool, PoolClient } from "pg";
+import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
+import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
 
 const USDC_7_DECIMAL_FACTOR = 10_000_000n;
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
@@ -69,6 +70,26 @@ export interface BillingDeductResult {
   simulationDetails?: SimulationDetails;
 }
 
+export interface BillingBulkDeductEntryResult {
+  requestId: string;
+  usageEventId: string;
+  stellarTxHash?: string;
+  alreadyProcessed: boolean;
+  deductionApplied: boolean;
+  reconciliationRequired: boolean;
+}
+
+export interface BillingBulkDeductResult {
+  success: boolean;
+  results: BillingBulkDeductEntryResult[];
+  entryCount: number;
+  deductedCount: number;
+  totalDeductedAmountUsdc: string;
+  stellarTxHash?: string;
+  error?: string;
+  simulationDetails?: SimulationDetails;
+}
+
 export interface SorobanBalanceResult {
   balance: string;
 }
@@ -97,16 +118,18 @@ export interface BillingServiceOptions {
 export function parseUsdcToContractUnits(amountUsdc: string): bigint {
   const trimmed = amountUsdc.trim();
   if (!/^\d+(\.\d{1,7})?$/.test(trimmed)) {
-    throw new Error('amountUsdc must be a positive decimal with at most 7 fractional digits');
+    throw new Error(
+      "amountUsdc must be a positive decimal with at most 7 fractional digits",
+    );
   }
 
-  const [wholePart, fractionalPart = ''] = trimmed.split('.');
+  const [wholePart, fractionalPart = ""] = trimmed.split(".");
   const whole = BigInt(wholePart);
-  const fraction = BigInt((fractionalPart + '0000000').slice(0, 7));
+  const fraction = BigInt((fractionalPart + "0000000").slice(0, 7));
   const result = whole * USDC_7_DECIMAL_FACTOR + fraction;
 
   if (result <= 0n) {
-    throw new Error('amountUsdc must be greater than zero');
+    throw new Error("amountUsdc must be greater than zero");
   }
 
   return result;
@@ -115,31 +138,51 @@ export function parseUsdcToContractUnits(amountUsdc: string): bigint {
 export function isTransientSorobanError(error: unknown): boolean {
   const message = normalizeErrorMessage(error).toLowerCase();
   return [
-    'timeout',
-    'timed out',
-    'socket hang up',
-    'temporarily unavailable',
-    'temporary outage',
-    'econnreset',
-    'econnrefused',
-    '503',
-    '429',
-    'rate limit',
-    'network error',
-    'transport error',
+    "timeout",
+    "timed out",
+    "socket hang up",
+    "temporarily unavailable",
+    "temporary outage",
+    "econnreset",
+    "econnrefused",
+    "503",
+    "429",
+    "rate limit",
+    "network error",
+    "transport error",
   ].some((token) => message.includes(token));
+}
+
+export function formatContractUnitsToUsdc(amount: bigint): string {
+  const whole = amount / USDC_7_DECIMAL_FACTOR;
+  const fraction = amount % USDC_7_DECIMAL_FACTOR;
+
+  if (fraction === 0n) {
+    return whole.toString();
+  }
+
+  return `${whole.toString()}.${fraction
+    .toString()
+    .padStart(7, "0")
+    .replace(/0+$/, "")}`;
+}
+
+function buildBulkDeductIdempotencyKey(requestIds: string[]): string {
+  return createHash("sha256")
+    .update(requestIds.slice().sort().join(":"))
+    .digest("hex");
 }
 
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  return 'Unknown error';
+  if (typeof error === "string") return error;
+  return "Unknown error";
 }
 
 function getSimulationDetails(error: unknown): SimulationDetails | undefined {
-  if (!error || typeof error !== 'object') return undefined;
+  if (!error || typeof error !== "object") return undefined;
   const details = (error as { simulationDetails?: unknown }).simulationDetails;
-  if (!details || typeof details !== 'object') return undefined;
+  if (!details || typeof details !== "object") return undefined;
   return details as SimulationDetails;
 }
 
@@ -158,16 +201,35 @@ interface Phase1Result {
   stellarTxHash?: string;
 }
 
+interface ExistingUsageEventRow {
+  request_id: string;
+  id: string;
+  stellar_tx_hash: string | null;
+}
+
+interface BulkInsertedUsageEvent {
+  requestId: string;
+  usageEventId: string;
+}
+
+interface BulkPhase1Result {
+  rowsByRequestId: Map<string, ExistingUsageEventRow>;
+  inserted: BulkInsertedUsageEvent[];
+}
+
 async function runPhase1(
   client: PoolClient,
   request: BillingDeductRequest,
   amountInContractUnits: bigint,
 ): Promise<Phase1Result> {
-  await client.query('BEGIN');
+  await client.query("BEGIN");
 
   // Lock the row (if it exists) so concurrent requests with the same
   // request_id serialise here rather than racing to INSERT.
-  const existingEvent = await client.query<{ id: string; stellar_tx_hash: string | null }>(
+  const existingEvent = await client.query<{
+    id: string;
+    stellar_tx_hash: string | null;
+  }>(
     `SELECT id, stellar_tx_hash
        FROM usage_events
       WHERE request_id = $1
@@ -176,7 +238,7 @@ async function runPhase1(
   );
 
   if (existingEvent.rows.length > 0) {
-    await client.query('COMMIT');
+    await client.query("COMMIT");
     return {
       alreadyExists: true,
       usageEventId: existingEvent.rows[0].id.toString(),
@@ -213,7 +275,7 @@ async function runPhase1(
     ],
   );
 
-  await client.query('COMMIT');
+  await client.query("COMMIT");
 
   return {
     alreadyExists: false,
@@ -236,6 +298,107 @@ async function runPhase3(
       WHERE id = $2`,
     [txHash, usageEventId],
   );
+}
+
+async function runPhase3Bulk(
+  pool: Pool,
+  usageEventIds: string[],
+  txHash: string,
+): Promise<void> {
+  if (usageEventIds.length === 0) {
+    return;
+  }
+
+  await pool.query(
+    `UPDATE usage_events
+        SET stellar_tx_hash = $1
+      WHERE id = ANY($2::bigint[])`,
+    [txHash, usageEventIds.map((id) => BigInt(id).toString())],
+  );
+}
+
+async function getUsageEventsByRequestIds(
+  pool: Pool,
+  requestIds: string[],
+): Promise<Map<string, ExistingUsageEventRow>> {
+  if (requestIds.length === 0) {
+    return new Map<string, ExistingUsageEventRow>();
+  }
+
+  const result = await pool.query<ExistingUsageEventRow>(
+    `SELECT request_id, id, stellar_tx_hash
+       FROM usage_events
+      WHERE request_id = ANY($1::text[])`,
+    [requestIds],
+  );
+
+  return new Map<string, ExistingUsageEventRow>(
+    result.rows.map((row: ExistingUsageEventRow) => [row.request_id, row]),
+  );
+}
+
+async function runPhase1Bulk(
+  client: PoolClient,
+  requests: BillingDeductRequest[],
+): Promise<BulkPhase1Result> {
+  await client.query("BEGIN");
+
+  const requestIds = requests.map((request) => request.requestId);
+  const existingEvents = await client.query<ExistingUsageEventRow>(
+    `SELECT request_id, id, stellar_tx_hash
+       FROM usage_events
+      WHERE request_id = ANY($1::text[])
+        FOR UPDATE`,
+    [requestIds],
+  );
+
+  const rowsByRequestId = new Map<string, ExistingUsageEventRow>(
+    existingEvents.rows.map((row: ExistingUsageEventRow) => [
+      row.request_id,
+      row,
+    ]),
+  );
+  const inserted: BulkInsertedUsageEvent[] = [];
+
+  for (const request of requests) {
+    if (rowsByRequestId.has(request.requestId)) {
+      continue;
+    }
+
+    const insertResult = await client.query<{ id: string }>(
+      `INSERT INTO usage_events
+         (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       RETURNING id`,
+      [
+        request.userId,
+        request.apiId,
+        request.endpointId,
+        request.apiKeyId,
+        request.amountUsdc,
+        request.requestId,
+      ],
+    );
+
+    const insertedRow: ExistingUsageEventRow = {
+      request_id: request.requestId,
+      id: insertResult.rows[0].id.toString(),
+      stellar_tx_hash: null,
+    };
+
+    rowsByRequestId.set(request.requestId, insertedRow);
+    inserted.push({
+      requestId: request.requestId,
+      usageEventId: insertedRow.id,
+    });
+  }
+
+  await client.query("COMMIT");
+
+  return {
+    rowsByRequestId,
+    inserted,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +424,44 @@ export class BillingService {
     );
   }
 
-  private async deductInternal(request: BillingDeductRequest): Promise<BillingDeductResult> {
+  async deductBulk(
+    requests: BillingDeductRequest[],
+    idempotencyKey?: string,
+  ): Promise<BillingBulkDeductResult> {
+    if (requests.length === 0) {
+      return {
+        success: false,
+        results: [],
+        entryCount: 0,
+        deductedCount: 0,
+        totalDeductedAmountUsdc: "0",
+        error: "At least one billing deduction entry is required",
+      };
+    }
+
+    const [firstRequest] = requests;
+    const mixedUserIds = requests.some(
+      (request) => request.userId !== firstRequest.userId,
+    );
+    if (mixedUserIds) {
+      return {
+        success: false,
+        results: [],
+        entryCount: requests.length,
+        deductedCount: 0,
+        totalDeductedAmountUsdc: "0",
+        error: "Bulk billing deductions must target a single user",
+      };
+    }
+
+    return billingConcurrencySemaphore.withSlot(firstRequest.userId, () =>
+      this.deductBulkInternal(requests, idempotencyKey),
+    );
+  }
+
+  private async deductInternal(
+    request: BillingDeductRequest,
+  ): Promise<BillingDeductResult> {
     // --- Validate amount before touching the DB ---
     let amountInContractUnits: bigint;
     try {
@@ -269,7 +469,7 @@ export class BillingService {
     } catch (error) {
       return {
         success: false,
-        usageEventId: '',
+        usageEventId: "",
         alreadyProcessed: false,
         deductionApplied: false,
         reconciliationRequired: false,
@@ -297,7 +497,7 @@ export class BillingService {
     } catch (error) {
       return {
         success: false,
-        usageEventId: '',
+        usageEventId: "",
         alreadyProcessed: false,
         deductionApplied: false,
         reconciliationRequired: false,
@@ -309,7 +509,7 @@ export class BillingService {
     if (availableBalance < amountInContractUnits) {
       return {
         success: false,
-        usageEventId: '',
+        usageEventId: "",
         alreadyProcessed: false,
         deductionApplied: false,
         reconciliationRequired: false,
@@ -325,14 +525,21 @@ export class BillingService {
     } catch (error) {
       // Rollback on any Phase 1 failure (INSERT never committed)
       try {
-        await client.query('ROLLBACK');
+        await client.query("ROLLBACK");
       } catch {
         // ignore rollback errors
       }
 
       // Unique-constraint race: another concurrent request committed first
-      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === '23505') {
-        const existing = await this.pool.query<{ id: string; stellar_tx_hash: string | null }>(
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as { code?: string }).code === "23505"
+      ) {
+        const existing = await this.pool.query<{
+          id: string;
+          stellar_tx_hash: string | null;
+        }>(
           `SELECT id, stellar_tx_hash FROM usage_events WHERE request_id = $1`,
           [request.requestId],
         );
@@ -350,7 +557,7 @@ export class BillingService {
 
       return {
         success: false,
-        usageEventId: '',
+        usageEventId: "",
         alreadyProcessed: false,
         deductionApplied: false,
         reconciliationRequired: false,
@@ -424,8 +631,229 @@ export class BillingService {
     };
   }
 
+  private async deductBulkInternal(
+    requests: BillingDeductRequest[],
+    idempotencyKey?: string,
+  ): Promise<BillingBulkDeductResult> {
+    let totalRequestedAmount = 0n;
+    const amountByRequestId = new Map<string, bigint>();
+
+    try {
+      for (const request of requests) {
+        const amount = parseUsdcToContractUnits(request.amountUsdc);
+        totalRequestedAmount += amount;
+        amountByRequestId.set(request.requestId, amount);
+      }
+    } catch (error) {
+      return {
+        success: false,
+        results: [],
+        entryCount: requests.length,
+        deductedCount: 0,
+        totalDeductedAmountUsdc: "0",
+        error: normalizeErrorMessage(error),
+      };
+    }
+
+    const requestIds = requests.map((request) => request.requestId);
+    const existingRows = await getUsageEventsByRequestIds(
+      this.pool,
+      requestIds,
+    );
+
+    let totalNewAmount = 0n;
+    for (const request of requests) {
+      if (!existingRows.has(request.requestId)) {
+        totalNewAmount += amountByRequestId.get(request.requestId) ?? 0n;
+      }
+    }
+
+    if (totalNewAmount > 0n) {
+      let availableBalance: bigint;
+      try {
+        const balanceResult = await this.sorobanClient.getBalance(
+          requests[0].userId,
+        );
+        availableBalance = BigInt(balanceResult.balance);
+      } catch (error) {
+        return {
+          success: false,
+          results: [],
+          entryCount: requests.length,
+          deductedCount: 0,
+          totalDeductedAmountUsdc: "0",
+          error: `Balance check failed: ${normalizeErrorMessage(error)}`,
+          simulationDetails: getSimulationDetails(error),
+        };
+      }
+
+      if (availableBalance < totalNewAmount) {
+        return {
+          success: false,
+          results: [],
+          entryCount: requests.length,
+          deductedCount: 0,
+          totalDeductedAmountUsdc:
+            formatContractUnitsToUsdc(totalRequestedAmount),
+          error:
+            `Insufficient balance: required ${totalNewAmount.toString()} units, ` +
+            `available ${availableBalance.toString()}`,
+        };
+      }
+    }
+
+    const client = await this.pool.connect();
+    let phase1: BulkPhase1Result;
+    try {
+      phase1 = await runPhase1Bulk(client, requests);
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore rollback errors
+      }
+
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as { code?: string }).code === "23505"
+      ) {
+        const recoveredRows = await getUsageEventsByRequestIds(
+          this.pool,
+          requestIds,
+        );
+        return {
+          success: true,
+          results: requests.map((request) => {
+            const recovered = recoveredRows.get(request.requestId)!;
+            return {
+              requestId: request.requestId,
+              usageEventId: recovered.id.toString(),
+              stellarTxHash: recovered.stellar_tx_hash ?? undefined,
+              alreadyProcessed: true,
+              deductionApplied: Boolean(recovered.stellar_tx_hash),
+              reconciliationRequired: recovered.stellar_tx_hash === null,
+            };
+          }),
+          entryCount: requests.length,
+          deductedCount: 0,
+          totalDeductedAmountUsdc: "0",
+        };
+      }
+
+      return {
+        success: false,
+        results: [],
+        entryCount: requests.length,
+        deductedCount: 0,
+        totalDeductedAmountUsdc: "0",
+        error: normalizeErrorMessage(error),
+      };
+    } finally {
+      client.release();
+    }
+
+    const insertedRequestIds = new Set(
+      phase1.inserted.map((entry) => entry.requestId),
+    );
+    let totalInsertedAmount = 0n;
+    for (const inserted of phase1.inserted) {
+      totalInsertedAmount += amountByRequestId.get(inserted.requestId) ?? 0n;
+    }
+
+    if (phase1.inserted.length === 0) {
+      return {
+        success: true,
+        results: requests.map((request) => {
+          const existing = phase1.rowsByRequestId.get(request.requestId)!;
+          return {
+            requestId: request.requestId,
+            usageEventId: existing.id.toString(),
+            stellarTxHash: existing.stellar_tx_hash ?? undefined,
+            alreadyProcessed: true,
+            deductionApplied: Boolean(existing.stellar_tx_hash),
+            reconciliationRequired: existing.stellar_tx_hash === null,
+          };
+        }),
+        entryCount: requests.length,
+        deductedCount: 0,
+        totalDeductedAmountUsdc: "0",
+      };
+    }
+
+    let deductResult: SorobanDeductResult;
+    try {
+      deductResult = await this.executeDeductWithRetry(
+        requests[0].userId,
+        totalInsertedAmount.toString(),
+        idempotencyKey ??
+          buildBulkDeductIdempotencyKey(Array.from(insertedRequestIds)),
+      );
+    } catch (error) {
+      return {
+        success: false,
+        results: requests.map((request) => {
+          const row = phase1.rowsByRequestId.get(request.requestId)!;
+          const wasInserted = insertedRequestIds.has(request.requestId);
+          return {
+            requestId: request.requestId,
+            usageEventId: row.id.toString(),
+            stellarTxHash: row.stellar_tx_hash ?? undefined,
+            alreadyProcessed: !wasInserted,
+            deductionApplied: !wasInserted && Boolean(row.stellar_tx_hash),
+            reconciliationRequired: wasInserted || row.stellar_tx_hash === null,
+          };
+        }),
+        entryCount: requests.length,
+        deductedCount: 0,
+        totalDeductedAmountUsdc: "0",
+        error: normalizeErrorMessage(error),
+        simulationDetails: getSimulationDetails(error),
+      };
+    }
+
+    try {
+      await runPhase3Bulk(
+        this.pool,
+        phase1.inserted.map((entry) => entry.usageEventId),
+        deductResult.txHash,
+      );
+    } catch (error) {
+      console.error(
+        `[BillingService] Bulk Phase 3 UPDATE failed for usageEventIds=` +
+          `${phase1.inserted.map((entry) => entry.usageEventId).join(",")} ` +
+          `txHash=${deductResult.txHash}: ${normalizeErrorMessage(error)}`,
+      );
+    }
+
+    return {
+      success: true,
+      results: requests.map((request) => {
+        const row = phase1.rowsByRequestId.get(request.requestId)!;
+        const wasInserted = insertedRequestIds.has(request.requestId);
+        return {
+          requestId: request.requestId,
+          usageEventId: row.id.toString(),
+          stellarTxHash: wasInserted
+            ? deductResult.txHash
+            : (row.stellar_tx_hash ?? undefined),
+          alreadyProcessed: !wasInserted,
+          deductionApplied: wasInserted || Boolean(row.stellar_tx_hash),
+          reconciliationRequired: !wasInserted && row.stellar_tx_hash === null,
+        };
+      }),
+      entryCount: requests.length,
+      deductedCount: phase1.inserted.length,
+      totalDeductedAmountUsdc: formatContractUnitsToUsdc(totalInsertedAmount),
+      stellarTxHash: deductResult.txHash,
+    };
+  }
+
   async getByRequestId(requestId: string): Promise<BillingDeductResult | null> {
-    const result = await this.pool.query<{ id: string; stellar_tx_hash: string | null }>(
+    const result = await this.pool.query<{
+      id: string;
+      stellar_tx_hash: string | null;
+    }>(
       `SELECT id, stellar_tx_hash
          FROM usage_events
         WHERE request_id = $1`,
@@ -453,11 +881,18 @@ export class BillingService {
 
     for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt += 1) {
       try {
-        return await this.sorobanClient.deductBalance(userId, amount, idempotencyKey);
+        return await this.sorobanClient.deductBalance(
+          userId,
+          amount,
+          idempotencyKey,
+        );
       } catch (error) {
         lastError = error;
 
-        if (!isTransientSorobanError(error) || attempt === this.retryDelaysMs.length) {
+        if (
+          !isTransientSorobanError(error) ||
+          attempt === this.retryDelaysMs.length
+        ) {
           break;
         }
 
@@ -465,12 +900,15 @@ export class BillingService {
       }
     }
 
-    throw lastError instanceof Error ? lastError : new Error(normalizeErrorMessage(lastError));
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(normalizeErrorMessage(lastError));
   }
 }
 
 // Exported for unit tests
 export const billingInternals = {
   parseUsdcToContractUnits,
+  formatContractUnitsToUsdc,
   isTransientSorobanError,
 };
