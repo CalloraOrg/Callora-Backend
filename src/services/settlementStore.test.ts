@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import type { Pool, PoolClient, QueryResult } from 'pg';
 
-import { PostgresSettlementStore, InMemorySettlementStore } from './settlementStore';
+import { PostgresSettlementStore, InMemorySettlementStore } from './settlementStore.js';
 import type { Settlement } from '../types/developer.js';
 
 // ---------------------------------------------------------------------------
@@ -38,9 +38,9 @@ function createMockClient(queryResults: (QueryResult | Error)[]): PoolClient {
 function createMockPool(client: PoolClient): Pool {
   return {
     connect: async () => client,
-    query: async (_sql: string | unknown, _params?: unknown[]) => {
+    query: async (sql: string, params?: unknown[]) => {
       // Delegate to the mock client's query method
-      return client.query(_sql, _params);
+      return client.query(sql, params);
     },
   } as unknown as Pool;
 }
@@ -394,10 +394,10 @@ describe('PostgresSettlementStore', () => {
         makeQr([]),
       ]);
       // Override query to capture params
-      client.query = async (_sql: string | unknown, params?: unknown[]) => {
+      client.query = (async (_sql: string, params?: unknown[]) => {
         capturedParams = params ?? [];
         return makeQr([]);
-      };
+      }) as PoolClient['query'];
 
       pool = createMockPool(client);
       store = new PostgresSettlementStore(pool);
@@ -419,10 +419,10 @@ describe('PostgresSettlementStore', () => {
       client = createMockClient([
         makeQr([]),
       ]);
-      client.query = async (_sql: string | unknown, params?: unknown[]) => {
+      client.query = (async (_sql: string, params?: unknown[]) => {
         capturedParams = params ?? [];
         return makeQr([]);
-      };
+      }) as PoolClient['query'];
 
       pool = createMockPool(client);
       store = new PostgresSettlementStore(pool);

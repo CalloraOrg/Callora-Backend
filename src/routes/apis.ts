@@ -5,6 +5,7 @@ import { buildCacheKey, listingsCache, type ListingsCache } from '../lib/listing
 import { recordCacheHit, recordCacheMiss } from '../metrics.js';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { bodyValidator } from '../middleware/validate.js';
+import { etagMiddleware } from '../middleware/etag.js';
 import {
   defaultApiRepository,
   type ApiRepository,
@@ -28,7 +29,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
   const developerRepository = deps.developerRepository ?? defaultDeveloperRepository;
   const cache = deps.cache ?? listingsCache;
 
-  router.get('/', async (req, res, next) => {
+  router.get('/', etagMiddleware, async (req, res, next) => {
     try {
       const { limit, offset } = parsePagination(req.query as Record<string, string>);
       const category = typeof req.query.category === 'string' ? req.query.category : undefined;

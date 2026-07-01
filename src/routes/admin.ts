@@ -1,3 +1,4 @@
+import { adminLogMiddleware } from '../middleware/adminLog.js';
 import { Router, type Response } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
@@ -15,6 +16,7 @@ import {
 } from '../services/quotaService.js';
 import { createAdminWebhooksRouter } from './admin/webhooks.js';
 import { createAdminApisRouter } from './admin/apis.js';
+import { createAdminHealthProbesRouter } from './admin/health/probes.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -24,7 +26,7 @@ const router = Router();
 // Apply IP allowlist check before authentication
 router.use(createAdminIpAllowlist());
 router.use(adminAuth);
-
+router.use(adminLogMiddleware); // <--- Add this line here!
 router.get('/users', async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);
@@ -210,5 +212,12 @@ router.use('/webhooks', createAdminWebhooksRouter());
 //          POST   /api/admin/apis/:id/restore
 // ---------------------------------------------------------------------------
 router.use('/apis', createAdminApisRouter());
+
+// ---------------------------------------------------------------------------
+// Admin health probes (per-component)
+// Mounts:  GET /api/admin/health/probes
+//          GET /api/admin/health/probes/:component
+// ---------------------------------------------------------------------------
+router.use('/health/probes', createAdminHealthProbesRouter());
 
 export default router;

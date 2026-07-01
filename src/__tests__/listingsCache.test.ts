@@ -34,6 +34,7 @@ function makeApi(overrides: Partial<Api> = {}): Api {
     status: 'active',
     created_at: new Date(0),
     updated_at: new Date(0),
+    deleted_at: null,
     ...overrides,
   };
 }

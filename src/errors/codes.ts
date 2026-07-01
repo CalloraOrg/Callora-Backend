@@ -247,7 +247,13 @@ export const ErrorCode = {
   UNPROCESSABLE_ENTITY: "UNPROCESSABLE_ENTITY",
 
   /** Usage aggregate not found for the given developer */
-  USAGE_AGGREGATE_NOT_FOUND: "USAGE_AGGREGATE_NOT_FOUND"
+  USAGE_AGGREGATE_NOT_FOUND: "USAGE_AGGREGATE_NOT_FOUND",
+
+  /** Export schedule payload or configuration is invalid */
+  INVALID_EXPORT_SCHEDULE: "INVALID_EXPORT_SCHEDULE",
+
+  /** Export schedule not found */
+  EXPORT_SCHEDULE_NOT_FOUND: "EXPORT_SCHEDULE_NOT_FOUND"
 
 } as const;
 

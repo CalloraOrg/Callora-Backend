@@ -17,6 +17,7 @@ export interface GatewayApiKeyRecord {
   createdAt?: Date | string;
   lastUsedAt?: Date | string | null;
   tier?: string;
+  expiresAt?: Date | string | null;
 }
 
 export interface GatewayAuthCandidate<

@@ -1,4 +1,4 @@
-import { InvoiceService } from "../services/invoiceService.js";
+import { InvoiceService } from "../services/InvoiceService.js";
 
 export class MonthlyInvoiceJob {
   constructor(

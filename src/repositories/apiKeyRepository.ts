@@ -1,6 +1,11 @@
-import { randomBytes, timingSafeEqual } from "crypto";
+import { randomBytes, timingSafeEqual, createHash } from "crypto";
 import bcrypt from "bcryptjs";
 import { config } from "../config/index.js";
+import { decodeCursor, encodeCursor } from "../lib/cursorPagination.js";
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 /**
  * Typed error returned when an API key prefix is found in the store but the
@@ -23,10 +28,13 @@ export interface ApiKeyRecord {
   userId: string;
   prefix: string;
   keyHash: string;
+  sha256Hash: string;
   scopes: string[];
   rateLimitPerMinute: number | null;
   createdAt: Date;
   revoked: boolean;
+  lastUsedAt?: Date | null;
+  revokedAt?: Date | null;
 }
 
 const apiKeys: ApiKeyRecord[] = [];
@@ -64,17 +72,18 @@ function constantTimeCompare(a: string, b: string): boolean {
 }
 
 export const apiKeyRepository = {
-  create(params: {
-    apiId: string;
-    userId: string;
-    scopes: string[];
-    rateLimitPerMinute: number | null;
-  }): ApiKeyCreateResult {
-    const p = params as any;
-    const key = generatePlainKey();
-    const prefix = key.slice(0, 16);
-    const id = randomBytes(8).toString('hex');
-    const createdAt = new Date();
+   create(params: {
+     apiId: string;
+     userId: string;
+     scopes: string[];
+     rateLimitPerMinute: number | null;
+   }): ApiKeyCreateResult {
+     const p = params as any;
+     const key = generatePlainKey();
+     const prefix = key.slice(0, 16);
+     const id = randomBytes(8).toString('hex');
+     const createdAt = new Date();
+     const sha256Hash = sha256Hex(key);
 
     apiKeys.push({
       id,
@@ -85,11 +94,13 @@ export const apiKeyRepository = {
       scopes: p.scopes,
       rateLimitPerMinute: p.rateLimitPerMinute,
       createdAt,
-      revoked: false
+      revoked: false,
+      lastUsedAt: null,
+      revokedAt: null
     });
 
-    return { id, key, prefix, createdAt };
-  },
+     return { id, key, prefix, createdAt };
+   },
   list(params: { userId: string; apiId?: string }): ApiKeyRecord[] {
     const { userId, apiId } = params;
     return apiKeys
@@ -99,13 +110,69 @@ export const apiKeyRepository = {
       )
       .map((record) => ({ ...record }));
   },
+  listWithCursor(params: {
+    userId: string;
+    limit: number;
+    cursor?: string;
+  }): { keys: ApiKeyRecord[]; nextCursor: string | null; hasMore: boolean } {
+    const { userId, limit, cursor } = params;
+
+    let filteredKeys = apiKeys.filter((record) => record.userId === userId);
+
+    // Sort descending by createdAt, then descending by id
+    filteredKeys.sort((a, b) => {
+      const timeA = a.createdAt.getTime();
+      const timeB = b.createdAt.getTime();
+      if (timeB !== timeA) {
+        return timeB - timeA;
+      }
+      return b.id.localeCompare(a.id);
+    });
+
+    if (cursor) {
+      const decoded = decodeCursor(cursor);
+      if (decoded) {
+        const targetTime = decoded.timestamp.getTime();
+        filteredKeys = filteredKeys.filter((k) => {
+          const kTime = k.createdAt.getTime();
+          if (kTime < targetTime) {
+            return true;
+          }
+          if (kTime === targetTime) {
+            return k.id < decoded.id;
+          }
+          return false;
+        });
+      }
+    }
+
+    const hasMore = filteredKeys.length > limit;
+    const results = hasMore ? filteredKeys.slice(0, limit) : filteredKeys;
+
+    let nextCursor: string | null = null;
+    if (hasMore && results.length > 0) {
+      const last = results[results.length - 1];
+      nextCursor = encodeCursor(last.createdAt, last.id);
+    }
+
+    return {
+      keys: results.map((record) => ({ ...record })),
+      nextCursor,
+      hasMore,
+    };
+  },
   revoke(id: string, userId: string): 'success' | 'not_found' | 'forbidden' {
     const key = apiKeys.find(k => k.id === id);
     if (!key) return 'not_found';
     if (key.userId !== userId) return 'forbidden';
 
     key.revoked = true;
+    key.revokedAt = new Date();
     return 'success';
+  },
+  getSha256Hash(id: string): string | null {
+    const key = apiKeys.find(k => k.id === id);
+    return key?.sha256Hash ?? null;
   },
   verify(key: string): ApiKeyRecord | null {
     if (typeof key !== 'string') return null;
@@ -132,10 +199,13 @@ export const apiKeyRepository = {
           userId: candidate.userId,
           prefix: candidate.prefix,
           keyHash: '[REDACTED]',
+          sha256Hash: candidate.sha256Hash,
           scopes: candidate.scopes,
           rateLimitPerMinute: candidate.rateLimitPerMinute,
           createdAt: candidate.createdAt,
           revoked: candidate.revoked,
+          lastUsedAt: candidate.lastUsedAt,
+          revokedAt: candidate.revokedAt,
         };
       }
     }

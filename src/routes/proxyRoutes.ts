@@ -21,6 +21,7 @@ import { CircuitBreakerOpenError } from '../lib/errors.js';
 import { CircuitBreaker, type CircuitBreakerStore } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
+import { defaultUsageSseBroadcaster } from './usage/sse.js';
 
 /**
  * Headers that must never be forwarded to the upstream server.
@@ -315,6 +316,21 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                   statusCode: upstreamStatus,
                   timestamp: new Date().toISOString(),
                 });
+
+                if (recorded) {
+                  defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
+                    id: randomUUID(),
+                    requestId,
+                    apiKey: apiKeyHeader,
+                    apiKeyId: keyRecord.id,
+                    apiId: String(apiEntry.id),
+                    endpointId: endpoint.endpointId,
+                    userId: keyRecord.userId,
+                    amountUsdc: endpoint.priceUsdc,
+                    statusCode: upstreamStatus,
+                    timestamp: new Date().toISOString(),
+                  });
+                }
 
                 // Only deduct billing if this requestId hasn't been processed
                 // before (idempotency guard inside usageStore.record).

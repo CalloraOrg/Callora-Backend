@@ -15,6 +15,7 @@ const developerProfile: Developer = {
   website: null,
   description: null,
   category: null,
+  plan_overrides: null,
   created_at: new Date(1000),
   updated_at: new Date(1000),
 };
@@ -30,6 +31,7 @@ const ownedApi: Api = {
   status: 'active',
   created_at: new Date(1000),
   updated_at: new Date(1000),
+  deleted_at: null,
 };
 
 const otherApi: Api = {
@@ -43,6 +45,7 @@ const otherApi: Api = {
   status: 'active',
   created_at: new Date(1000),
   updated_at: new Date(1000),
+  deleted_at: null,
 };
 
 const createDeveloperRepository = (): DeveloperRepository => ({
@@ -68,7 +71,13 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
     return null;
   },
   async delete() {
-    return true;
+    return false;
+  },
+  async restore() {
+    return null;
+  },
+  async bulkCreateEndpoints() {
+    return [];
   },
   async listByDeveloper(developerId: number) {
     return apis.filter((api) => api.developer_id === developerId);
@@ -81,12 +90,6 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
   },
   async getEndpoints() {
     return [];
-  },
-  async createWithEndpoints() {
-    throw new Error('not implemented');
-  },
-  async delete() {
-    return false;
   },
 });
 
@@ -259,5 +262,36 @@ describe('API key lifecycle routes', () => {
     const response = await request(app).get('/api/apis/101/keys');
     expect(response.status).toBe(401);
     expect(response.body.code).toBe('UNAUTHORIZED');
+  });
+
+  it('adds revoked key to in-memory revocation list', async () => {
+    const app = createTestApp();
+    const { resetTokenRevocationService, getTokenRevocationService } = await import('../services/tokenRevocation.js');
+    const { createHash } = await import('node:crypto');
+    resetTokenRevocationService();
+    const tokenRevocation = getTokenRevocationService({ defaultTtlMs: 60000 });
+    
+    const created = apiKeyRepository.create({
+      apiId: '101',
+      userId: 'dev-1',
+      scopes: ['*'],
+      rateLimitPerMinute: null,
+    });
+
+    const sha256Hex = (v: string) => createHash('sha256').update(v).digest('hex');
+    const keyHash = sha256Hex(created.key);
+
+    // Key should not be in revocation list initially
+    expect(tokenRevocation.isRevoked(keyHash)).toBe(false);
+
+    const response = await request(app)
+      .delete(`/api/keys/${created.id}`)
+      .set('x-user-id', 'dev-1');
+
+    expect(response.status).toBe(204);
+    // Key should now be in revocation list
+    expect(tokenRevocation.isRevoked(keyHash)).toBe(true);
+
+    resetTokenRevocationService();
   });
 });

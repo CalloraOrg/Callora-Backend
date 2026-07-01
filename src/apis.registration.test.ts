@@ -26,6 +26,7 @@ const developerProfile: Developer = {
   website: null,
   description: null,
   category: null,
+  plan_overrides: null,
   created_at: new Date(0),
   updated_at: new Date(0),
 };
@@ -104,5 +105,27 @@ describe('POST /api/apis', () => {
     const detailResponse = await request(app).get(`/api/apis/${createResponse.body.id}`);
     assert.equal(detailResponse.status, 200);
     assert.equal(detailResponse.body.endpoints[0].price_per_call_usdc, '0.01');
+  });
+
+  test('GET /api/apis returns ETag and supports conditional GET (304 Not Modified)', async () => {
+    const app = buildApp();
+
+    await request(app)
+      .post('/api/apis')
+      .set('x-user-id', 'dev-1')
+      .send(validBody);
+
+    const firstResponse = await request(app).get('/api/apis');
+    assert.equal(firstResponse.status, 200);
+    
+    const etag = firstResponse.headers.etag;
+    assert.ok(etag, 'ETag header should be present');
+
+    const secondResponse = await request(app)
+      .get('/api/apis')
+      .set('if-none-match', etag);
+    
+    assert.equal(secondResponse.status, 304);
+    assert.equal(secondResponse.text, '');
   });
 });

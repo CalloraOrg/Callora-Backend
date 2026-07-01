@@ -8,8 +8,10 @@ import {
   SettlementStore,
 } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
-import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
+import { BadRequestError, ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
+import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
+import { parseCursor } from '../lib/cursorPagination.js';
 
 /**
  * Wraps an async Express route handler so that any thrown error is forwarded
@@ -201,6 +203,77 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
       };
 
       res.json(body);
+    }),
+  );
+
+  // Validation schema for developer keys query parameters
+  const keysQuerySchema = z.object({
+    limit: z
+      .string()
+      .optional()
+      .transform((val) => (val ? parseInt(val, 10) : 20))
+      .pipe(z.number().int())
+      .transform((val) => Math.min(Math.max(val, 1), 100)),
+    cursor: z.string().optional(),
+  });
+
+  /**
+   * GET /api/developers/me/keys
+   *
+   * Returns a paginated list of the authenticated developer's API keys.
+   */
+  router.get(
+    '/me/keys',
+    requireAuth,
+    validate({ query: keysQuerySchema }),
+    asyncHandler(async (req, res) => {
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        throw new UnauthorizedError();
+      }
+
+      // Check if developer profile exists to prevent cross-tenant enumeration.
+      const developer = await developerRepository.findByUserId(user.id);
+      if (!developer) {
+        throw new ForbiddenError(
+          'No developer profile found for this account',
+          'DEVELOPER_NOT_FOUND',
+        );
+      }
+
+      const parsedQuery = keysQuerySchema.parse(req.query);
+      const limit = parsedQuery.limit;
+      const cursor = parsedQuery.cursor;
+
+      if (cursor) {
+        const decoded = parseCursor(cursor);
+        if (!decoded) {
+          throw new BadRequestError('Invalid cursor');
+        }
+      }
+
+      const { keys, nextCursor, hasMore } = apiKeyRepository.listWithCursor({
+        userId: user.id,
+        limit,
+        cursor,
+      });
+
+      const data = keys.map((key) => ({
+        id: key.id,
+        prefix: key.prefix,
+        created_at: key.createdAt.toISOString(),
+        last_used_at: key.lastUsedAt ? key.lastUsedAt.toISOString() : null,
+        revoked_at: key.revokedAt ? key.revokedAt.toISOString() : null,
+      }));
+
+      res.json({
+        data,
+        meta: {
+          limit,
+          nextCursor,
+          hasMore,
+        },
+      });
     }),
   );
 

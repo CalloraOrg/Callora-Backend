@@ -254,3 +254,36 @@ Required configuration for safe transaction building:
 - The endpoint is stateless and supports horizontal scaling
 - Only read operations are performed on the database
 - Network calls to Horizon may add latency (target: < 500ms)
+
+## Concurrency — Sequence Manager
+
+When multiple requests share the same source account, concurrent calls to
+`TransactionBuilderService.buildDepositTransaction()` can fetch the same
+Horizon sequence number and produce conflicting transactions.
+
+`SequenceManager` (`src/services/sequenceManager.ts`) eliminates this race by
+serialising sequence-number allocation per source account using a per-account
+async mutex (a chained Promise).  Each caller acquires the lock, fetches a fresh
+sequence from Horizon, increments it, and releases the lock before returning.
+
+### Usage
+
+```typescript
+import { SequenceManager } from './services/sequenceManager.js';
+import { Horizon } from '@stellar/stellar-sdk';
+
+const server = new Horizon.Server('https://horizon-testnet.stellar.org');
+const seqManager = new SequenceManager({ loader: server });
+
+// In concurrent billing or deposit flows:
+const sequence = await seqManager.nextSequence(sourceAccountPublicKey);
+```
+
+### Guarantees
+
+- No two concurrent calls for the same account ever receive the same sequence.
+- The lock is released even if `Horizon.Server.loadAccount()` throws, so a
+  transient error never permanently blocks subsequent callers.
+- Different source accounts are serialised independently — one account's load
+  latency does not block another account.
+

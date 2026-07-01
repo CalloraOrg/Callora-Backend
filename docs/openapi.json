@@ -64,6 +64,19 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/BillingDeductRequest"
+              },
+              "examples": {
+                "deductRequest": {
+                  "summary": "Deduct billing request",
+                  "value": {
+                    "requestId": "req-123e4567-e89b-12d3-a456-426614174000",
+                    "apiId": "api-123",
+                    "endpointId": "endpoint-456",
+                    "apiKeyId": "key-789",
+                    "amountUsdc": "0.01",
+                    "idempotencyKey": "idem-abc123"
+                  }
+                }
               }
             }
           }
@@ -75,6 +88,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BillingDeductResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Successful deduction",
+                    "value": {
+                      "success": true,
+                      "usageEventId": "evt-123e4567-e89b-12d3-a456-426614174000",
+                      "stellarTxHash": "abc123def456...",
+                      "alreadyProcessed": false
+                    }
+                  },
+                  "alreadyProcessed": {
+                    "summary": "Already processed (idempotent)",
+                    "value": {
+                      "success": true,
+                      "usageEventId": "evt-123e4567-e89b-12d3-a456-426614174000",
+                      "stellarTxHash": "abc123def456...",
+                      "alreadyProcessed": true
+                    }
+                  }
                 }
               }
             }
@@ -85,6 +118,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidAmount": {
+                    "summary": "Invalid amount format",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "amountUsdc must be a positive number with at most 7 decimal places",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -95,6 +138,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Authentication required",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -105,6 +158,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "insufficientBalance": {
+                    "summary": "Insufficient balance",
+                    "value": {
+                      "code": "INSUFFICIENT_BALANCE",
+                      "message": "Vault balance too low for deduction",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -115,26 +178,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Rate limit exceeded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "idempotencyConflict": {
+                    "summary": "Idempotency key already used with different parameters",
+                    "value": {
+                      "code": "IDEMPOTENCY_CONFLICT",
+                      "message": "Idempotency key conflict: different request parameters",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -172,52 +225,30 @@
               }
             }
           },
-          "400": {
-            "description": "Invalid request body parameters",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "Payment required (insufficient aggregate balance)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Idempotency conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "429": {
             "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "description": "Seconds until the rate limit expires"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "summary": "Too many requests",
+                    "value": {
+                      "code": "TOO_MANY_REQUESTS",
+                      "message": "Too Many Requests",
+                      "requestId": "req-abc123"
+                    }
+                  }
                 }
               }
             }
@@ -957,6 +988,90 @@
         }
       }
     },
+    "/api/developers/me/keys": {
+      "get": {
+        "summary": "List developer's own API keys",
+        "description": "Returns a paginated list of the authenticated developer's API keys using cursor-based pagination.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of API keys to return per page (max 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Base64 encoded cursor from a previous response to paginate forward",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API keys retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeveloperApiKeysResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden (no developer profile)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/apis/{id}/endpoints/bulk": {
       "post": {
         "summary": "Bulk register endpoints for an API",
@@ -1040,6 +1155,124 @@
           }
         }
       }
+    },
+    "/api/marketplace/plugins": {
+      "get": {
+        "summary": "List all plugins",
+        "description": "Returns all registered community plugins from the marketplace.",
+        "responses": {
+          "200": {
+            "description": "Plugin list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plugins", "total"],
+                  "properties": {
+                    "plugins": { "type": "array", "items": { "$ref": "#/components/schemas/PluginRecord" } },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Register a new plugin",
+        "description": "Registers a new community plugin manifest. Requires authentication.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PluginManifest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Plugin registered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PluginRecord" }
+              }
+            }
+          },
+          "400": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Plugin already registered", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/marketplace/plugins/{id}": {
+      "get": {
+        "summary": "Get a plugin by ID",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Plugin found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PluginRecord" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "summary": "Remove a plugin from the registry",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "204": { "description": "Plugin removed" },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/marketplace/plugins/{id}/install": {
+      "post": {
+        "summary": "Install a plugin",
+        "description": "Marks a plugin as installed and fires the install hook. Requires authentication.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": {
+            "description": "Plugin installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plugin"],
+                  "properties": {
+                    "plugin": { "$ref": "#/components/schemas/PluginRecord" },
+                    "hook": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "ok": { "type": "boolean" },
+                        "hook": { "type": "string" },
+                        "pluginId": { "type": "string" },
+                        "sandboxed": { "type": "boolean" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Bad request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Already installed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "summary": "Uninstall a plugin",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Plugin uninstalled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PluginRecord" } } } },
+          "400": { "description": "Not installed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
     }
   },
   "components": {
@@ -1056,6 +1289,34 @@
       }
     },
     "schemas": {
+      "PluginManifest": {
+        "type": "object",
+        "required": ["id", "name", "version", "hooks"],
+        "properties": {
+          "id": { "type": "string", "minLength": 3, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+          "description": { "type": "string", "maxLength": 512 },
+          "author": { "type": "string", "maxLength": 128 },
+          "hooks": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "enum": ["before_charge", "after_charge", "on_refund", "on_quota_exceeded"] }
+          },
+          "source_url": { "type": "string", "format": "uri" }
+        }
+      },
+      "PluginRecord": {
+        "type": "object",
+        "required": ["manifest", "status", "created_at"],
+        "properties": {
+          "manifest": { "$ref": "#/components/schemas/PluginManifest" },
+          "status": { "type": "string", "enum": ["available", "installed"] },
+          "installed_by": { "type": "string", "nullable": true },
+          "installed_at": { "type": "string", "nullable": true },
+          "created_at": { "type": "string" }
+        }
+      },
       "BillingDeductRequest": {
         "type": "object",
         "required": [
@@ -1789,6 +2050,73 @@
           }
         }
       },
+      "DeveloperApiKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "prefix",
+          "created_at",
+          "last_used_at",
+          "revoked_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "DeveloperApiKeysResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeveloperApiKey"
+            }
+          },
+          "meta": {
+            "type": "object",
+            "required": [
+              "limit",
+              "nextCursor",
+              "hasMore"
+            ],
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "nextCursor": {
+                "type": "string",
+                "nullable": true
+              },
+              "hasMore": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
       "GatewayHealthResponse": {
         "type": "object",
         "required": ["apiSlug", "latency", "breaker"],
@@ -1925,7 +2253,10 @@
           "REQUEST_TIMEOUT",
           "REQUEST_BODY_TOO_LARGE",
           "UNSUPPORTED_MEDIA_TYPE",
-          "UNPROCESSABLE_ENTITY"
+          "UNPROCESSABLE_ENTITY",
+          "USAGE_AGGREGATE_NOT_FOUND",
+          "INVALID_EXPORT_SCHEDULE",
+          "EXPORT_SCHEDULE_NOT_FOUND"
         ],
         "description": "Canonical Callora backend error code."
       }

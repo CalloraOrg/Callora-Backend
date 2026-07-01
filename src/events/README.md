@@ -54,6 +54,24 @@ Used when a developer or consumer balance falls below the configured threshold.
 }
 ```
 
+### `usage.anomaly.detected`
+
+Emitted by the usage anomaly background worker when a developer's latest
+5-minute call volume exceeds the rolling baseline multiplied by the configured
+threshold (default 5×).
+
+```ts
+{
+  windowStart: string;
+  windowEnd: string;
+  currentCalls: number;
+  baselineMean: number;
+  multiplier: number;
+  ratio: number;
+  windowMs: number;
+}
+```
+
 ## Typing Guarantees
 
 ```ts
@@ -105,5 +123,7 @@ The module registers one built-in listener per documented event:
 - `new_api_call`
 - `settlement_completed`
 - `low_balance_alert`
+- `invoice_created`
+- `usage.anomaly.detected`
 
 Each built-in listener resolves matching webhook subscriptions from `WebhookStore` and forwards the typed payload through `dispatchToAll(...)`.

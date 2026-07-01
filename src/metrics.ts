@@ -447,6 +447,33 @@ export function recordCacheMiss(): void {
   apisListingCacheMisses.inc();
 }
 
+// ── Gateway API key lookup counter ────────────────────────────────────────────
+//
+// Metric: gateway_api_key_lookup_total
+//   Type:    Counter
+//   Labels:  outcome — hit | miss | revoked | expired
+//   Purpose: Track API key lookup outcomes in gateway auth middleware.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const gatewayApiKeyLookupTotal = new client.Counter({
+  name: 'gateway_api_key_lookup_total',
+  help: 'Total API key lookups in gateway auth middleware',
+  labelNames: ['outcome'] as const,
+});
+
+register.registerMetric(gatewayApiKeyLookupTotal);
+
+export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired';
+
+export function recordApiKeyLookup(outcome: ApiKeyLookupOutcome): void {
+  gatewayApiKeyLookupTotal.inc({ outcome });
+}
+
+/** Reset gateway API key lookup metrics. Used in tests to isolate metric state. */
+export function resetApiKeyLookupMetrics(): void {
+  gatewayApiKeyLookupTotal.reset();
+}
+
 // ── Proxy premature-abort counter ─────────────────────────────────────────────
 //
 // Metric: proxy_premature_aborts_total
@@ -498,7 +525,9 @@ export function resetAllMetrics(): void {
   idempotencyStoreRows.reset();
   gatewayUpstreamBreakerState.reset();
   resetSlowQueryAlerterMetrics();
+  resetUsageAnomalyDetectorMetrics();
   resetReplicaMetrics();
+  resetApiKeyLookupMetrics();
 }
 
 // ── Replica routing metrics ───────────────────────────────────────────────────
@@ -621,6 +650,34 @@ export function resetSlowQueryAlerterMetrics(): void {
   slowQueryAlerterRunsTotal.reset();
   slowQueryAlerterAlertsTotal.reset();
   slowQueryAlerterQueriesAboveThreshold.reset();
+}
+
+// ── Usage anomaly detector metrics ────────────────────────────────────────────
+
+const usageAnomalyDetectorRunsTotal = new client.Counter({
+  name: 'usage_anomaly_detector_runs_total',
+  help: 'Total number of usage anomaly detector scan cycles',
+});
+
+const usageAnomalyDetectorAnomaliesTotal = new client.Counter({
+  name: 'usage_anomaly_detector_anomalies_total',
+  help: 'Total number of usage anomalies emitted',
+});
+
+register.registerMetric(usageAnomalyDetectorRunsTotal);
+register.registerMetric(usageAnomalyDetectorAnomaliesTotal);
+
+export function recordUsageAnomalyDetectorRun(): void {
+  usageAnomalyDetectorRunsTotal.inc();
+}
+
+export function recordUsageAnomalyDetectorAnomaly(): void {
+  usageAnomalyDetectorAnomaliesTotal.inc();
+}
+
+export function resetUsageAnomalyDetectorMetrics(): void {
+  usageAnomalyDetectorRunsTotal.reset();
+  usageAnomalyDetectorAnomaliesTotal.reset();
 }
 
 /** Reset all replica routing metrics. Used in tests to isolate metric state. */

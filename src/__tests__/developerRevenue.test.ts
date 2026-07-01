@@ -30,6 +30,7 @@ const developerRepository = {
       website: null,
       description: null,
       category: null,
+      plan_overrides: null,
       created_at: new Date('2026-01-01T00:00:00.000Z'),
       updated_at: new Date('2026-01-01T00:00:00.000Z'),
     };
@@ -142,6 +143,7 @@ function seedProfile(userId: string, id: number): void {
     website: null,
     description: null,
     category: null,
+    plan_overrides: null,
     created_at: new Date('2026-01-01T00:00:00.000Z'),
     updated_at: new Date('2026-01-01T00:00:00.000Z'),
   });
@@ -158,6 +160,7 @@ beforeAll(() => {
     website: null,
     description: null,
     category: 'analytics',
+    plan_overrides: null,
     created_at: new Date('2026-01-01T00:00:00.000Z'),
     updated_at: new Date('2026-01-01T00:00:00.000Z'),
   });
@@ -168,6 +171,7 @@ beforeAll(() => {
     website: null,
     description: null,
     category: 'finance',
+    plan_overrides: null,
     created_at: new Date('2026-01-01T00:00:00.000Z'),
     updated_at: new Date('2026-01-01T00:00:00.000Z'),
   });

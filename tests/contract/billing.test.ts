@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createApp } from '../../src/app';
+import { createApp } from '../../src/app.js';
 
 describe('POST /api/billing/deduct OpenAPI Contract', () => {
   const app = createApp();

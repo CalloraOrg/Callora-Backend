@@ -2,6 +2,17 @@
 
 API gateway, usage metering, and billing services for the Callora API marketplace. Talks to Soroban contracts and Horizon for on-chain settlement.
 
+## Fee Abstraction
+
+Developers can pay Stellar transaction fees using app tokens. The backend wraps their inner transaction in a Stellar fee-bump envelope signed by the platform fee account.
+
+- `POST /api/billing/fee-abstraction/quote` – returns estimated XLM fee and app-token equivalent.
+- `POST /api/billing/fee-abstraction` – accepts app-token payment reference and returns a signed fee-bump XDR.
+
+Requires `FEE_BUMPER_SECRET_KEY` environment variable (Stellar secret key `S...`).
+
+See [docs/fee-abstraction.md](./docs/fee-abstraction.md) for full API reference, security considerations, rate limits, and emitted events.
+
 ## Developer Profile Endpoints
 
 - `GET /api/developers/me` returns the authenticated developer profile and auto-creates a blank profile row on first access.
@@ -24,7 +35,9 @@ API gateway, usage metering, and billing services for the Callora API marketplac
   - `GET /api/apis/:id`
   - `POST /api/apis` for authenticated developers to register an API with priced endpoints
 - Usage route: `GET /api/usage`
+- Live usage stream: `GET /api/usage/sse` for authenticated developer dashboards
 - Admin usage anomalies: `GET /api/admin/usage/anomalies` returns per-API daily usage anomalies (z-score spikes/drops) for admin review, filterable by `from`/`to`/`apiId`/`threshold`/`limit` (admin auth + IP allowlist)
+- Usage anomaly detector: background worker emits `usage.anomaly.detected` when per-developer 5-minute traffic exceeds a rolling 12-window baseline by a configurable multiplier (see `docs/usage-anomaly-detector.md`)
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - Per-user global REST rate limiting for authenticated `/api/billing`, `/api/usage`, `/api/developers`, `/api/vault`, and `/api/keys` traffic, with IP fallback for unauthenticated requests
 - In-memory `VaultRepository` with:
@@ -381,3 +394,6 @@ Notes:
 This repo is part of [Callora](https://github.com/your-org/callora):
 - Frontend: `callora-frontend`
 - Contracts: `callora-contracts`
+
+## Security Audit Logging
+Admin events are routed into an isolated, structured Pino log stream containing the channel label `admin_action` for clean alerting profiles.
