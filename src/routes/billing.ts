@@ -20,6 +20,7 @@ import { createSorobanRpcBillingClient, SorobanRpcError } from '../services/soro
 import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
 import creditsRouter from './billing/credits.js';
 import disputesRouter from './billing/disputes.js';
+import { createFeeAbstractionRouter } from './billing/feeAbstraction.js';
 
 const router = Router();
 

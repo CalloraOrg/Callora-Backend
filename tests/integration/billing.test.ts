@@ -6,7 +6,14 @@
  */
 
 import assert from "node:assert/strict";
+import express from "express";
+import jwt from "jsonwebtoken";
+import type { Pool } from "pg";
+import request from "supertest";
 import { createTestDb } from "../helpers/db.js";
+import billingRouter from "../../src/routes/billing.js";
+import { errorHandler } from "../../src/middleware/errorHandler.js";
+import { requestIdMiddleware } from "../../src/middleware/requestId.js";
 import {
   BillingService,
   type BillingDeductRequest,
@@ -22,6 +29,22 @@ import type {
   ApiRegistryEntry,
 } from "../../src/types/gateway.js";
 import type { SettlementStore, Settlement } from "../../src/types/developer.js";
+
+jest.mock("../../src/services/sorobanBilling.js", () => {
+  const actual = jest.requireActual<
+    typeof import("../../src/services/sorobanBilling.js")
+  >("../../src/services/sorobanBilling.js");
+
+  return {
+    ...actual,
+    createSorobanRpcBillingClient: jest.fn().mockReturnValue({
+      getBalance: jest.fn().mockResolvedValue({ balance: "100000000000" }),
+      deductBalance: jest.fn().mockResolvedValue({
+        txHash: "tx_billing_integration",
+      }),
+    }),
+  };
+});
 
 // Mock Soroban client for integration tests
 class MockSorobanClient implements SorobanClient {
@@ -204,6 +227,20 @@ class MockApiRegistry implements ApiRegistry {
 
 function escapeSqlLiteral(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+function createBillingToken(userId: string): string {
+  return jwt.sign({ userId }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+}
+
+function createBillingApp(pool?: Pool): express.Express {
+  const app = express();
+  app.use(requestIdMiddleware);
+  app.use(express.json());
+  if (pool) app.locals.dbPool = pool;
+  app.use("/api/billing", billingRouter);
+  app.use(errorHandler);
+  return app;
 }
 
 describe("BillingService - Integration Tests", () => {
@@ -511,6 +548,116 @@ describe("BillingService - Integration Tests", () => {
     } finally {
       await testDb.end();
     }
+  });
+});
+
+describe("Billing HTTP flow - Integration Tests", () => {
+  test("deducts and retrieves a billing request through the API", async () => {
+    const testDb = createTestDb();
+
+    try {
+      await testDb.pool.query(`
+        CREATE TABLE usage_events (
+          id SERIAL PRIMARY KEY,
+          user_id VARCHAR(255) NOT NULL,
+          api_id VARCHAR(255) NOT NULL,
+          endpoint_id VARCHAR(255) NOT NULL,
+          api_key_id VARCHAR(255) NOT NULL,
+          amount_usdc NUMERIC NOT NULL,
+          request_id VARCHAR(255) NOT NULL UNIQUE,
+          stellar_tx_hash VARCHAR(64),
+          created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      const app = createBillingApp(testDb.pool);
+      const token = createBillingToken("user_http_billing");
+      const payload = {
+        requestId: "req_http_billing",
+        apiId: "api_weather",
+        endpointId: "endpoint_forecast",
+        apiKeyId: "key_http_billing",
+        amountUsdc: "0.05",
+      };
+
+      const deductResponse = await request(app)
+        .post("/api/billing/deduct")
+        .set("Authorization", `Bearer ${token}`)
+        .send(payload);
+
+      assert.equal(deductResponse.status, 200);
+      assert.deepEqual(deductResponse.body, {
+        success: true,
+        usageEventId: deductResponse.body.usageEventId,
+        stellarTxHash: "tx_billing_integration",
+        alreadyProcessed: false,
+      });
+
+      const stored = await testDb.pool.query(
+        "SELECT user_id, amount_usdc FROM usage_events WHERE request_id = $1",
+        [payload.requestId],
+      );
+      assert.equal(stored.rows.length, 1);
+      assert.equal(stored.rows[0].user_id, "user_http_billing");
+      assert.equal(Number(stored.rows[0].amount_usdc), 0.05);
+
+      const lookupResponse = await request(app)
+        .get(`/api/billing/request/${payload.requestId}`)
+        .set("Authorization", `Bearer ${token}`);
+
+      assert.equal(lookupResponse.status, 200);
+      assert.deepEqual(lookupResponse.body, {
+        success: true,
+        usageEventId: deductResponse.body.usageEventId,
+        stellarTxHash: "tx_billing_integration",
+        alreadyProcessed: true,
+      });
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test("returns the standard error envelope for an invalid amount", async () => {
+    const app = createBillingApp();
+    const response = await request(app)
+      .post("/api/billing/deduct")
+      .set("Authorization", `Bearer ${createBillingToken("user_invalid_amount")}`)
+      .set("X-Request-Id", "billing-validation-request")
+      .send({
+        requestId: "req_invalid_amount",
+        apiId: "api_weather",
+        endpointId: "endpoint_forecast",
+        apiKeyId: "key_invalid_amount",
+        amountUsdc: "-0.01",
+      });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body, {
+      code: "BAD_REQUEST",
+      message: "amountUsdc must be a positive number with at most 7 decimal places",
+      requestId: "billing-validation-request",
+    });
+  });
+
+  test("rejects a billing request without authentication", async () => {
+    const app = createBillingApp();
+    const response = await request(app)
+      .post("/api/billing/deduct")
+      .set("X-Request-Id", "billing-auth-request")
+      .send({
+        requestId: "req_no_auth",
+        apiId: "api_weather",
+        endpointId: "endpoint_forecast",
+        apiKeyId: "key_no_auth",
+        amountUsdc: "0.05",
+      });
+
+    assert.equal(response.status, 401);
+    assert.deepEqual(response.body, {
+      code: "UNAUTHORIZED",
+      message: "Unauthorized",
+      requestId: "billing-auth-request",
+    });
   });
 });
 
