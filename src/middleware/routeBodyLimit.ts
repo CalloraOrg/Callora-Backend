@@ -6,6 +6,8 @@ export interface RouteBodyLimitRule {
   limit: string;
 }
 
+const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 function normalizeRoute(route: string): string {
   if (!route || route === '/') {
     return '/';
@@ -50,6 +52,9 @@ function isRouteMatch(pathname: string, pattern: string): boolean {
 }
 
 function isMethodMatch(requestMethod: string, ruleMethod: string): boolean {
+  if (ruleMethod === '*') {
+    return true;
+  }
   return requestMethod.toUpperCase() === ruleMethod.toUpperCase();
 }
 
@@ -60,7 +65,26 @@ export function createRouteBodyLimitMiddleware(rules: RouteBodyLimitRule[] = [])
     limit: rule.limit,
   }));
 
+  const parserCache = new Map<string, { json: express.RequestHandler; urlEncoded: express.RequestHandler }>();
+
+  function getParserPair(limit: string) {
+    let pair = parserCache.get(limit);
+    if (!pair) {
+      pair = {
+        json: express.json({ limit }),
+        urlEncoded: express.urlencoded({ extended: false, limit }),
+      };
+      parserCache.set(limit, pair);
+    }
+    return pair;
+  }
+
   return (req: Request, res: Response, next: NextFunction) => {
+    if (!BODY_METHODS.has(req.method.toUpperCase())) {
+      next();
+      return;
+    }
+
     const matchingRule = normalizedRules.find((rule) =>
       isMethodMatch(req.method, rule.method) && isRouteMatch(req.path, rule.route),
     );
@@ -70,16 +94,15 @@ export function createRouteBodyLimitMiddleware(rules: RouteBodyLimitRule[] = [])
       return;
     }
 
-    const jsonParser = express.json({ limit: matchingRule.limit });
-    const urlEncodedParser = express.urlencoded({ extended: false, limit: matchingRule.limit });
+    const { json, urlEncoded } = getParserPair(matchingRule.limit);
 
-    jsonParser(req, res, (jsonError) => {
+    json(req, res, (jsonError) => {
       if (jsonError) {
         next(jsonError);
         return;
       }
 
-      urlEncodedParser(req, res, next);
+      urlEncoded(req, res, next);
     });
   };
 }
