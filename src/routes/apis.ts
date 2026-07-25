@@ -15,12 +15,15 @@ import {
   type DeveloperRepository,
 } from '../repositories/developerRepository.js';
 import { apiRegistrationSchema, bulkEndpointsSchema } from '../validators/apiRegistration.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 
 export interface ApisRouterDeps {
   apiRepository?: ApiRepository;
   developerRepository?: DeveloperRepository;
   /** Inject a custom cache instance (useful in tests). Defaults to the shared singleton. */
   cache?: ListingsCache;
+  /** Optional rate limit middleware for the public API routes. */
+  rateLimitMiddleware?: ReturnType<typeof createRateLimitMiddleware>;
 }
 
 export function createApisRouter(deps: ApisRouterDeps = {}): Router {
@@ -28,6 +31,12 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
   const apiRepository = deps.apiRepository ?? defaultApiRepository;
   const developerRepository = deps.developerRepository ?? defaultDeveloperRepository;
   const cache = deps.cache ?? listingsCache;
+  const rateLimitMiddleware = deps.rateLimitMiddleware ?? createRateLimitMiddleware({
+    windowMs: 60_000,
+    maxRequests: 60,
+  });
+
+  router.use(rateLimitMiddleware);
 
   router.get('/', etagMiddleware, async (req, res, next) => {
     try {

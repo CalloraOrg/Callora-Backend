@@ -13,6 +13,7 @@ import { InMemoryApiRepository } from '../repositories/apiRepository.js';
 import type { Api, Developer } from '../db/schema.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import { createApisRouter } from './apis.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 
 const developerProfile: Developer = {
   id: 11,
@@ -145,6 +146,43 @@ describe('createApisRouter', () => {
     expect(res.status).toBe(200);
     expect(res.body.meta).toEqual({ total: 1, limit: 1, offset: 0 });
     expect(res.body.data).toHaveLength(1);
+  });
+
+  it('returns 429 once the per-user limit for the API router is exceeded', async () => {
+    const repo = new InMemoryApiRepository(
+      [
+        {
+          id: 1,
+          name: 'Weather API',
+          description: 'Provides weather data',
+          base_url: 'https://api.weather.test',
+          logo_url: null,
+          category: 'weather',
+          status: 'active',
+          developer: {
+            name: 'Acme Corp',
+            website: 'https://acme.test',
+            description: 'Leading data provider',
+          },
+        },
+      ],
+      new Map(),
+    );
+
+    const app = express();
+    app.use('/api/apis', createApisRouter({
+      apiRepository: repo,
+      developerRepository,
+      rateLimitMiddleware: createRateLimitMiddleware({ windowMs: 60_000, maxRequests: 1 }),
+    }));
+    app.use(errorHandler);
+
+    await request(app).get('/api/apis').set('x-user-id', 'user-1').expect(200);
+    const res = await request(app).get('/api/apis').set('x-user-id', 'user-1');
+
+    expect(res.status).toBe(429);
+    expect(res.body.code).toBe('TOO_MANY_REQUESTS');
+    expect(res.headers['retry-after']).toBe('60');
   });
 });
 
