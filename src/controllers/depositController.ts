@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import type { AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { AmountValidator } from '../validators/amountValidator.js';
+import { isValidStellarPublicKey } from '../validators/stellarAddress.js';
+import { successEnvelope, errorEnvelope, getRequestId } from '../lib/envelope.js';
 import {
   TransactionBuilderService,
   type StellarNetwork,
@@ -137,7 +139,7 @@ export class DepositController {
 
       // Step 5: Validate source account if provided
       if (requestBody.source_account) {
-        if (!this.isValidStellarPublicKey(requestBody.source_account)) {
+        if (!isValidStellarPublicKey(requestBody.source_account)) {
           res.status(400).json(
             errorEnvelope(
               'INVALID_SOURCE_ACCOUNT',
@@ -193,11 +195,6 @@ export class DepositController {
     } catch (error) {
       this.handleError(error, res, getRequestId(req));
     }
-  }
-
-  private isValidStellarPublicKey(key: string): boolean {
-    // Stellar public keys start with 'G' and are 56 characters long
-    return /^G[A-Z0-9]{55}$/.test(key);
   }
 
   private handleError(error: unknown, res: Response, requestId: string): void {

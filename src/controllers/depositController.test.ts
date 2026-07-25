@@ -469,29 +469,5 @@ describe('DepositController', () => {
       );
     });
 
-    it('should validate Stellar public key format correctly', async () => {
-      // Test valid keys — exactly G + 55 uppercase alphanumeric = 56 chars
-      const validKeys = [
-        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-        'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-      ];
-
-      validKeys.forEach((key) => {
-        expect(depositController['isValidStellarPublicKey'](key)).toBe(true);
-      });
-
-      // Test invalid keys
-      const invalidKeys = [
-        'invalid',
-        'XAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', // Wrong prefix
-        'GAAAAAAAAA', // Too short
-        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', // Too long (58)
-        'gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', // Lowercase
-      ];
-
-      invalidKeys.forEach((key) => {
-        expect(depositController['isValidStellarPublicKey'](key)).toBe(false);
-      });
-    });
   });
 });
