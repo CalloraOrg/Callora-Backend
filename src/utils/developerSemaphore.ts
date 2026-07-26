@@ -48,6 +48,21 @@ export class DeveloperSemaphore {
     return total;
   }
 
+  /** Returns the active slot count for a specific developer, or 0 if not tracked. */
+  getActiveSlotCount(developerId: string): number {
+    return this.developers.get(developerId)?.activeCount ?? 0;
+  }
+
+  /** Returns the number of requests queued (waiting for a slot) for a developer. */
+  getQueueLength(developerId: string): number {
+    return this.developers.get(developerId)?.queue.length ?? 0;
+  }
+
+  /** Returns whether the developer has reached their concurrency limit. */
+  isAtLimit(developerId: string): boolean {
+    return this.getActiveSlotCount(developerId) >= this.maxConcurrencyPerDeveloper;
+  }
+
   private acquireSlot(developerId: string): Promise<() => void> {
     const state = this.getOrCreateState(developerId);
 
