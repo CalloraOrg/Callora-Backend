@@ -22,6 +22,7 @@ import { createAdminQuotaBulkRouter } from './admin/quotas/bulk.js';
 import { createAdminUsageExportRouter } from './admin/usage/export.js';
 import { createAdminKeyConcurrencyRouter } from './admin/keys/concurrency.js';
 import { createAdminAuditRouter } from './admin/audit.js';
+import { createAdminMetricsConcurrencyRouter } from './admin/metrics.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
@@ -303,6 +304,13 @@ router.use('/keys', createAdminKeyConcurrencyRouter());
 // Mounts: GET /api/admin/audit
 // ---------------------------------------------------------------------------
 router.use('/audit', createAdminAuditRouter());
+
+// ---------------------------------------------------------------------------
+// GrantFox FWC26 per-developer concurrency stats
+// Mounts: GET /api/admin/metrics/concurrency
+//         GET /api/admin/metrics/concurrency/:developerId
+// ---------------------------------------------------------------------------
+router.use('/metrics', createAdminMetricsConcurrencyRouter());
 
 // ---------------------------------------------------------------------------
 // Maintenance banner
