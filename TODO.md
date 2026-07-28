@@ -6,5 +6,5 @@
 - [x] 3. Wire usage access log config through `src/config/index.ts`
 - [x] 4. Apply config-aware `createUsageAccessLogMiddleware()` to all /api/usage/* sub-routers in `src/routes/index.ts`
 - [x] 5. Remove in-route `usageAccessLog` from `src/routes/usage.ts` to avoid double-logging
-- [ ] 6. Verify the build succeeds
+- [x] 6. Verify the build succeeds
 
