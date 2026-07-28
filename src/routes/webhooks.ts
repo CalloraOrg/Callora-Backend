@@ -294,4 +294,8 @@ router.post(
   }
 );
 
+export function createWebhooksRouter(): Router {
+  return router;
+}
+
 export default router;
