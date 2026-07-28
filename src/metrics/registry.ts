@@ -69,4 +69,22 @@ export function resetMaintenanceMetrics(): void {
   maintenanceDuration.reset();
 }
 
-export { billingDeductDuration, refreshTokenDuration, maintenanceDuration, creditsDuration };
+const adminDuration = new client.Histogram({
+  name: 'admin_duration_seconds',
+  help: 'Latency of /api/admin routes in seconds',
+  labelNames: ['route', 'status_code'],
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export function recordAdminDuration(route: string, statusCode: number, durationMs: number): void {
+  adminDuration.observe(
+    { route, status_code: String(statusCode) },
+    durationMs / 1000,
+  );
+}
+
+export function resetAdminMetrics(): void {
+  adminDuration.reset();
+}
+
+export { billingDeductDuration, refreshTokenDuration, maintenanceDuration, creditsDuration, adminDuration };

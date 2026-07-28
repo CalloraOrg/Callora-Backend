@@ -2,6 +2,7 @@ import { adminLogMiddleware } from '../middleware/adminLog.js';
 import { Router, type Response } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
+import { adminHistogramMiddleware } from '../middleware/metricsHistogram.js';
 import { findUsers } from '../repositories/userRepository.js';
 import { parsePagination, paginatedResponse } from '../lib/pagination.js';
 import { getClientIp } from '../lib/clientIp.js';
@@ -40,6 +41,7 @@ const router = Router();
 router.use(createAdminIpAllowlist());
 router.use(adminAuth);
 router.use(adminLogMiddleware);
+router.use(adminHistogramMiddleware);
 router.get('/users', async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);
