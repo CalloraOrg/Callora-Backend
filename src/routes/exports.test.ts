@@ -240,4 +240,87 @@ describe('GET /api/exports', () => {
       expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
     });
   });
+
+  describe('CORS allowlist', () => {
+    let originalEnv: string | undefined;
+
+    beforeEach(() => {
+      originalEnv = process.env.EXPORTS_CORS_ALLOWED_ORIGINS;
+    });
+
+    afterEach(() => {
+      if (originalEnv === undefined) {
+        delete process.env.EXPORTS_CORS_ALLOWED_ORIGINS;
+      } else {
+        process.env.EXPORTS_CORS_ALLOWED_ORIGINS = originalEnv;
+      }
+    });
+
+    it('denies cross-origin requests by default if environment variable is not set', async () => {
+      delete process.env.EXPORTS_CORS_ALLOWED_ORIGINS;
+      const app = createTestApp();
+      
+      const response = await request(app)
+        .get('/api/exports')
+        .set('Origin', 'https://malicious.com');
+        
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('ORIGIN_NOT_ALLOWED');
+    });
+
+    it('allows cross-origin requests from explicitly allowed origins', async () => {
+      process.env.EXPORTS_CORS_ALLOWED_ORIGINS = 'https://allowed.example.com';
+      const app = createTestApp();
+      
+      const response = await request(app)
+        .get('/api/exports')
+        .set('Origin', 'https://allowed.example.com')
+        // include auth to ensure we hit the 200 path instead of 401
+        .set('x-user-id', 'user-1');
+        
+      expect(response.status).toBe(200);
+      expect(response.headers['access-control-allow-origin']).toBe('https://allowed.example.com');
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+      expect(response.headers['vary']).toContain('Origin');
+    });
+
+    it('denies requests from origins not in the allowlist', async () => {
+      process.env.EXPORTS_CORS_ALLOWED_ORIGINS = 'https://allowed.example.com';
+      const app = createTestApp();
+      
+      const response = await request(app)
+        .get('/api/exports')
+        .set('Origin', 'https://other.example.com');
+        
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('ORIGIN_NOT_ALLOWED');
+    });
+
+    it('denies requests with no Origin header when CORS is configured', async () => {
+      process.env.EXPORTS_CORS_ALLOWED_ORIGINS = 'https://allowed.example.com';
+      const app = createTestApp();
+      
+      const response = await request(app)
+        .get('/api/exports');
+        
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('ORIGIN_NOT_ALLOWED');
+    });
+
+    it('responds to OPTIONS preflight requests for allowed origins', async () => {
+      process.env.EXPORTS_CORS_ALLOWED_ORIGINS = 'https://allowed.example.com';
+      const app = createTestApp();
+      
+      const response = await request(app)
+        .options('/api/exports')
+        .set('Origin', 'https://allowed.example.com');
+        
+      expect(response.status).toBe(204);
+      expect(response.headers['access-control-allow-origin']).toBe('https://allowed.example.com');
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+      expect(response.headers['access-control-max-age']).toBe('600');
+      expect(response.headers['access-control-allow-methods']).toContain('OPTIONS');
+      expect(response.headers['vary']).toContain('Origin');
+    });
+  });
 });
