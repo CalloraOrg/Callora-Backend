@@ -1,4 +1,4 @@
-export type GroupBy = 'day' | 'week' | 'month';
+export type GroupBy = 'hour' | 'day' | 'week' | 'month';
 
 export interface UsageEvent {
   id: string;
@@ -39,6 +39,13 @@ export interface UsageBucket {
   revenue: bigint;
 }
 
+export interface UsageHourBucket {
+  /** ISO 8601 datetime truncated to the hour, e.g. "2026-07-28T10:00:00.000Z" */
+  hour: string;
+  calls: number;
+  revenue: bigint;
+}
+
 export interface UsageEventsRepository {
   findByDeveloper(query: UsageEventQuery): Promise<UsageEvent[]>;
   findByUser(query: UserUsageEventQuery): Promise<UsageEvent[]>;
@@ -49,6 +56,20 @@ export interface UsageEventsRepository {
     totalCalls: number;
     breakdownByApi: UsageStats[];
     buckets?: UsageBucket[];
+  }>;
+  /**
+   * Returns per-hour call counts and revenue for the authenticated user
+   * within [from, to]. Buckets are sorted ascending by hour.
+   */
+  aggregateByHour(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+    apiId?: string;
+  }): Promise<{
+    buckets: UsageHourBucket[];
+    totalCalls: number;
+    totalRevenue: bigint;
   }>;
   getTopEndpoints(query: {
     userId: string;
@@ -205,6 +226,40 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
     };
   }
 
+  async aggregateByHour(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+    apiId?: string;
+  }): Promise<{
+    buckets: UsageHourBucket[];
+    totalCalls: number;
+    totalRevenue: bigint;
+  }> {
+    const bucketMap = new Map<string, { calls: number; revenue: bigint }>();
+    let totalCalls = 0;
+    let totalRevenue = 0n;
+
+    for (const event of this.events) {
+      if (event.userId !== query.userId) continue;
+      if (query.apiId && event.apiId !== query.apiId) continue;
+      if (event.occurredAt < query.from || event.occurredAt > query.to) continue;
+
+      totalCalls += 1;
+      totalRevenue += event.revenue;
+
+      const hour = this.getPeriodString(event.occurredAt, 'hour');
+      const bucket = bucketMap.get(hour) ?? { calls: 0, revenue: 0n };
+      bucketMap.set(hour, { calls: bucket.calls + 1, revenue: bucket.revenue + event.revenue });
+    }
+
+    const buckets: UsageHourBucket[] = [...bucketMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([hour, stats]) => ({ hour, calls: stats.calls, revenue: stats.revenue }));
+
+    return { buckets, totalCalls, totalRevenue };
+  }
+
   async getTopEndpoints(query: {
     userId: string;
     from: Date;
@@ -248,6 +303,9 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
 
   private getPeriodString(date: Date, groupBy: GroupBy): string {
     const d = new Date(date);
+    if (groupBy === 'hour') {
+      return d.toISOString().slice(0, 13) + ':00:00.000Z';
+    }
     if (groupBy === 'day') {
       return d.toISOString().slice(0, 10);
     }

@@ -31,6 +31,7 @@ import { billingAccessLogMiddleware } from "../middleware/billingAccessLog.js";
 import creditsRouter from "./billing/credits.js";
 import deductRouter from "./billing/deduct.js";
 import disputesRouter from "./billing/disputes.js";
+import refundRouter from "./billing/refund.js";
 import { createFeeAbstractionRouter } from "./billing/feeAbstraction.js";
 import { createBillingForecastRouter } from "./billing/forecast.js";
 import { etagMiddleware } from "../middleware/etag.js";
@@ -42,6 +43,7 @@ router.use(billingAccessLogMiddleware);
 router.use("/credits", creditsRouter);
 router.use("/disputes", disputesRouter);
 router.use("/deduct", deductRouter);
+router.use("/refund", refundRouter);
 router.use("/fee-abstraction", createFeeAbstractionRouter());
 router.use("/forecast", createBillingForecastRouter());
 

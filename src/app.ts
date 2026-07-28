@@ -17,8 +17,10 @@ import { createExplainRouter } from './routes/admin/explain.js';
 import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
 import { createAdminUsageByEndpointRouter } from './routes/admin/usage/by-endpoint.js';
 import { createSpikeRouter } from './routes/admin/usage/spike.js';
+import publicMaintenanceRouter from './routes/maintenance.js';
 import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
 import { createPluginsRouter } from './routes/marketplace/plugins.js';
 import { pool } from './db.js';
 import {
@@ -351,6 +353,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     createDependenciesRouter(dependencies?.healthCheckConfig),
   );
 
+  // Rate-limit health dependency probe - operational status of the rate-limit subsystem
+  app.use(
+    "/api/rate-limit/health",
+    createRateLimitHealthRouter({
+      limiter: restRateLimiter,
+      windowMs: restRateLimitOptions.windowMs,
+      maxRequests: restRateLimitOptions.maxRequests,
+    }),
+  );
+
   app.get("/api/health", async (req, res) => {
     const requestId = getRequestId(req);
     // If no health check config provided, return simple health check
@@ -381,6 +393,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }
   });
 
+  // Public maintenance status — readable by external monitoring without admin auth.
+  // Mounted in front of the admin routers so it cannot be shadowed by their catch-alls.
+  app.use("/api/maintenance", publicMaintenanceRouter);
+
   // Mounted before the generic admin router so the specific path is not
   // shadowed by adminRouter's `/usage/:developerId` route.
   app.use("/api/admin/usage/anomalies", createUsageAnomaliesRouter({ pool }));
@@ -400,8 +416,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   app.use("/api/quota/requests", quotaRequestsRouter);
   app.use("/api/quotas/counts", quotaCountsRouter);
 
-  // Refunds — developers submit refund requests, admins approve/reject
-  app.use("/api/refunds", refundsRouter);
 
   // Prometheus metrics endpoint — auth-gated in production
   app.get("/api/metrics", metricsEndpoint);
@@ -416,7 +430,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   app.use("/api/marketplace/plugins", createPluginsRouter());
 
-  app.use("/api/feature-flags", createFeatureFlagsRouter());
+
+
+  // Webhook management routes
+  app.use('/api/webhooks', createWebhooksRouter());
 
   // Mount all routes including billing and limits
   app.use(

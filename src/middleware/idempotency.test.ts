@@ -1,5 +1,10 @@
 import type { Request, Response, NextFunction } from 'express';
-import { idempotencyMiddleware, calculateRequestHash, IDEMPOTENCY_KEY_REUSE_MISMATCH } from './idempotency.js';
+import {
+  idempotencyMiddleware,
+  calculateRequestHash,
+  IDEMPOTENCY_KEY_REUSE_MISMATCH,
+  INVALID_IDEMPOTENCY_KEY,
+} from './idempotency.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -31,6 +36,8 @@ function makeReq(overrides: Partial<{
     body,
     method: 'POST',
     path: '/api/billing/deduct',
+    originalUrl: '/api/billing/deduct',
+    id: 'req-idem-test',
     app: { locals: { dbPool: undefined } } as unknown as Request['app'], // overridden per test
   };
 }
@@ -148,6 +155,41 @@ describe('idempotencyMiddleware — unit', () => {
     expect(mockDb.query).not.toHaveBeenCalled();
   });
 
+  it('rejects malformed Idempotency-Key values with the standard error envelope', async () => {
+    const mockDb = makeDb();
+    const req = makeReq({ idempotencyKeyHeader: 'bad key with spaces' }) as Request;
+    const res = makeRes();
+    const next = jest.fn();
+    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
+
+    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({ code: INVALID_IDEMPOTENCY_KEY }),
+        requestId: 'req-idem-test',
+      })
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(mockDb.query).not.toHaveBeenCalled();
+  });
+
+  it('ignores methods outside the configured idempotent write methods', async () => {
+    const mockDb = makeDb();
+    const req = makeReq() as Request;
+    (req as unknown as { method: string }).method = 'GET';
+    const res = makeRes();
+    const next = jest.fn();
+    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
+
+    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(mockDb.query).not.toHaveBeenCalled();
+  });
+
   it('deletes expired keys and inserts started record for new key', async () => {
     const mockDb = makeDb([]);
     const req = makeReq() as Request;
@@ -226,12 +268,15 @@ describe('idempotencyMiddleware — payload mismatch (issue #427)', () => {
 
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ code: IDEMPOTENCY_KEY_REUSE_MISMATCH })
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({ code: IDEMPOTENCY_KEY_REUSE_MISMATCH }),
+      })
     );
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('response includes conflictingSummary with incomingPayloadFingerprint and storedPayloadFingerprint', async () => {
+  it('response includes redacted mismatch details with request fingerprints', async () => {
     const mockDb = makeDb([{
       request_hash: 'stored-hash-abc',
       status: 'completed',
@@ -249,14 +294,14 @@ describe('idempotencyMiddleware — payload mismatch (issue #427)', () => {
     await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
 
     const responseBody = (res.json as jest.Mock).mock.calls[0][0];
-    expect(responseBody.conflictingSummary).toMatchObject({
+    expect(responseBody.error.details).toMatchObject({
       idempotencyKey: 'test-key-123',
       incomingPayloadFingerprint: expectedIncoming,
       storedPayloadFingerprint: 'stored-hash-abc',
     });
   });
 
-  it('conflictingSummary.incomingFields lists top-level body keys (sorted)', async () => {
+  it('mismatch details list top-level body keys (sorted)', async () => {
     const mockDb = makeDb([{
       request_hash: 'different-stored',
       status: 'completed',
@@ -272,7 +317,7 @@ describe('idempotencyMiddleware — payload mismatch (issue #427)', () => {
     await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
 
     const responseBody = (res.json as jest.Mock).mock.calls[0][0];
-    expect(responseBody.conflictingSummary.incomingFields).toEqual(['aaa', 'mmm', 'zzz']);
+    expect(responseBody.error.details.incomingFields).toEqual(['aaa', 'mmm', 'zzz']);
   });
 
   it('does NOT leak stored values — only fingerprints and field names are returned', async () => {
@@ -340,7 +385,10 @@ describe('idempotencyMiddleware — payload mismatch (issue #427)', () => {
     // Mismatch check runs before status check — should be REUSE_MISMATCH not IN_PROGRESS
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ code: IDEMPOTENCY_KEY_REUSE_MISMATCH })
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({ code: IDEMPOTENCY_KEY_REUSE_MISMATCH }),
+      })
     );
     expect(next).not.toHaveBeenCalled();
   });
@@ -368,7 +416,10 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
 
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 'IDEMPOTENCY_IN_PROGRESS' })
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({ code: 'IDEMPOTENCY_IN_PROGRESS' }),
+      })
     );
     expect(next).not.toHaveBeenCalled();
   });

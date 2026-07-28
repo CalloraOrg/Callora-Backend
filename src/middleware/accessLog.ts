@@ -239,3 +239,75 @@ export function createAccessLogMiddleware(options: AccessLogOptions = {}) {
 }
 
 export const requestLogger = createAccessLogMiddleware();
+
+export interface HealthAccessLogPayload {
+  requestId: string;
+  latencyMs: number;
+  status: number;
+  responseBytes: number;
+  actor?: string;
+}
+
+export function createHealthAccessLogMiddleware(): (
+  req: import('express').Request,
+  res: import('express').Response,
+  next: import('express').NextFunction,
+) => void {
+  return function healthAccessLogMiddleware(
+    req: import('express').Request,
+    res: import('express').Response,
+    next: import('express').NextFunction,
+  ): void {
+    const startAt = process.hrtime.bigint();
+    const requestId =
+      sanitizeRequestId(req.id) ??
+      sanitizeRequestId(getRequestId()) ??
+      sanitizeRequestId(getHeaderValue(req.headers, 'x-request-id')) ??
+      uuidv4();
+
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('x-request-id', requestId);
+    }
+
+    let responseBytes = 0;
+    const originalWrite = typeof res.write === 'function' ? res.write.bind(res) : undefined;
+    const originalEnd = typeof res.end === 'function' ? res.end.bind(res) : undefined;
+
+    if (originalWrite) {
+      res.write = ((chunk: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalWrite(chunk as never, encoding as never, callback as never);
+      }) as typeof res.write;
+    }
+
+    if (originalEnd) {
+      res.end = ((chunk?: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalEnd(chunk as never, encoding as never, callback as never);
+      }) as typeof res.end;
+    }
+
+    res.once('finish', () => {
+      const elapsedMs = Number(process.hrtime.bigint() - startAt) / 1_000_000;
+      const status = res.statusCode;
+      const payload: HealthAccessLogPayload = {
+        requestId,
+        latencyMs: Number(elapsedMs.toFixed(3)),
+        status,
+        responseBytes,
+      };
+
+      if (status >= 500 && typeof logger.error === 'function') {
+        logger.error(payload, 'health check completed');
+      } else if (status >= 400 && typeof logger.warn === 'function') {
+        logger.warn(payload, 'health check completed');
+      } else {
+        logger.info(payload, 'health check completed');
+      }
+    });
+
+    next();
+  };
+}
+
+export const healthAccessLog = createHealthAccessLogMiddleware();

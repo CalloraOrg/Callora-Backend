@@ -58,6 +58,7 @@ describe('Maintenance Configuration & Health Tracking Integration', () => {
   it('should include correlationId in POST response when x-correlation-id header is provided', async () => {
     const res = await request(app)
       .post('/api/admin/maintenance')
+      .set('Origin', origin)
       .set('x-correlation-id', 'test-corr-456')
       .send({
         isEnabled: false,
@@ -70,6 +71,7 @@ describe('Maintenance Configuration & Health Tracking Integration', () => {
   it('should include correlationId in GET response when x-correlation-id header is provided', async () => {
     const res = await request(app)
       .get('/api/admin/maintenance')
+      .set('Origin', origin)
       .set('x-correlation-id', 'get-corr-789');
 
     expect(res.status).toBe(200);
@@ -79,6 +81,7 @@ describe('Maintenance Configuration & Health Tracking Integration', () => {
   it('should include correlationId in error responses', async () => {
     const res = await request(app)
       .post('/api/admin/maintenance')
+      .set('Origin', origin)
       .set('x-correlation-id', 'error-corr-111')
       .send({ isEnabled: true });
 
@@ -88,7 +91,8 @@ describe('Maintenance Configuration & Health Tracking Integration', () => {
 
   it('should set X-Correlation-Id response header', async () => {
     const res = await request(app)
-      .get('/api/admin/maintenance');
+      .get('/api/admin/maintenance')
+      .set('Origin', origin);
 
     expect(res.headers['x-correlation-id']).toBeDefined();
   });
@@ -96,6 +100,7 @@ describe('Maintenance Configuration & Health Tracking Integration', () => {
   it('should echo X-Correlation-Id response header when client sends it', async () => {
     const res = await request(app)
       .get('/api/admin/maintenance')
+      .set('Origin', origin)
       .set('x-correlation-id', 'echo-corr-222');
 
     expect(res.headers['x-correlation-id']).toBe('echo-corr-222');

@@ -1,4 +1,5 @@
 import { resetAllMetrics, register } from '../metrics.js';
+import { logger } from '../logger.js';
 import type { Pool } from 'pg';
 import {
   createSlowQueryAlerterJob,
@@ -30,9 +31,13 @@ describe('slowQueryAlerter', () => {
 
   beforeEach(() => {
     originalFetch = global.fetch;
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
+    // `logger` wraps `console.*` at module load time (see logger.ts), so
+    // spying on `console.*` here would never intercept calls made through
+    // `logger`. Spy on `logger` directly instead, matching the convention
+    // used in sloAlertRecorder.test.ts.
+    jest.spyOn(logger, 'info').mockImplementation(() => undefined);
+    jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(logger, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -177,9 +182,7 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(mockPool.query).toHaveBeenCalledWith(
         expect.stringContaining('pg_stat_statements'),
@@ -216,17 +219,13 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       fetchMock.mockClear();
 
       jest.advanceTimersByTime(300_000);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).not.toHaveBeenCalled();
 
@@ -251,18 +250,14 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       fetchMock.mockClear();
       (mockPool.query as jest.Mock).mockClear();
 
       jest.advanceTimersByTime(200);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       job.stop();
@@ -302,12 +297,10 @@ describe('slowQueryAlerter', () => {
       expect(mockPool.query).toHaveBeenCalledTimes(1);
 
       queryResolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       jest.advanceTimersByTime(10);
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(mockPool.query).toHaveBeenCalledTimes(2);
 
@@ -399,9 +392,7 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       const metrics = await register.getMetricsAsJSON();
       const runsMetric = metrics.find(
@@ -447,11 +438,9 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
-      expect(console.error).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining('[slowQueryAlerter] Webhook returned 500'),
         'Internal Server Error',
       );
@@ -477,11 +466,9 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
-      expect(console.error).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining('[slowQueryAlerter] Webhook post failed:'),
         'network error',
       );
@@ -502,11 +489,9 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
-      expect(console.error).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining('[slowQueryAlerter] Job failed:'),
         expect.any(Error),
       );

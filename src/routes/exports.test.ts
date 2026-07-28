@@ -298,4 +298,44 @@ describe('GET /api/exports', () => {
     expect(response.body).toHaveProperty('success');
     expect(response.body.success).toBe(false);
   });
+
+  describe('security headers', () => {
+    const expectedCsp = "default-src 'self'; frame-ancestors 'none'; object-src 'none'";
+
+    it('sets CSP, X-Content-Type-Options, and Referrer-Policy on 200 responses', async () => {
+      const app = createTestApp();
+      const response = await request(app)
+        .get('/api/exports')
+        .set('x-user-id', 'user-1');
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-security-policy']).toBe(expectedCsp);
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+    });
+
+    it('sets the same security headers on 401 error responses', async () => {
+      const app = createTestApp();
+      const response = await request(app).get('/api/exports');
+
+      expect(response.status).toBe(401);
+      expect(response.headers['content-security-policy']).toBe(expectedCsp);
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+    });
+
+    it('sets the same security headers on 403 error responses', async () => {
+      const app = createTestApp();
+      mockDeveloperRepository.findByUserId.mockResolvedValueOnce(undefined);
+
+      const response = await request(app)
+        .get('/api/exports')
+        .set('x-user-id', 'user-no-profile');
+
+      expect(response.status).toBe(403);
+      expect(response.headers['content-security-policy']).toBe(expectedCsp);
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+    });
+  });
 });

@@ -39,11 +39,12 @@ export const requestIdMiddleware = (
 ): void => {
   const raw = req.header(REQUEST_ID_HEADER);
   const requestId = sanitizeRequestId(raw) ?? uuidv4();
+  const correlationId = sanitizeRequestId(req.header('x-correlation-id')) ?? requestId;
 
   req.id = requestId;
   res.setHeader('X-Request-Id', requestId);
 
-  runWithRequestContext({ requestId }, () => next());
+  runWithRequestContext({ requestId, correlationId }, () => next());
 };
 
 /**

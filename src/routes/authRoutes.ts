@@ -1,14 +1,20 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { AuthController } from '../controllers/authController.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { bodyValidator } from '../middleware/validate.js';
 import { createLoginThrottle } from '../middleware/loginThrottle.js';
 import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { refreshTokenHistogramMiddleware } from '../middleware/metricsHistogram.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { config } from '../config/index.js';
 import { walletLoginSchema, refreshTokenSchema } from '../validators/auth.js';
 
 const authTimeout = createTimeoutMiddleware({ timeoutMs: config.authTimeoutMs });
+const authIdempotency: RequestHandler = (req, res, next) =>
+  idempotencyMiddleware(req, res, next, {
+    methods: ['POST', 'PATCH'],
+    allowBodyKey: false,
+  });
 
 export function createAuthRoutes(authController: AuthController): Router {
   const router = Router();
@@ -32,6 +38,7 @@ export function createAuthRoutes(authController: AuthController): Router {
   router.post('/wallet',
     loginThrottle,
     bodyValidator(walletLoginSchema),
+    authIdempotency,
     (req, res, next) => authController.walletLogin(req, res, next)
   );
 
@@ -39,18 +46,21 @@ export function createAuthRoutes(authController: AuthController): Router {
   router.post('/refresh',
     refreshTokenHistogramMiddleware,
     bodyValidator(refreshTokenSchema),
+    authIdempotency,
     (req, res, next) => authController.refreshToken(req, res, next)
   );
 
   // POST /auth/revoke - Revoke a specific refresh token
   router.post('/revoke',
     bodyValidator(refreshTokenSchema),
+    authIdempotency,
     (req, res, next) => authController.revokeToken(req, res, next)
   );
 
   // POST /auth/revoke-all - Revoke all refresh tokens for authenticated user
   router.post('/revoke-all',
     requireAuth,
+    authIdempotency,
     (req, res, next) => authController.revokeAllTokens(req, res, next)
   );
 

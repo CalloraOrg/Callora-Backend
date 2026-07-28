@@ -278,7 +278,7 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   // -----------------------------------------------------------------------
   router.get('/', (req: Request, res: Response) => {
     const requestId = getRequestId(req) ?? 'unknown';
-    const forecast = simulateForecastCalculation(req.signal);
+    const forecast = simulateForecastCalculation(req.signal ?? req.abortSignal);
 
     const data: ForecastResponse = {
       forecast,

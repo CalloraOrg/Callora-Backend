@@ -760,4 +760,59 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       revenue: toBigInt(row.revenue, 'revenue'),
     }));
   }
+
+  /**
+   * Returns per-hour aggregation of call counts and revenue for a user.
+   *
+   * Uses `DATE_TRUNC('hour', created_at)` so the grouping is done entirely in
+   * PostgreSQL. Buckets are returned in ascending chronological order.
+   *
+   * The hour label is returned as an ISO 8601 string (UTC) to match the shape
+   * produced by InMemoryUsageEventsRepository.
+   */
+  async aggregateByHour(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+    apiId?: string;
+  }): Promise<{
+    buckets: import('./usageEventsRepository.js').UsageHourBucket[];
+    totalCalls: number;
+    totalRevenue: bigint;
+  }> {
+    assertValidRange(query.from, query.to);
+
+    const params: unknown[] = [assertNonEmpty(query.userId, 'userId')];
+    const clauses: string[] = ['user_id = $1'];
+    appendDateFilters(params, clauses, query.from, query.to);
+
+    if (query.apiId) {
+      params.push(query.apiId);
+      clauses.push(`api_id = $${params.length}`);
+    }
+
+    const sql = `
+      SELECT
+        TO_CHAR(DATE_TRUNC('hour', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24":00:00.000Z"') AS hour,
+        COUNT(*)::int                                                                                  AS calls,
+        COALESCE(SUM(amount_usdc), 0)::text                                                           AS revenue
+      FROM usage_events
+      WHERE ${clauses.join(' AND ')}
+      GROUP BY DATE_TRUNC('hour', created_at AT TIME ZONE 'UTC')
+      ORDER BY 1 ASC
+    `;
+
+    const result = await this.readDb.query<{ hour: string; calls: number; revenue: string }>(sql, params);
+
+    let totalCalls = 0;
+    let totalRevenue = 0n;
+    const buckets = result.rows.map((row) => {
+      const revenue = toBigInt(row.revenue, 'revenue');
+      totalCalls += row.calls;
+      totalRevenue += revenue;
+      return { hour: row.hour, calls: row.calls, revenue };
+    });
+
+    return { buckets, totalCalls, totalRevenue };
+  }
 } 

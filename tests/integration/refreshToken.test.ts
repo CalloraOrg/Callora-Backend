@@ -100,6 +100,51 @@ class MockRefreshTokenRepository {
   }
 }
 
+class InMemoryIdempotencyPool {
+  private records = new Map<string, any>();
+
+  async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
+    if (sql.includes('DELETE FROM idempotency_store WHERE expires_at')) {
+      return { rows: [] };
+    }
+
+    if (sql.includes('SELECT request_hash')) {
+      const record = this.records.get(params[0]);
+      return { rows: record ? [record] : [] };
+    }
+
+    if (sql.includes('INSERT INTO idempotency_store')) {
+      const [idempotencyKey, requestHash, status, expiresAt] = params;
+      this.records.set(idempotencyKey, {
+        request_hash: requestHash,
+        status,
+        response_status: null,
+        response_body: null,
+        expires_at: expiresAt,
+      });
+      return { rows: [] };
+    }
+
+    if (sql.includes('UPDATE idempotency_store')) {
+      const [status, responseStatus, responseBody, idempotencyKey] = params;
+      const record = this.records.get(idempotencyKey);
+      this.records.set(idempotencyKey, {
+        ...record,
+        status,
+        response_status: responseStatus,
+        response_body: responseBody,
+      });
+      return { rows: [] };
+    }
+
+    if (sql.includes('DELETE FROM idempotency_store WHERE idempotency_key')) {
+      this.records.delete(params[0]);
+    }
+
+    return { rows: [] };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // App builder
 // ---------------------------------------------------------------------------
@@ -120,6 +165,18 @@ function buildTestApp(
   app.use('/auth', createAuthRoutes(authController));
   app.use(errorHandler);
   return app;
+}
+
+function responseData(res: request.Response): any {
+  return res.body.data ?? res.body;
+}
+
+function responseErrorCode(res: request.Response): string | undefined {
+  return res.body.error?.code ?? res.body.code;
+}
+
+function responseErrorDetails(res: request.Response): unknown {
+  return res.body.error?.details ?? res.body.details;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,9 +212,9 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: tokenPair.refreshToken });
 
       expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('accessToken');
-      expect(res.body).toHaveProperty('refreshToken');
-      expect(res.body.tokenType).toBe('Bearer');
+      expect(responseData(res)).toHaveProperty('accessToken');
+      expect(responseData(res)).toHaveProperty('refreshToken');
+      expect(responseData(res).tokenType).toBe('Bearer');
     });
 
     it('new access token should carry the correct userId claim', async () => {
@@ -171,7 +228,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: tokenPair.refreshToken });
 
       const decoded = JSON.parse(
-        Buffer.from(res.body.accessToken.split('.')[1], 'base64').toString()
+        Buffer.from(responseData(res).accessToken.split('.')[1], 'base64').toString()
       );
       expect(decoded.userId).toBe(userId);
       expect(decoded.type).toBe('access');
@@ -223,13 +280,38 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: tokenPair.refreshToken });
 
       expect(res.status).toBe(401);
-      expect(res.body.code).toBe('REVOKED_TOKEN');
+      expect(responseErrorCode(res)).toBe('REVOKED_TOKEN');
+    });
+
+    it('replays a successful refresh retry with the same Idempotency-Key', async () => {
+      app.locals.dbPool = new InMemoryIdempotencyPool();
+      const userId = 'test-user-idempotent-refresh';
+      const tokenPair = refreshTokenService.createTokenPair(userId);
+      const tokenRecord = refreshTokenService.createRefreshTokenRecord(userId, tokenPair.refreshToken);
+      await mockRepository.createRefreshToken(tokenRecord);
+
+      const first = await request(app)
+        .post('/auth/refresh')
+        .set('Idempotency-Key', 'refresh-retry-key-1')
+        .send({ refreshToken: tokenPair.refreshToken });
+
+      await new Promise(resolve => setImmediate(resolve));
+
+      const second = await request(app)
+        .post('/auth/refresh')
+        .set('Idempotency-Key', 'refresh-retry-key-1')
+        .send({ refreshToken: tokenPair.refreshToken });
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(second.header['idempotent-replayed']).toBe('true');
+      expect(second.body).toEqual(first.body);
     });
 
     it('should reject missing refresh token', async () => {
       const res = await request(app).post('/auth/refresh').send({});
       expect(res.status).toBe(400);
-      expect(res.body.details).toBeDefined();
+      expect(responseErrorDetails(res)).toBeDefined();
     });
 
     it('should reject invalid refresh token', async () => {
@@ -237,7 +319,7 @@ describe('Refresh Token Integration Tests', () => {
         .post('/auth/refresh')
         .send({ refreshToken: 'invalid-token' });
       expect(res.status).toBe(401);
-      expect(res.body.code).toBe('INVALID_REFRESH_TOKEN');
+      expect(responseErrorCode(res)).toBe('INVALID_REFRESH_TOKEN');
     });
 
     it('should reject expired refresh token', async () => {
@@ -259,7 +341,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: tokenPair.refreshToken });
 
       expect(res.status).toBe(401);
-      expect(res.body.code).toBe('INVALID_REFRESH_TOKEN');
+      expect(responseErrorCode(res)).toBe('INVALID_REFRESH_TOKEN');
     });
 
     it('should reject token with wrong hash', async () => {
@@ -279,7 +361,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: tokenPair.refreshToken });
 
       expect(res.status).toBe(401);
-      expect(res.body.code).toBe('INVALID_REFRESH_TOKEN');
+      expect(responseErrorCode(res)).toBe('INVALID_REFRESH_TOKEN');
     });
   });
 
@@ -312,7 +394,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: pair1.refreshToken });
 
       expect(theftRes.status).toBe(401);
-      expect(theftRes.body.code).toBe('REVOKED_TOKEN');
+      expect(responseErrorCode(theftRes)).toBe('REVOKED_TOKEN');
 
       // ALL tokens for the user must now be revoked — including pair3
       const activeCount = await mockRepository.countActiveTokens(userId);
@@ -360,7 +442,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: victimPair.refreshToken });
 
       expect(res.status).toBe(401);
-      expect(res.body.code).toBe('REVOKED_TOKEN');
+      expect(responseErrorCode(res)).toBe('REVOKED_TOKEN');
     });
   });
 
@@ -378,7 +460,7 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: tokenPair.refreshToken });
 
       expect(res.status).toBe(200);
-      expect(res.body.message).toBe('Token revoked successfully');
+      expect(responseData(res).message).toBe('Token revoked successfully');
 
       const storedToken = await mockRepository.findRefreshTokenByHash(
         (refreshTokenService as any).hashToken(tokenPair.refreshToken),
@@ -394,13 +476,13 @@ describe('Refresh Token Integration Tests', () => {
         .send({ refreshToken: tokenPair.refreshToken });
 
       expect(res.status).toBe(200);
-      expect(res.body.message).toBe('Token revoked successfully');
+      expect(responseData(res).message).toBe('Token revoked successfully');
     });
 
     it('should reject missing refresh token', async () => {
       const res = await request(app).post('/auth/revoke').send({});
       expect(res.status).toBe(400);
-      expect(res.body.details).toBeDefined();
+      expect(responseErrorDetails(res)).toBeDefined();
     });
   });
 
@@ -436,9 +518,9 @@ describe('Refresh Token Integration Tests', () => {
       testApp.use('/auth', createAuthRoutes(authController));
       testApp.use(errorHandler);
 
-      const res = await request(testApp).post('/auth/revoke-all').send();
+      const res = await request(testApp).post('/auth/revoke-all').set('x-user-id', userId).send();
       expect(res.status).toBe(200);
-      expect(res.body.message).toBe('All tokens revoked successfully');
+      expect(responseData(res).message).toBe('All tokens revoked successfully');
 
       const activeCount = await mockRepository.countActiveTokens(userId);
       expect(activeCount).toBe(0);
@@ -476,10 +558,10 @@ describe('Refresh Token Integration Tests', () => {
       testApp.use('/auth', createAuthRoutes(authController));
       testApp.use(errorHandler);
 
-      const res = await request(testApp).get('/auth/tokens').send();
+      const res = await request(testApp).get('/auth/tokens').set('x-user-id', userId).send();
       expect(res.status).toBe(200);
-      expect(res.body.activeRefreshTokens).toBe(2);
-      expect(res.body.maxAllowedTokens).toBe(5);
+      expect(responseData(res).activeRefreshTokens).toBe(2);
+      expect(responseData(res).maxAllowedTokens).toBe(5);
     });
   });
 });

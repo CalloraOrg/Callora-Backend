@@ -238,7 +238,7 @@ export class RefreshTokenService {
    *      leaving the victim holding a now-revoked token.
    *   b) The attacker's rotated token was stolen back by the legitimate user.
    *
-   * In this case, we revoke the specific token family to invalidate the lineage.
+   * In this case, we revoke all user refresh tokens to contain the theft signal.
    *
    * @param storedToken - The revoked token record that was presented again
    * @param repository  - Token repository for persistence
@@ -253,7 +253,6 @@ export class RefreshTokenService {
       }
     );
 
-    // Revoke the specific token family to terminate the stolen token lineage.
-    await repository.revokeFamily(storedToken.familyId, storedToken.userId);
+    await repository.revokeAllUserTokens(storedToken.userId);
   }
 }

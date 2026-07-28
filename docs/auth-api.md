@@ -56,6 +56,50 @@ returns a structured 400:
 
 ---
 
+## Idempotent write retries
+
+`POST` and `PATCH` requests under `/api/auth` accept an optional
+`Idempotency-Key` header for safe client retries. The key is header-only on auth
+routes; `idempotencyKey` in the JSON body is ignored.
+
+When the first request for a key completes with a non-5xx response, the response
+is cached for the configured idempotency retention window. A later retry with
+the same method, path, authenticated user context, and JSON body returns the
+cached response with:
+
+```http
+Idempotent-Replayed: true
+```
+
+This is especially important for `POST /auth/refresh`: retrying a successful
+token rotation with the same `Idempotency-Key` replays the original success
+instead of treating the already-consumed refresh token as reuse.
+
+Invalid keys return HTTP 400 using the standard error envelope:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_IDEMPOTENCY_KEY",
+    "message": "Invalid Idempotency-Key header",
+    "details": {
+      "header": "Idempotency-Key",
+      "maxLength": 255,
+      "allowedCharacters": "A-Z, a-z, 0-9, dot, underscore, colon, and hyphen"
+    }
+  },
+  "requestId": "...",
+  "timestamp": "..."
+}
+```
+
+Reusing a key with a different payload returns HTTP 409 with
+`IDEMPOTENCY_KEY_REUSE_MISMATCH`. Retrying while the first request is still
+running returns HTTP 409 with `IDEMPOTENCY_IN_PROGRESS`.
+
+---
+
 ## POST /auth/wallet
 
 Wallet-based login. Returns a JWT access token and a refresh token on success.

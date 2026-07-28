@@ -194,6 +194,143 @@
         }
       }
     },
+    "/api/rate-limit/health": {
+      "get": {
+        "summary": "Check rate-limit subsystem health",
+        "description": "Returns the operational status of the rate-limit subsystem and its configured dependencies. This public probe does not consume rate-limit budget and does not require a request body.",
+        "responses": {
+          "200": {
+            "description": "Rate-limit subsystem is operational",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitHealthResponse"
+                },
+                "examples": {
+                  "operational": {
+                    "summary": "In-memory limiter is operational",
+                    "value": {
+                      "status": "ok",
+                      "timestamp": "2026-07-28T10:00:00.000Z",
+                      "dependencies": {
+                        "in_memory_store": {
+                          "status": "ok",
+                          "responseTime": 0.123,
+                          "details": {
+                            "windowMs": 60000,
+                            "maxRequests": 100
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "notConfigured": {
+                    "summary": "No limiter configured",
+                    "value": {
+                      "status": "ok",
+                      "timestamp": "2026-07-28T10:00:00.000Z",
+                      "dependencies": {
+                        "in_memory_store": {
+                          "status": "ok",
+                          "details": {
+                            "note": "No rate limiter configured for probing"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Rate-limit subsystem is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitHealthResponse"
+                },
+                "examples": {
+                  "unavailable": {
+                    "summary": "Rate-limit store probe failed",
+                    "value": {
+                      "status": "down",
+                      "timestamp": "2026-07-28T10:00:00.000Z",
+                      "dependencies": {
+                        "in_memory_store": {
+                          "status": "down",
+                          "responseTime": 0.456,
+                          "error": "unavailable"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/limits/check": {
+      "get": {
+        "summary": "Check the authenticated user's rate-limit budget",
+        "description": "Peeks at the authenticated user's REST rate-limit bucket without consuming a token. No request body is required.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rate-limit budget status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitCheckResponse"
+                },
+                "examples": {
+                  "allowed": {
+                    "summary": "Requests are currently allowed",
+                    "value": {
+                      "status": "ok"
+                    }
+                  },
+                  "denied": {
+                    "summary": "Rate-limit budget is exhausted",
+                    "value": {
+                      "status": "deny",
+                      "reason": "rate_limit_exceeded",
+                      "retryAfterMs": 42300
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Authentication required",
+                      "requestId": "req-rate-limit-check"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/gateway/health/{apiSlug}": {
       "get": {
         "summary": "Get gateway health for an API",
@@ -4669,6 +4806,90 @@
                 ]
               }
             }
+          }
+        }
+      },
+      "RateLimitHealthResponse": {
+        "type": "object",
+        "description": "Operational health response for the rate-limit subsystem.",
+        "required": [
+          "status",
+          "timestamp",
+          "dependencies"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RateLimitDependencyStatus"
+            }
+          }
+        }
+      },
+      "RateLimitCheckResponse": {
+        "type": "object",
+        "description": "Non-consuming rate-limit budget check for the authenticated user.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "deny"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "rate_limit_exceeded"
+            ]
+          },
+          "retryAfterMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Milliseconds until the current rate-limit window resets"
+          }
+        }
+      },
+      "RateLimitDependencyStatus": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ]
+          },
+          "responseTime": {
+            "type": "number",
+            "description": "Probe response time in milliseconds"
+          },
+          "error": {
+            "type": "string",
+            "description": "Safe error identifier when the dependency is unavailable"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },

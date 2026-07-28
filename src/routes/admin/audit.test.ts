@@ -207,8 +207,8 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details).toEqual(
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'query.cursor' }),
       ]),
@@ -224,7 +224,7 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.details).toEqual(
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'query.limit' }),
       ]),
@@ -240,7 +240,11 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('from');
+    expect(res.body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'query.from' }),
+      ]),
+    );
   });
 
   it('rejects when from is after to', async () => {
@@ -256,7 +260,11 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('from');
+    expect(res.body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'query.from' }),
+      ]),
+    );
   });
 
   it('requires admin authentication', async () => {
@@ -394,5 +402,93 @@ describe('GET /api/admin/audit — ETag / 304 caching', () => {
 
     expect(res.status).toBe(401);
     expect(res.headers.etag).toBeUndefined();
+  });
+});
+
+describe('GET /api/admin/audit — security headers', () => {
+  it('sets Content-Security-Policy on audit responses', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-security-policy']).toBeDefined();
+    expect(res.headers['content-security-policy']).toContain("default-src 'self'");
+    expect(res.headers['content-security-policy']).toContain("script-src 'self'");
+    expect(res.headers['content-security-policy']).toContain("object-src 'none'");
+    expect(res.headers['content-security-policy']).toContain("frame-src 'none'");
+  });
+
+  it('sets X-Content-Type-Options: nosniff on audit responses', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('sets Referrer-Policy on audit responses', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  });
+
+  it('applies security headers even on error responses from the audit route', async () => {
+    const repo = new MockAuditLogRepository(() => {
+      throw new Error('unexpected');
+    });
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    // Should return a 500 but still have security headers
+    expect(res.status).toBe(500);
+    expect(res.headers['content-security-policy']).toBeDefined();
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  });
+
+  it('applies security headers on the replay sub-route', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    // Authenticated request to replay with an empty body — should reach the
+    // router and get a 400 validation error, but security headers are set
+    const res = await request(app)
+      .post('/api/admin/audit/replay')
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.headers['content-security-policy']).toBeDefined();
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
   });
 });

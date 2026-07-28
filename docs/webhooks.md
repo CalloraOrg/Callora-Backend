@@ -19,6 +19,37 @@ when specific events occur on the Callora platform.
 | url         | string     | ✅       | HTTPS endpoint to receive events   |
 | events      | string[]   | ✅       | One or more event types (see below)|
 | secret      | string     | ❌       | Used to sign payloads (recommended)|
+| retryPolicy | object     | optional | Optional per-subscription retry override |
+
+Request bodies are Zod-validated before registration logic runs. Unknown fields
+are rejected.
+
+### Validation errors
+
+Invalid registration and retry-policy requests return HTTP 400 using the
+standard error envelope:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed",
+    "details": [
+      {
+        "field": "body.url",
+        "message": "url must be a valid absolute URL",
+        "code": "INVALID_FORMAT"
+      }
+    ]
+  },
+  "requestId": "req-webhook-create",
+  "timestamp": "2026-07-28T00:00:00.000Z"
+}
+```
+
+`developerId` path parameters on management routes are also validated and return
+the same envelope when malformed.
 
 ### Supported Events
 
@@ -238,6 +269,26 @@ Failed deliveries (non-2xx, timeout, DNS failure) are retried with **exponential
 
 After 5 failures, the event is dropped and logged server-side.
 
+Override retry behavior for a single subscription with:
+
+```http
+PATCH /api/webhooks/:developerId/retry-policy
+Content-Type: application/json
+```
+
+```json
+{
+  "retryPolicy": {
+    "maxRetries": 3,
+    "baseDelayMs": 500
+  }
+}
+```
+
+`retryPolicy` is optional; sending `{}` clears the override. When provided,
+`maxRetries` must be an integer from 0 to 10 and `baseDelayMs` must be an
+integer from 100 to 60000.
+
 ---
 
 ## Manage Webhooks
@@ -247,6 +298,7 @@ After 5 failures, the event is dropped and logged server-side.
 | POST   | `/api/webhooks`                   | Register webhook         |
 | GET    | `/api/webhooks/:developerId`      | View current webhook     |
 | POST   | `/api/webhooks/:developerId/rotate-secret` | Rotate signing secret |
+| PATCH  | `/api/webhooks/:developerId/retry-policy` | Update retry policy |
 | DELETE | `/api/webhooks/:developerId`      | Remove webhook           |
 
 ---

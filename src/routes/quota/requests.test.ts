@@ -19,7 +19,7 @@
 import request from 'supertest';
 import express from 'express';
 import quotaRequestsRouter from './requests.js';
-import quotaCountsRouter from './counts.js';
+import quotaCountsRouter from '../quotas/counts.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 import {
@@ -732,6 +732,19 @@ describe('GET /api/quota/requests/:id', () => {
 describe('GET /api/quotas/counts', () => {
   beforeEach(() => {
     setQuotaRequestStore(new InMemoryQuotaRequestStore());
+  });
+
+  it('returns X-Correlation-Id header and body field for counts requests', async () => {
+    const app = createTestApp();
+
+    const res = await request(app)
+      .get('/api/quotas/counts')
+      .set('x-user-id', 'dev-1')
+      .set('x-correlation-id', 'counts-corr-123');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-correlation-id']).toBe('counts-corr-123');
+    expect(res.body.correlationId).toBe('counts-corr-123');
   });
 
   it('returns a summary of the caller requests by status', async () => {

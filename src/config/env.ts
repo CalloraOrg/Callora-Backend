@@ -166,7 +166,27 @@ export const envSchema = z
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
 
-    // Maintenance CORS allowlist (comma-separated origins; deny by default when empty)
+    // Subscription CORS allowlist (comma-separated origins; deny by default when empty).
+    //
+    // This entry mirrors the pattern used by MAINTENANCE_CORS_ALLOWED_ORIGINS:
+    // the runtime parser lives in
+    // {@link createSubscriptionCorsMiddleware} (src/middleware/cors.ts), which
+    // reads `process.env` lazily so tests that mutate the env after module
+    // load still work. If this entry is transformed into an array here, the
+    // middleware will continue to read the raw string and the two sources of
+    // truth will silently diverge.
+    SUBSCRIPTION_CORS_ALLOWED_ORIGINS: z.string().default(""),
+
+    // Maintenance CORS allowlist (comma-separated origins; deny by default when empty).
+    //
+    // This entry is intentionally left as a raw string — it exists in the
+    // schema for documentation and `.env.example` cross-referencing purposes
+    // only. The runtime parser lives in
+    // {@link createMaintenanceCorsMiddleware} (src/middleware/cors.ts), which
+    // reads `process.env` lazily so tests that mutate the env after module
+    // load still work. If this entry is transformed into an array here, the
+    // middleware will continue to read the raw string and the two sources of
+    // truth will silently diverge.
     MAINTENANCE_CORS_ALLOWED_ORIGINS: z.string().default(""),
 
     // Soroban RPC (optional)

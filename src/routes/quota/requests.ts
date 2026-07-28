@@ -26,7 +26,6 @@ import {
 import { logger } from '../../logger.js';
 import { NotFoundError, UnauthorizedError } from '../../errors/index.js';
 import { withSpan } from '../../otel/spans.js';
-import { correlationMiddleware } from '../../middleware/correlation.js';
 
 const router = Router();
 
