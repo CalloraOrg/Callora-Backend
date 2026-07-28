@@ -19,6 +19,7 @@ import {
 } from "../lib/listingsCache.js";
 import { recordCacheHit, recordCacheMiss } from "../metrics.js";
 import { recordApisLatency } from "../metrics/registry.js";
+import { createApisCorsMiddleware } from "../middleware/cors.js";
 import {
   requireAuth,
   type AuthenticatedLocals,
@@ -100,6 +101,9 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       maxRequests: 60,
     });
 
+  const apisCors = createApisCorsMiddleware();
+
+  router.use(apisCors);
   router.use(rateLimitMiddleware);
 
   /**
