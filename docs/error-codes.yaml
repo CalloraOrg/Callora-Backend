@@ -259,6 +259,18 @@ error_codes:
     section: Webhooks
     description: Webhook signature verification failed
 
+  - code: INVALID_DELIVERY_ID
+    section: Webhooks
+    description: The delivery ID provided for webhook replay is missing or invalid
+
+  - code: INVALID_RETRY_POLICY
+    section: Webhooks
+    description: The retry policy provided is invalid
+
+  - code: DLQ_ENTRY_NOT_FOUND
+    section: Webhooks
+    description: No Dead-Letter Queue entry was found for the given delivery ID
+
   # IP allowlist
   - code: INVALID_IP_FORMAT
     section: IP allowlist
@@ -353,3 +365,15 @@ error_codes:
   - code: EXPORT_SCHEDULE_NOT_FOUND
     section: Export schedules
     description: Export schedule not found
+
+  - code: MISSING_AUTH_FIELDS
+    section: Auth
+    description: Required authentication fields are missing from the request
+
+  - code: AUTH_NOT_IMPLEMENTED
+    section: Auth
+    description: The authentication method is not yet implemented
+
+  - code: COMPONENT_NOT_CONFIGURED
+    section: Health / dependency probes
+    description: A required system component is not configured

@@ -1,6 +1,7 @@
 /// <reference types="jest" />
 import request from 'supertest';
 import type { Server } from 'http';
+import type { Request, Response } from 'express';
 import app, { createGracefulShutdownHandler, createInFlightDrainTracker } from './index.js';
 
 jest.mock('./db/index.js', () => ({
@@ -137,9 +138,9 @@ describe('proxy drain tracker', () => {
         listeners.set(event, handler);
         return res;
       }),
-    } as any;
+    } as unknown as Response;
 
-    tracker.middleware({} as any, res, next);
+    tracker.middleware({} as unknown as Request, res, next);
     tracker.subsystem.beginShutdown();
     const idlePromise = tracker.subsystem.awaitIdle();
 

@@ -181,7 +181,7 @@ describe('API Key Redaction Regression Tests', () => {
         res.emit('finish');
 
         // The log should only contain safe metadata, not headers or body
-        const [payload] = infoSpy.mock.calls[0] as [Record<string, unknown>, string];
+        const [payload] = infoSpy.mock.calls[0] as [Record<string, any>, string];
         assert(!('headers' in payload), 'headers should not be in log payload');
         assert(!('body' in payload), 'body should not be in log payload');
         assert(payload.requestId, 'requestId should be in log payload');
@@ -342,7 +342,7 @@ describe('API Key Redaction Regression Tests', () => {
       error.apiKey = 'sk_live_error_context_secret';
       error.code = 'AUTH_FAILED';
 
-      const redacted = redactLogValue(error) as Record<string, unknown>;
+      const redacted = redactLogValue(error) as Record<string, any>;
 
       assert.equal(redacted.name, 'Error');
       assert.equal(redacted.message, 'API authentication failed');

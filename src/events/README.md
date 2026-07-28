@@ -72,6 +72,24 @@ threshold (default 5×).
 }
 ```
 
+### `usage_event.created`
+
+Emitted when a usage event is successfully recorded for an API call. Provides
+metered usage details for the request that was just processed.
+
+```ts
+{
+  id: string;
+  requestId: string;
+  apiId: string;
+  endpointId: string;
+  developerId: string;
+  amountUsdc: number;
+  statusCode: number;
+  timestamp: string;
+}
+```
+
 ## Typing Guarantees
 
 ```ts
@@ -125,5 +143,6 @@ The module registers one built-in listener per documented event:
 - `low_balance_alert`
 - `invoice_created`
 - `usage.anomaly.detected`
+- `usage_event.created`
 
 Each built-in listener resolves matching webhook subscriptions from `WebhookStore` and forwards the typed payload through `dispatchToAll(...)`.

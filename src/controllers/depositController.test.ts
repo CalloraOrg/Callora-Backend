@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { DepositController, VaultNotFoundError } from './depositController.js';
+import { DepositController } from './depositController.js';
 import { TransactionBuilderService, InvalidContractIdError, NetworkError } from '../services/transactionBuilder.js';
 import { AmountValidator } from '../validators/amountValidator.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
@@ -19,7 +19,6 @@ jest.mock('../services/transactionBuilder.js', () => {
     TransactionBuilderService: MockTransactionBuilderService,
   };
 });
-const MockedTransactionBuilderService = TransactionBuilderService as jest.MockedClass<typeof TransactionBuilderService>;
 
 // Mock config to fix stellar.network so the controller's network-mismatch guard passes
 jest.mock('../config/index.js', () => ({
@@ -34,7 +33,7 @@ describe('DepositController', () => {
   let mockTransactionBuilder: jest.Mocked<TransactionBuilderService>;
   let mockReq: Partial<Request>;
   let mockRes: Partial<Response>;
-  let mockLocals: any;
+  let mockLocals: { authenticatedUser: { id: string; email: string } };
 
   beforeEach(() => {
     // Reset all mocks
@@ -43,11 +42,11 @@ describe('DepositController', () => {
     // Create mock dependencies
     mockVaultRepository = {
       findByUserId: jest.fn(),
-    } as any;
+    } as unknown as jest.Mocked<VaultRepository>;
 
     mockTransactionBuilder = {
       buildDepositTransaction: jest.fn(),
-    } as any;
+    } as unknown as jest.Mocked<TransactionBuilderService>;
 
     // Create controller instance
     depositController = new DepositController(mockVaultRepository, mockTransactionBuilder);

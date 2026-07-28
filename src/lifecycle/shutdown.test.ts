@@ -1,10 +1,10 @@
 /// <reference types="jest" />
 import type { Server } from 'http';
 import type { Socket } from 'net';
+import type { Request, Response } from 'express';
 import {
   createGracefulShutdownHandler,
   createInFlightDrainTracker,
-  type DrainableSubsystem,
 } from './shutdown.js';
 
 describe('shutdown module', () => {
@@ -110,6 +110,37 @@ describe('shutdown module', () => {
       expect(logger.log).toHaveBeenCalledWith(
         expect.stringContaining('Draining 1 subsystem')
       );
+    });
+
+    it('should begin subsystem draining while the HTTP server close callback is still pending', async () => {
+      let closeCallback: ((err?: Error) => void) | undefined;
+      const closeServer = jest.fn((callback: (err?: Error) => void) => {
+        closeCallback = callback;
+      });
+      const closeDatabase = jest.fn(async () => Promise.resolve());
+      const beginShutdown = jest.fn();
+      const awaitIdle = jest.fn(async () => Promise.resolve());
+      const logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+      const shutdown = createGracefulShutdownHandler({
+        server: { close: closeServer } as unknown as Server,
+        activeConnections: new Set(),
+        closeDatabase,
+        logger,
+        timeoutMs: 100,
+        subsystems: [{ name: 'test-job', beginShutdown, awaitIdle }],
+      });
+
+      const promise = shutdown('SIGTERM');
+      await Promise.resolve();
+
+      expect(beginShutdown).toHaveBeenCalledTimes(1);
+      expect(awaitIdle).toHaveBeenCalledTimes(1);
+      expect(closeDatabase).not.toHaveBeenCalled();
+
+      closeCallback?.();
+      await expect(promise).resolves.toBe(0);
+      expect(closeDatabase).toHaveBeenCalledTimes(1);
     });
 
     it('should destroy lingering connections after timeout', async () => {
@@ -355,10 +386,10 @@ describe('shutdown module', () => {
           listeners.set(event, handler);
           return res;
         }),
-      } as any;
+      } as unknown as Response;
 
       // Start a request
-      tracker.middleware({} as any, res, next);
+      tracker.middleware({} as unknown as Request, res, next);
       expect(next).toHaveBeenCalledTimes(1);
 
       // Begin shutdown
@@ -385,13 +416,13 @@ describe('shutdown module', () => {
       const res = {
         setHeader: jest.fn(),
         once: jest.fn(() => res),
-      } as any;
+      } as unknown as Response;
 
       // Begin shutdown
       tracker.subsystem.beginShutdown();
 
       // New requests should get Connection: close
-      tracker.middleware({} as any, res, jest.fn());
+      tracker.middleware({} as unknown as Request, res, jest.fn());
       expect(res.setHeader).toHaveBeenCalledWith('Connection', 'close');
     });
 
@@ -413,7 +444,7 @@ describe('shutdown module', () => {
           listeners1.set(event, handler);
           return res1;
         }),
-      } as any;
+      } as unknown as Response;
 
       const res2 = {
         setHeader: jest.fn(),
@@ -421,11 +452,11 @@ describe('shutdown module', () => {
           listeners2.set(event, handler);
           return res2;
         }),
-      } as any;
+      } as unknown as Response;
 
       // Start two requests
-      tracker.middleware({} as any, res1, jest.fn());
-      tracker.middleware({} as any, res2, jest.fn());
+      tracker.middleware({} as unknown as Request, res1, jest.fn());
+      tracker.middleware({} as unknown as Request, res2, jest.fn());
 
       tracker.subsystem.beginShutdown();
       const idlePromise = tracker.subsystem.awaitIdle();
@@ -455,9 +486,9 @@ describe('shutdown module', () => {
           listeners.set(event, handler);
           return res;
         }),
-      } as any;
+      } as unknown as Response;
 
-      tracker.middleware({} as any, res, jest.fn());
+      tracker.middleware({} as unknown as Request, res, jest.fn());
       tracker.subsystem.beginShutdown();
 
       // Complete via close instead of finish
@@ -474,9 +505,9 @@ describe('shutdown module', () => {
           listeners.set(event, handler);
           return res;
         }),
-      } as any;
+      } as unknown as Response;
 
-      tracker.middleware({} as any, res, jest.fn());
+      tracker.middleware({} as unknown as Request, res, jest.fn());
       tracker.subsystem.beginShutdown();
 
       // Fire both events
@@ -487,9 +518,53 @@ describe('shutdown module', () => {
       await expect(tracker.subsystem.awaitIdle()).resolves.toBeUndefined();
     });
 
-    it('should provide descriptive subsystem name', () => {
-      const tracker = createInFlightDrainTracker('my-custom-tracker');
-      expect(tracker.subsystem.name).toBe('my-custom-tracker');
-    });
-  });
+   it('should provide descriptive subsystem name', () => {
+     const tracker = createInFlightDrainTracker('my-custom-tracker');
+     expect(tracker.subsystem.name).toBe('my-custom-tracker');
+   });
+ });
+
+ describe('keys drain tracker', () => {
+   it('waits for active keys requests to finish before becoming idle', async () => {
+     const tracker = createInFlightDrainTracker('api-keys');
+     const next = jest.fn();
+     const listeners = new Map<string, () => void>();
+     const res = {
+       setHeader: jest.fn(),
+       once: jest.fn((event: string, handler: () => void) => {
+         listeners.set(event, handler);
+         return res;
+       }),
+     } as unknown as Response;
+
+     tracker.middleware({} as unknown as Request, res, next);
+     tracker.subsystem.beginShutdown();
+     const idlePromise = tracker.subsystem.awaitIdle();
+
+     let settled = false;
+     void idlePromise.then(() => {
+       settled = true;
+     });
+     await Promise.resolve();
+
+     expect(next).toHaveBeenCalledTimes(1);
+     expect(settled).toBe(false);
+
+     listeners.get('finish')?.();
+     await expect(idlePromise).resolves.toBeUndefined();
+     expect(settled).toBe(true);
+   });
+
+   it('sets Connection: close header on new requests during drain', () => {
+     const tracker = createInFlightDrainTracker('api-keys');
+     const res = {
+       setHeader: jest.fn(),
+       once: jest.fn(() => res),
+     } as unknown as Response;
+
+     tracker.subsystem.beginShutdown();
+     tracker.middleware({} as unknown as Request, res, jest.fn());
+     expect(res.setHeader).toHaveBeenCalledWith('Connection', 'close');
+   });
+ });
 });

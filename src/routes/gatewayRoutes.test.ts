@@ -4,7 +4,7 @@ import { createGatewayRouter } from "./gatewayRoutes.js";
 import { createRateLimiter } from "../services/rateLimiter.js";
 import { errorHandler } from "../middleware/errorHandler.js";
 import { requestIdMiddleware } from "../middleware/requestId.js";
-import type { ApiKey } from "../types/gateway.js";
+import type { ApiKey, GatewayDeps } from "../types/gateway.js";
 
 describe("gateway route - rate limiting", () => {
   let now = 0;
@@ -21,7 +21,7 @@ describe("gateway route - rate limiting", () => {
   test("returns 429 with Retry-After when rate limited", async () => {
     const apiKey = "test-key";
     const apiId = "my-api";
-    const apiKeys = new Map<string, any>();
+    const apiKeys = new Map<string, ApiKey>();
     apiKeys.set(apiKey, { key: "k1", apiId, developerId: "dev1" });
 
     const windowMs = 60_000;
@@ -35,7 +35,7 @@ describe("gateway route - rate limiting", () => {
       usageStore: { record: () => {} },
       upstreamUrl: "http://example.invalid",
       apiKeys,
-    } as any;
+    } as unknown as GatewayDeps;
 
     const app = express();
     // The gateway router supplies its own body parser; no outer express.json() needed
@@ -60,7 +60,7 @@ describe("gateway route - body size limits", () => {
   function buildApp(maxBodySize?: string) {
     const apiKey = "test-key";
     const apiId = "my-api";
-    const apiKeys = new Map<string, any>();
+    const apiKeys = new Map<string, ApiKey>();
     apiKeys.set(apiKey, { key: "k1", apiId, developerId: "dev1" });
 
     const deps = {
@@ -70,7 +70,7 @@ describe("gateway route - body size limits", () => {
       upstreamUrl: "http://example.invalid",
       apiKeys,
       maxBodySize,
-    } as any;
+    } as unknown as GatewayDeps;
 
     const app = express();
     // No outer express.json() — the gateway router enforces its own limit
@@ -83,7 +83,7 @@ describe("gateway route - body size limits", () => {
   test("accepts POST bodies within the configured size limit", async () => {
     const apiKey = "test-key";
     const apiId = "my-api";
-    const apiKeys = new Map<string, any>();
+    const apiKeys = new Map<string, ApiKey>();
     apiKeys.set(apiKey, { key: "k1", apiId, developerId: "dev1" });
 
     const deps = {
@@ -95,7 +95,7 @@ describe("gateway route - body size limits", () => {
       upstreamUrl: "http://example.invalid",
       apiKeys,
       maxBodySize: "1kb",
-    } as any;
+    } as unknown as GatewayDeps;
 
     const app = express();
     app.use(requestIdMiddleware);
@@ -144,7 +144,7 @@ describe("gateway route - body size limits", () => {
   test("defaults to 1mb limit when maxBodySize is not specified", async () => {
     const apiKey = "test-key";
     const apiId = "my-api";
-    const apiKeys = new Map<string, any>();
+    const apiKeys = new Map<string, ApiKey>();
     apiKeys.set(apiKey, { key: "k1", apiId, developerId: "dev1" });
 
     const deps = {
@@ -155,7 +155,7 @@ describe("gateway route - body size limits", () => {
       upstreamUrl: "http://example.invalid",
       apiKeys,
       // no maxBodySize → defaults to 1mb
-    } as any;
+    } as unknown as GatewayDeps;
 
     const app = express();
     app.use(requestIdMiddleware);
@@ -205,7 +205,7 @@ describe("gateway route - request id propagation", () => {
     const apiKey = "test-key";
     const apiId = "my-api";
     const edgeRequestId = "edge-request-123";
-    const apiKeys = new Map<string, any>();
+    const apiKeys = new Map<string, ApiKey>();
     apiKeys.set(apiKey, { key: "k1", apiId, developerId: "dev1" });
     const originalFetch = global.fetch;
     const fetchMock = jest.fn().mockResolvedValue({
@@ -223,7 +223,7 @@ describe("gateway route - request id propagation", () => {
         usageStore,
         upstreamUrl: "http://example.internal",
         apiKeys,
-      } as any;
+      } as unknown as GatewayDeps;
 
       const app = express();
       app.use(requestIdMiddleware);
@@ -266,7 +266,7 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       usageStore: { record: () => true },
       upstreamUrl: "http://example.invalid",
       apiKeys,
-    } as any;
+    } as unknown as GatewayDeps;
 
     const app = express();
     app.use(requestIdMiddleware);

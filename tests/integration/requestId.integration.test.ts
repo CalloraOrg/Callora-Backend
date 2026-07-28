@@ -4,6 +4,9 @@
  * Verifies that the requestId middleware correctly echoes (or generates) the
  * X-Request-Id header on every HTTP response, and that it rejects unsafe values.
  *
+ * Also verifies per-endpoint body enrichment: every JSON response body
+ * automatically carries the `requestId` field for end-to-end correlation.
+ *
  * Security assumptions:
  *  - The echoed value is sanitized: ASCII control characters (including CR/LF)
  *    are stripped before the value is placed in a response header, preventing
@@ -17,6 +20,7 @@
  *  - When a client supplies a valid X-Request-Id the same value is echoed back
  *    unchanged (after sanitization), preserving end-to-end trace correlation.
  *  - req.id and the response header always carry the same value.
+ *  - The requestId in the response body matches the X-Request-Id header.
  */
 
 import assert from 'node:assert/strict';
@@ -36,6 +40,7 @@ jest.mock('better-sqlite3', () => {
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.ADMIN_API_KEY = 'test-admin-key';
 process.env.METRICS_API_KEY = 'test-metrics-key';
+process.env.DATABASE_URL = 'postgresql://mock:mock@localhost:5432/mock';
 
 import { createApp } from '../../src/app.js';
 
@@ -149,5 +154,68 @@ describe('X-Request-Id echo header — integration', () => {
       .send({});
     // Route returns 400 (validation), but the header must still be echoed
     assert.equal(res.headers['x-request-id'], clientId);
+  });
+
+  // ── per‑endpoint body enrichment ────────────────────────────────────────
+
+  test('200 response body includes requestId matching the header', async () => {
+    const res = await request(app).get('/api/health');
+    assert.equal(res.status, 200);
+    assert.ok(res.body.requestId, 'response body must have requestId');
+    assert.equal(res.body.requestId, res.headers['x-request-id']);
+  });
+
+  test('200 response body includes requestId when client supplies id', async () => {
+    const clientId = 'body-enrich-client-id';
+    const res = await request(app)
+      .get('/api/health')
+      .set('x-request-id', clientId);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.requestId, clientId);
+    assert.equal(res.headers['x-request-id'], clientId);
+  });
+
+  test('404 error response body includes requestId (from errorHandler)', async () => {
+    const res = await request(app).get('/api/does-not-exist');
+    assert.equal(res.status, 404);
+    assert.ok(res.body.requestId, 'error body must have requestId');
+    assert.equal(res.body.requestId, res.headers['x-request-id']);
+  });
+
+  test('401 error response body includes requestId', async () => {
+    const res = await request(app).get('/api/developers/analytics');
+    assert.equal(res.status, 401);
+    assert.ok(res.body.requestId, '401 error body must have requestId');
+    assert.equal(res.body.requestId, res.headers['x-request-id']);
+  });
+
+  test('400 error response body includes requestId on POST', async () => {
+    const clientId = 'body-post-err';
+    const res = await request(app)
+      .post('/api/developers/apis')
+      .set('x-request-id', clientId)
+      .set('x-user-id', 'dev-1')
+      .send({});
+    assert.equal(res.status, 400);
+    assert.ok(res.body.requestId, '400 error body must have requestId');
+    assert.equal(res.body.requestId, clientId);
+  });
+
+  test('requestId in body remains consistent across multiple requests', async () => {
+    const id1 = 'multi-req-1';
+    const id2 = 'multi-req-2';
+
+    const res1 = await request(app)
+      .get('/api/health')
+      .set('x-request-id', id1);
+    assert.equal(res1.body.requestId, id1);
+
+    const res2 = await request(app)
+      .get('/api/health')
+      .set('x-request-id', id2);
+    assert.equal(res2.body.requestId, id2);
+
+    // Ensure they are different and correct
+    assert.notEqual(res1.body.requestId, res2.body.requestId);
   });
 });

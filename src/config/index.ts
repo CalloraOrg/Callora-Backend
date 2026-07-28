@@ -19,7 +19,9 @@ const MAINNET_NETWORK_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
 
 function isLocalStellarHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  return (
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+  );
 }
 
 function validateStellarEndpointUrl(name: string, rawUrl: string): string {
@@ -31,9 +33,12 @@ function validateStellarEndpointUrl(name: string, rawUrl: string): string {
     throw new Error(`${name} must be a valid absolute URL.`);
   }
 
-  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocalStellarHost(parsed.hostname))) {
+  if (
+    parsed.protocol !== "https:" &&
+    !(parsed.protocol === "http:" && isLocalStellarHost(parsed.hostname))
+  ) {
     throw new Error(
-      `${name} must use HTTPS unless it targets localhost for local development.`
+      `${name} must use HTTPS unless it targets localhost for local development.`,
     );
   }
 
@@ -58,11 +63,11 @@ const selectedNetwork: StellarNetwork =
 const testnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
     "STELLAR_TESTNET_HORIZON_URL",
-    env.STELLAR_TESTNET_HORIZON_URL
+    env.STELLAR_TESTNET_HORIZON_URL,
   ),
   sorobanRpcUrl: validateStellarEndpointUrl(
     "SOROBAN_TESTNET_RPC_URL",
-    env.SOROBAN_TESTNET_RPC_URL
+    env.SOROBAN_TESTNET_RPC_URL,
   ),
   networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_TESTNET_VAULT_CONTRACT_ID,
@@ -72,11 +77,11 @@ const testnetConfig: StellarNetworkConfig = {
 const mainnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
     "STELLAR_MAINNET_HORIZON_URL",
-    env.STELLAR_MAINNET_HORIZON_URL
+    env.STELLAR_MAINNET_HORIZON_URL,
   ),
   sorobanRpcUrl: validateStellarEndpointUrl(
     "SOROBAN_MAINNET_RPC_URL",
-    env.SOROBAN_MAINNET_RPC_URL
+    env.SOROBAN_MAINNET_RPC_URL,
   ),
   networkPassphrase: MAINNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
@@ -86,7 +91,9 @@ const mainnetConfig: StellarNetworkConfig = {
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
 
-const upstreamHostAllowlist = parseUpstreamHostAllowlist(env.UPSTREAM_HOST_ALLOWLIST);
+const upstreamHostAllowlist = parseUpstreamHostAllowlist(
+  env.UPSTREAM_HOST_ALLOWLIST,
+);
 const validatedUpstreamUrl = validateUpstreamBaseUrl(env.UPSTREAM_URL, {
   allowedHosts: upstreamHostAllowlist,
 });
@@ -97,8 +104,8 @@ export const config = {
   version: env.APP_VERSION,
   accessLog: {
     sampleRate: env.ACCESS_LOG_SAMPLE_RATE,
-    redactFields: (env.ACCESS_LOG_REDACT_FIELDS ?? '')
-      .split(',')
+    redactFields: (env.ACCESS_LOG_REDACT_FIELDS ?? "")
+      .split(",")
       .map((field) => field.trim())
       .filter((field) => field.length > 0),
   },
@@ -143,16 +150,29 @@ export const config = {
 
   webhookRateLimit: {
     windowMs: env.WEBHOOK_RATE_LIMIT_WINDOW_MS ?? env.REST_RATE_LIMIT_WINDOW_MS,
-    maxRequests: env.WEBHOOK_RATE_LIMIT_MAX_REQUESTS ?? env.REST_RATE_LIMIT_MAX_REQUESTS,
+    maxRequests:
+      env.WEBHOOK_RATE_LIMIT_MAX_REQUESTS ?? env.REST_RATE_LIMIT_MAX_REQUESTS,
   },
 
   webhooks: {
     secretRotationGraceMs: env.WEBHOOK_SECRET_ROTATION_GRACE_MS,
   },
 
+  authTimeoutMs: env.AUTH_TIMEOUT_MS,
+
   loginRateLimit: {
     windowMs: env.LOGIN_RATE_LIMIT_WINDOW_MS,
     maxRequests: env.LOGIN_RATE_LIMIT_MAX_REQUESTS,
+  },
+
+  creditsRateLimit: {
+    capacity: env.CREDITS_RATE_LIMIT_CAPACITY,
+    refillRate: env.CREDITS_RATE_LIMIT_REFILL_RATE,
+
+    billingRateLimit: {
+      windowMs: env.BILLING_RATE_LIMIT_WINDOW_MS,
+      maxRequests: env.BILLING_RATE_LIMIT_MAX_REQUESTS,
+    },
   },
 
   rateLimiter: {
@@ -213,12 +233,20 @@ export const config = {
     maxPerDeveloper: env.BILLING_MAX_CONCURRENCY_PER_DEV,
     semaphoreTtlMs: env.BILLING_SEMAPHORE_TTL_MS,
   },
+  keyConcurrency: {
+    maxPerKey: env.KEY_MAX_CONCURRENCY_PER_KEY,
+    semaphoreTtlMs: env.KEY_SEMAPHORE_TTL_MS,
+  },
+  routeBodyLimits: env.ROUTE_BODY_LIMITS,
   idempotency: {
     retentionWindowSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
     sweeperIntervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
   },
   listingsCache: {
     warmupTimeoutMs: env.LISTINGS_CACHE_WARMUP_TIMEOUT_MS,
+  },
+  refundsCache: {
+    warmupTimeoutMs: env.REFUNDS_CACHE_WARMUP_TIMEOUT_MS,
   },
   bulkEndpointLimit: env.BULK_ENDPOINT_LIMIT,
 
@@ -234,19 +262,32 @@ export const config = {
     thresholdMb: env.MEMORY_ACCOUNTING_THRESHOLD_MB,
   },
 
-  slowQueryAlerter: {
-    webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
-    p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
-    pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
-  },
-
   usageAnomalyDetector: {
     enabled: env.USAGE_ANOMALY_DETECTOR_ENABLED,
     multiplier: env.USAGE_ANOMALY_MULTIPLIER,
     pollIntervalMs: env.USAGE_ANOMALY_POLL_INTERVAL_MS,
     windowMs: env.USAGE_ANOMALY_WINDOW_MS,
     baselineWindows: env.USAGE_ANOMALY_BASELINE_WINDOWS,
-    dedupWindowMs: env.USAGE_ANOMALY_DEDUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
+    dedupWindowMs:
+      env.USAGE_ANOMALY_DEDUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
+  },
+
+  monthlyInvoiceJob: {
+    intervalMs: env.MONTHLY_INVOICE_JOB_INTERVAL_MS,
+  },
+
+  sloAlert: {
+    enabled:
+      Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
+    webhookUrl: env.SLO_ALERT_WEBHOOK_URL,
+    pollIntervalMs: env.SLO_ALERT_POLL_INTERVAL_MS,
+    dedupWindowMs: env.SLO_ALERT_DEDUP_WINDOW_MS,
+    observationWindowMs: env.SLO_ALERT_OBSERVATION_WINDOW_MS,
+    configs: env.SLO_ROUTE_CONFIGS as Array<{
+      method: string;
+      route: string;
+      maxErrorRate?: number;
+      maxLatencyP95Ms?: number;
+    }>,
   },
 } as const;

@@ -95,7 +95,6 @@ function createMockBillingPool() {
 function createSorobanMock(balances: Record<string, bigint>, failureAfter?: number) {
   const deductCalls: string[] = [];
   const getBalanceCalls: string[] = [];
-  let failures = 0;
 
   const client: SorobanClient = {
     getBalance: async (userId: string) => {
@@ -157,8 +156,8 @@ describe('BillingService semaphore integration', () => {
     const [firstResult, secondResult] = await Promise.allSettled([first, second]);
     assert.equal(firstResult.status, 'fulfilled');
     assert.equal(secondResult.status, 'fulfilled');
-    assert.equal((firstResult as PromiseFulfilledResult<any>).value.success, false);
-    assert.equal((secondResult as PromiseFulfilledResult<any>).value.success, true);
+    assert.equal((firstResult as PromiseFulfilledResult<{ success: boolean }>).value.success, false);
+    assert.equal((secondResult as PromiseFulfilledResult<{ success: boolean }>).value.success, true);
   });
 
   test('fairness: requests are processed in order', async () => {

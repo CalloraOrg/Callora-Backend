@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import type { StringValue } from 'ms';
 import { logger } from '../logger.js';
 import type { 
   RefreshTokenPayload, 
@@ -11,14 +12,14 @@ import type { RefreshTokenRepository } from '../repositories/refreshTokenReposit
 
 export interface RefreshTokenServiceOptions {
   jwtSecret: string;
-  accessTokenExpiry: string;
-  refreshTokenExpiry: string;
+  accessTokenExpiry: StringValue | number;
+  refreshTokenExpiry: StringValue | number;
 }
 
 export class RefreshTokenService {
   private readonly jwtSecret: string;
-  private readonly accessTokenExpiry: string;
-  private readonly refreshTokenExpiry: string;
+  private readonly accessTokenExpiry: StringValue | number;
+  private readonly refreshTokenExpiry: StringValue | number;
 
   constructor(options: RefreshTokenServiceOptions) {
     this.jwtSecret = options.jwtSecret;
@@ -55,7 +56,7 @@ export class RefreshTokenService {
     };
     
     const accessToken = jwt.sign(accessTokenPayload, this.jwtSecret, {
-      expiresIn: this.accessTokenExpiry as any,
+      expiresIn: this.accessTokenExpiry,
       algorithm: 'HS256'
     });
 
@@ -66,7 +67,7 @@ export class RefreshTokenService {
     };
     
     const refreshToken = jwt.sign(refreshTokenPayload, this.jwtSecret, {
-      expiresIn: this.refreshTokenExpiry as any,
+      expiresIn: this.refreshTokenExpiry,
       algorithm: 'HS256'
     });
 
@@ -140,7 +141,8 @@ export class RefreshTokenService {
   /**
    * Parse expiry string to seconds
    */
-  private parseExpiry(expiry: string): number {
+  private parseExpiry(expiry: StringValue | number): number {
+    if (typeof expiry === 'number') return expiry;
     const match = expiry.match(/^(\d+)(ms|[smhd])$/);
     if (!match) {
       throw new Error(`Invalid expiry format: ${expiry}`);
@@ -185,7 +187,7 @@ export class RefreshTokenService {
     };
 
     return jwt.sign(payload, this.jwtSecret, {
-      expiresIn: this.accessTokenExpiry as any,
+      expiresIn: this.accessTokenExpiry,
       algorithm: 'HS256'
     });
   }
@@ -236,10 +238,7 @@ export class RefreshTokenService {
    *      leaving the victim holding a now-revoked token.
    *   b) The attacker's rotated token was stolen back by the legitimate user.
    *
-   * In either case we cannot tell who is legitimate, so the safest response
-   * is to revoke ALL tokens for the user, forcing a full re-authentication.
-   * Revoking only the family is insufficient because an attacker who has
-   * already rotated the token may have started a new family.
+   * In this case, we revoke all user refresh tokens to contain the theft signal.
    *
    * @param storedToken - The revoked token record that was presented again
    * @param repository  - Token repository for persistence
@@ -254,8 +253,6 @@ export class RefreshTokenService {
       }
     );
 
-    // Revoke every token for this user, not just the family, because the
-    // attacker may have rotated into a new family after the initial theft.
     await repository.revokeAllUserTokens(storedToken.userId);
   }
 }

@@ -148,7 +148,7 @@ export function decodeCursor(cursor: string): { created_at: string; id: string }
     }
 
     return { created_at, id };
-  } catch (error) {
+  } catch {
     throw new ValidationError([
       { 
         field: 'query.cursor', 

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface RequestContext {
   requestId: string;
+  correlationId?: string;
 }
 
 const requestContextStorage = new AsyncLocalStorage<RequestContext>();
@@ -21,6 +22,10 @@ export const runWithRequestContext = <T>(
 /** Return the active request id for the current async execution chain. */
 export const getRequestId = (): string | undefined =>
   requestContextStorage.getStore()?.requestId;
+
+/** Return the active correlation id for the current async execution chain. */
+export const getCorrelationId = (): string | undefined =>
+  requestContextStorage.getStore()?.correlationId;
 
 /**
  * Return the active request id, or create a local fallback for work that runs

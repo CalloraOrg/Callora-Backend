@@ -2,7 +2,6 @@ import { Settlement, SettlementStore } from '../types/developer.js';
 import { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 import { SorobanSettlementClient } from './sorobanSettlement.js';
 import { randomUUID } from 'node:crypto';
-import { config } from '../config/index.js';
 import { calloraEvents } from '../events/event.emitter.js';
 import {
   RETRIABLE_HTTP_STATUSES,

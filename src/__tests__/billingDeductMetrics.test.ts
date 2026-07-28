@@ -15,7 +15,7 @@ interface MetricEntry {
 
 async function getMetricValues(name: string) {
   const metrics = await client.register.getMetricsAsJSON();
-  const found = metrics.find((m: any) => m.name === name);
+  const found = metrics.find((m: { name: string }) => m.name === name);
   if (!found) return undefined;
   return { ...found, values: found.values as MetricEntry[] };
 }
@@ -240,7 +240,7 @@ describe('resetBillingDeductMetrics', () => {
 describe('metric registration and dashboard consistency', () => {
   it('metric name appears in the exported metric registry', async () => {
     const metrics = await client.register.getMetricsAsJSON();
-    const metricNames = metrics.map((m: any) => m.name);
+    const metricNames = metrics.map((m: { name: string }) => m.name);
     expect(metricNames).toContain('billing_deduct_duration_seconds');
   });
 

@@ -1,10 +1,8 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
 import { InMemoryUsageEventsRepository, type UsageEvent } from '../repositories/usageEventsRepository.js';
-import type { AuthenticatedUser } from '../types/auth.js';
 
 describe('GET /api/usage', () => {
-  const mockUser: AuthenticatedUser = { id: 'user123' };
   const mockEvents: UsageEvent[] = [
     {
       id: 'event1',
@@ -86,8 +84,8 @@ describe('GET /api/usage', () => {
     
     // Check breakdown by API
     const breakdown = response.body.stats.breakdownByApi;
-    const api1Breakdown = breakdown.find((b: any) => b.apiId === 'api1');
-    const api2Breakdown = breakdown.find((b: any) => b.apiId === 'api2');
+    const api1Breakdown = breakdown.find((b: { apiId: string }) => b.apiId === 'api1');
+    const api2Breakdown = breakdown.find((b: { apiId: string }) => b.apiId === 'api2');
     
     expect(api1Breakdown).toMatchObject({
       apiId: 'api1',

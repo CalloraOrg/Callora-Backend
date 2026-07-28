@@ -7,7 +7,7 @@ import {
 } from '../lib/retry.js';
 
 export interface ReconciliationQueryable {
-  query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
 }
 
 export type DiscrepancyType =

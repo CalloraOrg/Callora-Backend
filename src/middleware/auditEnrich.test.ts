@@ -168,7 +168,7 @@ describe('auditEnrichMiddleware', () => {
   });
 
   it('resolves clientIp from socket when no proxy headers', () => {
-    const req = makeReq({ socket: { remoteAddress: '10.0.0.1' } as any });
+    const req = makeReq({ socket: { remoteAddress: '10.0.0.1' } as unknown as AugmentedRequest['socket'] });
     runMiddleware(req);
     assert.equal(req.auditContext.clientIp, '10.0.0.1');
   });
@@ -176,19 +176,19 @@ describe('auditEnrichMiddleware', () => {
   it('sets userAgent from User-Agent header', () => {
     const req = makeReq({
       get: (name: string) => name.toLowerCase() === 'user-agent' ? 'supertest/1.0' : undefined,
-    } as any);
+    } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.userAgent, 'supertest/1.0');
   });
 
   it('sets userAgent to undefined when no User-Agent header', () => {
-    const req = makeReq({ get: (_: string) => undefined } as any);
+    const req = makeReq({ get: (_: string) => undefined } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.userAgent, undefined);
   });
 
   it('picks correlationId from req.id (set by requestIdMiddleware)', () => {
-    const req = makeReq({ id: 'req-id-from-middleware' } as any);
+    const req = makeReq({ id: 'req-id-from-middleware' } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.correlationId, 'req-id-from-middleware');
   });
@@ -196,7 +196,7 @@ describe('auditEnrichMiddleware', () => {
   it('falls back to x-request-id header if req.id absent', () => {
     const req = makeReq({
       headers: { 'x-request-id': 'header-req-id' },
-    } as any);
+    } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.correlationId, 'header-req-id');
   });
@@ -204,7 +204,7 @@ describe('auditEnrichMiddleware', () => {
   it('falls back to x-correlation-id header when x-request-id absent', () => {
     const req = makeReq({
       headers: { 'x-correlation-id': 'corr-id-123' },
-    } as any);
+    } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.correlationId, 'corr-id-123');
   });
@@ -216,7 +216,7 @@ describe('auditEnrichMiddleware', () => {
   });
 
   it('sets tenantId from req.developerId when present', () => {
-    const req = makeReq({ developerId: 'dev-user-42' } as any);
+    const req = makeReq({ developerId: 'dev-user-42' } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.tenantId, 'dev-user-42');
   });
@@ -228,29 +228,29 @@ describe('auditEnrichMiddleware', () => {
   });
 
   it('computes bodyHash for a JSON body', () => {
-    const req = makeReq({ body: { action: 'test', id: 99 } } as any);
+    const req = makeReq({ body: { action: 'test', id: 99 } } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.ok(typeof req.auditContext.bodyHash === 'string');
     assert.match(req.auditContext.bodyHash!, /^[0-9a-f]{64}$/);
   });
 
   it('sets bodyHash to null when body is absent', () => {
-    const req = makeReq({ body: undefined } as any);
+    const req = makeReq({ body: undefined } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.bodyHash, null);
   });
 
   it('sets bodyHash to null when AUDIT_BODY_HASH_SECRET is not set', () => {
     delete process.env.AUDIT_BODY_HASH_SECRET;
-    const req = makeReq({ body: { x: 1 } } as any);
+    const req = makeReq({ body: { x: 1 } } as unknown as AugmentedRequest);
     runMiddleware(req);
     assert.equal(req.auditContext.bodyHash, null);
   });
 
   it('produces deterministic bodyHash across two identical requests', () => {
     const body = { delete: true, id: 7 };
-    const req1 = makeReq({ body } as any);
-    const req2 = makeReq({ body } as any);
+    const req1 = makeReq({ body } as unknown as AugmentedRequest);
+    const req2 = makeReq({ body } as unknown as AugmentedRequest);
     runMiddleware(req1);
     runMiddleware(req2);
     assert.equal(req1.auditContext.bodyHash, req2.auditContext.bodyHash);

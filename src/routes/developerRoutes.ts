@@ -8,10 +8,11 @@ import {
   SettlementStore,
 } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
-import { BadRequestError, ForbiddenError, UnauthorizedError } from '../errors/index.js';
+import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
-import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
-import { parseCursor } from '../lib/cursorPagination.js';
+import type { UsageEventsRepository } from '../repositories/usageEventsRepository.js';
+import type { ReportExporterService } from '../services/reportExporter.js';
+import { createDeveloperUsageSummaryRouter } from './developers/me/usage.js';
 
 /**
  * Wraps an async Express route handler so that any thrown error is forwarded
@@ -30,11 +31,13 @@ export interface DeveloperRoutesDeps {
   settlementStore: SettlementStore;
   usageStore: UsageStore;
   developerRepository: DeveloperRepository;
+  usageEventsRepository?: UsageEventsRepository;
+  reportExporterService?: ReportExporterService;
 }
 
 export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
   const router = Router();
-  const { settlementStore, usageStore, developerRepository } = deps;
+  const { settlementStore, usageStore, developerRepository, usageEventsRepository, reportExporterService } = deps;
 
   // Validation schema for revenue query parameters
   const revenueQuerySchema = z.object({
@@ -206,76 +209,60 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
     }),
   );
 
-  // Validation schema for developer keys query parameters
-  const keysQuerySchema = z.object({
+  // Validation schema for exports query parameters
+  const exportsQuerySchema = z.object({
     limit: z
       .string()
       .optional()
       .transform((val) => (val ? parseInt(val, 10) : 20))
       .pipe(z.number().int())
       .transform((val) => Math.min(Math.max(val, 1), 100)),
-    cursor: z.string().optional(),
+    offset: z
+      .string()
+      .optional()
+      .transform((val) => (val ? parseInt(val, 10) : 0))
+      .pipe(z.number().int().min(0)),
   });
 
-  /**
-   * GET /api/developers/me/keys
-   *
-   * Returns a paginated list of the authenticated developer's API keys.
-   */
-  router.get(
-    '/me/keys',
-    requireAuth,
-    validate({ query: keysQuerySchema }),
-    asyncHandler(async (req, res) => {
-      const user = res.locals.authenticatedUser;
-      if (!user) {
-        throw new UnauthorizedError();
-      }
+  if (reportExporterService) {
+    router.get(
+      '/exports',
+      requireAuth,
+      validate({ query: exportsQuerySchema }),
+      asyncHandler(async (req, res) => {
+        const user = res.locals.authenticatedUser;
+        if (!user) throw new UnauthorizedError();
+        const developer = await developerRepository.findByUserId(user.id);
+        if (!developer)
+          throw new ForbiddenError('No developer profile found for this account', 'DEVELOPER_NOT_FOUND');
 
-      // Check if developer profile exists to prevent cross-tenant enumeration.
-      const developer = await developerRepository.findByUserId(user.id);
-      if (!developer) {
-        throw new ForbiddenError(
-          'No developer profile found for this account',
-          'DEVELOPER_NOT_FOUND',
-        );
-      }
+        const parsedQuery = exportsQuerySchema.parse(req.query);
+        const { limit, offset } = parsedQuery;
+        const ttl = Number(process.env.EXPORT_SIGNED_URL_TTL_SECONDS ?? '900');
 
-      const parsedQuery = keysQuerySchema.parse(req.query);
-      const limit = parsedQuery.limit;
-      const cursor = parsedQuery.cursor;
+        const records = await reportExporterService.listExportsForDeveloper(developer.user_id, { limit, offset });
+        const data = records.map((r) => ({
+          id: r.id,
+          format: r.format,
+          exportedAt: r.exportedAt.toISOString(),
+          expiresAt: r.expiresAt.toISOString(),
+          downloadUrl: reportExporterService.getSignedUrl(r, ttl),
+        }));
 
-      if (cursor) {
-        const decoded = parseCursor(cursor);
-        if (!decoded) {
-          throw new BadRequestError('Invalid cursor');
-        }
-      }
+        res.json({ data, pagination: { limit, offset, total: data.length } });
+      }),
+    );
+  }
 
-      const { keys, nextCursor, hasMore } = apiKeyRepository.listWithCursor({
-        userId: user.id,
-        limit,
-        cursor,
-      });
-
-      const data = keys.map((key) => ({
-        id: key.id,
-        prefix: key.prefix,
-        created_at: key.createdAt.toISOString(),
-        last_used_at: key.lastUsedAt ? key.lastUsedAt.toISOString() : null,
-        revoked_at: key.revokedAt ? key.revokedAt.toISOString() : null,
-      }));
-
-      res.json({
-        data,
-        meta: {
-          limit,
-          nextCursor,
-          hasMore,
-        },
-      });
-    }),
-  );
+  if (usageEventsRepository) {
+    router.use(
+      '/me/usage',
+      createDeveloperUsageSummaryRouter({
+        usageEventsRepository,
+        developerRepository,
+      }),
+    );
+  }
 
   return router;
 }

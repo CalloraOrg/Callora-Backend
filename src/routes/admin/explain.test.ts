@@ -1,4 +1,5 @@
 import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import request from 'supertest';
 import type { Pool, QueryResult } from 'pg';
 import { createExplainRouter } from './explain.js';
@@ -7,14 +8,14 @@ import { requestIdMiddleware } from '../../middleware/requestId.js';
 import { logger } from '../../logger.js';
 
 jest.mock('../../middleware/adminAuth', () => ({
-  adminAuth: jest.fn((_req: any, _res: any, next: any) => {
+  adminAuth: jest.fn((_req: Request, _res: Response, next: NextFunction) => {
     _res.locals = { ..._res.locals, adminActor: 'test-admin' };
     next();
   }),
 }));
 
 jest.mock('../../middleware/ipAllowlist', () => ({
-  createAdminIpAllowlist: jest.fn(() => (_req: any, _res: any, next: any) => next()),
+  createAdminIpAllowlist: jest.fn(() => (_req: Request, _res: Response, next: NextFunction) => next()),
 }));
 
 jest.mock('../../logger', () => {
@@ -295,6 +296,24 @@ describe('POST /api/admin/db/explain', () => {
         .send({ query: 'SELECT 1' });
       expect(successRes.status).toBe(200);
       expect(successRes.body).toHaveProperty('plan');
+    });
+
+    it('propagates unexpected non-ZodError errors to the error handler', async () => {
+      // Simulate an unexpected error thrown after successful db query (e.g. from logger.audit).
+      // This covers the final `next(error)` fallthrough in the outer catch block (100% coverage).
+      const unexpectedError = new TypeError('Unexpected runtime error');
+      (logger.audit as jest.Mock).mockImplementationOnce(() => {
+        throw unexpectedError;
+      });
+
+      mockQuery.mockResolvedValueOnce({ rows: [makeExplainRow(SAMPLE_PLAN)] } as unknown as QueryResult);
+      const app = createTestApp();
+      const res = await request(app)
+        .post('/api/admin/db/explain')
+        .send({ query: 'SELECT 1' });
+
+      // The unexpected error is passed to next(); errorHandler maps it to 500
+      expect(res.status).toBe(500);
     });
   });
 });

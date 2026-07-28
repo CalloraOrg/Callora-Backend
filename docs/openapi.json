@@ -6,6 +6,331 @@
     "description": "API contract covering Callora backend billing, usage, and developer routes."
   },
   "paths": {
+    "/api/admin/billing/credits/grant": {
+      "post": {
+        "summary": "Grant GrantFox FWC26 prepaid credits",
+        "description": "Adds prepaid USDC credits to a user account for the GrantFox FWC26 campaign. Requires admin authentication and the admin IP allowlist.",
+        "security": [
+          {
+            "adminApiKey": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "user_id",
+                  "amount_usdc"
+                ],
+                "properties": {
+                  "user_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "amount_usdc": {
+                    "type": "string",
+                    "pattern": "^\\d+(?:\\.\\d{1,7})?$",
+                    "description": "Positive USDC amount with at most seven fractional digits"
+                  }
+                }
+              },
+              "example": {
+                "user_id": "user_123",
+                "amount_usdc": "25.50"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Credits granted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "user_id",
+                        "amount_usdc",
+                        "balance_usdc",
+                        "campaign",
+                        "updated_at"
+                      ],
+                      "properties": {
+                        "user_id": {
+                          "type": "string"
+                        },
+                        "amount_usdc": {
+                          "type": "string"
+                        },
+                        "balance_usdc": {
+                          "type": "string"
+                        },
+                        "campaign": {
+                          "type": "string",
+                          "example": "GrantFox FWC26"
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid grant request"
+          },
+          "401": {
+            "description": "Unauthorized admin request"
+          },
+          "403": {
+            "description": "Forbidden by admin IP allowlist"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Application health check",
+        "description": "Returns the health status of the application and its dependencies (database, Soroban RPC, Horizon). Public endpoint — no authentication required.",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Application is healthy or partially degraded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "examples": {
+                  "simpleOk": {
+                    "summary": "Simple health check (no config)",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "status": "ok",
+                        "service": "callora-backend"
+                      },
+                      "requestId": "req-mock-uuid",
+                      "timestamp": "2026-07-25T10:00:00.000Z"
+                    }
+                  },
+                  "fullOk": {
+                    "summary": "Full health check — all dependencies healthy",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "status": "ok",
+                        "version": "1.0.0",
+                        "timestamp": "2026-07-25T10:00:00.000Z",
+                        "checks": {
+                          "api": "ok",
+                          "database": "ok",
+                          "soroban_rpc": "ok"
+                        }
+                      },
+                      "requestId": "req-mock-uuid",
+                      "timestamp": "2026-07-25T10:00:00.000Z"
+                    }
+                  },
+                  "degraded": {
+                    "summary": "Degraded — database slow, optional dep down",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "status": "degraded",
+                        "version": "1.0.0",
+                        "timestamp": "2026-07-25T10:00:00.000Z",
+                        "checks": {
+                          "api": "ok",
+                          "database": "degraded",
+                          "soroban_rpc": "down"
+                        }
+                      },
+                      "requestId": "req-mock-uuid",
+                      "timestamp": "2026-07-25T10:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Application is down or health check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "serviceUnavailable": {
+                    "summary": "Health check failure",
+                    "value": {
+                      "code": "SERVICE_UNAVAILABLE",
+                      "message": "Health check failed",
+                      "requestId": "req-mock-uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rate-limit/health": {
+      "get": {
+        "summary": "Check rate-limit subsystem health",
+        "description": "Returns the operational status of the rate-limit subsystem and its configured dependencies. This public probe does not consume rate-limit budget and does not require a request body.",
+        "responses": {
+          "200": {
+            "description": "Rate-limit subsystem is operational",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitHealthResponse"
+                },
+                "examples": {
+                  "operational": {
+                    "summary": "In-memory limiter is operational",
+                    "value": {
+                      "status": "ok",
+                      "timestamp": "2026-07-28T10:00:00.000Z",
+                      "dependencies": {
+                        "in_memory_store": {
+                          "status": "ok",
+                          "responseTime": 0.123,
+                          "details": {
+                            "windowMs": 60000,
+                            "maxRequests": 100
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "notConfigured": {
+                    "summary": "No limiter configured",
+                    "value": {
+                      "status": "ok",
+                      "timestamp": "2026-07-28T10:00:00.000Z",
+                      "dependencies": {
+                        "in_memory_store": {
+                          "status": "ok",
+                          "details": {
+                            "note": "No rate limiter configured for probing"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Rate-limit subsystem is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitHealthResponse"
+                },
+                "examples": {
+                  "unavailable": {
+                    "summary": "Rate-limit store probe failed",
+                    "value": {
+                      "status": "down",
+                      "timestamp": "2026-07-28T10:00:00.000Z",
+                      "dependencies": {
+                        "in_memory_store": {
+                          "status": "down",
+                          "responseTime": 0.456,
+                          "error": "unavailable"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/limits/check": {
+      "get": {
+        "summary": "Check the authenticated user's rate-limit budget",
+        "description": "Peeks at the authenticated user's REST rate-limit bucket without consuming a token. No request body is required.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rate-limit budget status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitCheckResponse"
+                },
+                "examples": {
+                  "allowed": {
+                    "summary": "Requests are currently allowed",
+                    "value": {
+                      "status": "ok"
+                    }
+                  },
+                  "denied": {
+                    "summary": "Rate-limit budget is exhausted",
+                    "value": {
+                      "status": "deny",
+                      "reason": "rate_limit_exceeded",
+                      "retryAfterMs": 42300
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Authentication required",
+                      "requestId": "req-rate-limit-check"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/gateway/health/{apiSlug}": {
       "get": {
         "summary": "Get gateway health for an API",
@@ -51,7 +376,7 @@
         "description": "Deducts USDC from the user's vault balance to pay for an API call. Authenticated and idempotent.",
         "externalDocs": {
           "description": "SDK idempotency contract and retry guidance",
-          "url": "./sdk/billing-deduct.md"
+          "url": "https://callora.com/sdk/billing-deduct.md"
         },
         "security": [
           {
@@ -70,6 +395,7 @@
                   "summary": "Deduct billing request",
                   "value": {
                     "requestId": "req-123e4567-e89b-12d3-a456-426614174000",
+                    "developerId": "dev-123",
                     "apiId": "api-123",
                     "endpointId": "endpoint-456",
                     "apiKeyId": "key-789",
@@ -188,6 +514,39 @@
                       "requestId": "req-abc123"
                     }
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/billing/deduct/bulk": {
+      "post": {
+        "summary": "Deduct billing balance for up to 100 API calls in one batch",
+        "description": "Creates usage events for up to 100 billing entries in a single database transaction, then performs one aggregate on-chain deduction for the newly inserted entries. Existing requestIds are treated idempotently and are returned in the per-entry results without being charged again.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingBulkDeductRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk billing deduction successfully processed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingBulkDeductResponse"
                 }
               }
             }
@@ -314,6 +673,147 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UsageResponse"
+                },
+                "examples": {
+                  "withEvents": {
+                    "summary": "Typical response with two usage events",
+                    "value": {
+                      "events": [
+                        {
+                          "id": "evt_01hx9r2k3m4n5p6q7r8s9t0u",
+                          "apiId": "api_weather_v1",
+                          "endpoint": "/v1/weather/current",
+                          "occurredAt": "2026-07-01T14:32:00.000Z",
+                          "revenue": "1000000"
+                        },
+                        {
+                          "id": "evt_01hx9r2k3m4n5p6q7r8s9t0v",
+                          "apiId": "api_weather_v1",
+                          "endpoint": "/v1/weather/forecast",
+                          "occurredAt": "2026-07-01T14:45:00.000Z",
+                          "revenue": "1000000"
+                        }
+                      ],
+                      "stats": {
+                        "totalCalls": 2,
+                        "totalSpent": "2000000",
+                        "breakdownByApi": [
+                          {
+                            "apiId": "api_weather_v1",
+                            "calls": 2,
+                            "revenue": "2000000"
+                          }
+                        ]
+                      },
+                      "period": {
+                        "from": "2026-06-01T00:00:00.000Z",
+                        "to": "2026-07-01T00:00:00.000Z"
+                      },
+                      "pagination": {
+                        "limit": 20,
+                        "offset": 0,
+                        "hasMore": false
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t0w"
+                    }
+                  },
+                  "withBuckets": {
+                    "summary": "Response with daily call buckets (groupBy=day)",
+                    "value": {
+                      "events": [
+                        {
+                          "id": "evt_01hx9r2k3m4n5p6q7r8s9t0x",
+                          "apiId": "api_maps_v2",
+                          "endpoint": "/v2/geocode",
+                          "occurredAt": "2026-07-10T09:15:00.000Z",
+                          "revenue": "500000"
+                        }
+                      ],
+                      "stats": {
+                        "totalCalls": 1,
+                        "totalSpent": "500000",
+                        "breakdownByApi": [
+                          {
+                            "apiId": "api_maps_v2",
+                            "calls": 1,
+                            "revenue": "500000"
+                          }
+                        ],
+                        "buckets": [
+                          {
+                            "period": "2026-07-10",
+                            "calls": 1,
+                            "revenue": "500000"
+                          }
+                        ]
+                      },
+                      "period": {
+                        "from": "2026-07-10T00:00:00.000Z",
+                        "to": "2026-07-11T00:00:00.000Z"
+                      },
+                      "pagination": {
+                        "limit": 20,
+                        "offset": 0,
+                        "hasMore": false
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t0y"
+                    }
+                  },
+                  "empty": {
+                    "summary": "No events in the requested period",
+                    "value": {
+                      "events": [],
+                      "stats": {
+                        "totalCalls": 0,
+                        "totalSpent": "0",
+                        "breakdownByApi": []
+                      },
+                      "period": {
+                        "from": "2026-06-01T00:00:00.000Z",
+                        "to": "2026-07-01T00:00:00.000Z"
+                      },
+                      "pagination": {
+                        "limit": 20,
+                        "offset": 0,
+                        "hasMore": false
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t0z"
+                    }
+                  },
+                  "withCursorPagination": {
+                    "summary": "Cursor-paginated response (more pages available)",
+                    "value": {
+                      "events": [
+                        {
+                          "id": "evt_01hx9r2k3m4n5p6q7r8s9t1a",
+                          "apiId": "api_translate_v1",
+                          "endpoint": "/v1/translate",
+                          "occurredAt": "2026-07-20T11:00:00.000Z",
+                          "revenue": "250000"
+                        }
+                      ],
+                      "stats": {
+                        "totalCalls": 1,
+                        "totalSpent": "250000",
+                        "breakdownByApi": [
+                          {
+                            "apiId": "api_translate_v1",
+                            "calls": 1,
+                            "revenue": "250000"
+                          }
+                        ]
+                      },
+                      "period": {
+                        "from": "2026-07-01T00:00:00.000Z",
+                        "to": "2026-07-31T00:00:00.000Z"
+                      },
+                      "pagination": {
+                        "limit": 1,
+                        "nextCursor": "eyJjcmVhdGVkX2F0IjoiMjAyNi0wNy0yMFQxMTowMDowMC4wMDBaIiwiaWQiOiJldnRfMDFoeDlyMmszbTRuNXA2cTdyOHM5dDF"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t1b"
+                    }
+                  }
                 }
               }
             }
@@ -324,6 +824,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidDateRange": {
+                    "summary": "from date is after to date",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "'from' date must be before or equal to 'to' date",
+                        "details": [
+                          {
+                            "field": "from",
+                            "message": "'from' date must be before or equal to 'to' date",
+                            "code": "custom"
+                          }
+                        ]
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t1c",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  },
+                  "invalidGroupBy": {
+                    "summary": "Invalid groupBy value",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Invalid enum value. Expected 'day' | 'week' | 'month'",
+                        "details": [
+                          {
+                            "field": "groupBy",
+                            "message": "Invalid enum value. Expected 'day' | 'week' | 'month'",
+                            "code": "invalid_enum_value"
+                          }
+                        ]
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t1d",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  },
+                  "invalidCursor": {
+                    "summary": "Malformed cursor value",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BAD_REQUEST",
+                        "message": "Invalid cursor format. Cursor must be base64 encoded (created_at, id).",
+                        "details": []
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t1e",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  }
                 }
               }
             }
@@ -334,6 +887,32 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingToken": {
+                    "summary": "No authorization token provided",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Unauthorized"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t1f",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  },
+                  "expiredToken": {
+                    "summary": "JWT token has expired",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "TOKEN_EXPIRED",
+                        "message": "Token expired"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t1g",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  }
                 }
               }
             }
@@ -344,6 +923,338 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "internalError": {
+                    "summary": "Unexpected server error",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INTERNAL_SERVER_ERROR",
+                        "message": "Internal server error"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t1h",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/usage/sse": {
+      "get": {
+        "summary": "Stream live usage events",
+        "description": "Streams live usage events for the authenticated user over Server-Sent Events. Clients should keep the connection open and process connected and usage events as they arrive.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream established successfully",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "connected": {
+                    "summary": "Initial connected event sent on stream open",
+                    "value": "event: connected\ndata: {\"status\":\"connected\"}\n\n"
+                  },
+                  "usageEvent": {
+                    "summary": "Live usage event pushed to the stream",
+                    "value": "event: usage\ndata: {\"id\":\"evt_01hx9r2k3m4n5p6q7r8s9t2a\",\"apiId\":\"api_weather_v1\",\"endpoint\":\"/v1/weather/current\",\"occurredAt\":\"2026-07-01T14:32:00.000Z\",\"revenue\":\"1000000\"}\n\n"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingToken": {
+                    "summary": "No authorization token provided",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Unauthorized"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t2b",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/usage/by-endpoint": {
+      "get": {
+        "summary": "Top-N endpoints by call volume",
+        "description": "Returns the authenticated developer's most-called API endpoints ranked by call volume within the requested time window. Useful for identifying hot endpoints and optimising spend. Defaults to the last 30 days and top 5 endpoints when the corresponding query parameters are omitted.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of period (ISO-8601). Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of period (ISO-8601). Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of endpoints to return. Must be a positive integer. Defaults to 5.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 5
+            }
+          },
+          {
+            "name": "apiId",
+            "in": "query",
+            "description": "Filter results to a specific API by its ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Top endpoints returned successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "period"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "description": "Endpoints ordered by call count descending. Ties are broken by endpoint path ascending.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "endpoint",
+                          "calls",
+                          "revenue"
+                        ],
+                        "properties": {
+                          "endpoint": {
+                            "type": "string",
+                            "description": "Endpoint path (e.g. `/v1/weather/current`)."
+                          },
+                          "calls": {
+                            "type": "integer",
+                            "description": "Total number of calls to this endpoint in the period."
+                          },
+                          "revenue": {
+                            "type": "string",
+                            "description": "Total revenue generated in smallest USDC units (string to avoid precision loss)."
+                          }
+                        }
+                      }
+                    },
+                    "period": {
+                      "type": "object",
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Effective start of the query period."
+                        },
+                        "to": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Effective end of the query period."
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "topEndpoints": {
+                    "summary": "Two most-called endpoints in the period",
+                    "value": {
+                      "data": [
+                        {
+                          "endpoint": "/v1/weather/current",
+                          "calls": 142,
+                          "revenue": "142000"
+                        },
+                        {
+                          "endpoint": "/v1/weather/forecast",
+                          "calls": 87,
+                          "revenue": "87000"
+                        }
+                      ],
+                      "period": {
+                        "from": "2026-06-01T00:00:00.000Z",
+                        "to": "2026-07-01T00:00:00.000Z"
+                      }
+                    }
+                  },
+                  "filteredByApi": {
+                    "summary": "Top endpoints filtered to a single API",
+                    "value": {
+                      "data": [
+                        {
+                          "endpoint": "/v2/geocode",
+                          "calls": 310,
+                          "revenue": "310000"
+                        }
+                      ],
+                      "period": {
+                        "from": "2026-07-01T00:00:00.000Z",
+                        "to": "2026-07-27T00:00:00.000Z"
+                      }
+                    }
+                  },
+                  "empty": {
+                    "summary": "No calls in the requested period",
+                    "value": {
+                      "data": [],
+                      "period": {
+                        "from": "2026-01-01T00:00:00.000Z",
+                        "to": "2026-01-02T00:00:00.000Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters (bad date format, invalid limit, `from` after `to`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidDateRange": {
+                    "summary": "from is after to",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BAD_REQUEST",
+                        "message": "from must be before or equal to to"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t3a",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  },
+                  "invalidLimit": {
+                    "summary": "Non-positive limit value",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BAD_REQUEST",
+                        "message": "limit must be a positive integer"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t3b",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  },
+                  "invalidDate": {
+                    "summary": "Malformed date string in from/to parameter",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BAD_REQUEST",
+                        "message": "Invalid \"from\" date"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t3c",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingToken": {
+                    "summary": "No authorization token provided",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Unauthorized"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t3d",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "internalError": {
+                    "summary": "Unexpected server error",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INTERNAL_SERVER_ERROR",
+                        "message": "Internal server error"
+                      },
+                      "requestId": "req-01hx9r2k3m4n5p6q7r8s9t3e",
+                      "timestamp": "2026-07-01T10:00:00.000Z"
+                    }
+                  }
                 }
               }
             }
@@ -701,7 +1612,7 @@
     "/api/apis": {
       "get": {
         "summary": "List public APIs",
-        "description": "Returns a paginated list of public active APIs, optionally filtered by category or search term.",
+        "description": "Returns a paginated list of public active APIs, optionally filtered by category or search term. Successful responses include a strong ETag; clients may send If-None-Match for conditional GET (304 when unchanged).",
         "parameters": [
           {
             "name": "limit",
@@ -736,15 +1647,108 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Strong ETag from a previous listings response. When it matches the current representation, the server returns 304 Not Modified.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Successfully retrieved list of public APIs",
+            "headers": {
+              "ETag": {
+                "description": "Strong SHA-256 ETag of the JSON response body",
+                "schema": {
+                  "type": "string",
+                  "example": "\"a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456\""
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApisListResponse"
+                },
+                "examples": {
+                  "activeListings": {
+                    "summary": "Active API listings page",
+                    "value": {
+                      "data": [
+                        {
+                          "id": 101,
+                          "name": "GrantFox Scoring API",
+                          "description": "Scores FWC26 grant applications against program rules.",
+                          "base_url": "https://api.grantfox.example",
+                          "logo_url": "https://cdn.grantfox.example/logo.png",
+                          "category": "grants",
+                          "status": "active",
+                          "developer": {
+                            "id": 11,
+                            "name": "GrantFox Labs"
+                          },
+                          "endpoints": [
+                            {
+                              "id": 501,
+                              "api_id": 101,
+                              "path": "/applications/{applicationId}/score",
+                              "method": "POST",
+                              "price_per_call_usdc": "0.2500000",
+                              "description": "Score a single grant application.",
+                              "created_at": "2026-07-27T09:00:00.000Z",
+                              "updated_at": "2026-07-27T09:00:00.000Z"
+                            }
+                          ]
+                        },
+                        {
+                          "id": 102,
+                          "name": "GrantFox Eligibility API",
+                          "description": "Validates applicant eligibility before scoring.",
+                          "base_url": "https://api.grantfox.example",
+                          "logo_url": null,
+                          "category": "grants",
+                          "status": "active",
+                          "developer": {
+                            "id": 11,
+                            "name": "GrantFox Labs"
+                          },
+                          "endpoints": [
+                            {
+                              "id": 502,
+                              "api_id": 102,
+                              "path": "/applications/{applicationId}/eligibility",
+                              "method": "GET",
+                              "price_per_call_usdc": "0.0500000",
+                              "description": "Return eligibility checks for an application.",
+                              "created_at": "2026-07-27T09:05:00.000Z",
+                              "updated_at": "2026-07-27T09:05:00.000Z"
+                            }
+                          ]
+                        }
+                      ],
+                      "pagination": {
+                        "limit": 20,
+                        "offset": 0,
+                        "total": 2
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified — the listings representation matches If-None-Match; response body is empty",
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag of the unchanged representation",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -755,6 +1759,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "internalServerError": {
+                    "summary": "Unexpected repository error",
+                    "value": {
+                      "code": "INTERNAL_SERVER_ERROR",
+                      "message": "Internal server error",
+                      "requestId": "req-apis-list-500"
+                    }
+                  }
                 }
               }
             }
@@ -775,6 +1789,31 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ApiCreateRequest"
+              },
+              "examples": {
+                "publishApi": {
+                  "summary": "Publish a grant review API",
+                  "value": {
+                    "name": "GrantFox Review API",
+                    "description": "Automates FWC26 application review workflows.",
+                    "base_url": "https://api.grantfox.example",
+                    "category": "grants",
+                    "endpoints": [
+                      {
+                        "path": "/applications/{applicationId}/review",
+                        "method": "POST",
+                        "price_per_call_usdc": "0.3000000",
+                        "description": "Run the full review pipeline for one application."
+                      },
+                      {
+                        "path": "/applications/{applicationId}/status",
+                        "method": "GET",
+                        "price_per_call_usdc": "0.0200000",
+                        "description": "Fetch the latest review status."
+                      }
+                    ]
+                  }
+                }
               }
             }
           }
@@ -786,6 +1825,45 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiCreateResponse"
+                },
+                "examples": {
+                  "createdApi": {
+                    "summary": "API published successfully",
+                    "value": {
+                      "id": 301,
+                      "developer_id": 11,
+                      "name": "GrantFox Review API",
+                      "description": "Automates FWC26 application review workflows.",
+                      "base_url": "https://api.grantfox.example",
+                      "logo_url": null,
+                      "category": "grants",
+                      "status": "active",
+                      "created_at": "2026-07-27T10:00:00.000Z",
+                      "updated_at": "2026-07-27T10:00:00.000Z",
+                      "endpoints": [
+                        {
+                          "id": 801,
+                          "api_id": 301,
+                          "path": "/applications/{applicationId}/review",
+                          "method": "POST",
+                          "price_per_call_usdc": "0.3000000",
+                          "description": "Run the full review pipeline for one application.",
+                          "created_at": "2026-07-27T10:00:00.000Z",
+                          "updated_at": "2026-07-27T10:00:00.000Z"
+                        },
+                        {
+                          "id": 802,
+                          "api_id": 301,
+                          "path": "/applications/{applicationId}/status",
+                          "method": "GET",
+                          "price_per_call_usdc": "0.0200000",
+                          "description": "Fetch the latest review status.",
+                          "created_at": "2026-07-27T10:00:00.000Z",
+                          "updated_at": "2026-07-27T10:00:00.000Z"
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -796,6 +1874,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidPayload": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "Path must start with /",
+                      "requestId": "req-apis-create-400",
+                      "details": [
+                        {
+                          "field": "endpoints.0.path",
+                          "message": "Path must start with /",
+                          "code": "custom"
+                        }
+                      ]
+                    }
+                  },
+                  "developerProfileMissing": {
+                    "summary": "Developer profile missing",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "Developer profile not found. Create a developer profile first.",
+                      "requestId": "req-apis-create-dev-missing"
+                    }
+                  }
                 }
               }
             }
@@ -806,6 +1909,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Unauthorized",
+                      "requestId": "req-apis-create-401"
+                    }
+                  }
                 }
               }
             }
@@ -816,6 +1929,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "internalServerError": {
+                    "summary": "Unexpected persistence error",
+                    "value": {
+                      "code": "INTERNAL_SERVER_ERROR",
+                      "message": "Internal server error",
+                      "requestId": "req-apis-create-500"
+                    }
+                  }
                 }
               }
             }
@@ -844,6 +1967,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiDetailsResponse"
+                },
+                "examples": {
+                  "apiDetails": {
+                    "summary": "Detailed API record",
+                    "value": {
+                      "id": 101,
+                      "name": "GrantFox Scoring API",
+                      "description": "Scores FWC26 grant applications against program rules.",
+                      "base_url": "https://api.grantfox.example",
+                      "logo_url": "https://cdn.grantfox.example/logo.png",
+                      "category": "grants",
+                      "status": "active",
+                      "developer": {
+                        "id": 11,
+                        "name": "GrantFox Labs"
+                      },
+                      "endpoints": [
+                        {
+                          "id": 501,
+                          "api_id": 101,
+                          "path": "/applications/{applicationId}/score",
+                          "method": "POST",
+                          "price_per_call_usdc": "0.2500000",
+                          "description": "Score a single grant application.",
+                          "created_at": "2026-07-27T09:00:00.000Z",
+                          "updated_at": "2026-07-27T09:00:00.000Z"
+                        },
+                        {
+                          "id": 503,
+                          "api_id": 101,
+                          "path": "/applications/{applicationId}/score/explain",
+                          "method": "GET",
+                          "price_per_call_usdc": "0.0400000",
+                          "description": "Fetch scoring rationale for the latest run.",
+                          "created_at": "2026-07-27T09:10:00.000Z",
+                          "updated_at": "2026-07-27T09:10:00.000Z"
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -854,6 +2017,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidId": {
+                    "summary": "Invalid API id",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "id must be a positive integer",
+                      "requestId": "req-api-details-400"
+                    }
+                  }
                 }
               }
             }
@@ -864,6 +2037,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "apiNotFound": {
+                    "summary": "API not found",
+                    "value": {
+                      "code": "NOT_FOUND",
+                      "message": "API not found or not active",
+                      "requestId": "req-api-details-404"
+                    }
+                  }
                 }
               }
             }
@@ -874,6 +2057,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "internalServerError": {
+                    "summary": "Unexpected lookup error",
+                    "value": {
+                      "code": "INTERNAL_SERVER_ERROR",
+                      "message": "Internal server error",
+                      "requestId": "req-api-details-500"
+                    }
+                  }
                 }
               }
             }
@@ -945,6 +2138,211 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/exports": {
+      "get": {
+        "summary": "List export artifacts for GrantFox FWC26 campaign",
+        "description": "Returns a paginated list of materialized export artifacts for the authenticated developer. Part of the GrantFox FWC26 (Stellar Wave) campaign. Each export provides a signed download URL for accessing the artifact from object storage.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of export records to return (1-100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Pagination offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "developerId",
+            "in": "query",
+            "description": "Filter by developer ID (admin-only)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Filter by export format",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv",
+                "json"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Export artifacts retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "pagination"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "developerId",
+                          "format",
+                          "exportedAt",
+                          "expiresAt",
+                          "downloadUrl"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Unique export record identifier"
+                          },
+                          "developerId": {
+                            "type": "string",
+                            "description": "Developer identifier who owns this export"
+                          },
+                          "format": {
+                            "type": "string",
+                            "enum": [
+                              "csv",
+                              "json"
+                            ],
+                            "description": "Export file format"
+                          },
+                          "exportedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "ISO-8601 UTC timestamp when the export was created"
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "ISO-8601 UTC timestamp when the export record expires (7 days after creation)"
+                          },
+                          "downloadUrl": {
+                            "type": "string",
+                            "format": "uri",
+                            "description": "Signed download URL for the export artifact. Expires per EXPORT_SIGNED_URL_TTL_SECONDS (default 900s / 15 minutes)"
+                          }
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "required": [
+                        "limit",
+                        "offset",
+                        "total"
+                      ],
+                      "properties": {
+                        "limit": {
+                          "type": "integer",
+                          "description": "Requested page size"
+                        },
+                        "offset": {
+                          "type": "integer",
+                          "description": "Requested pagination offset"
+                        },
+                        "total": {
+                          "type": "integer",
+                          "description": "Total number of export records matching the query"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": "550e8400-e29b-41d4-a716-446655440000",
+                      "developerId": "dev-123",
+                      "format": "csv",
+                      "exportedAt": "2026-06-01T00:00:00.000Z",
+                      "expiresAt": "2026-06-08T00:00:00.000Z",
+                      "downloadUrl": "https://s3.example.com/exports/dev-123/2026-06-01.csv?expires=1234567890&signature=abc123"
+                    }
+                  ],
+                  "pagination": {
+                    "limit": 20,
+                    "offset": 0,
+                    "total": 1
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "code": "UNAUTHORIZED",
+                  "message": "Authentication required",
+                  "requestId": "req-abc123def456"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - no developer profile found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "code": "DEVELOPER_NOT_FOUND",
+                  "message": "No developer profile found for this account",
+                  "requestId": "req-abc123def456"
                 }
               }
             }
@@ -1072,6 +2470,27 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/BulkEndpointRegistrationRequest"
+              },
+              "examples": {
+                "bulkRegisterEndpoints": {
+                  "summary": "Add two endpoints to an API",
+                  "value": {
+                    "endpoints": [
+                      {
+                        "path": "/applications/{applicationId}/decision",
+                        "method": "POST",
+                        "price_per_call_usdc": "0.1800000",
+                        "description": "Create a funding decision recommendation."
+                      },
+                      {
+                        "path": "/applications/{applicationId}/timeline",
+                        "method": "GET",
+                        "price_per_call_usdc": "0.0150000",
+                        "description": "Return review timeline milestones."
+                      }
+                    ]
+                  }
+                }
               }
             }
           }
@@ -1083,6 +2502,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BulkEndpointRegistrationResponse"
+                },
+                "examples": {
+                  "createdEndpoints": {
+                    "summary": "Endpoints added successfully",
+                    "value": {
+                      "endpoints": [
+                        {
+                          "id": 901,
+                          "api_id": 301,
+                          "path": "/applications/{applicationId}/decision",
+                          "method": "POST",
+                          "price_per_call_usdc": "0.1800000",
+                          "description": "Create a funding decision recommendation."
+                        },
+                        {
+                          "id": 902,
+                          "api_id": 301,
+                          "path": "/applications/{applicationId}/timeline",
+                          "method": "GET",
+                          "price_per_call_usdc": "0.0150000",
+                          "description": "Return review timeline milestones."
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1093,6 +2537,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidEndpoint": {
+                    "summary": "Invalid endpoint payload",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "Price per call must be a non-negative decimal string",
+                      "requestId": "req-bulk-endpoints-400",
+                      "details": [
+                        {
+                          "field": "endpoints.0.price_per_call_usdc",
+                          "message": "Price per call must be a non-negative decimal string",
+                          "code": "custom"
+                        }
+                      ]
+                    }
+                  },
+                  "tooManyEndpoints": {
+                    "summary": "Too many endpoints submitted",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "Cannot register more than 50 endpoints at once",
+                      "requestId": "req-bulk-endpoints-too-many"
+                    }
+                  }
                 }
               }
             }
@@ -1103,6 +2572,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Unauthorized",
+                      "requestId": "req-bulk-endpoints-401"
+                    }
+                  }
                 }
               }
             }
@@ -1113,6 +2592,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "apiNotFound": {
+                    "summary": "Owned API not found",
+                    "value": {
+                      "code": "NOT_FOUND",
+                      "message": "API not found",
+                      "requestId": "req-bulk-endpoints-404"
+                    }
+                  }
                 }
               }
             }
@@ -1123,6 +2612,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "internalServerError": {
+                    "summary": "Unexpected persistence error",
+                    "value": {
+                      "code": "INTERNAL_SERVER_ERROR",
+                      "message": "Internal server error",
+                      "requestId": "req-bulk-endpoints-500"
+                    }
+                  }
                 }
               }
             }
@@ -1462,6 +2961,614 @@
           }
         }
       }
+    },
+    "/api/billing/disputes": {
+      "post": {
+        "summary": "Open a dispute",
+        "description": "Developer opens a dispute against a billing charge (usage event). One open dispute is allowed per usage_event_id.",
+        "tags": [
+          "Billing",
+          "Disputes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenDisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Dispute opened successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dispute"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "409": {
+            "description": "Dispute already exists for this usage_event_id"
+          }
+        }
+      },
+      "get": {
+        "summary": "List own disputes",
+        "description": "Returns all disputes opened by the authenticated developer.",
+        "tags": [
+          "Billing",
+          "Disputes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of disputes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "disputes",
+                    "total"
+                  ],
+                  "properties": {
+                    "disputes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Dispute"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/billing/disputes/{id}": {
+      "get": {
+        "summary": "Get own dispute with audit trail",
+        "description": "Returns a single dispute and its full audit event trail. Only the dispute owner may access it.",
+        "tags": [
+          "Billing",
+          "Disputes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dispute with events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "dispute",
+                    "events"
+                  ],
+                  "properties": {
+                    "dispute": {
+                      "$ref": "#/components/schemas/Dispute"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DisputeEvent"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: dispute belongs to another user"
+          },
+          "404": {
+            "description": "Dispute not found"
+          }
+        }
+      }
+    },
+    "/api/billing/disputes/{id}/resolve": {
+      "post": {
+        "summary": "Resolve a dispute (admin)",
+        "description": "Admin resolves an open dispute as REFUNDED or UPHELD. Requires admin authentication.",
+        "tags": [
+          "Billing",
+          "Disputes"
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dispute resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dispute"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Admin authentication required"
+          },
+          "404": {
+            "description": "Dispute not found"
+          },
+          "409": {
+            "description": "Dispute already resolved"
+          }
+        }
+      }
+    },
+    "/api/billing/disputes/admin/all": {
+      "get": {
+        "summary": "List all disputes (admin)",
+        "description": "Admin endpoint to list every dispute in the system.",
+        "tags": [
+          "Billing",
+          "Disputes"
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All disputes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "disputes",
+                    "total"
+                  ],
+                  "properties": {
+                    "disputes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Dispute"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin authentication required"
+          }
+        }
+      }
+    },
+    "/api/quota/requests": {
+      "post": {
+        "summary": "Submit a quota request",
+        "description": "Creates a new quota increase request for the authenticated developer. The request remains pending until an admin resolves it.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuotaRequestCreate"
+              },
+              "examples": {
+                "createRequest": {
+                  "summary": "Quota increase request",
+                  "value": {
+                    "requested_tier": "pro",
+                    "reason": "We need a higher monthly call cap for our beta launch.",
+                    "requested_overrides": {
+                      "monthly_call_limit": 250000,
+                      "rate_limit_max_requests": 1000
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Quota request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/QuotaRequest"
+                    }
+                  }
+                },
+                "examples": {
+                  "createdRequest": {
+                    "summary": "Created quota request",
+                    "value": {
+                      "data": {
+                        "id": "8dbc1b8b-5fe5-4e2f-8ece-9f0d7f9e5743",
+                        "developerId": "dev_123",
+                        "requestedTier": "pro",
+                        "reason": "We need a higher monthly call cap for our beta launch.",
+                        "requestedOverrides": {
+                          "monthlyCallLimit": 250000,
+                          "rateLimitMaxRequests": 1000
+                        },
+                        "status": "pending",
+                        "createdAt": "2026-07-26T12:34:56.000Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "validationError": {
+                    "summary": "Validation error",
+                    "value": {
+                      "code": "VALIDATION_ERROR",
+                      "message": "Request validation failed",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Authentication required",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unprocessable": {
+                    "summary": "Unprocessable entity",
+                    "value": {
+                      "code": "UNPROCESSABLE_ENTITY",
+                      "message": "Request validation failed",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List quota requests",
+        "description": "Lists the authenticated developer's own quota requests. An optional status query parameter filters the results.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Optional status filter",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of quota requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/QuotaRequest"
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "listSuccess": {
+                    "summary": "List of requests",
+                    "value": {
+                      "data": [
+                        {
+                          "id": "8dbc1b8b-5fe5-4e2f-8ece-9f0d7f9e5743",
+                          "developerId": "dev_123",
+                          "requestedTier": "pro",
+                          "reason": "We need a higher monthly call cap for our beta launch.",
+                          "requestedOverrides": {
+                            "monthlyCallLimit": 250000,
+                            "rateLimitMaxRequests": 1000
+                          },
+                          "status": "pending",
+                          "createdAt": "2026-07-26T12:34:56.000Z"
+                        },
+                        {
+                          "id": "c51082b2-9f67-4f57-8d7e-0784f09e5ea6",
+                          "developerId": "dev_123",
+                          "requestedTier": "enterprise",
+                          "reason": "We are onboarding a larger enterprise customer base.",
+                          "status": "approved",
+                          "adminNotes": "Approved for the next billing cycle.",
+                          "resolvedBy": "admin_42",
+                          "resolvedAt": "2026-07-27T09:00:00.000Z",
+                          "createdAt": "2026-07-25T10:15:00.000Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidStatus": {
+                    "summary": "Invalid status value",
+                    "value": {
+                      "code": "BAD_REQUEST",
+                      "message": "status must be one of: pending, approved, rejected",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Authentication required",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/quota/requests/{id}": {
+      "get": {
+        "summary": "Get a quota request",
+        "description": "Returns a single quota request by ID for the authenticated developer. Requests belonging to another developer appear as not found.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Quota request UUID",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Quota request retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/QuotaRequest"
+                    }
+                  }
+                },
+                "examples": {
+                  "singleRequest": {
+                    "summary": "Single quota request",
+                    "value": {
+                      "data": {
+                        "id": "8dbc1b8b-5fe5-4e2f-8ece-9f0d7f9e5743",
+                        "developerId": "dev_123",
+                        "requestedTier": "pro",
+                        "reason": "We need a higher monthly call cap for our beta launch.",
+                        "requestedOverrides": {
+                          "monthlyCallLimit": 250000,
+                          "rateLimitMaxRequests": 1000
+                        },
+                        "status": "pending",
+                        "createdAt": "2026-07-26T12:34:56.000Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "code": "UNAUTHORIZED",
+                      "message": "Authentication required",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Quota request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "notFound": {
+                    "summary": "Quota request missing or inaccessible",
+                    "value": {
+                      "code": "NOT_FOUND",
+                      "message": "Quota request not found",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1478,6 +3585,181 @@
       }
     },
     "schemas": {
+      "Subscription": {
+        "type": "object",
+        "description": "A user's subscription to a marketplace API.",
+        "required": [
+          "id",
+          "user_id",
+          "api_id",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Subscription UUID"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "ID of the subscribing user"
+          },
+          "api_id": {
+            "type": "integer",
+            "description": "ID of the subscribed API"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "cancelled"
+            ],
+            "description": "Current subscription status"
+          },
+          "metering_limit": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Maximum calls per calendar month; null means unlimited"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cancelled_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "QuotaRequest": {
+        "type": "object",
+        "description": "A developer quota increase request and its current resolution state.",
+        "required": [
+          "id",
+          "developerId",
+          "requestedTier",
+          "reason",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique request ID (UUID v4)"
+          },
+          "developerId": {
+            "type": "string",
+            "description": "The developer's user ID (from auth)"
+          },
+          "requestedTier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "pro",
+              "enterprise"
+            ],
+            "description": "Requested plan tier"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1000,
+            "description": "Developer-provided justification"
+          },
+          "requestedOverrides": {
+            "type": "object",
+            "description": "Optional specific limits to override in addition to the tier",
+            "properties": {
+              "monthlyCallLimit": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Requested monthly API call cap"
+              },
+              "rateLimitMaxRequests": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Requested per-window rate-limit ceiling"
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected"
+            ],
+            "description": "Current resolution state"
+          },
+          "adminNotes": {
+            "type": "string",
+            "description": "Admin-provided notes on the approval or rejection decision"
+          },
+          "resolvedBy": {
+            "type": "string",
+            "description": "Actor ID (admin) who resolved the request"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 timestamp when the request was resolved"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 timestamp when the request was submitted"
+          }
+        }
+      },
+      "QuotaRequestCreate": {
+        "type": "object",
+        "description": "Payload for submitting a new quota increase request.",
+        "required": [
+          "requested_tier",
+          "reason"
+        ],
+        "properties": {
+          "requested_tier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "pro",
+              "enterprise"
+            ],
+            "description": "Desired plan tier"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1000,
+            "description": "Justification for the upgrade (10–1000 characters)"
+          },
+          "requested_overrides": {
+            "type": "object",
+            "description": "Optional specific limit overrides to request alongside the tier upgrade",
+            "properties": {
+              "monthly_call_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Requested monthly API call cap"
+              },
+              "rate_limit_max_requests": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Requested per-window rate-limit ceiling"
+              }
+            }
+          }
+        }
+      },
       "PluginManifest": {
         "type": "object",
         "required": [
@@ -1573,6 +3855,10 @@
           "requestId": {
             "type": "string"
           },
+          "developerId": {
+            "type": "string",
+            "description": "Optional developer identifier. If provided, it must be a non-empty string. When omitted, the authenticated user ID is used."
+          },
           "apiId": {
             "type": "string"
           },
@@ -1613,6 +3899,114 @@
           }
         }
       },
+      "BillingBulkDeductEntry": {
+        "type": "object",
+        "required": [
+          "events",
+          "stats",
+          "period"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "apiId": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "apiKeyId": {
+            "type": "string"
+          },
+          "amountUsdc": {
+            "type": "string",
+            "description": "Positive decimal string with up to 7 fractional digits"
+          }
+        }
+      },
+      "BillingBulkDeductRequest": {
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/BillingBulkDeductEntry"
+            }
+          },
+          "idempotencyKey": {
+            "type": "string"
+          }
+        }
+      },
+      "BillingBulkDeductEntryResult": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "usageEventId",
+          "alreadyProcessed",
+          "deductionApplied",
+          "reconciliationRequired"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "usageEventId": {
+            "type": "string"
+          },
+          "stellarTxHash": {
+            "type": "string"
+          },
+          "alreadyProcessed": {
+            "type": "boolean"
+          },
+          "deductionApplied": {
+            "type": "boolean"
+          },
+          "reconciliationRequired": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BillingBulkDeductResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "entryCount",
+          "deductedCount",
+          "totalDeductedAmountUsdc",
+          "results"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "entryCount": {
+            "type": "integer"
+          },
+          "deductedCount": {
+            "type": "integer"
+          },
+          "totalDeductedAmountUsdc": {
+            "type": "string"
+          },
+          "stellarTxHash": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BillingBulkDeductEntryResult"
+            }
+          }
+        }
+      },
       "UsageResponse": {
         "type": "object",
         "required": [
@@ -1634,20 +4028,25 @@
               ],
               "properties": {
                 "id": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Unique identifier for the usage event."
                 },
                 "apiId": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Identifier of the API that was called."
                 },
                 "endpoint": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "API endpoint path that was invoked."
                 },
                 "occurredAt": {
                   "type": "string",
-                  "format": "date-time"
+                  "format": "date-time",
+                  "description": "ISO 8601 timestamp when the call occurred."
                 },
                 "revenue": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Revenue generated by this event in smallest USDC units (string to avoid precision loss)."
                 }
               }
             }
@@ -1661,13 +4060,16 @@
             ],
             "properties": {
               "totalCalls": {
-                "type": "integer"
+                "type": "integer",
+                "description": "Total number of API calls in the period."
               },
               "totalSpent": {
-                "type": "string"
+                "type": "string",
+                "description": "Total spend in smallest USDC units (string to avoid precision loss)."
               },
               "breakdownByApi": {
                 "type": "array",
+                "description": "Per-API aggregated call count and revenue.",
                 "items": {
                   "type": "object",
                   "required": [
@@ -1690,6 +4092,7 @@
               },
               "buckets": {
                 "type": "array",
+                "description": "Time-bucketed aggregation (present when groupBy is supplied).",
                 "items": {
                   "type": "object",
                   "required": [
@@ -1699,7 +4102,8 @@
                   ],
                   "properties": {
                     "period": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Bucket label (e.g. YYYY-MM-DD for groupBy=day)."
                     },
                     "calls": {
                       "type": "integer"
@@ -1718,6 +4122,7 @@
               "from",
               "to"
             ],
+            "description": "The effective time range covered by this response.",
             "properties": {
               "from": {
                 "type": "string",
@@ -1728,6 +4133,32 @@
                 "format": "date-time"
               }
             }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination metadata. Shape varies by pagination mode: offset pagination includes limit/offset/hasMore; cursor pagination includes limit/nextCursor.",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "description": "Page size used for this request."
+              },
+              "offset": {
+                "type": "integer",
+                "description": "Offset applied for this request (offset pagination only)."
+              },
+              "hasMore": {
+                "type": "boolean",
+                "description": "Whether additional pages exist."
+              },
+              "nextCursor": {
+                "type": "string",
+                "description": "Opaque base64 cursor to pass as the `cursor` query parameter for the next page (cursor pagination only)."
+              }
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Correlation ID for this request, propagated from the X-Request-Id header."
           }
         }
       },
@@ -2378,6 +4809,90 @@
           }
         }
       },
+      "RateLimitHealthResponse": {
+        "type": "object",
+        "description": "Operational health response for the rate-limit subsystem.",
+        "required": [
+          "status",
+          "timestamp",
+          "dependencies"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RateLimitDependencyStatus"
+            }
+          }
+        }
+      },
+      "RateLimitCheckResponse": {
+        "type": "object",
+        "description": "Non-consuming rate-limit budget check for the authenticated user.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "deny"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "rate_limit_exceeded"
+            ]
+          },
+          "retryAfterMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Milliseconds until the current rate-limit window resets"
+          }
+        }
+      },
+      "RateLimitDependencyStatus": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ]
+          },
+          "responseTime": {
+            "type": "number",
+            "description": "Probe response time in milliseconds"
+          },
+          "error": {
+            "type": "string",
+            "description": "Safe error identifier when the dependency is unavailable"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "required": [
@@ -2465,6 +4980,9 @@
           "WEBHOOK_TIMESTAMP_OUT_OF_WINDOW",
           "MALFORMED_WEBHOOK_SIGNATURE",
           "INVALID_WEBHOOK_SIGNATURE",
+          "INVALID_DELIVERY_ID",
+          "INVALID_RETRY_POLICY",
+          "DLQ_ENTRY_NOT_FOUND",
           "INVALID_IP_FORMAT",
           "IP_NOT_ALLOWED",
           "DATABASE_NOT_AVAILABLE",
@@ -2486,9 +5004,227 @@
           "UNPROCESSABLE_ENTITY",
           "USAGE_AGGREGATE_NOT_FOUND",
           "INVALID_EXPORT_SCHEDULE",
-          "EXPORT_SCHEDULE_NOT_FOUND"
+          "EXPORT_SCHEDULE_NOT_FOUND",
+          "MISSING_AUTH_FIELDS",
+          "AUTH_NOT_IMPLEMENTED",
+          "COMPONENT_NOT_CONFIGURED"
         ],
         "description": "Canonical Callora backend error code."
+      },
+      "Dispute": {
+        "type": "object",
+        "required": [
+          "id",
+          "usage_event_id",
+          "opened_by",
+          "reason",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "usage_event_id": {
+            "type": "string"
+          },
+          "opened_by": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "REFUNDED",
+              "UPHELD"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolved_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolved_by": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "HealthChecks": {
+        "type": "object",
+        "description": "Per-dependency health check statuses.",
+        "required": [
+          "api"
+        ],
+        "properties": {
+          "api": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ],
+            "description": "API server health"
+          },
+          "database": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ],
+            "description": "Database connection health"
+          },
+          "soroban_rpc": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ],
+            "description": "Soroban RPC connectivity"
+          },
+          "horizon": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "down"
+            ],
+            "description": "Horizon API connectivity"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "description": "Health check response in success envelope.",
+        "required": [
+          "success",
+          "data",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "degraded",
+                  "down"
+                ],
+                "description": "Aggregate health status"
+              },
+              "service": {
+                "type": "string",
+                "description": "Service name (simple mode)"
+              },
+              "version": {
+                "type": "string",
+                "description": "Application version"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "checks": {
+                "$ref": "#/components/schemas/HealthChecks"
+              }
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Correlation ID for the request"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DisputeEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "dispute_id",
+          "actor",
+          "action",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "dispute_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OpenDisputeRequest": {
+        "type": "object",
+        "required": [
+          "usage_event_id",
+          "reason"
+        ],
+        "properties": {
+          "usage_event_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      },
+      "ResolveDisputeRequest": {
+        "type": "object",
+        "required": [
+          "resolution"
+        ],
+        "properties": {
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "REFUNDED",
+              "UPHELD"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
       }
     }
   }

@@ -8,7 +8,11 @@ const logger = console;
 let sqliteClosed = false;
 
 // Create SQLite database instance
-const sqlite = new Database('./database.db');
+/**
+ * The underlying connection is exported for the small number of repository
+ * operations that must run synchronously in a SQLite transaction.
+ */
+export const sqlite = new Database('./database.db');
 
 // Create Drizzle instance with schema
 export const db = drizzle(sqlite, { schema });

@@ -8,6 +8,7 @@ import {
 import type { AuthenticatedLocals } from '../middleware/requireAuth.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
 import { parseNetworkWithDefault } from '../validators/networkSchema.js';
+import { successEnvelope, getRequestId } from '../lib/envelope.js';
 
 export class VaultController {
   constructor(private readonly vaultRepository: VaultRepository) { }
@@ -22,13 +23,14 @@ export class VaultController {
     res: Response<unknown, AuthenticatedLocals>,
     next: NextFunction,
   ): Promise<void> {
+    const requestId = getRequestId(req);
     const user = res.locals.authenticatedUser;
     if (!user) {
       next(new UnauthorizedError('Authentication required'));
       return;
     }
 
-      const network = parseNetworkWithDefault(req.query);
+    const network = parseNetworkWithDefault(req.query);
 
     try {
       const vault = await this.vaultRepository.findByUserId(user.id, network);
@@ -45,12 +47,14 @@ export class VaultController {
       // Format balance from stroops (bigint) to USDC string (7 decimals)
       const balanceUsdc = this.formatStroopsToUsdc(vault.balanceSnapshot);
 
-      res.status(200).json({
+      const data = {
         balance_usdc: balanceUsdc,
         contractId: vault.contractId,
         network: vault.network,
-        lastSyncedAt: vault.lastSyncedAt ? vault.lastSyncedAt.toISOString() : null
-      });
+        lastSyncedAt: vault.lastSyncedAt ? vault.lastSyncedAt.toISOString() : null,
+      };
+
+      res.status(200).json(successEnvelope(data, requestId));
     } catch (error) {
       next(
         isAppError(error)

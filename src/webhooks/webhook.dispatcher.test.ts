@@ -40,7 +40,7 @@ describe('Webhook Dispatcher', () => {
             status: 200,
             statusText: 'OK',
         } as Response);
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
 
         const promise = dispatchWebhook(config, payload);
         await Promise.resolve(); // flush microtasks
@@ -61,7 +61,7 @@ describe('Webhook Dispatcher', () => {
             status: 200,
             statusText: 'OK',
         } as Response);
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
         const { runWithRequestContext } = await import('../utils/asyncContext.js');
 
         await runWithRequestContext({ requestId: 'req-webhook-als' }, async () => {
@@ -72,13 +72,33 @@ describe('Webhook Dispatcher', () => {
         expect(headers['X-Request-Id']).toBe('req-webhook-als');
     });
 
+    it('propagates the active correlation id to outbound webhook headers', async () => {
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+        } as Response);
+        global.fetch = fetchMock as unknown as typeof fetch;
+        const { runWithRequestContext } = await import('../utils/asyncContext.js');
+
+        await runWithRequestContext(
+            { requestId: 'req-webhook-corr', correlationId: 'corr-webhook-als' },
+            async () => {
+                await dispatchWebhook(config, payload);
+            },
+        );
+
+        const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+        expect(headers['X-Correlation-Id']).toBe('corr-webhook-als');
+    });
+
     it('omits X-Request-Id header when no request context is set', async () => {
         const fetchMock = jest.fn().mockResolvedValue({
             ok: true,
             status: 200,
             statusText: 'OK',
         } as Response);
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
 
         await dispatchWebhook(config, payload);
 
@@ -92,7 +112,7 @@ describe('Webhook Dispatcher', () => {
             status: 200,
             statusText: 'OK',
         } as Response);
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
         const { runWithRequestContext } = await import('../utils/asyncContext.js');
 
         const configWithSecret: WebhookConfig = {
@@ -132,7 +152,7 @@ describe('Webhook Dispatcher', () => {
                 statusText: 'OK',
             } as Response);
             
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
 
         const promise = dispatchWebhook(config, payload);
         
@@ -163,7 +183,7 @@ describe('Webhook Dispatcher', () => {
             statusText: 'Service Unavailable',
         } as Response);
         
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
 
         const promise = dispatchWebhook(config, payload);
         
@@ -181,7 +201,7 @@ describe('Webhook Dispatcher', () => {
 
     it('does not start new deliveries after shutdown begins', async () => {
         const fetchMock = jest.fn();
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
 
         stopWebhookDispatching();
         await dispatchWebhook(config, payload);
@@ -195,7 +215,7 @@ describe('Webhook Dispatcher', () => {
             status: 200,
             statusText: 'OK',
         } as Response);
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock as unknown as typeof fetch;
 
         const settlementPayload: WebhookPayload = {
             event: 'settlement_completed',
@@ -240,7 +260,7 @@ describe('Webhook Dispatcher', () => {
                 status: 503,
                 statusText: 'Service Unavailable',
             } as Response);
-            global.fetch = fetchMock as any;
+            global.fetch = fetchMock as unknown as typeof fetch;
 
             const customConfig: WebhookConfig = {
                 ...config,
@@ -276,7 +296,7 @@ describe('Webhook Dispatcher', () => {
                     statusText: 'OK',
                 } as Response);
 
-            global.fetch = fetchMock as any;
+            global.fetch = fetchMock as unknown as typeof fetch;
 
             const customConfig: WebhookConfig = {
                 ...config,
@@ -299,7 +319,7 @@ describe('Webhook Dispatcher', () => {
                 status: 503,
                 statusText: 'Service Unavailable',
             } as Response);
-            global.fetch = fetchMock as any;
+            global.fetch = fetchMock as unknown as typeof fetch;
 
             const customConfig: WebhookConfig = {
                 ...config,
@@ -318,7 +338,7 @@ describe('Webhook Dispatcher', () => {
                 status: 200,
                 statusText: 'OK',
             } as Response);
-            global.fetch = fetchMock as any;
+            global.fetch = fetchMock as unknown as typeof fetch;
 
             const defaultConfig: WebhookConfig = {
                 ...config,

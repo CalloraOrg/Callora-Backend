@@ -39,7 +39,7 @@ export async function resetDb() {
       ));
       
       if (Array.isArray(tablesResult)) {
-        const dynamicTables = (tablesResult as any[]).map(r => r.name as string);
+        const dynamicTables = (tablesResult as Record<string, unknown>[]).map(r => r.name as string);
         if (dynamicTables.length > 0) {
           logger.info(`Found ${dynamicTables.length} tables to reset: ${dynamicTables.join(', ')}`);
           // Use dynamic tables
@@ -47,7 +47,7 @@ export async function resetDb() {
             await db.run(sql.raw(`DELETE FROM "${table}"`));
             try {
               await db.run(sql.raw(`DELETE FROM sqlite_sequence WHERE name = '${table}'`));
-            } catch (_e) {
+            } catch {
               // Ignore if sqlite_sequence doesn't exist or doesn't have the table
             }
           }
@@ -59,7 +59,7 @@ export async function resetDb() {
         await db.run(sql.raw(`DELETE FROM "${table}"`));
         try {
           await db.run(sql.raw(`DELETE FROM sqlite_sequence WHERE name = '${table}'`));
-        } catch (_e) {}
+        } catch {}
       }
     }
 

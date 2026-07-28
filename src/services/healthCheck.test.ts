@@ -119,7 +119,7 @@ describe('checkSorobanRpc', () => {
   });
 
   test('returns down when Soroban RPC times out', async () => {
-    const mockFetch = jest.fn(async (url: any, options: any) => {
+    const mockFetch = jest.fn(async (url: string, options?: { signal?: AbortSignal }) => {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       if (options?.signal?.aborted) {
         const err = new Error('Timeout');
@@ -176,7 +176,7 @@ describe('checkHorizon', () => {
   });
 
   test('returns down when Horizon times out', async () => {
-    const mockFetch = jest.fn(async (url: any, options: any) => {
+    const mockFetch = jest.fn(async (url: string, options?: { signal?: AbortSignal }) => {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       if (options?.signal?.aborted) {
         const err = new Error('Timeout');

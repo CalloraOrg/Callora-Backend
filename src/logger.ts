@@ -4,7 +4,7 @@ import {
   type RequestContext,
 } from './utils/asyncContext.js';
 
-export { getRequestId, runWithRequestContext, type RequestContext };
+export { getRequestId, getCorrelationId, setCorrelationId, runWithRequestContext, type RequestContext };
 
 export const REDACTED_LOG_VALUE = '[REDACTED]';
 

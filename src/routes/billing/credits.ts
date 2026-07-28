@@ -2,13 +2,25 @@ import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 
-import { BadRequestError, NotFoundError, UnauthorizedError } from '../../errors/index.js';
+import { UnauthorizedError } from '../../errors/index.js';
 import { requireAuth, type AuthenticatedLocals } from '../../middleware/requireAuth.js';
 import { validate } from '../../middleware/validate.js';
 import { defaultCreditsRepository, type CreditsRepository } from '../../repositories/creditsRepository.js';
 import { logger } from '../../logger.js';
+import { TokenBucketRateLimiter, createTokenBucketRateLimitMiddleware } from '../../middleware/rateLimit.js';
+import { creditsHistogramMiddleware } from '../../middleware/creditsHistogram.js';
 
 const router = Router();
+
+const creditsRateLimiter = new TokenBucketRateLimiter(10, 1);
+const creditsRateLimit = createTokenBucketRateLimitMiddleware(
+  { capacity: 10, refillRate: 1 },
+  creditsRateLimiter,
+);
+
+export function resetCreditsRateLimit(): void {
+  creditsRateLimiter.reset();
+}
 
 /**
  * Validation schema for query parameters
@@ -51,8 +63,10 @@ interface CreditsBalanceResponse {
  */
 router.get(
   '/',
+  creditsRateLimit,
   requireAuth,
   validate({ query: getCreditsQuerySchema }),
+  creditsHistogramMiddleware,
   async (
     req: Request,
     res: Response<unknown, AuthenticatedLocals>,

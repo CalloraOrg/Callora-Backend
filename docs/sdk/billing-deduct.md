@@ -36,6 +36,7 @@ Authorization: Bearer <jwt>
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `requestId` | `string` | **Yes** | Unique idempotency key for this billing event. Must be a non-empty string. Reusing the same value returns the existing result with `alreadyProcessed: true`. |
+| `developerId` | `string` | No | The developer/account being billed. If omitted entirely, defaults to the authenticated user's ID. If provided, it must be a non-empty string — `null`, an empty string, or a non-string value are all rejected with `400 BAD_REQUEST` rather than being passed through to the billing service. |
 | `apiId` | `string` | **Yes** | The API being called. Non-empty string. |
 | `endpointId` | `string` | **Yes** | The specific endpoint being called. Non-empty string. |
 | `apiKeyId` | `string` | **Yes** | The API key used for the call. Non-empty string. |
@@ -133,6 +134,7 @@ the billing `requestId` body field.
 | Condition | HTTP | `code` | Message |
 |---|---|---|---|
 | Missing or empty `requestId` | 400 | `BAD_REQUEST` | `requestId is required and must be a non-empty string` |
+| `developerId` present but `null`, empty, or non-string | 400 | `BAD_REQUEST` | `developerId is required` |
 | Missing or empty `apiId` | 400 | `BAD_REQUEST` | `apiId is required and must be a non-empty string` |
 | Missing or empty `endpointId` | 400 | `BAD_REQUEST` | `endpointId is required and must be a non-empty string` |
 | Missing or empty `apiKeyId` | 400 | `BAD_REQUEST` | `apiKeyId is required and must be a non-empty string` |

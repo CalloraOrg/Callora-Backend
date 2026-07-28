@@ -19,7 +19,6 @@ import {
   generateSigningSecret,
   hashSecret,
   resolveGraceWindowMs,
-  type RotationResult,
   type WebhookSignerDeps,
 } from '../../src/services/webhookSigner.js';
 import { createWebhookKeysRouter } from '../../src/routes/admin/webhookKeys.js';

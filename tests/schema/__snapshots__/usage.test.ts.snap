@@ -1,0 +1,59 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`GET /api/usage — Response Schema Stability snapshot tests — full response matches the full usage response schema snapshot: usage-response-schema 1`] = `
+{
+  "events": [
+    {
+      "apiId": "api1",
+      "endpoint": "/api1/endpoint1",
+      "id": "<EVENT_ID>",
+      "occurredAt": "<OCCURRED_AT>",
+      "revenue": "1000000",
+    },
+    {
+      "apiId": "api1",
+      "endpoint": "/api1/endpoint2",
+      "id": "<EVENT_ID>",
+      "occurredAt": "<OCCURRED_AT>",
+      "revenue": "2000000",
+    },
+  ],
+  "pagination": {
+    "hasMore": false,
+    "limit": 20,
+    "offset": 0,
+  },
+  "period": {
+    "from": "<PERIOD_FROM>",
+    "to": "<PERIOD_TO>",
+  },
+  "requestId": "mock-uuid-1234",
+  "stats": {
+    "breakdownByApi": [
+      {
+        "apiId": "api1",
+        "calls": 2,
+        "revenue": "3000000",
+      },
+    ],
+    "totalCalls": 2,
+    "totalSpent": "3000000",
+  },
+}
+`;
+
+exports[`GET /api/usage — Response Schema Stability snapshot tests — full response matches the full usage response schema snapshot: usage-response-top-level-shape 1`] = `
+{
+  "eventsType": "object",
+  "keys": [
+    "events",
+    "pagination",
+    "period",
+    "requestId",
+    "stats",
+  ],
+  "paginationType": "object",
+  "periodType": "object",
+  "statsType": "object",
+}
+`;

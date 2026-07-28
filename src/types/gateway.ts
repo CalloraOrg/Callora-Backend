@@ -91,11 +91,20 @@ export interface ApiRegistryEntry {
   base_url: string;
   developerId: string;
   endpoints: EndpointPricing[];
+  created_at?: Date;
+}
+
+/** Paginated listing result for cursor-based API browsing. */
+export interface PaginatedApiList {
+  entries: ApiRegistryEntry[];
+  nextCursor: string | null;
 }
 
 /** Registry for resolving API slugs / IDs to their upstream entries. */
 export interface ApiRegistry {
   resolve(slugOrId: string): ApiRegistryEntry | undefined;
+  /** List registered APIs with cursor-based pagination over (created_at, id). */
+  list(cursor?: string | null, limit?: number): PaginatedApiList;
 }
 
 /** Configuration for proxy behaviour. */
@@ -142,6 +151,8 @@ export interface ProxyDeps {
   registry: ApiRegistry;
   apiKeys?: Map<string, ApiKey>;
   authMiddleware?: RequestHandler;
+  /** Per-API-key concurrency tracker. Defaults to the shared-semaphore middleware. */
+  perKeyConcurrency?: RequestHandler;
   proxyConfig?: Partial<ProxyConfig>;
   circuitBreakerStore?: CircuitBreakerStore;
 }

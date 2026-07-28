@@ -227,7 +227,7 @@ export class TransactionBuilderService {
     } catch (error) {
       // If the SDK throws a simulation‑related error we capture its diagnostics.
       // The SDK currently throws a generic Error with a `details` property.
-      const details = (error as any).details;
+      const details = (error as { details?: unknown }).details;
       if (details) {
         throw new SimulationError(
           `Soroban simulation failed: ${this.getErrorMessage(error)}`,

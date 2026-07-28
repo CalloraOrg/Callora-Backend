@@ -7,7 +7,6 @@
 import { Pool } from 'pg';
 import { env } from './env.js';
 import type { HealthCheckConfig } from '../services/healthCheck.js';
-import { config as appConfig } from './index.js';
 
 let dbPool: Pool | null = null;
 

@@ -149,7 +149,7 @@ test('developer only in ledger (partial settlement) has negative delta', async (
   const { store, runs } = makeStore();
 
   const job = new BillingReconciliationJob(db, store);
-  const summary = await job.runOnce();
+  await job.runOnce();
 
   assert.equal(runs[0]!.delta_usdc, -200n);
   assert.equal(runs[0]!.status, 'discrepancy');

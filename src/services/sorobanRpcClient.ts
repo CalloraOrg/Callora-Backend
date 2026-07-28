@@ -12,6 +12,13 @@ export interface SorobanRpcClientOptions {
   circuitBreakerConfig?: CircuitBreakerConfig;
 }
 
+interface SorobanRpcResponse<T = unknown> {
+  jsonrpc: string;
+  id: string;
+  result?: T;
+  error?: { code: number; message: string };
+}
+
 export class SorobanRpcClient {
   private readonly rpcUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -25,7 +32,7 @@ export class SorobanRpcClient {
     this.circuitBreaker = createCircuitBreaker(options.circuitBreakerConfig);
   }
 
-  async request<T = any>(method: string, params?: any): Promise<T> {
+  async request<T = unknown>(method: string, params?: unknown): Promise<T> {
     return this.circuitBreaker.execute(BREAKER_KEY, async () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -49,7 +56,7 @@ export class SorobanRpcClient {
           throw new Error(`Soroban RPC request failed with status ${response.status}`);
         }
 
-        const data = await response.json() as any;
+        const data = await response.json() as SorobanRpcResponse<T>;
         if (data.error) {
           throw new Error(`Soroban RPC error: ${data.error.message}`);
         }

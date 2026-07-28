@@ -5,6 +5,8 @@ import { createAdminIpAllowlist } from '../../../middleware/ipAllowlist.js';
 import { BadRequestError, InternalServerError } from '../../../errors/index.js';
 import { logger } from '../../../logger.js';
 import { getClientIp } from '../../../lib/clientIp.js';
+import { validate } from '../../../middleware/validate.js';
+import { usageAnomaliesQuerySchema } from '../../../validators/admin.js';
 import {
   detectUsageAnomalies,
   type DailyUsagePoint,
@@ -14,10 +16,7 @@ const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
 const DEFAULT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_THRESHOLD = 3;
-const MIN_THRESHOLD = 1;
-const MAX_THRESHOLD = 10;
 const DEFAULT_LIMIT = 100;
-const MAX_LIMIT = 1000;
 /** Minimum days of history an API needs before its baseline is trustworthy. */
 const MIN_DATA_POINTS = 3;
 
@@ -27,50 +26,6 @@ interface DailyUsageRow {
   calls: number;
   revenue: string;
 }
-
-/**
- * Parses a query-string value as a Date.
- * - absent → `undefined` (caller applies a default)
- * - present but unparseable → `null` (caller returns 400)
- */
-const parseDateParam = (value: unknown): Date | null | undefined => {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-/**
- * Parses a bounded numeric query param.
- * Returns the default when absent, or `null` when present but invalid /
- * out of range so the caller can return a standardized 400.
- */
-const parseNumberParam = (
-  value: unknown,
-  opts: { min: number; max: number; integer: boolean; fallback: number },
-): number | null => {
-  if (value === undefined) {
-    return opts.fallback;
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  if (opts.integer && !Number.isInteger(parsed)) {
-    return null;
-  }
-  if (parsed < opts.min || parsed > opts.max) {
-    return null;
-  }
-  return parsed;
-};
 
 export interface UsageAnomaliesRouterDeps {
   pool?: Pool;
@@ -84,6 +39,10 @@ export interface UsageAnomaliesRouterDeps {
  * Usage is aggregated to per-API daily counts in a single grouped SQL scan,
  * then scored in-process by {@link detectUsageAnomalies}, so the work stays
  * bounded by the number of (API, day) buckets rather than raw event volume.
+ *
+ * All query-parameter validation is performed by {@link usageAnomaliesQuerySchema}
+ * via the {@link validate} middleware, which returns a structured
+ * `{ code, message, details }` 400 response for any invalid input.
  */
 export function createUsageAnomaliesRouter(deps: UsageAnomaliesRouterDeps = {}): Router {
   const router = Router();
@@ -91,136 +50,115 @@ export function createUsageAnomaliesRouter(deps: UsageAnomaliesRouterDeps = {}):
   router.use(createAdminIpAllowlist());
   router.use(adminAuth);
 
-  router.get('/', async (req, res, next) => {
-    try {
-      // ── Input validation (boundary) ──────────────────────────────────────
-      const from = parseDateParam(req.query.from);
-      if (from === null) {
-        next(new BadRequestError('Invalid "from" date'));
-        return;
-      }
-      const to = parseDateParam(req.query.to);
-      if (to === null) {
-        next(new BadRequestError('Invalid "to" date'));
-        return;
-      }
-
-      const threshold = parseNumberParam(req.query.threshold, {
-        min: MIN_THRESHOLD,
-        max: MAX_THRESHOLD,
-        integer: false,
-        fallback: DEFAULT_THRESHOLD,
-      });
-      if (threshold === null) {
-        next(new BadRequestError(`threshold must be a number between ${MIN_THRESHOLD} and ${MAX_THRESHOLD}`));
-        return;
-      }
-
-      const limit = parseNumberParam(req.query.limit, {
-        min: 1,
-        max: MAX_LIMIT,
-        integer: true,
-        fallback: DEFAULT_LIMIT,
-      });
-      if (limit === null) {
-        next(new BadRequestError(`limit must be an integer between 1 and ${MAX_LIMIT}`));
-        return;
-      }
-
-      if (req.query.apiId !== undefined && typeof req.query.apiId !== 'string') {
-        next(new BadRequestError('apiId must be a single string value'));
-        return;
-      }
-      const apiId =
-        typeof req.query.apiId === 'string' && req.query.apiId.length > 0
-          ? req.query.apiId
-          : undefined;
-
-      const now = new Date();
-      const queryFrom = from ?? new Date(now.getTime() - DEFAULT_WINDOW_MS);
-      const queryTo = to ?? now;
-
-      if (queryFrom > queryTo) {
-        next(new BadRequestError('from must be before or equal to to'));
-        return;
-      }
-
-      const { pool } = deps;
-      if (!pool) {
-        next(new InternalServerError('Database pool not available'));
-        return;
-      }
-
-      // ── Aggregate per-API daily usage in a single grouped scan ────────────
-      const params: unknown[] = [queryFrom, queryTo];
-      let apiFilter = '';
-      if (apiId !== undefined) {
-        params.push(apiId);
-        apiFilter = `AND api_id = $${params.length}`;
-      }
-
-      const sql = `
-        SELECT
-          api_id AS "apiId",
-          to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
-          COUNT(*)::int AS calls,
-          COALESCE(SUM(amount_usdc), 0)::text AS revenue
-        FROM usage_events
-        WHERE created_at >= $1 AND created_at <= $2
-          ${apiFilter}
-        GROUP BY api_id, date_trunc('day', created_at)
-        ORDER BY api_id, day
-      `;
-
-      let rows: DailyUsageRow[];
+  router.get(
+    '/',
+    // ── Input validation at the boundary ──────────────────────────────────
+    // usageAnomaliesQuerySchema coerces date strings to Date objects and
+    // numeric strings to numbers; any violation yields a structured 400.
+    validate({ query: usageAnomaliesQuerySchema }),
+    async (req, res, next) => {
       try {
-        const result = await pool.query<DailyUsageRow>(sql, params);
-        rows = result.rows;
-      } catch (dbError) {
-        logger.error('[usage.anomalies] aggregation query failed', { error: dbError });
-        next(new InternalServerError());
-        return;
-      }
+        // At this point the query has passed schema validation.
+        // We read the raw query strings here because Express keeps req.query
+        // as strings after validate() — the schema transform result is not
+        // written back to req.query.  The parse call below is cheap.
+        const parsed = usageAnomaliesQuerySchema.safeParse(req.query);
+        if (!parsed.success) {
+          // Should never happen — validate() already rejected invalid input.
+          next(new BadRequestError('Invalid query parameters'));
+          return;
+        }
 
-      const series: DailyUsagePoint[] = rows.map((row) => ({
-        apiId: row.apiId,
-        day: row.day,
-        calls: Number(row.calls),
-        revenue: row.revenue,
-      }));
+        const { from, to, threshold, limit, apiId } = parsed.data;
 
-      const { anomalies, seriesAnalyzed } = detectUsageAnomalies(series, {
-        threshold,
-        minDataPoints: MIN_DATA_POINTS,
-        limit,
-      });
+        const now = new Date();
+        const queryFrom = from ?? new Date(now.getTime() - DEFAULT_WINDOW_MS);
+        const queryTo = to ?? now;
+        const resolvedThreshold = threshold ?? DEFAULT_THRESHOLD;
+        const resolvedLimit = limit ?? DEFAULT_LIMIT;
 
-      logger.audit('LIST_USAGE_ANOMALIES', res.locals.adminActor, {
-        clientIp: getClientIp(req, TRUST_PROXY),
-        userAgent: req.get('User-Agent'),
-        window: { from: queryFrom.toISOString(), to: queryTo.toISOString() },
-        threshold,
-        apiId,
-        seriesAnalyzed,
-        anomalyCount: anomalies.length,
-      });
+        if (queryFrom > queryTo) {
+          next(new BadRequestError('from must be before or equal to to'));
+          return;
+        }
 
-      res.json({
-        data: {
-          anomalies,
-          summary: {
-            window: { from: queryFrom.toISOString(), to: queryTo.toISOString() },
-            threshold,
-            minDataPoints: MIN_DATA_POINTS,
-            seriesAnalyzed,
-            anomalyCount: anomalies.length,
+        const { pool } = deps;
+        if (!pool) {
+          next(new InternalServerError('Database pool not available'));
+          return;
+        }
+
+        // ── Aggregate per-API daily usage in a single grouped scan ────────
+        const params: unknown[] = [queryFrom, queryTo];
+        let apiFilter = '';
+        if (apiId !== undefined) {
+          params.push(apiId);
+          apiFilter = `AND api_id = $${params.length}`;
+        }
+
+        const sql = `
+          SELECT
+            api_id AS "apiId",
+            to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+            COUNT(*)::int AS calls,
+            COALESCE(SUM(amount_usdc), 0)::text AS revenue
+          FROM usage_events
+          WHERE created_at >= $1 AND created_at <= $2
+            ${apiFilter}
+          GROUP BY api_id, date_trunc('day', created_at)
+          ORDER BY api_id, day
+        `;
+
+        let rows: DailyUsageRow[];
+        try {
+          const result = await pool.query<DailyUsageRow>(sql, params);
+          rows = result.rows;
+        } catch (dbError) {
+          logger.error('[usage.anomalies] aggregation query failed', { error: dbError });
+          next(new InternalServerError());
+          return;
+        }
+
+        const series: DailyUsagePoint[] = rows.map((row) => ({
+          apiId: row.apiId,
+          day: row.day,
+          calls: Number(row.calls),
+          revenue: row.revenue,
+        }));
+
+        const { anomalies, seriesAnalyzed } = detectUsageAnomalies(series, {
+          threshold: resolvedThreshold,
+          minDataPoints: MIN_DATA_POINTS,
+          limit: resolvedLimit,
+        });
+
+        logger.audit('LIST_USAGE_ANOMALIES', res.locals.adminActor, {
+          clientIp: getClientIp(req, TRUST_PROXY),
+          userAgent: req.get('User-Agent'),
+          window: { from: queryFrom.toISOString(), to: queryTo.toISOString() },
+          threshold: resolvedThreshold,
+          apiId,
+          seriesAnalyzed,
+          anomalyCount: anomalies.length,
+        });
+
+        res.json({
+          data: {
+            anomalies,
+            summary: {
+              window: { from: queryFrom.toISOString(), to: queryTo.toISOString() },
+              threshold: resolvedThreshold,
+              minDataPoints: MIN_DATA_POINTS,
+              seriesAnalyzed,
+              anomalyCount: anomalies.length,
+            },
           },
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   return router;
 }

@@ -22,12 +22,12 @@ jest.mock('../logger.js', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
+import { logger } from '../logger.js';
 import {
   calculateFeeQuote,
   createFeeBumpTransaction,
   FeeBumperConfigError,
   FeeBumperInvalidTransactionError,
-  FeeBumperSigningError,
 } from './feeBumper.js';
 
 const TEST_NETWORK = Networks.TESTNET;
@@ -147,7 +147,6 @@ describe('feeBumper service', () => {
     });
 
     it('logs info messages during successful creation', () => {
-      const { logger } = require('../logger.js') as { logger: { info: jest.Mock } };
       process.env.FEE_BUMPER_SECRET_KEY = feeKeypair.secret();
       const xdr = buildTestInnerXdr(innerKeypair);
 

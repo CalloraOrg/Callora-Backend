@@ -16,8 +16,8 @@ jest.mock('better-sqlite3', () => {
     prepare() {
       return { get: () => null };
     }
-    exec() {}
-    close() {}
+    exec() { }
+    close() { }
   };
 });
 
@@ -546,4 +546,194 @@ describe('GET /api/health - Integration Tests', () => {
     });
   });
 });
+
+describe('GET /api/health/dependencies - Integration Tests', () => {
+  test('returns 200 with per-dependency probe results when all dependencies are healthy', async () => {
+    const testDb = createTestDb();
+
+    try {
+      const originalFetch = global.fetch;
+      global.fetch = async (url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('soroban')) {
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'ok' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (urlStr.includes('horizon')) {
+          return new Response('', { status: 200 });
+        }
+        return originalFetch(url);
+      };
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+        sorobanRpc: { url: 'http://mock-soroban-rpc.com', timeout: 2000 },
+        horizon: { url: 'http://mock-horizon.com', timeout: 2000 },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health/dependencies');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'ok');
+      assert.ok(response.body.timestamp);
+      assert.equal(response.body.dependencies.database.status, 'ok');
+      assert.ok(typeof response.body.dependencies.database.responseTime === 'number');
+      assert.equal(response.body.dependencies.soroban_rpc.status, 'ok');
+      assert.equal(response.body.dependencies.horizon.status, 'ok');
+
+      global.fetch = originalFetch;
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('negative test: explicitly surfaces dependency failure status and sanitized error when DB fails', async () => {
+    const badPool = {
+      query: async () => {
+        throw new Error('FATAL: postgresql connection pool exhausted at postgres://admin:secret@db.internal:5432/db');
+      },
+    };
+
+    const config: HealthCheckConfig = {
+      database: { pool: badPool as any },
+    };
+
+    const app = createApp({ healthCheckConfig: config });
+    const response = await request(app).get('/api/health/dependencies');
+
+    assert.equal(response.status, 503);
+    assert.equal(response.body.status, 'down');
+    assert.equal(response.body.dependencies.database.status, 'down');
+    assert.equal(response.body.dependencies.database.error, 'unavailable');
+    assert.ok(!JSON.stringify(response.body).includes('secret'));
+    assert.ok(!JSON.stringify(response.body).includes('db.internal'));
+  });
+
+  test('surfaces partial degradation when optional dependencies fail or time out', async () => {
+    const testDb = createTestDb();
+
+    try {
+      const originalFetch = global.fetch;
+      global.fetch = async (url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('soroban')) {
+          throw new Error('Connection refused');
+        }
+        if (urlStr.includes('horizon')) {
+          return new Response('Server Error', { status: 503 });
+        }
+        return originalFetch(url);
+      };
+
+      const config: HealthCheckConfig = {
+        database: { pool: testDb.pool },
+        sorobanRpc: { url: 'http://mock-soroban-rpc.com', timeout: 2000 },
+        horizon: { url: 'http://mock-horizon.com', timeout: 2000 },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health/dependencies');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'degraded');
+      assert.equal(response.body.dependencies.database.status, 'ok');
+      assert.equal(response.body.dependencies.soroban_rpc.status, 'down');
+      assert.equal(response.body.dependencies.soroban_rpc.error, 'unavailable');
+      assert.equal(response.body.dependencies.horizon.status, 'degraded');
+      assert.equal(response.body.dependencies.horizon.error, 'HTTP 503');
+
+      global.fetch = originalFetch;
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('omits unconfigured optional dependencies from probe response', async () => {
+    const testDb = createTestDb();
+
+    try {
+      const config: HealthCheckConfig = {
+        database: { pool: testDb.pool },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health/dependencies');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'ok');
+      assert.equal(response.body.dependencies.database.status, 'ok');
+      assert.equal(response.body.dependencies.soroban_rpc, undefined);
+      assert.equal(response.body.dependencies.horizon, undefined);
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('returns empty dependencies map when no health check config is provided', async () => {
+    const app = createApp();
+    const response = await request(app).get('/api/health/dependencies');
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.status, 'ok');
+    assert.ok(response.body.timestamp);
+    assert.deepEqual(response.body.dependencies, {});
+  });
+
+  test('preserves request correlation ID in response headers', async () => {
+    const customRequestId = 'test-correlation-id-9999';
+    const app = createApp();
+    const response = await request(app)
+      .get('/api/health/dependencies')
+      .set('x-request-id', customRequestId);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['x-request-id'], customRequestId);
+  });
+});
+
+describe('GET /api/health/db - DB Pool Stats Tests', () => {
+  test('returns 200 with current database pool statistics', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock the native pg.Pool properties on the pg-mem test instance
+      Object.defineProperty(testDb.pool, 'totalCount', { value: 10, configurable: true });
+      Object.defineProperty(testDb.pool, 'idleCount', { value: 8, configurable: true });
+      Object.defineProperty(testDb.pool, 'waitingCount', { value: 0, configurable: true });
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health/db');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'ok');
+      assert.ok(response.body.timestamp);
+      assert.equal(response.body.pool.total, 10);
+      assert.equal(response.body.pool.idle, 8);
+      assert.equal(response.body.pool.waiting, 0);
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('preserves request correlation ID in response headers', async () => {
+    const customRequestId = 'db-stats-id-1234';
+    const app = createApp();
+    const response = await request(app)
+      .get('/api/health/db')
+      .set('x-request-id', customRequestId);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['x-request-id'], customRequestId);
+  });
+});
+
 

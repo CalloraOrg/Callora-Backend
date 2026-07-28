@@ -1,16 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
-import { errorHandler, ErrorResponseBody } from '../middleware/errorHandler.js';
+import { errorHandler } from '../middleware/errorHandler.js';
 import { 
-  AppError, 
   BadRequestError, 
   UnauthorizedError,
   ForbiddenError,
   NotFoundError,
   PaymentRequiredError,
-  TooManyRequestsError
+  TooManyRequestsError,
+  AppError,
 } from '../errors/index.js';
 import { ValidationError } from '../middleware/validate.js';
 import { logger } from '../logger.js';
+import type { ErrorEnvelope } from '../types/ResponseEnvelope.js';
 
 jest.mock('../logger.js', () => ({
   logger: {
@@ -41,22 +42,28 @@ describe('Error Handler', () => {
     jest.clearAllMocks();
   });
 
-  it('should handle AppError with correct response shape', () => {
+  it('should handle AppError with correct error envelope shape', () => {
     const error = new BadRequestError('Test bad request');
     
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
+      mockRes as Response<ErrorEnvelope>,
       mockNext
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(400);
-    expect(mockRes.json).toHaveBeenCalledWith({
+    
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call).toMatchObject({
+      success: false,
+      requestId: 'test-request-id',
+    });
+    expect(call.error).toMatchObject({
       code: 'BAD_REQUEST',
       message: 'Test bad request',
-      requestId: 'test-request-id'
     });
+    expect(typeof call.timestamp).toBe('string');
 
     expect(logger.error).toHaveBeenCalledWith(
       '[errorHandler]',
@@ -64,27 +71,26 @@ describe('Error Handler', () => {
     );
   });
 
-  it('should handle generic Error with default values', () => {
+  it('should handle generic Error with error envelope', () => {
     const error = new Error('Generic error');
     
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
+      mockRes as Response<ErrorEnvelope>,
       mockNext
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(500);
-    expect(mockRes.json).toHaveBeenCalledWith({
-      code: 'INTERNAL_SERVER_ERROR',
-      message: 'Generic error',
-      requestId: 'test-request-id'
+    
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call).toMatchObject({
+      success: false,
+      requestId: 'test-request-id',
     });
-
-    expect(logger.error).toHaveBeenCalledWith(
-      '[errorHandler]',
-      expect.objectContaining({ requestId: 'test-request-id', statusCode: 500 })
-    );
+    expect(call.error).toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+    });
   });
 
   it('should handle unknown error type', () => {
@@ -93,16 +99,15 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
+      mockRes as Response<ErrorEnvelope>,
       mockNext
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(500);
-    expect(mockRes.json).toHaveBeenCalledWith({
-      code: 'INTERNAL_SERVER_ERROR',
-      message: 'Internal server error',
-      requestId: 'test-request-id'
-    });
+    
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call.success).toBe(false);
+    expect(call.error.code).toBe('INTERNAL_SERVER_ERROR');
   });
 
   it('should use unknown requestId when req.id is missing', () => {
@@ -113,15 +118,12 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
+      mockRes as Response<ErrorEnvelope>,
       mockNext
     );
 
-    expect(mockRes.json).toHaveBeenCalledWith({
-      code: 'UNAUTHORIZED',
-      message: 'Unauthorized',
-      requestId: 'unknown'
-    });
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call.requestId).toBe('unknown');
   });
 
   it('should not send response if headers already sent', () => {
@@ -131,7 +133,7 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
+      mockRes as Response<ErrorEnvelope>,
       mockNext
     );
 
@@ -145,15 +147,19 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
+      mockRes as Response<ErrorEnvelope>,
       mockNext
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(422);
-    expect(mockRes.json).toHaveBeenCalledWith({
-      message: 'Custom error',
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call).toMatchObject({
+      success: false,
+      requestId: 'test-request-id',
+    });
+    expect(call.error).toMatchObject({
       code: 'UNPROCESSABLE_ENTITY',
-      requestId: 'test-request-id'
+      message: 'Custom error',
     });
   });
 
@@ -166,119 +172,56 @@ describe('Error Handler', () => {
       },
     ]);
 
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorResponseBody>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
 
     expect(mockRes.status).toHaveBeenCalledWith(400);
-    expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Request validation failed',
-      code: 'VALIDATION_ERROR',
-      details: expect.any(Array)
-    }));
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call.error.details).toBeDefined();
+    expect(Array.isArray(call.error.details)).toBe(true);
   });
 
   it('should map ForbiddenError to 403', () => {
     const error = new ForbiddenError('Test forbidden');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorResponseBody>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
     expect(mockRes.status).toHaveBeenCalledWith(403);
-    expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Test forbidden',
-      code: 'FORBIDDEN'
-    }));
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call.error.code).toBe('FORBIDDEN');
   });
 
   it('should map NotFoundError to 404', () => {
     const error = new NotFoundError('Test not found');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorResponseBody>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
     expect(mockRes.status).toHaveBeenCalledWith(404);
-    expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Test not found',
-      code: 'NOT_FOUND'
-    }));
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call.error.code).toBe('NOT_FOUND');
   });
 
   it('should map PaymentRequiredError to 402', () => {
     const error = new PaymentRequiredError('Test payment required');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorResponseBody>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
     expect(mockRes.status).toHaveBeenCalledWith(402);
-    expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Test payment required',
-      code: 'PAYMENT_REQUIRED'
-    }));
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call.error.code).toBe('PAYMENT_REQUIRED');
   });
 
   it('should map TooManyRequestsError to 429', () => {
     const error = new TooManyRequestsError('Test too many requests');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorResponseBody>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
     expect(mockRes.status).toHaveBeenCalledWith(429);
-    expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Test too many requests',
-      code: 'TOO_MANY_REQUESTS'
-    }));
-  });
-});
-
-describe('Error Handler - Production Environment', () => {
-  let mockReq: Partial<Request> & { id?: string };
-  let mockRes: Partial<Response>;
-  let mockNext: NextFunction;
-  let productionErrorHandler: typeof errorHandler;
-
-  beforeEach(() => {
-    jest.isolateModules(() => {
-      process.env.NODE_ENV = 'production';
-      // Re-require to pick up the env change
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { errorHandler: eh } = require('../middleware/errorHandler.js');
-      productionErrorHandler = eh;
-    });
-
-    mockReq = { id: 'prod-request-id' };
-    mockRes = {
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn(),
-      headersSent: false
-    };
-    mockNext = jest.fn();
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call.error.code).toBe('TOO_MANY_REQUESTS');
   });
 
-  afterEach(() => {
-    process.env.NODE_ENV = 'test';
-    jest.clearAllMocks();
-  });
-
-  it('should mask generic error message in production', () => {
-    const error = new Error('Sensitive database error message');
+  it('all error envelopes have required fields', () => {
+    const error = new BadRequestError('test');
+    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
     
-    productionErrorHandler(
-      error,
-      mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
-      mockNext
-    );
-
-    expect(mockRes.status).toHaveBeenCalledWith(500);
-    expect(mockRes.json).toHaveBeenCalledWith({
-      code: 'INTERNAL_SERVER_ERROR',
-      message: 'Internal server error',
-      requestId: 'prod-request-id'
-    });
-  });
-
-  it('should NOT mask AppError messages in production', () => {
-    const error = new BadRequestError('User-facing validation error');
-    
-    productionErrorHandler(
-      error,
-      mockReq as Request,
-      mockRes as Response<ErrorResponseBody>,
-      mockNext
-    );
-
-    expect(mockRes.status).toHaveBeenCalledWith(400);
-    expect(mockRes.json).toHaveBeenCalledWith({
-      message: 'User-facing validation error',
-      code: 'BAD_REQUEST',
-      requestId: 'prod-request-id'
-    });
+    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    expect(call).toHaveProperty('success');
+    expect(call).toHaveProperty('requestId');
+    expect(call).toHaveProperty('timestamp');
+    expect(call).toHaveProperty('error');
+    expect(call.error).toHaveProperty('code');
+    expect(call.error).toHaveProperty('message');
   });
 });

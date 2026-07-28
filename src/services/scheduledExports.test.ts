@@ -12,9 +12,9 @@ import {
   eventsToJson,
 } from './scheduledExports.js';
 
-async function listAllEvents(pool: any): Promise<BillingUsageEvent[]> {
+async function listAllEvents(pool: { query: (sql: string) => Promise<{ rows: Record<string, unknown>[] }> }): Promise<BillingUsageEvent[]> {
   const result = await pool.query(`SELECT id, user_id, api_id, endpoint_id, api_key_id, developer_id, amount_usdc, request_id, stellar_tx_hash, created_at FROM usage_events ORDER BY created_at ASC`);
-  return result.rows.map((row: any) => ({ id: String(row.id), userId: row.user_id, apiId: row.api_id, endpointId: row.endpoint_id, apiKeyId: row.api_key_id, developerId: row.developer_id, amount: BigInt(row.amount_usdc), requestId: row.request_id, stellarTxHash: row.stellar_tx_hash, createdAt: new Date(row.created_at) }));
+  return result.rows.map((row: Record<string, unknown>) => ({ id: String(row.id), userId: row.user_id as string, apiId: row.api_id as string, endpointId: row.endpoint_id as string, apiKeyId: row.api_key_id as string, developerId: row.developer_id as string, amount: BigInt(row.amount_usdc as string | number | bigint), requestId: row.request_id as string, stellarTxHash: row.stellar_tx_hash as string | null, createdAt: new Date(row.created_at as string) }));
 }
 
 function createUsageRepository() {

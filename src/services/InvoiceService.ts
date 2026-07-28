@@ -52,7 +52,7 @@ export class InvoiceService {
 
       let invoicesCreated = 0;
 
-      const grouped = new Map<string, any[]>();
+      const grouped = new Map<string, Array<{ developer_id: string; api_id: string; usage_count: string | number; amount: string | number }>>();
 
       for (const row of usage.rows) {
         if (!grouped.has(row.developer_id)) {

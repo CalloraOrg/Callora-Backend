@@ -30,14 +30,14 @@ describe("ApiKeyRepository Security Tests", () => {
     });
 
     it("should use different salts for different keys", () => {
-      const result1 = apiKeyRepository.create({
+      apiKeyRepository.create({
         apiId: "api-1",
         userId: "user-1",
         scopes: ["*"],
         rateLimitPerMinute: null,
       });
 
-      const result2 = apiKeyRepository.create({
+      apiKeyRepository.create({
         apiId: "api-2",
         userId: "user-2",
         scopes: ["*"],
@@ -119,9 +119,9 @@ describe("ApiKeyRepository Security Tests", () => {
         "short",
         "ck_live_",
         "not_a_key_at_all",
-        null as any,
-        undefined as any,
-        123 as any,
+        null as unknown as string,
+        undefined as unknown as string,
+        123 as unknown as string,
       ];
 
       malformedKeys.forEach((key) => {
@@ -229,7 +229,6 @@ describe("ApiKeyRepository Security Tests", () => {
 
     it("should maintain metadata during rotation", () => {
       const userId = "user-1";
-      const createdDate = new Date();
 
       apiKeyRepository.create({
         apiId: "api-1",
@@ -331,8 +330,8 @@ describe("ApiKeyRepository Security Tests", () => {
 
     it("should handle invalid input parameters gracefully", () => {
       // null and undefined should throw — they are not objects
-      expect(() => apiKeyRepository.create(null as any)).toThrow(TypeError);
-      expect(() => apiKeyRepository.create(undefined as any)).toThrow(
+      expect(() => apiKeyRepository.create(null as unknown as Parameters<typeof apiKeyRepository.create>[0])).toThrow(TypeError);
+      expect(() => apiKeyRepository.create(undefined as unknown as Parameters<typeof apiKeyRepository.create>[0])).toThrow(
         TypeError,
       );
 
@@ -351,7 +350,7 @@ describe("ApiKeyRepository Security Tests", () => {
       ];
 
       partialParams.forEach((params) => {
-        expect(() => apiKeyRepository.create(params as any)).not.toThrow();
+        expect(() => apiKeyRepository.create(params as unknown as Parameters<typeof apiKeyRepository.create>[0])).not.toThrow();
       });
     });
 

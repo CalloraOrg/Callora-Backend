@@ -51,8 +51,8 @@ export function getEffectiveRetryPolicy(policy?: RetryPolicy): {
     baseDelayMs: number;
 } {
     return {
-        maxRetries: policy?.maxRetries ?? DEFAULT_RETRY_POLICY.maxRetries,
-        baseDelayMs: policy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs,
+        maxRetries: policy?.maxRetries ?? DEFAULT_RETRY_POLICY.maxRetries ?? 3,
+        baseDelayMs: policy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs ?? 1000,
     };
 }
 

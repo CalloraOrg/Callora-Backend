@@ -1,6 +1,5 @@
 import express from 'express';
 import request from 'supertest';
-import { errorHandler } from '../middleware/errorHandler.js';
 import { InMemoryRestRateLimiter } from '../middleware/restRateLimit.js';
 import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
 import { createLimitsRouter } from './limits.js';

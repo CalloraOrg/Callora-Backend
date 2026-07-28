@@ -89,3 +89,15 @@ export type {
   CalloraEventPayloadMap,
   CalloraEventUnsubscribe,
 } from '../events/event.emitter.js';
+
+export type {
+  SuccessEnvelope,
+  ErrorEnvelope,
+  ResponseMeta,
+  ApiEnvelope,
+} from './ResponseEnvelope.js';
+export {
+  ENVELOPE_REQUIRED_FIELDS,
+  SUCCESS_REQUIRED_FIELDS,
+  ERROR_REQUIRED_FIELDS,
+} from './ResponseEnvelope.js';

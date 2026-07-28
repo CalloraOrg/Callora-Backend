@@ -4,7 +4,7 @@ import { createGatewayRouter, clearHealthCache } from './gatewayRoutes.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import * as metricsModule from '../metrics.js';
-const { startUpstreamTimer, resetUpstreamMetrics, getUpstreamHealth } = metricsModule;
+const { startUpstreamTimer, resetUpstreamMetrics } = metricsModule;
 import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { BreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
 import type { ApiRegistryEntry, GatewayDeps } from '../types/gateway.js';

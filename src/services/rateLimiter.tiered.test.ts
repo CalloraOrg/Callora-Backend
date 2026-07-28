@@ -52,7 +52,6 @@ describe('Tiered rate limiting', () => {
 
   it('uses the pro-tier ceiling when tier="pro"', async () => {
     const limiter = new InMemoryRateLimiter(DEFAULT_MAX, DEFAULT_WINDOW);
-    const proMax = DEFAULT_TIER_POLICIES.pro.maxRequests;
 
     // Exhaust free ceiling should still leave room in pro
     await consumeTokens(limiter, 'key-pro', DEFAULT_TIER_POLICIES.free.maxRequests, 'pro');
@@ -63,7 +62,6 @@ describe('Tiered rate limiting', () => {
 
   it('uses the enterprise-tier ceiling when tier="enterprise"', async () => {
     const limiter = new InMemoryRateLimiter(DEFAULT_MAX, DEFAULT_WINDOW);
-    const enterpriseMax = DEFAULT_TIER_POLICIES.enterprise.maxRequests;
 
     // Pro ceiling reached, but enterprise still has room
     await consumeTokens(limiter, 'key-ent', DEFAULT_TIER_POLICIES.pro.maxRequests, 'enterprise');

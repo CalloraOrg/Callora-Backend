@@ -25,6 +25,7 @@ import {
   BadRequestError,
 } from '../../errors/index.js';
 import { logger } from '../../logger.js';
+import { sendMail } from '../../lib/mailer.js';
 import {
   WebhookSignerService,
   InMemoryWebhookKeyStore,
@@ -64,22 +65,21 @@ function buildAdminNotifier(): (result: RotationResult) => Promise<void> {
         previousKeyId: result.previousKey?.id ?? null,
         graceWindowMs: result.graceWindowMs,
         previousKeyExpiresAt: result.previousKeyExpiresAt,
-        // rawSecret intentionally NOT logged
       },
     );
 
-    // TODO: integrate real email transport here, e.g.:
-    //
-    //   await mailer.send({
-    //     to: adminEmail,
-    //     subject: 'Webhook signing key rotated',
-    //     text: [
-    //       `A new webhook signing key was generated (id: ${result.newKey.id}).`,
-    //       `The previous key expires at: ${result.previousKeyExpiresAt ?? 'N/A'}.`,
-    //       `Grace window: ${result.graceWindowMs / 1000}s.`,
-    //       `Distribute the new key to subscribers before the grace window closes.`,
-    //     ].join('\n'),
-    //   });
+    if (adminEmail) {
+      await sendMail({
+        to: adminEmail,
+        subject: 'Webhook signing key rotated',
+        text: [
+          `A new webhook signing key was generated (id: ${result.newKey.id}).`,
+          `The previous key expires at: ${result.previousKeyExpiresAt ?? 'N/A'}.`,
+          `Grace window: ${result.graceWindowMs / 1000}s.`,
+          `Distribute the new key to subscribers before the grace window closes.`,
+        ].join('\n'),
+      });
+    }
   };
 }
 

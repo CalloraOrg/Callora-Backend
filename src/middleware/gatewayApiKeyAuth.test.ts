@@ -19,8 +19,8 @@ function sha256Hex(value: string): string {
 async function getMetricValue(outcome: 'hit' | 'miss' | 'revoked' | 'expired'): Promise<number> {
   const metric = register.getSingleMetric('gateway_api_key_lookup_total');
   if (!metric) return 0;
-  const data = await (metric as any).get();
-  const valueObj = data.values.find((v: any) => v.labels.outcome === outcome);
+  const data = await (metric as { get: () => Promise<{ values: Array<{ labels: Record<string, string>; value: number }> }> }).get();
+  const valueObj = data.values.find((v: { labels: Record<string, string>; value: number }) => v.labels.outcome === outcome);
   return valueObj ? valueObj.value : 0;
 }
 
@@ -451,7 +451,7 @@ describe('gatewayApiKeyAuth middleware', () => {
         resolveApiContext() {
           return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
         },
-        getApiId(api: any) {
+        getApiId(api: Record<string, unknown>) {
           return String(api.id);
         },
       }),
@@ -503,7 +503,7 @@ describe('gatewayApiKeyAuth middleware', () => {
         resolveApiContext() {
           return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
         },
-        getApiId(api: any) {
+        getApiId(api: Record<string, unknown>) {
           return String(api.id);
         },
       }),
@@ -543,7 +543,7 @@ describe('gatewayApiKeyAuth middleware', () => {
         resolveApiContext() {
           return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
         },
-        getApiId(api: any) {
+        getApiId(api: Record<string, unknown>) {
           return String(api.id);
         },
       }),

@@ -186,8 +186,7 @@ describe('Schema Drift Audit', () => {
       
       // Types should be exported for all main entities
       const entities = extractDrizzleEntityConstNames(drizzleSchema);
-      const expectedTypeExports = entities.map((entity) => `export type ${entity}`);
-      
+
       // Ensure type consistency
       expect(typeExports.length).toBeGreaterThanOrEqual(entities.length);
     });

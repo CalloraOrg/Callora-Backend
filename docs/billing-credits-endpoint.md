@@ -6,6 +6,26 @@ The `/api/billing/credits` endpoint provides access to prepaid credit balance tr
 
 ## Endpoint
 
+### POST /api/admin/billing/credits/grant
+
+Issues a prepaid-credit grant for the **GrantFox FWC26** campaign. This is an
+admin-only endpoint: it is protected by the existing admin API-key/JWT and IP
+allowlist middleware. The grant amount is added atomically, so concurrent
+grants for the same user do not overwrite each other.
+
+**Request body:**
+
+```json
+{
+  "user_id": "user_123",
+  "amount_usdc": "25.50"
+}
+```
+
+`amount_usdc` must be a positive decimal string with at most seven fractional
+digits. Unknown fields are rejected. A successful request returns `201` with
+the granted amount, campaign name, and the updated `balance_usdc`.
+
 ### GET /api/billing/credits
 
 Returns the prepaid credit balance for the authenticated user.

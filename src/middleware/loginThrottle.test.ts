@@ -66,7 +66,7 @@ describe('loginThrottle middleware', () => {
 
   it('resets the window after expiry', async () => {
     const limiter = new InMemoryLoginRateLimiter(60_000, 2);
-    const app = buildThrottleApp(limiter);
+    buildThrottleApp(limiter);
 
     // Use direct limiter manipulation for time travel test
     limiter.check('10.0.0.1');

@@ -239,6 +239,10 @@ class FakeApiRepository implements ApiRepository {
     return restored;
   }
 
+  async findRawById(id: number): Promise<Api | null> {
+    return null;
+  }
+
   async bulkCreateEndpoints() {
     return [];
   }
@@ -754,7 +758,7 @@ test('POST /api/developers/apis returns 401 when unauthenticated', async () => {
 test('POST /api/developers/apis returns 400 when name is missing', async () => {
   const app = makeApp();
   const body = { ...validApiBody };
-  delete (body as any).name;
+  delete (body as Record<string, unknown>).name;
   const res = await request(app)
     .post('/api/developers/apis')
     .set('x-user-id', 'dev-1')
@@ -767,7 +771,7 @@ test('POST /api/developers/apis returns 400 when name is missing', async () => {
 test('POST /api/developers/apis returns 400 when base_url is missing', async () => {
   const app = makeApp();
   const body = { ...validApiBody };
-  delete (body as any).base_url;
+  delete (body as Record<string, unknown>).base_url;
   const res = await request(app)
     .post('/api/developers/apis')
     .set('x-user-id', 'dev-1')
@@ -791,7 +795,7 @@ test('POST /api/developers/apis returns 400 when base_url is not a valid URL', a
 test('POST /api/developers/apis returns 400 when category is missing', async () => {
   const app = makeApp();
   const body = { ...validApiBody };
-  delete (body as any).category;
+  delete (body as Record<string, unknown>).category;
   const res = await request(app)
     .post('/api/developers/apis')
     .set('x-user-id', 'dev-1')
@@ -1262,14 +1266,21 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
     // Express app stack paths
     const registeredRoutes: string[] = [];
     
-    function extractRoutes(stack: any[], prefix = '') {
+    interface ExpressLayer {
+      route?: { path: string };
+      name?: string;
+      handle?: { stack?: ExpressLayer[] };
+      regexp?: { toString(): string };
+    }
+
+    function extractRoutes(stack: ExpressLayer[], prefix = '') {
       for (const layer of stack) {
         if (layer.route) {
           const path = (prefix + layer.route.path).replace(/\/+/g, '/');
           // normalize path variables like /apis/:id -> /apis/{id}
           const normalizedPath = path.replace(/:([a-zA-Z0-9_]+)/g, '{$1}');
           registeredRoutes.push(normalizedPath);
-        } else if (layer.name === 'router' && layer.handle.stack) {
+        } else if (layer.name === 'router' && layer.handle?.stack) {
           let newPrefix = prefix;
           if (layer.regexp) {
             // Extract route prefix from layer regexp
@@ -1278,7 +1289,7 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
               newPrefix += match[1];
             }
           }
-          extractRoutes(layer.handle.stack, newPrefix);
+          extractRoutes(layer.handle!.stack, newPrefix);
         }
       }
     }

@@ -2,8 +2,16 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
 import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
-import { startUpstreamTimer, recordProxyPrematureAbort, type UpstreamOutcome, setGatewayUpstreamBreakerState } from '../metrics.js';
+import {
+  startUpstreamTimer,
+  recordProxyPrematureAbort,
+  type UpstreamOutcome,
+  setGatewayUpstreamBreakerState,
+  recordEndpointThroughputSaturation,
+} from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
+import { createConfiguredPerKeyConcurrencyMiddleware } from '../middleware/perKeyConcurrency.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import {
   buildUpstreamTargetUrl,
@@ -18,7 +26,7 @@ import {
   TooManyRequestsError,
 } from '../errors/index.js';
 import { CircuitBreakerOpenError } from '../lib/errors.js';
-import { CircuitBreaker, type CircuitBreakerStore } from '../lib/circuitBreaker.js';
+import { CircuitBreaker } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
@@ -103,10 +111,41 @@ export function createProxyRouter(deps: ProxyDeps): Router {
     },
   });
 
+  // Tracks in-flight requests per API key on the shared semaphore that
+  // GET /api/admin/keys/concurrency reads from. Must run after authMiddleware
+  // so that req.apiKeyRecord is populated.
+  const perKeyConcurrency = deps.perKeyConcurrency ?? createConfiguredPerKeyConcurrencyMiddleware();
+
+  // Idempotency middleware for POST/PATCH to prevent duplicate downstream calls.
+  // Caches request→response keyed by Idempotency-Key header, ensuring safe retries.
+  // See docs/api-proxy-idempotency.md for the contract.
+  const idempotencyForProxy = (req: Request, res: Response, next: NextFunction): void => {
+    idempotencyMiddleware(req, res, next, {
+      keyFromHeader: 'idempotency-key',
+      retentionSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
+      bodyExcludingKeys: ['idempotencyKey'],
+    });
+  };
+
   // Use a param of 0 to capture the wildcard path (everything after the slug)
-  router.all('/:apiSlugOrId/*', authMiddleware, handleProxy);
-  // Also handle requests without a trailing path (e.g. /v1/call/my-api)
-  router.all('/:apiSlugOrId', authMiddleware, handleProxy);
+  // POST and PATCH routes get idempotency protection; GET/DELETE are naturally safe.
+  router.post('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.post('/:apiSlugOrId', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+
+  // GET, DELETE, and other methods pass through without idempotency caching
+  router.get('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.delete('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.put('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.options('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.head('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+
+  router.get('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.delete('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.put('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.options('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.head('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -114,7 +153,12 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const apiEntry = req.api as unknown as ApiRegistryEntry | undefined;
       const endpoint = req.endpoint as unknown as EndpointPricing | undefined;
       const apiKeyHeader = req.apiKeyValue;
-      const keyRecord = req.apiKeyRecord as { id: string; userId: string; apiId: string } | undefined;
+      const keyRecord = req.apiKeyRecord as {
+        id: string;
+        userId: string;
+        apiId: string;
+        rateLimitPerMinute?: number | null;
+      } | undefined;
 
       if (!apiEntry || !endpoint || !apiKeyHeader || !keyRecord) {
         next(
@@ -243,7 +287,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           upstreamStatus = 502;
           timer.stop(upstreamStatus, outcome);
           // Update metric
-          const openMetrics = await circuitBreaker.getMetrics(breakerKey);
+          await circuitBreaker.getMetrics(breakerKey);
           setGatewayUpstreamBreakerState(breakerKey, 1);
           throw new BadGatewayError('Bad Gateway: upstream unavailable');
         } else if (err instanceof DOMException && err.name === 'TimeoutError') {
@@ -332,6 +376,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                   });
                 }
 
+                recordEndpointThroughputSaturation({
+                  apiId: String(apiEntry.id),
+                  endpointId: endpoint.endpointId,
+                  endpointPath: endpoint.path,
+                  advertisedLimitPerMinute: Number(keyRecord?.rateLimitPerMinute ?? 0),
+                  observedAt: Date.now(),
+                });
+
                 // Only deduct billing if this requestId hasn't been processed
                 // before (idempotency guard inside usageStore.record).
                 if (recorded && endpoint.priceUsdc > 0) {
@@ -361,104 +413,4 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   }
 
   return router;
-}
-
-interface ReconcileUsageAndBillingArgs {
-  billing: ProxyDeps['billing'];
-  usageStore: ProxyDeps['usageStore'];
-  requestId: string;
-  apiKeyHeader: string;
-  keyRecord: { id: string; userId: string; apiId: string };
-  apiEntry: ApiRegistryEntry;
-  endpoint: EndpointPricing;
-  upstreamStatus: number;
-}
-
-async function reconcileUsageAndBilling({
-  billing,
-  usageStore,
-  requestId,
-  apiKeyHeader,
-  keyRecord,
-  apiEntry,
-  endpoint,
-  upstreamStatus,
-}: ReconcileUsageAndBillingArgs): Promise<void> {
-  let chargeResult:
-    | { success: boolean; alreadyProcessed?: boolean; reconciliationRequired?: boolean; error?: string }
-    | undefined;
-
-  if (endpoint.priceUsdc > 0) {
-    if (billing.chargeUsage) {
-      chargeResult = await billing.chargeUsage({
-        requestId,
-        developerId: keyRecord.userId,
-        apiId: String(apiEntry.id),
-        endpointId: endpoint.endpointId,
-        apiKeyId: keyRecord.id,
-        amountUsdc: endpoint.priceUsdc,
-      });
-    } else {
-      const deduction = await billing.deductCredit(keyRecord.userId, endpoint.priceUsdc);
-      chargeResult = {
-        success: deduction.success,
-        alreadyProcessed: false,
-        reconciliationRequired: false,
-      };
-    }
-
-    if (!chargeResult.success) {
-      if (chargeResult.reconciliationRequired) {
-        console.error(
-          '[proxy billing reconciliation] Billing anchor failed after usage write phase started',
-          {
-            requestId,
-            apiId: apiEntry.id,
-            endpointId: endpoint.endpointId,
-            developerId: keyRecord.userId,
-            error: chargeResult.error ?? 'Unknown billing failure',
-          },
-        );
-      }
-      return;
-    }
-  }
-
-  try {
-    const recorded = usageStore.record({
-      id: randomUUID(),
-      requestId,
-      apiKey: apiKeyHeader,
-      apiKeyId: keyRecord.id,
-      apiId: String(apiEntry.id),
-      endpointId: endpoint.endpointId,
-      userId: keyRecord.userId,
-      amountUsdc: endpoint.priceUsdc,
-      statusCode: upstreamStatus,
-      timestamp: new Date().toISOString(),
-    });
-
-    if (!recorded && !chargeResult?.alreadyProcessed) {
-      console.error(
-        '[proxy billing reconciliation] Usage view write failed after successful billing charge',
-        {
-          requestId,
-          apiId: apiEntry.id,
-          endpointId: endpoint.endpointId,
-          developerId: keyRecord.userId,
-        },
-      );
-    }
-  } catch (error) {
-    console.error(
-      '[proxy billing reconciliation] Usage view write threw after successful billing charge',
-      {
-        requestId,
-        apiId: apiEntry.id,
-        endpointId: endpoint.endpointId,
-        developerId: keyRecord.userId,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    );
-  }
 }

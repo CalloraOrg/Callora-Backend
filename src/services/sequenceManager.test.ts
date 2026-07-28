@@ -18,7 +18,7 @@ import { SequenceManager, type HorizonAccountLoader, type HorizonAccount } from 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Build a loader whose loadAccount always resolves with the given sequence. */
-function makeLoader(sequence: string | bigint, accountId = 'GABC'): HorizonAccountLoader {
+function makeLoader(sequence: string | bigint, _accountId = 'GABC'): HorizonAccountLoader {
   return {
     async loadAccount(id: string): Promise<HorizonAccount> {
       return { accountId: id, sequence: String(sequence) };

@@ -86,3 +86,59 @@ export type Api = typeof apis.$inferSelect;
 export type NewApi = typeof apis.$inferInsert;
 export type ApiEndpoint = typeof apiEndpoints.$inferSelect;
 export type NewApiEndpoint = typeof apiEndpoints.$inferInsert;
+
+// Quota requests table — stores developer-initiated tier/override requests
+// and their admin resolution. requested_overrides is JSON-serialised text.
+export const quotaRequests = sqliteTable('quota_requests', {
+  id: text('id').primaryKey(),                    // UUID generated in service
+  developer_id: text('developer_id').notNull(),   // references developers.user_id
+  requested_tier: text('requested_tier').notNull(),
+  reason: text('reason').notNull(),
+  requested_overrides: text('requested_overrides'), // JSON: { monthlyCallLimit?, rateLimitMaxRequests? }
+  status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+    .notNull()
+    .default('pending'),
+  admin_notes: text('admin_notes'),
+  resolved_by: text('resolved_by'),
+  resolved_at: integer('resolved_at', { mode: 'timestamp' }),
+  created_at: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export type QuotaRequestRow = typeof quotaRequests.$inferSelect;
+export type NewQuotaRequestRow = typeof quotaRequests.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Subscriptions — per-user subscriptions to marketplace APIs
+// ---------------------------------------------------------------------------
+
+export const subscriptionStatusEnum = ['active', 'paused', 'cancelled'] as const;
+export type SubscriptionStatus = (typeof subscriptionStatusEnum)[number];
+
+export const subscriptions = sqliteTable('subscriptions', {
+  id: text('id').primaryKey(),
+  user_id: text('user_id').notNull(),
+  api_id: integer('api_id')
+    .notNull()
+    .references(() => apis.id, { onDelete: 'cascade' }),
+  status: text('status', { enum: subscriptionStatusEnum }).notNull().default('active'),
+  /** Maximum calls per calendar month. NULL means unlimited. */
+  metering_limit: integer('metering_limit'),
+  /**
+   * Per-subscription webhook retry policy override.
+   * Stored as a JSON string: { maxRetries?: number, baseDelayMs?: number }.
+   * NULL means use the platform default (maxRetries: 5, baseDelayMs: 1000 ms).
+   */
+  retry_policy: text('retry_policy'),
+  created_at: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updated_at: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  cancelled_at: integer('cancelled_at', { mode: 'timestamp' }),
+});
+
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;

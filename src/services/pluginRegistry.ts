@@ -170,7 +170,7 @@ export interface HookContext {
 export function executeHook(
   record: PluginRecord,
   hook: HookEvent,
-  context: Pick<HookContext, 'userId' | 'payload'>,
+  _context: Pick<HookContext, 'userId' | 'payload'>,
 ): { ok: boolean; hook: HookEvent; pluginId: string; sandboxed: true } {
   if (!record.manifest.hooks.includes(hook)) {
     throw new BadRequestError(

@@ -74,7 +74,10 @@ describe('pluginManifestSchema', () => {
   });
 
   it('allows optional fields to be absent', () => {
-    const { description: _, author: __, source_url: ___, ...minimal } = validManifest;
+    const minimal = { ...validManifest };
+    delete minimal.description;
+    delete minimal.author;
+    delete minimal.source_url;
     expect(() => pluginManifestSchema.parse(minimal)).not.toThrow();
   });
 });

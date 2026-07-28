@@ -4,7 +4,7 @@ module.exports = {
   testEnvironment: "node",
   testMatch: ["**/?(*.)+(spec|test).ts"],
   testPathIgnorePatterns: ["/node_modules/"],
-  transformIgnorePatterns: ["node_modules/(?!(uuid)/)"],
+  transformIgnorePatterns: ["/node_modules/(?!.*uuid)"],
   transform: {
     "^.+\\.ts$": [
       "ts-jest",
@@ -28,6 +28,7 @@ module.exports = {
       },
     ],
   },
+  setupFiles: ["<rootDir>/jest.env-setup.cjs"],
   moduleNameMapper: {
     "^(\\.{1,2}/.*)\\.js$": "$1",
   },

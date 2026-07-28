@@ -77,22 +77,22 @@ export const apiKeyRepository = {
      userId: string;
      scopes: string[];
      rateLimitPerMinute: number | null;
-   }): ApiKeyCreateResult {
-     const p = params as any;
-     const key = generatePlainKey();
-     const prefix = key.slice(0, 16);
-     const id = randomBytes(8).toString('hex');
-     const createdAt = new Date();
-     const sha256Hash = sha256Hex(key);
+    }): ApiKeyCreateResult {
+      const key = generatePlainKey();
+      const prefix = key.slice(0, 16);
+      const id = randomBytes(8).toString('hex');
+      const createdAt = new Date();
+      const sha256Hash = sha256Hex(key);
 
     apiKeys.push({
       id,
-      apiId: p.apiId,
-      userId: p.userId,
+      apiId: params.apiId,
+      userId: params.userId,
       prefix,
       keyHash: toHash(key),
-      scopes: p.scopes,
-      rateLimitPerMinute: p.rateLimitPerMinute,
+      sha256Hash,
+      scopes: params.scopes,
+      rateLimitPerMinute: params.rateLimitPerMinute,
       createdAt,
       revoked: false,
       lastUsedAt: null,

@@ -1,6 +1,5 @@
-import type { Pool } from 'pg';
 import { NotFoundError } from '../errors/index.js';
-import { pool, readQuery, writeQuery } from '../db.js';
+import { readQuery, writeQuery } from '../db.js';
 import type { PaginationParams } from '../lib/pagination.js';
 
 export interface UserDto {

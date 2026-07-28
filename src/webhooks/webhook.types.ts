@@ -3,7 +3,20 @@ export type WebhookEventType =
     | 'settlement_completed'
     | 'low_balance_alert'
     | 'quota.threshold.reached'
-    | 'invoice_created';
+    | 'invoice_created'
+    | 'usage.anomaly.detected'
+    | 'fee_abstraction.executed'
+    | 'usage_event.created';
+
+export interface RetryPolicy {
+  maxRetries?: number;
+  baseDelayMs?: number;
+}
+
+export const DEFAULT_RETRY_POLICY: RetryPolicy = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+};
 
 export interface WebhookConfig {
     developerId: string;
@@ -100,3 +113,40 @@ export interface QuotaThresholdReachedData {
     /** Actual usage as a percentage of quota, rounded to two decimal places. */
     usagePercent: number;
 }
+
+/**
+ * Fired when a new usage event is recorded for a developer's API call.
+ * Contains the metered usage details for the request that was just processed.
+ */
+export interface UsageEventCreatedData {
+    /** Unique identifier for this usage event. */
+    id: string;
+    /** Unique request identifier for idempotency. */
+    requestId: string;
+    /** The API that was called. */
+    apiId: string;
+    /** The specific endpoint that was hit. */
+    endpointId: string;
+    /** Developer who owns the API key used for this request. */
+    developerId: string;
+    /** Amount in USDC charged for this request. */
+    amountUsdc: number;
+    /** HTTP status code returned by the upstream API. */
+    statusCode: number;
+    /** ISO 8601 timestamp of when the usage event was recorded. */
+    timestamp: string;
+}
+
+// ---------------------------------------------------------------------------
+// Retry policy types
+// ---------------------------------------------------------------------------
+
+export interface RetryPolicy {
+    maxRetries?: number;
+    baseDelayMs?: number;
+}
+
+export const DEFAULT_RETRY_POLICY = {
+    maxRetries: 5,
+    baseDelayMs: 1000,
+} satisfies RetryPolicy;

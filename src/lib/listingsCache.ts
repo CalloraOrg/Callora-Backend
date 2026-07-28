@@ -44,6 +44,8 @@ export interface ListingsCacheKeyParams {
   offset: number;
   category?: string;
   search?: string;
+  /** Opaque cursor string for keyset pagination. When present, offset is ignored. */
+  cursor?: string;
 }
 
 // ── Cache key builder ─────────────────────────────────────────────────────────
@@ -51,15 +53,20 @@ export interface ListingsCacheKeyParams {
 /**
  * Build a stable, deterministic cache key from listing query params.
  *
- * Only the four params that affect the result set are included.
+ * Only the params that affect the result set are included.
  * The key is a compact JSON string so it is human-readable in logs.
+ * When `cursor` is present it represents the keyset position and takes
+ * precedence over `offset` for cache differentiation.
  */
 export function buildCacheKey(params: ListingsCacheKeyParams): string {
   return JSON.stringify({
     limit: params.limit,
-    offset: params.offset,
+    // Omit offset from the key when cursor is present — they are mutually
+    // exclusive; storing both would generate spurious cache misses.
+    offset: params.cursor ? null : (params.offset ?? null),
     category: params.category ?? null,
     search: params.search ?? null,
+    cursor: params.cursor ?? null,
   });
 }
 

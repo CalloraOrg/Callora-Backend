@@ -135,6 +135,11 @@ export const WebhookStore = {
         return deadLetterStore.size;
     },
 
+    /** Look up a single DLQ entry by deliveryId. */
+    getFromDlq(deliveryId: string): DeadLetterEntry | undefined {
+        return deadLetterStore.get(deliveryId);
+    },
+
     /** Clear the DLQ — for testing only. */
     clearDlq(): void {
         deadLetterStore.clear();

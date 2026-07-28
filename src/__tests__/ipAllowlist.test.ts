@@ -263,7 +263,6 @@ describe('IP Allowlist Middleware', () => {
       // Test the 400 path by mocking getClientIp to return an empty string.
       // This covers the edge case where neither the socket nor any proxy header
       // provides a valid IP (e.g., Unix socket connections).
-      const { getClientIp } = await import('../lib/clientIp.js');
       const spy = jest.spyOn(await import('../lib/clientIp.js'), 'getClientIp').mockReturnValueOnce('');
 
       const middleware = createIpAllowlist({

@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS schema_versions (
 
 | Table | Owner | Source of Truth |
 |-------|-------|-----------------|
-| `schema_versions` | Drizzle + SQLite | `src/db/schema.ts` + `migrations/*.sql` |
+| `schema_versions` | Drizzle + SQLite | `src/db/schema.ts` + `drizzle/schema-versions.sql` + `migrations/*.sql` |
 | `_migrations` | Migration runner (internal) | `src/migrate.ts` |
 
 > The `_migrations` table is an **internal** tracking table used by the runner.
@@ -179,7 +179,7 @@ resistance and is the standard choice in Node.js (`node:crypto`).
 
 A: The checksum is computed at apply time. If the file is modified before
 being applied, the runner will compute the checksum of the modified version.
-This is fine — the checksum captures whatever content was actually executed.
+This is fine ï¿½ the checksum captures whatever content was actually executed.
 The drift detection only flags changes **after** recording.
 
 **Q: Can I bypass the CI gate?**

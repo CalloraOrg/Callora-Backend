@@ -1,9 +1,5 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import assert from 'node:assert';
+import assert from 'assert';
 import Database from 'better-sqlite3';
-
-const migrationDir = path.join(process.cwd(), 'migrations');
 
 describe('Migration Runner Logic', () => {
   let db: Database.Database;

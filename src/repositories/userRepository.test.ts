@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { DataType, newDb } from 'pg-mem';
 
-import { NotFoundError } from '../errors/index.js';
 import { PgUserRepository, type UserRepositoryQueryable } from './userRepository.js';
 
 function createUserRepository() {
@@ -42,9 +41,6 @@ function createUserRepository() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
-
-  const { Pool } = db.adapters.createPg();
-  const pool = new Pool();
 
   return {
     repository: new PgUserRepository(wrappedPool as UserRepositoryQueryable),

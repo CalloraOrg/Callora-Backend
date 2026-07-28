@@ -6,7 +6,6 @@
 
 import request from 'supertest';
 import { createApp } from '../app.js';
-import assert from 'node:assert';
 
 // Mock better-sqlite3 to prevent native binding errors
 jest.mock('better-sqlite3', () => {
@@ -223,6 +222,23 @@ describe('Security Headers and CORS Configuration', () => {
         expect(response.status).toBe(204);
         expect(response.headers['access-control-allow-headers']).toContain('x-user-id');
         expect(response.headers['access-control-allow-headers']).toContain('x-request-id');
+      } finally {
+        process.env.CORS_ALLOWED_ORIGINS = originalEnv;
+      }
+    });
+
+    test('exposes X-Request-Id header in responses', async () => {
+      const originalEnv = process.env.CORS_ALLOWED_ORIGINS;
+      process.env.CORS_ALLOWED_ORIGINS = 'https://app.example.com';
+      
+      try {
+        const app = createApp();
+        const response = await request(app)
+          .get('/api/health')
+          .set('Origin', 'https://app.example.com');
+        
+        expect(response.status).toBe(200);
+        expect(response.headers['access-control-expose-headers']).toContain('X-Request-Id');
       } finally {
         process.env.CORS_ALLOWED_ORIGINS = originalEnv;
       }

@@ -216,23 +216,34 @@ export function createGracefulShutdownHandler({
       };
 
       /**
-       * Execute shutdown phases in sequence
+       * Execute shutdown phases.
+       *
+       * `beginShutdown()` is triggered immediately so subsystems can stop
+       * accepting new work and start their own drain path. We also start
+       * closing the HTTP server in parallel so the process can move toward a
+       * clean exit without waiting on the server close callback before draining
+       * in-flight work.
        */
       void (async () => {
         let exitCode = 0;
 
         try {
-          // Phase 1 & 2: Stop and drain subsystems
-          const subsystemsStopped = await stopSubsystems();
-          const serverClosed = await closeServer();
-          const subsystemsDrained = await drainSubsystems();
+          const stopSubsystemsPromise = stopSubsystems();
+          const closeServerPromise = closeServer();
+          const drainSubsystemsPromise = drainSubsystems();
+
+          const [subsystemsStopped, serverClosed, subsystemsDrained] = await Promise.all([
+            stopSubsystemsPromise,
+            closeServerPromise,
+            drainSubsystemsPromise,
+          ]);
 
           // Clear the force-close timeout since we completed gracefully
           clearTimeout(forceCloseTimeout);
 
           // Phase 3: Close database resources
           log.log(`[shutdown:${ShutdownPhase.DATABASE_CLOSING}] Closing database pools`);
-          
+
           try {
             await closeDatabase();
             log.log(`[shutdown:${ShutdownPhase.DATABASE_CLOSING}] Database pools closed successfully`);

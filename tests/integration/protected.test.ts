@@ -233,6 +233,9 @@ class StubApiRepository implements ApiRepository {
   async bulkCreateEndpoints() {
     return [];
   }
+  async findRawById() {
+    return null;
+  }
 }
 
 /**

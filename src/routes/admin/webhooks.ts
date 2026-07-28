@@ -2,9 +2,10 @@
  * src/routes/admin/webhooks.ts
  *
  * Composes all admin webhook routes under one router:
- *   POST /api/admin/webhooks/rotate-key     (from webhookKeys)
- *   GET  /api/admin/webhooks/grace-window   (from webhookKeys)
- *   GET  /api/admin/webhooks/monitor        ← new
+ *   POST /api/admin/webhooks/rotate-key          (from webhookKeys)
+ *   GET  /api/admin/webhooks/grace-window        (from webhookKeys)
+ *   GET  /api/admin/webhooks/monitor
+ *   POST /api/admin/webhooks/replay              (from replay)
  *
  * Authentication: adminAuth middleware applied at the parent admin router.
  * IP allowlist:   createAdminIpAllowlist() applied at the parent admin router.
@@ -19,8 +20,10 @@ import { AppError, InternalServerError } from '../../errors/index.js';
 import { logger } from '../../logger.js';
 import { getWebhookMonitorSnapshot } from '../../services/webhookMonitor.js';
 import { createWebhookKeysRouter } from './webhookKeys.js';
+import { createAdminWebhookReplayRouter } from './webhooks/replay.js';
 
 export { createWebhookKeysRouter } from './webhookKeys.js';
+export { createAdminWebhookReplayRouter } from './webhooks/replay.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
@@ -114,6 +117,13 @@ export function createAdminWebhooksRouter(
             next(new InternalServerError('Failed to retrieve webhook monitor data'));
         }
     });
+
+    // ── POST /replay ───────────────────────────────────────────────────────
+    /**
+     * Mounts the replay sub-router under /replay.
+     * The replay endpoint is POST /api/admin/webhooks/replay.
+     */
+    router.use('/replay', createAdminWebhookReplayRouter());
 
     return router;
 }

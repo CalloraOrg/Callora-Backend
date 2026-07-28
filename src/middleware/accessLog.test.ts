@@ -2,7 +2,11 @@ import { EventEmitter } from 'node:events';
 import type { Request, Response } from 'express';
 
 import { logger } from './logging.js';
-import { createAccessLogMiddleware, ACCESS_LOG_REDACTED_VALUE } from './accessLog.js';
+import {
+  createAccessLogMiddleware,
+  ACCESS_LOG_REDACTED_VALUE,
+  createHealthAccessLogMiddleware,
+} from './accessLog.js';
 
 describe('createAccessLogMiddleware', () => {
   test('logs structured JSON with correlation id and byte counts', () => {
@@ -112,6 +116,49 @@ describe('createAccessLogMiddleware', () => {
     }
   });
 
+  test('uses a correlation id from request headers when present', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+    const middleware = createAccessLogMiddleware({ random: () => 0 });
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/apis',
+        headers: { 'x-correlation-id': 'corr-123' },
+        id: undefined,
+      }) as unknown as EventEmitter & Request & { id?: string };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+        };
+
+      middleware(req, res, jest.fn());
+      res.end();
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          correlationId: 'corr-123',
+          requestId: expect.any(String),
+        }),
+      );
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
   test('skips logging when sample rate is zero', () => {
     const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
     const middleware = createAccessLogMiddleware({ sampleRate: 0, random: () => 0 });
@@ -142,6 +189,260 @@ describe('createAccessLogMiddleware', () => {
       res.emit('finish');
 
       expect(infoSpy).not.toHaveBeenCalled();
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+});
+
+describe('createHealthAccessLogMiddleware', () => {
+  test('logs structured JSON with req-id, latency, status, and size', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+    const middleware = createHealthAccessLogMiddleware();
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/health',
+        headers: { 'x-request-id': 'req-health-1' },
+        id: 'req-health-1',
+      }) as unknown as EventEmitter &
+        Request & {
+          headers: Record<string, string>;
+          id?: string;
+        };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+        };
+
+      middleware(req, res, jest.fn());
+      res.write(Buffer.from('health'));
+      res.end(Buffer.from('ok'));
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const logPayload = infoSpy.mock.calls[0][0];
+      expect(logPayload).toEqual(
+        expect.objectContaining({
+          requestId: 'req-health-1',
+          latencyMs: expect.any(Number),
+          status: 200,
+          responseBytes: 8,
+        }),
+      );
+      expect(logPayload).not.toHaveProperty('actor');
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  test('logs at warn level for 4xx status codes', () => {
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => logger);
+    const middleware = createHealthAccessLogMiddleware();
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/health',
+        headers: {},
+        id: 'req-health-4xx',
+      }) as unknown as EventEmitter & Request & { id?: string; headers: Record<string, string> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 404,
+        writableEnded: true,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+        };
+
+      middleware(req, res, jest.fn());
+      res.end();
+      res.emit('finish');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          status: 404,
+          requestId: 'req-health-4xx',
+        }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('logs at error level for 5xx status codes', () => {
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => logger);
+    const middleware = createHealthAccessLogMiddleware();
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/health',
+        headers: {},
+        id: 'req-health-5xx',
+      }) as unknown as EventEmitter & Request & { id?: string; headers: Record<string, string> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 503,
+        writableEnded: true,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+        };
+
+      middleware(req, res, jest.fn());
+      res.end();
+      res.emit('finish');
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          status: 503,
+          requestId: 'req-health-5xx',
+        }),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('sets x-request-id header on response', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+    const middleware = createHealthAccessLogMiddleware();
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/health',
+        headers: {},
+        id: 'req-header-test',
+      }) as unknown as EventEmitter & Request & { id?: string; headers: Record<string, string> };
+
+      const setHeaderSpy = jest.fn();
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        setHeader: setHeaderSpy,
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+        };
+
+      middleware(req, res, jest.fn());
+      res.end();
+      res.emit('finish');
+
+      expect(setHeaderSpy).toHaveBeenCalledWith('x-request-id', 'req-header-test');
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  test('generates UUID when no request id is provided', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+    const middleware = createHealthAccessLogMiddleware();
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/health',
+        headers: {},
+      }) as unknown as EventEmitter & Request & { headers: Record<string, string> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+        };
+
+      middleware(req, res, jest.fn());
+      res.end();
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const logPayload = infoSpy.mock.calls[0][0] as { requestId: string };
+      expect(logPayload.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  test('uses x-request-id header when available', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+    const middleware = createHealthAccessLogMiddleware();
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/health',
+        headers: { 'x-request-id': 'header-request-id' },
+      }) as unknown as EventEmitter & Request & { headers: Record<string, string> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+        };
+
+      middleware(req, res, jest.fn());
+      res.end();
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const logPayload = infoSpy.mock.calls[0][0] as { requestId: string };
+      expect(logPayload.requestId).toBe('header-request-id');
     } finally {
       infoSpy.mockRestore();
     }

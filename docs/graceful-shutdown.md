@@ -4,7 +4,7 @@ This document describes the graceful shutdown mechanism implemented in the Callo
 
 ## Overview
 
-The graceful shutdown handler ensures that the application terminates cleanly when receiving termination signals (SIGTERM/SIGINT), preventing data loss and ensuring all in-flight operations complete successfully before exit.
+The graceful shutdown handler ensures that the application terminates cleanly when receiving termination signals (SIGTERM/SIGINT), preventing data loss and ensuring all in-flight operations complete successfully before exit. On SIGTERM, the handler starts subsystem draining immediately while the HTTP server is also being closed, so the process can move toward a clean exit without waiting on the server close callback before the drain phase begins.
 
 ## Features
 

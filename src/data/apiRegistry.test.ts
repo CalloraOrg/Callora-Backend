@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import { InMemoryApiRegistry, resolveEndpointPrice } from './apiRegistry.js';
 import type { ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';
+import { encodeCursor } from '../lib/cursorPagination.js';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,123 @@ describe('InMemoryApiRegistry', () => {
       () => registry.register({ ...ENTRY_A, base_url: 'http://169.254.169.254/latest' }),
       /private or loopback IP range/i,
     );
+  });
+});
+
+// ── Cursor pagination (list) ────────────────────────────────────────────────
+
+describe('InMemoryApiRegistry.list (cursor pagination)', () => {
+  const now = new Date('2026-07-01T00:00:00.000Z');
+
+  const mkEntry = (
+    id: string,
+    slug: string,
+    created_at: Date,
+  ): ApiRegistryEntry => ({
+    id,
+    slug,
+    base_url: `http://localhost:${id.split('_')[1] ?? 8000}`,
+    developerId: 'dev_test',
+    endpoints: [{ endpointId: 'ep', path: '*', priceUsdc: 0.01 }],
+    created_at,
+  });
+
+  test('returns all entries when no cursor is provided', () => {
+    const entries = [
+      mkEntry('api_1', 'slug-1', new Date(now.getTime() - 3000)),
+      mkEntry('api_2', 'slug-2', new Date(now.getTime() - 2000)),
+      mkEntry('api_3', 'slug-3', new Date(now.getTime() - 1000)),
+    ];
+    const registry = new InMemoryApiRegistry(entries);
+
+    const result = registry.list(null, 10);
+
+    assert.equal(result.entries.length, 3);
+    // Sorted by created_at DESC, so most recent first
+    assert.equal(result.entries[0].id, 'api_3');
+    assert.equal(result.entries[1].id, 'api_2');
+    assert.equal(result.entries[2].id, 'api_1');
+    assert.equal(result.nextCursor, null);
+  });
+
+  test('returns a nextCursor when there are more entries than the limit', () => {
+    const entries = [
+      mkEntry('api_1', 'slug-1', new Date(now.getTime() - 3000)),
+      mkEntry('api_2', 'slug-2', new Date(now.getTime() - 2000)),
+      mkEntry('api_3', 'slug-3', new Date(now.getTime() - 1000)),
+      mkEntry('api_4', 'slug-4', now),
+    ];
+    const registry = new InMemoryApiRegistry(entries);
+
+    const result = registry.list(null, 2);
+
+    assert.equal(result.entries.length, 2);
+    assert.equal(result.entries[0].id, 'api_4');
+    assert.equal(result.entries[1].id, 'api_3');
+    assert.notEqual(result.nextCursor, null);
+    assert.ok(typeof result.nextCursor === 'string');
+  });
+
+  test('correctly pages through results using a cursor', () => {
+    const entries = [
+      mkEntry('api_1', 'slug-1', new Date(now.getTime() - 3000)),
+      mkEntry('api_2', 'slug-2', new Date(now.getTime() - 2000)),
+      mkEntry('api_3', 'slug-3', new Date(now.getTime() - 1000)),
+      mkEntry('api_4', 'slug-4', now),
+    ];
+    const registry = new InMemoryApiRegistry(entries);
+
+    // Page 1: most recent 2 entries
+    const page1 = registry.list(null, 2);
+    assert.equal(page1.entries.length, 2);
+    assert.equal(page1.entries[0].id, 'api_4');
+    assert.equal(page1.entries[1].id, 'api_3');
+    assert.notEqual(page1.nextCursor, null);
+
+    // Page 2: resume from cursor
+    const page2 = registry.list(page1.nextCursor, 2);
+    assert.equal(page2.entries.length, 2);
+    assert.equal(page2.entries[0].id, 'api_2');
+    assert.equal(page2.entries[1].id, 'api_1');
+    assert.equal(page2.nextCursor, null);
+  });
+
+  test('handles entries without created_at (stable by id)', () => {
+    const e1: ApiRegistryEntry = {
+      id: 'api_z', slug: 'slug-z', base_url: 'http://localhost:9001',
+      developerId: 'dev_test', endpoints: [],
+    };
+    const e2: ApiRegistryEntry = {
+      id: 'api_a', slug: 'slug-a', base_url: 'http://localhost:9002',
+      developerId: 'dev_test', endpoints: [],
+    };
+    const registry = new InMemoryApiRegistry([e1, e2]);
+
+    const result = registry.list(null, 10);
+
+    assert.equal(result.entries.length, 2);
+    // Same created_at (both 0), so sorted by id DESC
+    assert.equal(result.entries[0].id, 'api_z');
+    assert.equal(result.entries[1].id, 'api_a');
+  });
+
+  test('returns empty list when registry is empty', () => {
+    const registry = new InMemoryApiRegistry();
+
+    const result = registry.list(null, 10);
+
+    assert.equal(result.entries.length, 0);
+    assert.equal(result.nextCursor, null);
+  });
+
+  test('clamps limit to available entries', () => {
+    const entries = [mkEntry('api_1', 'slug-1', now)];
+    const registry = new InMemoryApiRegistry(entries);
+
+    const result = registry.list(null, 50);
+
+    assert.equal(result.entries.length, 1);
+    assert.equal(result.nextCursor, null);
   });
 });
 

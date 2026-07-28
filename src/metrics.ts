@@ -72,6 +72,73 @@ const httpRequestDuration = new client.Histogram({
   buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
 });
 
+// ── HTTP request duration summary ─────────────────────────────────────────────
+//
+// Client-side computed quantiles with a `quantile` label exposing p50 / p95 / p99
+// directly in the Prometheus scrape output. Complements the histogram above:
+//   - Histogram  → server-side aggregation via histogram_quantile() in PromQL
+//   - Summary    → direct percentile labels for dashboards that want precomputed
+//                  p50/p95/p99 per (method, route, status_code, route_group)
+//
+// Security / cardinality notes:
+//   - `maxAgeSeconds` and `ageBuckets` cap memory and prevent unbounded growth
+//     of the internal quantile estimator per label combination.
+//   - Label set is identical to the histogram (method / route / status_code /
+//     route_group), which is already bounded by route-normalisation rules.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const httpRequestDurationSummary = new client.Summary({
+  name: 'http_request_duration_summary_seconds',
+  help: 'Duration of HTTP requests in seconds with precomputed p50 / p95 / p99 percentiles per route',
+  labelNames: ['method', 'route', 'status_code', 'route_group'],
+  percentiles: [0.5, 0.95, 0.99],
+  maxAgeSeconds: 5 * 60,
+  ageBuckets: 5,
+});
+
+// ── Per-route request-timing histogram (FWC26 Stellar Wave) ────────────────────
+//
+// Dedicated per-route request-duration histogram with a focused label set
+// (route / method / status_code) for route-level SLO dashboards.
+//
+// Metric: http_route_duration_seconds
+//   Type:    Histogram
+//   Labels:  route, method, status_code
+//   Buckets: 1 ms → 10 s (tuned for full in-process request cycles)
+//
+// Metric: http_route_duration_summary_seconds
+//   Type:    Summary
+//   Labels:  route, method, status_code  (+ implicit `quantile` label)
+//   Quantiles: 0.50 (p50), 0.95 (p95), 0.99 (p99)
+//
+// The Summary emits p50 / p95 / p99 with a `quantile` label directly in the
+// Prometheus scrape output — consumers can read these without running
+// histogram_quantile().  The Histogram remains available for server-side
+// aggregation and arbitrary-percentile queries via PromQL.
+//
+// Security / cardinality:
+//   - `route` label is sourced from the same normalised route template used
+//     everywhere else (normalizeRouteForMetrics), so UUIDs / numeric IDs /
+//     pathological paths are collapsed to a bounded cardinality.
+//   - Summary `maxAgeSeconds` / `ageBuckets` cap per-label memory usage.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const httpRouteDuration = new client.Histogram({
+  name: 'http_route_duration_seconds',
+  help: 'Per-route request duration histogram in seconds (FWC26 Stellar Wave)',
+  labelNames: ['route', 'method', 'status_code'],
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+const httpRouteDurationSummary = new client.Summary({
+  name: 'http_route_duration_summary_seconds',
+  help: 'Per-route request duration with precomputed p50 / p95 / p99 quantile labels (FWC26 Stellar Wave)',
+  labelNames: ['route', 'method', 'status_code'],
+  percentiles: [0.5, 0.95, 0.99],
+  maxAgeSeconds: 5 * 60,
+  ageBuckets: 5,
+});
+
 // ── HTTP request counter ──────────────────────────────────────────────────────
 
 const httpRequestsTotal = new client.Counter({
@@ -81,7 +148,50 @@ const httpRequestsTotal = new client.Counter({
 });
 
 register.registerMetric(httpRequestDuration);
+register.registerMetric(httpRequestDurationSummary);
+register.registerMetric(httpRouteDuration);
+register.registerMetric(httpRouteDurationSummary);
 register.registerMetric(httpRequestsTotal);
+
+// ── Per-route metric helpers (FWC26 Stellar Wave) ───────────────────────────
+//
+// Expose record helpers so ad-hoc code paths (workers, internal routes,
+// middleware sub-functions) can record per-route timing without going
+// through the full Express middleware stack.
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Manually record a per-route duration observation onto the histogram and
+ * the summary.  Called automatically by `metricsMiddleware` for all
+ * Express-handled requests; exposed directly for non-middleware code paths.
+ *
+ * @param route      – Normalised route template (e.g. `/api/apis/:id`)
+ * @param method     – HTTP verb (GET, POST, …)
+ * @param statusCode – Response status code
+ * @param durationMs – Elapsed time in milliseconds
+ */
+export function recordPerRouteDuration(
+  route: string,
+  method: string,
+  statusCode: number,
+  durationMs: number,
+): void {
+  const labels = {
+    route,
+    method: method.toUpperCase(),
+    status_code: String(statusCode),
+  };
+  const durationSec = durationMs / 1000;
+  httpRouteDuration.observe(labels, durationSec);
+  httpRouteDurationSummary.observe(labels, durationSec);
+}
+
+/** Metric name constants for consumers that build PromQL queries
+ *  programmatically (avoids hard-coding strings in dashboards/tests). */
+export const PER_ROUTE_METRIC_NAMES = {
+  histogram: 'http_route_duration_seconds',
+  summary: 'http_route_duration_summary_seconds',
+} as const;
 
 // ── Gateway upstream profiling ─────────────────────────────────────────────
 //
@@ -183,7 +293,7 @@ const UNKNOWN_ROUTE_SENTINEL = '_unknown';
  * This ensures metrics cardinality stays bounded regardless of URL
  * parameter values, bot activity, or path-scanning attacks.
  */
-function normalizeRouteForMetrics(
+export function normalizeRouteForMetrics(
   matched: string | undefined,
   baseUrl: string | undefined,
   unmatched: string,
@@ -225,7 +335,10 @@ function normalizeRouteForMetrics(
  *   - This prevents cardinality explosion from dynamic path segments, bots, or attacks
  */
 export const metricsMiddleware = (req: Request, res: Response, next: NextFunction): void => {
-  const endTimer = httpRequestDuration.startTimer();
+  const endHistogramTimer = httpRequestDuration.startTimer();
+  const endSummaryTimer = httpRequestDurationSummary.startTimer();
+  const endRouteHistogramTimer = httpRouteDuration.startTimer();
+  const endRouteSummaryTimer = httpRouteDurationSummary.startTimer();
 
   res.on('finish', () => {
     // Normalize the route to a safe cardinality label
@@ -236,16 +349,27 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
     );
 
     const routeGroup = resolveRouteGroup(routePattern);
+    const statusCode = res.statusCode.toString();
+    const method = req.method;
 
     const labels = {
-      method: req.method,
+      method,
       route: routePattern,
-      status_code: res.statusCode.toString(),
+      status_code: statusCode,
       route_group: routeGroup,
     };
 
+    const routeLabels = {
+      route: routePattern,
+      method,
+      status_code: statusCode,
+    };
+
     httpRequestsTotal.inc(labels);
-    endTimer(labels);
+    endHistogramTimer(labels);
+    endSummaryTimer(labels);
+    endRouteHistogramTimer(routeLabels);
+    endRouteSummaryTimer(routeLabels);
   });
 
   next();
@@ -301,7 +425,7 @@ interface MetricEntry {
 
 async function getUpstreamMetricValues(): Promise<MetricEntry[]> {
   const metrics = await register.getMetricsAsJSON();
-  const found = metrics.find((m: any) => m.name === 'gateway_upstream_duration_seconds');
+  const found = metrics.find((m: { name: string }) => m.name === 'gateway_upstream_duration_seconds');
   return (found?.values ?? []) as MetricEntry[];
 }
 
@@ -406,6 +530,9 @@ export function resetUpstreamMetrics(): void {
 /** Exposed for testing — reset all HTTP metrics. */
 export function resetHttpMetrics(): void {
   httpRequestDuration.reset();
+  httpRequestDurationSummary.reset();
+  httpRouteDuration.reset();
+  httpRouteDurationSummary.reset();
   httpRequestsTotal.reset();
 }
 
@@ -496,8 +623,15 @@ const idempotencyStoreRows = new client.Gauge({
   help: 'Current number of rows in the idempotency_store table',
 });
 
+const endpointThroughputSaturationRatio = new client.Gauge({
+  name: 'gateway_endpoint_throughput_saturation_ratio',
+  help: 'Observed throughput divided by advertised limit for a gateway endpoint over the trailing 96h window',
+  labelNames: ['api_id', 'endpoint_id', 'endpoint_path'] as const,
+});
+
 register.registerMetric(proxyPrematureAbortsTotal);
 register.registerMetric(idempotencyStoreRows);
+register.registerMetric(endpointThroughputSaturationRatio);
 
 /** Increment the premature-abort counter. Called by proxyRoutes when a response
  *  emits `close` without a preceding `finish` event. */
@@ -508,6 +642,52 @@ export function recordProxyPrematureAbort(): void {
 /** Update the current number of active idempotency rows for monitoring. */
 export function setIdempotencyStoreRows(value: number): void {
   idempotencyStoreRows.set(value);
+}
+
+interface ThroughputSaturationSample {
+  apiId: string;
+  endpointId: string;
+  endpointPath: string;
+  advertisedLimitPerMinute: number;
+  observedAt: number;
+}
+
+interface ThroughputSaturationSeries {
+  samples: ThroughputSaturationSample[];
+}
+
+const throughputSaturationSamples = new Map<string, ThroughputSaturationSeries>();
+const SATURATION_WINDOW_MS = 96 * 60 * 60 * 1000;
+
+function getThroughputSaturationKey(sample: ThroughputSaturationSample): string {
+  return `${sample.apiId}:${sample.endpointId}:${sample.endpointPath}`;
+}
+
+export function recordEndpointThroughputSaturation(sample: ThroughputSaturationSample): void {
+  if (!Number.isFinite(sample.advertisedLimitPerMinute) || sample.advertisedLimitPerMinute <= 0) {
+    return;
+  }
+
+  const key = getThroughputSaturationKey(sample);
+  const series = throughputSaturationSamples.get(key) ?? { samples: [] };
+  const cutoff = sample.observedAt - SATURATION_WINDOW_MS;
+  const retained = series.samples.filter((value) => value.observedAt >= cutoff);
+  retained.push(sample);
+
+  throughputSaturationSamples.set(key, { samples: retained });
+
+  const throughputPerMinute = retained.length;
+  const ratio = throughputPerMinute / (sample.advertisedLimitPerMinute * (SATURATION_WINDOW_MS / 60_000));
+
+  endpointThroughputSaturationRatio.set(
+    { api_id: sample.apiId, endpoint_id: sample.endpointId, endpoint_path: sample.endpointPath },
+    ratio,
+  );
+}
+
+export function resetThroughputSaturationMetrics(): void {
+  throughputSaturationSamples.clear();
+  endpointThroughputSaturationRatio.reset();
 }
 
 /** Exposed for testing — reset all metrics including upstream and HTTP. */
@@ -528,6 +708,7 @@ export function resetAllMetrics(): void {
   resetUsageAnomalyDetectorMetrics();
   resetReplicaMetrics();
   resetApiKeyLookupMetrics();
+  resetThroughputSaturationMetrics();
 }
 
 // ── Replica routing metrics ───────────────────────────────────────────────────
@@ -686,4 +867,49 @@ export function resetReplicaMetrics(): void {
   dbPrimaryQueriesTotal.reset();
   dbReplicaFallbacksTotal.reset();
   dbReplicaFailuresTotal.reset();
+}
+
+// ── SLO alert metrics ───────────────────────────────────────────────────────
+
+const sloAlerterRunsTotal = new client.Counter({
+  name: 'slo_alerter_runs_total',
+  help: 'Number of SLO alerter poll cycles',
+});
+
+const sloAlertsTotal = new client.Counter({
+  name: 'slo_alerts_total',
+  help: 'Number of SLO alerts fired',
+  labelNames: ['route', 'kind'] as const,
+});
+
+const sloActiveBurns = new client.Gauge({
+  name: 'slo_active_burns',
+  help: 'Number of currently active SLO burns',
+});
+
+const sloRecorderSamplesTotal = new client.Counter({
+  name: 'slo_recorder_samples_total',
+  help: 'Number of recorder samples processed',
+  labelNames: ['route'] as const,
+});
+
+register.registerMetric(sloAlerterRunsTotal);
+register.registerMetric(sloAlertsTotal);
+register.registerMetric(sloActiveBurns);
+register.registerMetric(sloRecorderSamplesTotal);
+
+export function recordSloAlerterRun(): void {
+  sloAlerterRunsTotal.inc();
+}
+
+export function recordSloAlert(route: string, kind: string): void {
+  sloAlertsTotal.labels(route, kind).inc();
+}
+
+export function setSloAlertActiveBurns(count: number): void {
+  sloActiveBurns.set(count);
+}
+
+export function recordSloRecorderSample(route: string): void {
+  sloRecorderSamplesTotal.labels(route).inc();
 }

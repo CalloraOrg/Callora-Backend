@@ -72,6 +72,9 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `WEBHOOK_TIMESTAMP_OUT_OF_WINDOW` | Webhooks |
 | `MALFORMED_WEBHOOK_SIGNATURE` | Webhooks |
 | `INVALID_WEBHOOK_SIGNATURE` | Webhooks |
+| `INVALID_DELIVERY_ID` | Webhooks |
+| `INVALID_RETRY_POLICY` | Webhooks |
+| `DLQ_ENTRY_NOT_FOUND` | Webhooks |
 | `INVALID_IP_FORMAT` | IP allowlist |
 | `IP_NOT_ALLOWED` | IP allowlist |
 | `DATABASE_NOT_AVAILABLE` | DB / infrastructure |
@@ -94,6 +97,9 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `USAGE_AGGREGATE_NOT_FOUND` | Admin usage management |
 | `INVALID_EXPORT_SCHEDULE` | Export schedules |
 | `EXPORT_SCHEDULE_NOT_FOUND` | Export schedules |
+| `MISSING_AUTH_FIELDS` | Auth |
+| `AUTH_NOT_IMPLEMENTED` | Auth |
+| `COMPONENT_NOT_CONFIGURED` | Health / dependency probes |
 <!-- END GENERATED ERROR CODES -->
 
 ## Scope and important caveats

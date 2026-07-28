@@ -12,6 +12,7 @@
 
 import { z } from 'zod';
 import { ConflictError, NotFoundError, ForbiddenError } from '../errors/index.js';
+import { refundsCache } from './refundsCacheWarm.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -189,6 +190,9 @@ export class DisputeService {
       action: 'RESOLVED',
       details: { resolution: input.resolution, notes: input.notes },
     });
+    if (input.resolution === 'REFUNDED') {
+      refundsCache.invalidateAll();
+    }
     return dispute;
   }
 

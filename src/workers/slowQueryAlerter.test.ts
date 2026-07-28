@@ -1,4 +1,6 @@
 import { resetAllMetrics, register } from '../metrics.js';
+import { logger } from '../logger.js';
+import type { Pool } from 'pg';
 import {
   createSlowQueryAlerterJob,
   createDedupStore,
@@ -29,9 +31,13 @@ describe('slowQueryAlerter', () => {
 
   beforeEach(() => {
     originalFetch = global.fetch;
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
+    // `logger` wraps `console.*` at module load time (see logger.ts), so
+    // spying on `console.*` here would never intercept calls made through
+    // `logger`. Spy on `logger` directly instead, matching the convention
+    // used in sloAlertRecorder.test.ts.
+    jest.spyOn(logger, 'info').mockImplementation(() => undefined);
+    jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(logger, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -50,7 +56,7 @@ describe('slowQueryAlerter', () => {
       const expectedRows = [makeRow()];
       const mockPool = {
         query: jest.fn().mockResolvedValue({ rows: expectedRows }),
-      } as any;
+      } as unknown as Pool;
 
       const rows = await fetchSlowQueries(mockPool, 500);
 
@@ -65,7 +71,7 @@ describe('slowQueryAlerter', () => {
     it('returns empty array when no slow queries', async () => {
       const mockPool = {
         query: jest.fn().mockResolvedValue({ rows: [] }),
-      } as any;
+      } as unknown as Pool;
 
       const rows = await fetchSlowQueries(mockPool, 9999);
 
@@ -111,7 +117,7 @@ describe('slowQueryAlerter', () => {
 
   describe('createSlowQueryAlerterJob', () => {
     it('throws on invalid pollIntervalMs', () => {
-      const pool = {} as any;
+      const pool = {} as unknown as Pool;
       expect(() =>
         createSlowQueryAlerterJob(pool, {
           webhookUrl,
@@ -123,7 +129,7 @@ describe('slowQueryAlerter', () => {
     });
 
     it('throws on invalid p95ThresholdMs', () => {
-      const pool = {} as any;
+      const pool = {} as unknown as Pool;
       expect(() =>
         createSlowQueryAlerterJob(pool, {
           webhookUrl,
@@ -135,7 +141,7 @@ describe('slowQueryAlerter', () => {
     });
 
     it('throws on invalid dedupWindowMs', () => {
-      const pool = {} as any;
+      const pool = {} as unknown as Pool;
       expect(() =>
         createSlowQueryAlerterJob(pool, {
           webhookUrl,
@@ -147,7 +153,7 @@ describe('slowQueryAlerter', () => {
     });
 
     it('throws on missing webhookUrl', () => {
-      const pool = {} as any;
+      const pool = {} as unknown as Pool;
       expect(() =>
         createSlowQueryAlerterJob(pool, {
           webhookUrl: '',
@@ -163,10 +169,10 @@ describe('slowQueryAlerter', () => {
         query: jest.fn().mockResolvedValue({
           rows: [makeRow()],
         }),
-      } as any;
+      } as unknown as Pool;
 
       const fetchMock = jest.fn().mockResolvedValue({ ok: true } as Response);
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -176,9 +182,7 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(mockPool.query).toHaveBeenCalledWith(
         expect.stringContaining('pg_stat_statements'),
@@ -202,10 +206,10 @@ describe('slowQueryAlerter', () => {
         query: jest.fn().mockResolvedValue({
           rows: [makeRow({ fingerprint: 'dup-fingerprint' })],
         }),
-      } as any;
+      } as unknown as Pool;
 
       const fetchMock = jest.fn().mockResolvedValue({ ok: true } as Response);
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -215,17 +219,13 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       fetchMock.mockClear();
 
       jest.advanceTimersByTime(300_000);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).not.toHaveBeenCalled();
 
@@ -237,10 +237,10 @@ describe('slowQueryAlerter', () => {
         query: jest.fn().mockResolvedValue({
           rows: [makeRow({ fingerprint: 'recurring-query' })],
         }),
-      } as any;
+      } as unknown as Pool;
 
       const fetchMock = jest.fn().mockResolvedValue({ ok: true } as Response);
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -250,18 +250,14 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       fetchMock.mockClear();
-      mockPool.query.mockClear();
+      (mockPool.query as jest.Mock).mockClear();
 
       jest.advanceTimersByTime(200);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       job.stop();
@@ -278,10 +274,10 @@ describe('slowQueryAlerter', () => {
           await queryPromise;
           return { rows: [makeRow()] };
         }),
-      } as any;
+      } as unknown as Pool;
 
       const fetchMock = jest.fn().mockResolvedValue({ ok: true } as Response);
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -301,12 +297,10 @@ describe('slowQueryAlerter', () => {
       expect(mockPool.query).toHaveBeenCalledTimes(1);
 
       queryResolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       jest.advanceTimersByTime(10);
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(mockPool.query).toHaveBeenCalledTimes(2);
 
@@ -316,7 +310,7 @@ describe('slowQueryAlerter', () => {
     it('respects beginShutdown and does not start ticks', async () => {
       const mockPool = {
         query: jest.fn().mockResolvedValue({ rows: [] }),
-      } as any;
+      } as unknown as Pool;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -337,7 +331,7 @@ describe('slowQueryAlerter', () => {
     it('awaitIdle resolves when no tick is running', async () => {
       const mockPool = {
         query: jest.fn().mockResolvedValue({ rows: [] }),
-      } as any;
+      } as unknown as Pool;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -352,7 +346,7 @@ describe('slowQueryAlerter', () => {
     it('stops and starts cleanly', async () => {
       const mockPool = {
         query: jest.fn().mockResolvedValue({ rows: [] }),
-      } as any;
+      } as unknown as Pool;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -366,7 +360,7 @@ describe('slowQueryAlerter', () => {
       expect(mockPool.query).toHaveBeenCalledTimes(1);
 
       job.stop();
-      mockPool.query.mockClear();
+      (mockPool.query as jest.Mock).mockClear();
 
       jest.advanceTimersByTime(100);
       await Promise.resolve();
@@ -385,10 +379,10 @@ describe('slowQueryAlerter', () => {
         query: jest.fn().mockResolvedValue({
           rows: [makeRow(), makeRow({ fingerprint: 'def456', meanExecTime: 900 })],
         }),
-      } as any;
+      } as unknown as Pool;
 
       const fetchMock = jest.fn().mockResolvedValue({ ok: true } as Response);
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -398,25 +392,23 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       const metrics = await register.getMetricsAsJSON();
       const runsMetric = metrics.find(
-        (m: any) => m.name === 'slow_query_alerter_runs_total',
+        (m: { name: string }) => m.name === 'slow_query_alerter_runs_total',
       );
       expect(runsMetric).toBeDefined();
       expect(runsMetric!.values[0].value).toBe(1);
 
       const alertsMetric = metrics.find(
-        (m: any) => m.name === 'slow_query_alerter_alerts_total',
+        (m: { name: string }) => m.name === 'slow_query_alerter_alerts_total',
       );
       expect(alertsMetric).toBeDefined();
       expect(alertsMetric!.values[0].value).toBe(1);
 
       const gaugeMetric = metrics.find(
-        (m: any) => m.name === 'slow_query_alerter_queries_above_threshold',
+        (m: { name: string }) => m.name === 'slow_query_alerter_queries_above_threshold',
       );
       expect(gaugeMetric).toBeDefined();
       expect(gaugeMetric!.values[0].value).toBe(2);
@@ -429,14 +421,14 @@ describe('slowQueryAlerter', () => {
         query: jest.fn().mockResolvedValue({
           rows: [makeRow()],
         }),
-      } as any;
+      } as unknown as Pool;
 
       const fetchMock = jest.fn().mockResolvedValue({
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
       } as Response);
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -446,11 +438,9 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
-      expect(console.error).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining('[slowQueryAlerter] Webhook returned 500'),
         'Internal Server Error',
       );
@@ -463,10 +453,10 @@ describe('slowQueryAlerter', () => {
         query: jest.fn().mockResolvedValue({
           rows: [makeRow()],
         }),
-      } as any;
+      } as unknown as Pool;
 
       const fetchMock = jest.fn().mockRejectedValue(new Error('network error'));
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -476,11 +466,9 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
-      expect(console.error).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining('[slowQueryAlerter] Webhook post failed:'),
         'network error',
       );
@@ -491,7 +479,7 @@ describe('slowQueryAlerter', () => {
     it('logs error when pool query throws', async () => {
       const mockPool = {
         query: jest.fn().mockRejectedValue(new Error('db connection lost')),
-      } as any;
+      } as unknown as Pool;
 
       const job = createSlowQueryAlerterJob(mockPool, {
         webhookUrl,
@@ -501,11 +489,9 @@ describe('slowQueryAlerter', () => {
       });
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
-      expect(console.error).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining('[slowQueryAlerter] Job failed:'),
         expect.any(Error),
       );

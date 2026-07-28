@@ -1,5 +1,4 @@
 import request from 'supertest';
-import { app } from '../index.js';
 import { z } from 'zod';
 import { validate, validateWithDetails } from '../middleware/validate.js';
 import express from 'express';
@@ -173,9 +172,9 @@ describe('Validation Middleware', () => {
 
       // Check that details contain field names and messages
       const details = response.body.details;
-      expect(details.some((detail: any) => detail.field.includes('body.name'))).toBe(true);
-      expect(details.some((detail: any) => detail.field.includes('body.email'))).toBe(true);
-      expect(details.some((detail: any) => detail.field.includes('body.age'))).toBe(true);
+      expect(details.some((detail: { field: string }) => detail.field.includes('body.name'))).toBe(true);
+      expect(details.some((detail: { field: string }) => detail.field.includes('body.email'))).toBe(true);
+      expect(details.some((detail: { field: string }) => detail.field.includes('body.age'))).toBe(true);
     });
 
     it('should format nested array field paths consistently', async () => {

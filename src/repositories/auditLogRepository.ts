@@ -34,6 +34,7 @@ export interface FindAuditLogsCursorResult {
 
 export interface AuditLogRepository {
   findCursor(params: FindAuditLogsCursorParams): Promise<FindAuditLogsCursorResult>;
+  findById(id: string): Promise<AuditLogEntry | undefined>;
 }
 
 export interface AuditLogRepositoryQueryable {
@@ -157,6 +158,31 @@ export class PgAuditLogRepository implements AuditLogRepository {
     const entries = result.rows.slice(0, params.limit).map(mapAuditLogRow);
 
     return { entries, hasMore };
+  }
+
+  async findById(id: string): Promise<AuditLogEntry | undefined> {
+    const result = await this.read<AuditLogRow>(
+      `
+        SELECT
+          id,
+          event,
+          actor,
+          tenant_id,
+          client_ip,
+          user_agent,
+          correlation_id,
+          body_hash,
+          details,
+          created_at
+        FROM audit_logs
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [id],
+    );
+
+    const row = result.rows[0];
+    return row ? mapAuditLogRow(row) : undefined;
   }
 
   private read<T>(text: string, params?: unknown[]): Promise<{ rows: T[] }> {

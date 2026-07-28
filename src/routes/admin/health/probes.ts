@@ -7,26 +7,26 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { pool as defaultPool } from '../../../../db.js';
-import { config as defaultConfig } from '../../../../config/index.js';
+import type { Pool } from 'pg';
+import { pool as defaultPool } from '../../../db.js';
+import { config as defaultConfig } from '../../../config/index.js';
 import {
   checkDatabase,
   checkSorobanRpc,
   checkHorizon,
   determineOverallStatus,
-  type ComponentStatus,
   type ComponentCheck,
-} from '../../../../services/healthCheck.js';
-import { BadRequestError, NotFoundError, InternalServerError } from '../../../../errors/index.js';
-import { logger } from '../../../../logger.js';
-import { getClientIp } from '../../../../lib/clientIp.js';
-import { validate } from '../../../../middleware/validate.js';
+} from '../../../services/healthCheck.js';
+import { BadRequestError, NotFoundError, InternalServerError } from '../../../errors/index.js';
+import { logger } from '../../../logger.js';
+import { getClientIp } from '../../../lib/clientIp.js';
+import { validate } from '../../../middleware/validate.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
 export interface AdminHealthProbesDeps {
-  pool?: any;
-  config?: any;
+  pool?: Pool;
+  config?: typeof defaultConfig;
 }
 
 const componentParamSchema = z.object({

@@ -3,8 +3,9 @@ import express from 'express';
 import { createDeveloperRouter } from './developerRoutes.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import type { Developer } from '../db/schema.js';
-import type { UpdateDeveloperProfileInput } from '../types/developer.js';
-import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
+import type { UpdateDeveloperProfileInput, SettlementStore } from '../types/developer.js';
+import type { UsageStore } from '../types/gateway.js';
+import type { DeveloperRepository } from '../repositories/developerRepository.js';
 
 const mockSettlementStore = {
   create: jest.fn(),
@@ -43,9 +44,9 @@ const app = express();
 app.use(express.json());
 // Mount the router
 app.use('/api/developers', createDeveloperRouter({
-  settlementStore: mockSettlementStore as any,
-  usageStore: mockUsageStore as any,
-  developerRepository: mockDeveloperRepository as any,
+  settlementStore: mockSettlementStore as unknown as SettlementStore,
+  usageStore: mockUsageStore as unknown as UsageStore,
+  developerRepository: mockDeveloperRepository as unknown as DeveloperRepository,
 }));
 // Error handler to catch UnauthorizedError
 app.use(errorHandler);
@@ -232,148 +233,120 @@ describe('PATCH /api/developers/me', () => {
   });
 });
 
-describe('GET /api/developers/me/keys', () => {
+// ─────────────────────────────────────────────
+// GET /api/developers/exports
+// ─────────────────────────────────────────────
+
+describe('GET /api/developers/exports', () => {
+  const mockReportExporterService = {
+    listExportsForDeveloper: jest.fn(),
+    getSignedUrl: jest.fn(),
+  };
+
+  const exportsApp = express();
+  exportsApp.use(express.json());
+  exportsApp.use(
+    '/api/developers',
+    createDeveloperRouter({
+      settlementStore: mockSettlementStore as unknown as SettlementStore,
+      usageStore: mockUsageStore as unknown as UsageStore,
+      developerRepository: mockDeveloperRepository as unknown as DeveloperRepository,
+      reportExporterService: mockReportExporterService as unknown as import('../services/reportExporter.js').ReportExporterService,
+    }),
+  );
+  exportsApp.use(errorHandler);
+
+  const baseDeveloper = makeDeveloper({ user_id: 'dev-1' });
+
   beforeEach(() => {
     jest.clearAllMocks();
-    apiKeyRepository.clear();
-    // Default: findByUserId returns a developer profile for 'dev-1'
-    mockDeveloperRepository.findByUserId.mockImplementation((userId: string) =>
-      userId === 'dev-1'
-        ? Promise.resolve(makeDeveloper({ user_id: 'dev-1' }))
-        : Promise.resolve(undefined),
-    );
+    mockDeveloperRepository.findByUserId.mockResolvedValue(baseDeveloper);
+    mockReportExporterService.listExportsForDeveloper.mockResolvedValue([]);
+    mockReportExporterService.getSignedUrl.mockReturnValue('https://s3.test/signed-url');
   });
 
   it('returns 401 when unauthenticated', async () => {
-    const res = await request(app).get('/api/developers/me/keys');
+    const res = await request(exportsApp).get('/api/developers/exports');
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 when the authenticated user has no developer profile', async () => {
+  it('returns 403 when the user has no developer profile', async () => {
     mockDeveloperRepository.findByUserId.mockResolvedValue(undefined);
 
-    const res = await request(app)
-      .get('/api/developers/me/keys')
+    const res = await request(exportsApp)
+      .get('/api/developers/exports')
       .set('x-user-id', 'no-profile-user');
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('DEVELOPER_NOT_FOUND');
   });
 
-  it('retrieves only that developer\'s API keys and excludes sensitive fields', async () => {
-    // Create key for dev-1
-    const key1 = apiKeyRepository.create({
-      apiId: 'api-1',
-      userId: 'dev-1',
-      scopes: ['read'],
-      rateLimitPerMinute: null,
-    });
+  it('returns 200 with paginated data array containing the expected fields', async () => {
+    const now = new Date('2026-06-01T12:00:00.000Z');
+    const expires = new Date('2026-06-08T12:00:00.000Z');
 
-    // Create key for dev-2
-    apiKeyRepository.create({
-      apiId: 'api-1',
-      userId: 'dev-2',
-      scopes: ['read'],
-      rateLimitPerMinute: null,
-    });
+    const record = {
+      id: 'rec-1',
+      developerId: 'dev-1',
+      format: 'csv',
+      s3Key: 'daily-exports/dev-1/2026-06-01.csv',
+      exportedAt: now,
+      expiresAt: expires,
+    };
 
-    const res = await request(app)
-      .get('/api/developers/me/keys')
+    mockReportExporterService.listExportsForDeveloper.mockResolvedValue([record]);
+    mockReportExporterService.getSignedUrl.mockReturnValue('https://s3.test/signed-url?expires=999');
+
+    const res = await request(exportsApp)
+      .get('/api/developers/exports')
       .set('x-user-id', 'dev-1');
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].id).toBe(key1.id);
-    expect(res.body.data[0].prefix).toBe(key1.prefix);
-    expect(res.body.data[0].created_at).toBe(key1.createdAt.toISOString());
-    expect(res.body.data[0].last_used_at).toBeNull();
-    expect(res.body.data[0].revoked_at).toBeNull();
+    expect(res.body.pagination).toMatchObject({ limit: 20, offset: 0, total: 1 });
 
-    // Verify only public-safe fields are present
-    const keys = Object.keys(res.body.data[0]);
-    expect(keys).toEqual(expect.arrayContaining(['id', 'prefix', 'created_at', 'last_used_at', 'revoked_at']));
-    expect(keys.length).toBe(5);
-
-    // Verify secret fields are NOT returned
-    expect(res.body.data[0]).not.toHaveProperty('key');
-    expect(res.body.data[0]).not.toHaveProperty('keyHash');
-    expect(res.body.data[0]).not.toHaveProperty('key_hash');
-    expect(res.body.data[0]).not.toHaveProperty('scopes');
-    expect(res.body.data[0]).not.toHaveProperty('userId');
-    expect(res.body.data[0]).not.toHaveProperty('user_id');
-    expect(JSON.stringify(res.body)).not.toContain(key1.key);
-  });
-
-  it('supports cursor-based pagination and correctly updates nextCursor/hasMore', async () => {
-    const now = new Date();
-    // Create 3 keys for dev-1 at distinct timestamps (or different IDs for sorting stability)
-    const key1 = apiKeyRepository.create({ apiId: 'api-1', userId: 'dev-1', scopes: ['*'], rateLimitPerMinute: null });
-    const keysInRepo = apiKeyRepository.listForTesting();
-    
-    // key1 created first (oldest)
-    keysInRepo[0].createdAt = new Date(now.getTime() - 3000);
-    
-    const key2 = apiKeyRepository.create({ apiId: 'api-1', userId: 'dev-1', scopes: ['*'], rateLimitPerMinute: null });
-    keysInRepo[1].createdAt = new Date(now.getTime() - 2000);
-    
-    const key3 = apiKeyRepository.create({ apiId: 'api-1', userId: 'dev-1', scopes: ['*'], rateLimitPerMinute: null });
-    keysInRepo[2].createdAt = new Date(now.getTime() - 1000);
-
-    // Fetch page 1 (limit 2) -> should return key3, key2 (sorted by createdAt desc)
-    const page1 = await request(app)
-      .get('/api/developers/me/keys?limit=2')
-      .set('x-user-id', 'dev-1');
-
-    expect(page1.status).toBe(200);
-    expect(page1.body.data).toHaveLength(2);
-    expect(page1.body.data[0].id).toBe(key3.id);
-    expect(page1.body.data[1].id).toBe(key2.id);
-    expect(page1.body.meta.hasMore).toBe(true);
-    expect(page1.body.meta.nextCursor).toBeTruthy();
-
-    const nextCursor = page1.body.meta.nextCursor;
-
-    // Fetch page 2 using the cursor
-    const page2 = await request(app)
-      .get(`/api/developers/me/keys?limit=2&cursor=${encodeURIComponent(nextCursor)}`)
-      .set('x-user-id', 'dev-1');
-
-    expect(page2.status).toBe(200);
-    expect(page2.body.data).toHaveLength(1);
-    expect(page2.body.data[0].id).toBe(key1.id);
-    expect(page2.body.meta.hasMore).toBe(false);
-    expect(page2.body.meta.nextCursor).toBeNull();
-  });
-
-  it('rejects invalid cursor format', async () => {
-    const res = await request(app)
-      .get('/api/developers/me/keys?cursor=invalid-non-base64-json')
-      .set('x-user-id', 'dev-1');
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('BAD_REQUEST');
-    expect(res.body.message).toBe('Invalid cursor');
-  });
-
-  it('returns revoked keys with revoked_at correctly populated', async () => {
-    const key = apiKeyRepository.create({
-      apiId: 'api-1',
-      userId: 'dev-1',
-      scopes: ['*'],
-      rateLimitPerMinute: null,
+    const item = res.body.data[0];
+    expect(item).toMatchObject({
+      id: 'rec-1',
+      format: 'csv',
+      exportedAt: now.toISOString(),
+      expiresAt: expires.toISOString(),
+      downloadUrl: 'https://s3.test/signed-url?expires=999',
     });
+  });
 
-    apiKeyRepository.revoke(key.id, 'dev-1');
+  it('returns 200 with empty data array when listExportsForDeveloper returns []', async () => {
+    mockReportExporterService.listExportsForDeveloper.mockResolvedValue([]);
 
-    const res = await request(app)
-      .get('/api/developers/me/keys')
+    const res = await request(exportsApp)
+      .get('/api/developers/exports')
       .set('x-user-id', 'dev-1');
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].id).toBe(key.id);
-    expect(res.body.data[0].revoked_at).not.toBeNull();
-    expect(new Date(res.body.data[0].revoked_at).getTime()).toBeCloseTo(Date.now().valueOf(), -3); // Within 1 second
+    expect(res.body.data).toEqual([]);
+    expect(res.body.pagination).toMatchObject({ total: 0 });
+  });
+
+  it('downloadUrl comes from getSignedUrl return value', async () => {
+    const record = {
+      id: 'rec-2',
+      developerId: 'dev-1',
+      format: 'json',
+      s3Key: 'daily-exports/dev-1/2026-06-01.json',
+      exportedAt: new Date('2026-06-01T12:00:00.000Z'),
+      expiresAt: new Date('2026-06-08T12:00:00.000Z'),
+    };
+
+    mockReportExporterService.listExportsForDeveloper.mockResolvedValue([record]);
+    const expectedUrl = 'https://s3.test/specific-signed-url?sig=abc123';
+    mockReportExporterService.getSignedUrl.mockReturnValue(expectedUrl);
+
+    const res = await request(exportsApp)
+      .get('/api/developers/exports')
+      .set('x-user-id', 'dev-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].downloadUrl).toBe(expectedUrl);
+    expect(mockReportExporterService.getSignedUrl).toHaveBeenCalledWith(record, expect.any(Number));
   });
 });
-
