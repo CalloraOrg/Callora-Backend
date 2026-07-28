@@ -140,6 +140,27 @@ This guarantees that every sub-route — `GET /`, `POST /`, `PATCH /:scheduleId`
 Unit tests: `src/middleware/exportsAccessLog.test.ts`
 Route integration tests: `src/routes/exports/schedules.test.ts`
 
+## `/api/exports` Pagination
+
+`GET /api/exports` returns export artifacts newest first using stable keyset
+pagination over `(created_at, id)`, represented by each record's `exportedAt`
+timestamp and `id`.
+
+Query parameters:
+
+| Parameter | Type | Notes |
+| --- | --- | --- |
+| `limit` | integer | Optional, 1-100, defaults to 20 |
+| `cursor` | string | Optional opaque value from `pagination.nextCursor` |
+| `offset` | integer | Legacy fallback when `cursor` is omitted |
+| `format` | `csv` or `json` | Optional format filter applied before pagination |
+| `developerId` | string | Optional, but must match the authenticated developer |
+
+Responses include `pagination.hasMore` and, when another page exists,
+`pagination.nextCursor`. Invalid cursors and pagination parameters return the
+standard error envelope with `error.code = "VALIDATION_ERROR"` and field-level
+details such as `query.cursor`.
+
 Run with:
 
 ```bash

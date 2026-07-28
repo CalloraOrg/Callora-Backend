@@ -5,7 +5,6 @@ import type { ValidationErrorDetail } from './validate.js';
 import { ValidationError } from './validate.js';
 import { buildErrorEnvelope } from './envelope.js';
 import type { ErrorEnvelope } from '../types/ResponseEnvelope.js';
-import { buildErrorEnvelope } from './envelope.js';
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -100,7 +99,7 @@ export function errorHandler(
   }
 
   const details = extractValidationDetails(err);
-  const body = errorEnvelope(code, finalMessage, requestId, details);
+  const body = buildErrorEnvelope(code, finalMessage, requestId, details);
 
   if (!res.headersSent) {
     res.status(statusCode).json(body);
