@@ -92,8 +92,8 @@ describe('GET /api/admin/users — Integration', () => {
     process.env.JWT_SECRET = TEST_JWT_SECRET;
     mockFindUsers.mockResolvedValue({
       users: [
-        { id: 'user-1', email: 'admin@callora.com', role: 'admin' },
-        { id: 'user-2', email: 'dev@callora.com', role: 'developer' },
+        { id: 'user-1', stellar_address: 'admin@callora.com', created_at: new Date('2024-01-01') },
+        { id: 'user-2', stellar_address: 'dev@callora.com', created_at: new Date('2024-01-01') },
       ],
       total: 2,
     });
@@ -431,8 +431,8 @@ describe('ETag / 304 caching on GET /api/admin routes', () => {
     process.env.JWT_SECRET = TEST_JWT_SECRET;
     mockFindUsers.mockResolvedValue({
       users: [
-        { id: 'user-1', email: 'admin@callora.com', role: 'admin' },
-        { id: 'user-2', email: 'dev@callora.com', role: 'developer' },
+        { id: 'user-1', stellar_address: 'admin@callora.com', created_at: new Date('2024-01-01') },
+        { id: 'user-2', stellar_address: 'dev@callora.com', created_at: new Date('2024-01-01') },
       ],
       total: 2,
     });

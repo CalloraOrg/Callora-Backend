@@ -153,7 +153,7 @@ describe('OpenAPI examples — GET /api/usage', () => {
       const examples = getExamples(spec, '/api/usage', 'get', '200');
       for (const [name, ex] of Object.entries(examples)) {
         const val = ex.value!;
-        expect(val.pagination).toBeDefined(`pagination missing in example "${name}"`);
+        expect(val.pagination).toBeDefined();
         expect(typeof val.pagination).toBe('object');
       }
     });
@@ -161,7 +161,7 @@ describe('OpenAPI examples — GET /api/usage', () => {
     it('all 200 examples include a requestId string', () => {
       const examples = getExamples(spec, '/api/usage', 'get', '200');
       for (const [name, ex] of Object.entries(examples)) {
-        expect(typeof ex.value!.requestId).toBe('string', `requestId missing in example "${name}"`);
+        expect(typeof ex.value!.requestId).toBe('string');
       }
     });
   });
@@ -203,7 +203,7 @@ describe('OpenAPI examples — GET /api/usage', () => {
     it('all 400 examples have success=false', () => {
       const examples = getExamples(spec, '/api/usage', 'get', '400');
       for (const [name, ex] of Object.entries(examples)) {
-        expect(ex.value!.success).toBe(false, `success should be false in example "${name}"`);
+        expect(ex.value!.success).toBe(false);
       }
     });
   });
@@ -366,10 +366,10 @@ describe('OpenAPI examples — GET /api/usage/by-endpoint', () => {
     it('all 400 examples have success=false with an error code', () => {
       const examples = getExamples(spec, '/api/usage/by-endpoint', 'get', '400');
       for (const [name, ex] of Object.entries(examples)) {
-        expect(ex.value!.success).toBe(false, `success should be false in example "${name}"`);
+        expect(ex.value!.success).toBe(false);
         const error = ex.value!.error as Record<string, unknown>;
-        expect(typeof error.code).toBe('string', `error.code missing in example "${name}"`);
-        expect(typeof error.message).toBe('string', `error.message missing in example "${name}"`);
+        expect(typeof error.code).toBe('string');
+        expect(typeof error.message).toBe('string');
       }
     });
   });
@@ -439,8 +439,7 @@ describe('OpenAPI spec integrity — usage-related schemas', () => {
       const getMethod = pathObj.get as Record<string, unknown>;
       const responses = getMethod.responses as Record<string, Record<string, unknown>>;
       for (const [code, response] of Object.entries(responses)) {
-        expect((response as Record<string, unknown>).responses).toBeUndefined(
-          `Stray "responses" key found inside status ${code} of GET ${apiPath}`);
+        expect((response as Record<string, unknown>).responses).toBeUndefined();
       }
     }
   });

@@ -174,9 +174,6 @@ export const ErrorCode = {
   /** Webhook URL validation failed */
   WEBHOOK_URL_VALIDATION_FAILED: "WEBHOOK_URL_VALIDATION_FAILED",
 
-  /** Retry policy configuration is invalid */
-  INVALID_RETRY_POLICY: "INVALID_RETRY_POLICY",
-
   /** Webhook signature headers are missing */
   MISSING_WEBHOOK_SIGNATURE_HEADERS: "MISSING_WEBHOOK_SIGNATURE_HEADERS",
 
