@@ -448,3 +448,61 @@ describe('createHealthAccessLogMiddleware', () => {
     }
   });
 });
+
+describe('billingAccessLog re-exports from accessLog', () => {
+  test('exports createBillingAccessLogMiddleware and billingAccessLogMiddleware', () => {
+    const {
+      createBillingAccessLogMiddleware,
+      billingAccessLogMiddleware,
+    } = require('./accessLog.js');
+    expect(typeof createBillingAccessLogMiddleware).toBe('function');
+    expect(typeof billingAccessLogMiddleware).toBe('function');
+  });
+
+  test('re-exported middleware logs structured JSON with req-id, latency, status, size, actor', () => {
+    const {
+      createBillingAccessLogMiddleware,
+      billingLogger,
+    } = require('./accessLog.js');
+    const infoSpy = jest.spyOn(billingLogger, 'info').mockImplementation(() => billingLogger);
+
+    try {
+      const middleware = createBillingAccessLogMiddleware();
+
+      const req = Object.assign(new EventEmitter(), {
+        method: 'POST',
+        path: '/api/billing/deduct',
+        headers: { 'x-request-id': 'reexport-req-1' },
+        id: 'reexport-req-1',
+        body: { developerId: 'dev-777' },
+      }) as unknown as EventEmitter & Request & { id?: string; body: Record<string, unknown> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+        setHeader: jest.fn(),
+        locals: { authenticatedUser: { id: 'user-777' } },
+      }) as unknown as EventEmitter & Response & { statusCode: number; locals: Record<string, unknown> };
+
+      middleware(req, res, jest.fn());
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          'req-id': 'reexport-req-1',
+          requestId: 'reexport-req-1',
+          status: 200,
+          latency: expect.any(Number),
+          size: expect.any(Number),
+          actor: 'user-777',
+        }),
+      );
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+});
+
