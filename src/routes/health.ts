@@ -20,13 +20,17 @@ router.get('/', async (_req, res) => {
 
   if (isCurrentlyUnderMaintenance) {
     res.status(503).json({
-      status: 'MAINTENANCE',
-      version: config.version,
-      timestamp: now.toISOString(),
-      details: {
-        reason: activeMaintenanceWindow.reason,
-        expiresAt: activeMaintenanceWindow.endTime,
-      }
+      items: [{
+        status: 'MAINTENANCE',
+        version: config.version,
+        timestamp: now.toISOString(),
+        details: {
+          reason: activeMaintenanceWindow.reason,
+          expiresAt: activeMaintenanceWindow.endTime,
+        }
+      }],
+      next_cursor: null,
+      total: 1
     });
     return;
   }
@@ -43,7 +47,11 @@ router.get('/', async (_req, res) => {
   });
 
   const statusCode = response.status === 'down' ? 503 : 200;
-  res.status(statusCode).json(response);
+  res.status(statusCode).json({
+    items: [response],
+    next_cursor: null,
+    total: 1
+  });
 });
 
 export default router;
