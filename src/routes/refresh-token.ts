@@ -16,6 +16,7 @@
 
 import { Router } from 'express';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { correlationMiddleware } from '../middleware/correlation.js';
 import { getClientIp, DEFAULT_PROXY_HEADERS } from '../lib/clientIp.js';
 import { encodeCursor, parseCursor } from '../lib/cursorPagination.js';
 import {
@@ -29,19 +30,33 @@ import {
 } from '../errors/index.js';
 import { ValidationError } from '../middleware/validate.js';
 import { logger } from '../logger.js';
-import { getRequestId } from '../utils/asyncContext.js';
 import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
 import { DatabaseRefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
+
+import {
+  createTokenBucketRateLimitMiddleware,
+  TokenBucketRateLimiter,
+} from '../middleware/rateLimit.js';
+import type { RequestHandler } from 'express';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
 export interface RefreshTokenRouterDeps {
   refreshTokenRepository?: RefreshTokenRepository;
+  rateLimitMiddleware?: RequestHandler;
+  rateLimiter?: TokenBucketRateLimiter;
 }
 
 export function createRefreshTokenRouter(deps: RefreshTokenRouterDeps = {}): Router {
   const router = Router();
+  router.use(correlationMiddleware);
   const refreshTokenRepository = deps.refreshTokenRepository ?? new DatabaseRefreshTokenRepository();
+  const rateLimitMiddleware =
+    deps.rateLimitMiddleware ??
+    createTokenBucketRateLimitMiddleware(
+      { capacity: 10, refillRate: 1 },
+      deps.rateLimiter,
+    );
 
   /**
    * GET /api/refresh-token
@@ -74,8 +89,8 @@ export function createRefreshTokenRouter(deps: RefreshTokenRouterDeps = {}): Rou
    *     "timestamp": "2026-..."
    *   }
    */
-  router.get('/', requireAuth, async (req, res, next) => {
-    const requestId = getRequestId();
+  router.get('/', rateLimitMiddleware, requireAuth, async (req, res, next) => {
+    const correlationId = (req as Request & { correlationId?: string }).correlationId;
     const userId = req.developerId || res.locals.authenticatedUser?.id;
 
     if (!userId) {
@@ -130,7 +145,7 @@ export function createRefreshTokenRouter(deps: RefreshTokenRouterDeps = {}): Rou
         userId,
         clientIp: getClientIp(req, TRUST_PROXY, DEFAULT_PROXY_HEADERS),
         userAgent: req.get('User-Agent'),
-        correlationId: requestId,
+        correlationId,
         limit,
         cursorProvided: rawCursor !== undefined,
         count: data.length,
@@ -152,7 +167,7 @@ export function createRefreshTokenRouter(deps: RefreshTokenRouterDeps = {}): Rou
       logger.error('Failed to list refresh tokens', {
         error,
         userId,
-        correlationId: requestId,
+        correlationId,
       });
       next(new InternalServerError('Failed to list refresh tokens'));
     }

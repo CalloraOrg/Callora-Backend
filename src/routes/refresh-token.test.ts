@@ -182,11 +182,22 @@ class MockRefreshTokenRepository implements RefreshTokenRepository {
   }
 }
 
-function buildApp(repository: RefreshTokenRepository) {
+import { TokenBucketRateLimiter } from '../middleware/rateLimit.js';
+
+function buildApp(
+  repository: RefreshTokenRepository,
+  rateLimiter?: TokenBucketRateLimiter,
+) {
   const app = express();
   app.use(requestIdMiddleware);
   app.use(express.json());
-  app.use('/api/refresh-token', createRefreshTokenRouter({ refreshTokenRepository: repository }));
+  app.use(
+    '/api/refresh-token',
+    createRefreshTokenRouter({
+      refreshTokenRepository: repository,
+      rateLimiter,
+    }),
+  );
   app.use(errorHandler);
   return app;
 }
@@ -454,5 +465,173 @@ describe('GET /api/refresh-token', () => {
         hasMore: false,
       }),
     );
+  });
+
+  describe('X-Correlation-Id propagation (issue #957)', () => {
+    it('always sets X-Correlation-Id response header', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+
+      const res = await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['x-correlation-id']).toBeDefined();
+      expect(typeof res.headers['x-correlation-id']).toBe('string');
+      expect(res.headers['x-correlation-id'].length).toBeGreaterThan(0);
+    });
+
+    it('propagates client-supplied x-correlation-id in response header', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+      const clientCorrelationId = 'client-corr-test-abc-123';
+
+      const res = await request(app)
+        .get('/api/refresh-token')
+        .set(authHeader)
+        .set('x-correlation-id', clientCorrelationId);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
+    });
+
+    it('includes correlation ID in structured log output', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+
+      await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'LIST_REFRESH_TOKENS',
+        expect.objectContaining({
+          correlationId: expect.any(String),
+        }),
+      );
+    });
+
+    it('includes correlation ID in error log when repository fails', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      jest.spyOn(repo, 'listRefreshTokens').mockRejectedValue(new Error('DB error'));
+      const app = buildApp(repo);
+
+      await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to list refresh tokens',
+        expect.objectContaining({
+          correlationId: expect.any(String),
+        }),
+      );
+    });
+  });
+
+  describe('Token-Bucket Rate Limiting (issue #930)', () => {
+    it('allows requests within capacity and rejects with HTTP 429 when capacity is exceeded', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      // Limiter with capacity 2, refill rate 1 token/sec
+      const limiter = new TokenBucketRateLimiter(2, 1);
+      const app = buildApp(repo, limiter);
+
+      // First 2 requests succeed (capacity: 2)
+      const res1 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res1.status).toBe(200);
+
+      const res2 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res2.status).toBe(200);
+
+      // 3rd request exceeds capacity
+      const res3 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res3.status).toBe(429);
+      expect(res3.body).toEqual(
+        expect.objectContaining({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Too Many Requests',
+        }),
+      );
+      expect(res3.body).toHaveProperty('requestId');
+      expect(res3.body).toHaveProperty('retryAfterMs');
+    });
+
+    it('returns Retry-After header in whole seconds reflecting refill time', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      // Capacity 1, refill rate 0.5 (takes 2 seconds to refill 1 token)
+      const limiter = new TokenBucketRateLimiter(1, 0.5);
+      const app = buildApp(repo, limiter);
+
+      const res1 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res1.status).toBe(200);
+
+      const res2 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res2.status).toBe(429);
+
+      // Retry-After header must be present and formatted as whole seconds string
+      const retryAfterHeader = res2.headers['retry-after'];
+      expect(retryAfterHeader).toBeDefined();
+      expect(/^\d+$/.test(retryAfterHeader)).toBe(true);
+      const seconds = parseInt(retryAfterHeader, 10);
+      expect(seconds).toBeGreaterThanOrEqual(1);
+    });
+
+    it('enforces rate limit per-user in isolation', async () => {
+      const repo = new MockRefreshTokenRepository([
+        makeToken({ userId: 'user-A' }),
+        makeToken({ userId: 'user-B' }),
+      ]);
+      const limiter = new TokenBucketRateLimiter(1, 1);
+      const app = buildApp(repo, limiter);
+
+      // User A consumes their token
+      const resA1 = await request(app).get('/api/refresh-token').set('x-user-id', 'user-A');
+      expect(resA1.status).toBe(200);
+
+      const resA2 = await request(app).get('/api/refresh-token').set('x-user-id', 'user-A');
+      expect(resA2.status).toBe(429);
+
+      // User B should NOT be blocked by User A's rate limit
+      const resB1 = await request(app).get('/api/refresh-token').set('x-user-id', 'user-B');
+      expect(resB1.status).toBe(200);
+    });
+
+    it('falls back to client IP for rate limiting key when no user auth is present', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      const limiter = new TokenBucketRateLimiter(1, 1);
+      const app = buildApp(repo, limiter);
+
+      // First unauthenticated request consumes IP bucket, proceeds to auth middleware and returns 401
+      const res1 = await request(app).get('/api/refresh-token');
+      expect(res1.status).toBe(401);
+
+      // Second request from same IP exceeds bucket capacity and returns 429
+      const res2 = await request(app).get('/api/refresh-token');
+      expect(res2.status).toBe(429);
+      expect(res2.headers['retry-after']).toBeDefined();
+    });
+
+    it('logs structured warning with correlation ID when rate limit is exceeded', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      const limiter = new TokenBucketRateLimiter(1, 1);
+      const app = buildApp(repo, limiter);
+
+      await request(app).get('/api/refresh-token').set(authHeader).set('x-request-id', 'req-corr-999');
+      await request(app).get('/api/refresh-token').set(authHeader).set('x-request-id', 'req-corr-999');
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[tokenBucketRateLimit] request limit exceeded',
+        expect.objectContaining({
+          key: `user:${USER_ID}`,
+          requestId: 'req-corr-999',
+        }),
+      );
+    });
+
+    it('returns 500 InternalServerError when repository listRefreshTokens throws unexpected error', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      jest.spyOn(repo, 'listRefreshTokens').mockRejectedValue(new Error('DB Connection Failed'));
+      const app = buildApp(repo);
+
+      const res = await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+    });
   });
 });

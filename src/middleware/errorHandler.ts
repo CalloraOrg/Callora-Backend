@@ -94,7 +94,7 @@ export function errorHandler(
   const requestId = req.id || "unknown";
 
   let finalMessage = rawMessage;
-  if (isProduction && !isAppError(err)) {
+  if (process.env.NODE_ENV !== "development" && !isAppError(err)) {
     finalMessage = "Internal server error";
   }
 

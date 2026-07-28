@@ -7,6 +7,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { envelopeMiddleware } from '../middleware/envelope.js';
 import { createForecastRouter } from './forecast.js';
+import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { defaultAuditService } from '../services/auditService.js';
 import jwt from 'jsonwebtoken';
 
@@ -537,6 +538,46 @@ describe('Forecast Routes with Audit Logging', () => {
 
       const auditCall = mockAuditService.record.mock.calls[0][0];
       expect(auditCall.userAgent).toBe('TestClient/1.0');
+    });
+  });
+
+  // =========================================================================
+  // Per-request Timeout & Cooperative Abort (issue #935)
+  // =========================================================================
+
+  describe('Per-request Timeout & Cooperative Cancellation (#935)', () => {
+    it('should complete request normally when execution is within timeout limit', async () => {
+      const timeoutApp = express();
+      timeoutApp.use(express.json());
+      timeoutApp.use('/api/forecast', createForecastRouter(5000));
+      timeoutApp.use(errorHandler);
+
+      const res = await request(timeoutApp).get('/api/forecast');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('data');
+    });
+
+    it('should return 504 GATEWAY_TIMEOUT when request times out', async () => {
+      const timeoutApp = express();
+      timeoutApp.use(express.json());
+
+      const router = express.Router();
+      router.use(createTimeoutMiddleware({ durationMs: 50 }));
+      router.get('/test-timeout', (req, _res) => {
+        expect(req.signal).toBeDefined();
+        expect(req.abortSignal).toBeDefined();
+        // Leave hanging to let timeout middleware fire 504
+      });
+
+      timeoutApp.use('/api/forecast', router);
+      timeoutApp.use(errorHandler);
+
+      const res = await request(timeoutApp).get('/api/forecast/test-timeout');
+
+      expect(res.status).toBe(504);
+      expect(res.body.code).toBe('GATEWAY_TIMEOUT');
+      expect(res.body.message).toMatch(/timed out after 50ms/i);
     });
   });
 });

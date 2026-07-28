@@ -5,6 +5,7 @@ import { cursorPaginatedResponse } from '../../lib/pagination.js';
 import { AppError, InternalServerError } from '../../errors/index.js';
 import { validate, ValidationError } from '../../middleware/validate.js';
 import { etagMiddleware } from '../../middleware/etag.js';
+import { securityHeadersMiddleware } from '../../middleware/securityHeaders.js';
 import { logger } from '../../logger.js';
 import { PgAuditLogRepository, type AuditLogRepository } from '../../repositories/auditLogRepository.js';
 import { auditQuerySchema } from '../../validators/audit.js';
@@ -20,6 +21,7 @@ export function createAdminAuditRouter(deps: AdminAuditRouterDeps = {}): Router 
   const router = Router();
   const auditLogRepository = deps.auditLogRepository ?? new PgAuditLogRepository();
 
+  router.use(securityHeadersMiddleware);
   router.use('/replay', createAdminAuditReplayRouter(deps));
 
   router.get(

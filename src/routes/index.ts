@@ -15,6 +15,7 @@ import { createLimitsRouter } from "./limits.js";
 import { InMemoryRestRateLimiter } from "../middleware/restRateLimit.js";
 import { createUsageCsvRouter } from "./usage/csv.js";
 import { createUsageByEndpointRouter } from "./usage/byEndpoint.js";
+import { createUsageAggregateRouter } from "./usage/aggregate.js";
 import { createExportSchedulesRouter } from "./exports/schedules.js";
 import { createExportsRouter } from "./exports.js";
 import type { ScheduledExportsService } from "../services/scheduledExports.js";
@@ -25,8 +26,10 @@ import type { SubscriptionRepository } from "../repositories/subscriptionReposit
 import type { DeveloperRepository } from "../repositories/developerRepository.js";
 import type { ApiRepository } from "../repositories/apiRepository.js";
 import { createForecastRouter } from "./forecast.js";
+import { createErrorsRouter } from "./errors.js";
 import { config } from "../config/index.js";
 import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
+import type { AuditService } from "../services/auditService.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
 const openApiSpec = JSON.parse(readFileSync(openApiPath, "utf8"));
@@ -42,6 +45,7 @@ export interface ApiRouterDeps
   developerRepository?: DeveloperRepository;
   apiRepository?: ApiRepository;
   usageSseBroadcaster?: UsageSseBroadcaster;
+  auditService?: AuditService;
 }
 
 export function createApiRouter(deps: ApiRouterDeps = {}): Router {
@@ -49,6 +53,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use("/health", healthRouter);
   router.use("/spike", createSpikeRouter());
+  router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
 
   router.use(
     "/apis",
@@ -74,6 +79,13 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   );
 
   router.use(
+    "/usage/aggregate",
+    createUsageAggregateRouter({
+      usageEventsRepository: deps.usageEventsRepository!,
+    }),
+  );
+
+  router.use(
     "/usage/sse",
     createUsageSseRouter({
       broadcaster: deps.usageSseBroadcaster,
@@ -87,7 +99,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     }),
   );
 
-  router.use("/forecast", createForecastRouter());
+
 
   if (deps.scheduledExportsService) {
     router.use(
@@ -134,7 +146,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   // Per-user billing rate limiter (100 requests per 60 seconds by default).
   const billingRateLimiter = createBillingRateLimitMiddleware(
-    config.billingRateLimit,
+    config.creditsRateLimit.billingRateLimit,
   );
   billingMiddlewares.push(billingRateLimiter);
   if (billingConcurrency) {
@@ -156,7 +168,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     router.use("/billing/portal", createBillingPortalRouter());
   }
 
-  router.use("/refunds", createRefundsCountsRouter());
+
 
   if (deps.restRateLimiter) {
     router.use("/limits", createLimitsRouter(deps.restRateLimiter).router);

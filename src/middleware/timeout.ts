@@ -2,17 +2,27 @@ import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
 
 export interface TimeoutMiddlewareOptions {
-  timeoutMs: number;
+  timeoutMs?: number;
+  durationMs?: number;
 }
 
 export function createTimeoutMiddleware(
   options: TimeoutMiddlewareOptions
 ): (req: Request, res: Response, next: NextFunction) => void {
-  const { timeoutMs } = options;
+  const timeoutMs = options.timeoutMs ?? options.durationMs ?? 5000;
 
   return (req: Request, res: Response, next: NextFunction): void => {
     const controller = new AbortController();
     req.abortSignal = controller.signal;
+    try {
+      Object.defineProperty(req, 'signal', {
+        value: controller.signal,
+        configurable: true,
+        writable: true,
+      });
+    } catch {
+      // Fallback if property is already defined
+    }
 
     const timer = setTimeout(() => {
       controller.abort();

@@ -125,6 +125,12 @@ export const subscriptions = sqliteTable('subscriptions', {
   status: text('status', { enum: subscriptionStatusEnum }).notNull().default('active'),
   /** Maximum calls per calendar month. NULL means unlimited. */
   metering_limit: integer('metering_limit'),
+  /**
+   * Per-subscription webhook retry policy override.
+   * Stored as a JSON string: { maxRetries?: number, baseDelayMs?: number }.
+   * NULL means use the platform default (maxRetries: 5, baseDelayMs: 1000 ms).
+   */
+  retry_policy: text('retry_policy'),
   created_at: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

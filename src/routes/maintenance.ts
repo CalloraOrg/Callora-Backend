@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   createMaintenanceCorsMiddleware,
 } from '../middleware/cors.js';
+import { maintenanceHistogramMiddleware } from '../middleware/metricsHistogram.js';
 import { logger } from '../logger.js';
 import { getRequestId, successEnvelope } from '../lib/envelope.js';
 import { activeMaintenanceWindow } from './admin/maintenance.js';
@@ -24,6 +25,7 @@ const maintenanceCors = createMaintenanceCorsMiddleware();
 export const publicMaintenanceRouter = Router();
 
 publicMaintenanceRouter.use(maintenanceCors);
+publicMaintenanceRouter.use(maintenanceHistogramMiddleware);
 
 /**
  * GET /api/maintenance — return the current maintenance window state.

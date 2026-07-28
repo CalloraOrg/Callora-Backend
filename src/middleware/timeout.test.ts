@@ -91,7 +91,9 @@ describe('createTimeoutMiddleware', () => {
       async (_req, res) => {
         // Wait longer than the timeout, then try to respond
         await new Promise((r) => setTimeout(r, 100));
-        res.status(200).json({ status: 'too-late' });
+        if (!res.headersSent) {
+          res.status(200).json({ status: 'too-late' });
+        }
       }
     );
     app.use(errorHandler);
@@ -111,5 +113,23 @@ describe('createTimeoutMiddleware', () => {
     // Should complete normally without firing the timer
     const res = await request(app).get('/fast');
     expect(res.status).toBe(200);
+  });
+
+  it('supports durationMs option and populates both req.signal and req.abortSignal', async () => {
+    const app = express();
+    let capturedSignal: AbortSignal | undefined;
+    let capturedAbortSignal: AbortSignal | undefined;
+
+    app.get('/duration-option', createTimeoutMiddleware({ durationMs: 50 }), (req, _res) => {
+      capturedSignal = req.signal;
+      capturedAbortSignal = req.abortSignal;
+    });
+    app.use(errorHandler);
+
+    const res = await request(app).get('/duration-option');
+    expect(res.status).toBe(504);
+    expect(capturedSignal).toBeDefined();
+    expect(capturedAbortSignal).toBeDefined();
+    expect(capturedSignal).toBe(capturedAbortSignal);
   });
 });

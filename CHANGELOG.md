@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Propagated `X-Correlation-Id` across the quota self-service routes and outbound webhook dispatches so quota requests and related notifications can be traced end-to-end.
 - Removed a broken, unmounted CORS middleware call and a duplicate import from `src/routes/billing.ts` that were left over from a conflicted merge and failed to compile.
 - Removed a duplicated, syntactically invalid test block in `src/middleware/etag.test.ts` that was blocking `tsc --noEmit` for the entire project.
 - Return `400 BAD_REQUEST` from `POST /api/billing/deduct` when a client provides a null or empty `developerId` instead of allowing the request to proceed into billing logic.
