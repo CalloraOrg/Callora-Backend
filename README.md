@@ -153,6 +153,7 @@ The migration is in `migrations/0019_disputes.sql` (rollback: `migrations/0019_d
 - Multi-region read-replica routing: optional round-robin routing of SELECT queries to PostgreSQL read replicas via `REPLICA_URLS`; writes always use the primary; automatic fallback to primary on replica failure (see [docs/replica-routing.md](./docs/replica-routing.md))
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - Per-user global REST rate limiting for authenticated `/api/billing`, `/api/usage`, `/api/developers`, `/api/vault`, and `/api/keys` traffic, with IP fallback for unauthenticated requests
+- Per-user token-bucket rate limiting for all `/api/quotas` traffic (capacity and refill rate independently configurable via `QUOTA_RATE_LIMIT_CAPACITY` / `QUOTA_RATE_LIMIT_REFILL_RATE`); exceeded requests return `HTTP 429` with a `Retry-After` header and the standardised error envelope
 - In-memory `VaultRepository` with:
   - `create(userId, contractId, network)`
   - `findByUserId(userId, network)`
@@ -437,6 +438,8 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 | `RATE_LIMIT_WINDOW_MS` | No | `60000` | Token-bucket refill window for `RATE_LIMIT_MAX_REQUESTS` (ms) |
 | `RATE_LIMIT_STORE` | No | `memory` | `memory` or `postgres`. Use `postgres` to share bucket state across multiple gateway instances |
 | `RATE_LIMIT_PG_TABLE` | No | `gateway_rate_limit_buckets` | Table name used when `RATE_LIMIT_STORE=postgres` (auto-created) |
+| `QUOTA_RATE_LIMIT_CAPACITY` | No | `60` | Token-bucket burst capacity for all `/api/quotas` endpoints (per user / IP) |
+| `QUOTA_RATE_LIMIT_REFILL_RATE` | No | `1` | Tokens added per second to each `/api/quotas` bucket; governs steady-state request rate |
 | `CORS_ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed origins |
 | `SOROBAN_RPC_ENABLED` | No | `false` | Enable Soroban RPC health check |
 | `SOROBAN_RPC_URL` | If `SOROBAN_RPC_ENABLED=true` | — | Soroban RPC endpoint URL |

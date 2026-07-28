@@ -59,6 +59,7 @@ import { createDependenciesRouter } from "./routes/health/dependencies.js";
 import { createRateLimitHealthRouter } from "./routes/rate-limit/health.js";
 import quotaRequestsRouter from "./routes/quota/requests.js";
 import quotaCountsRouter from "./routes/quotas/counts.js";
+import { createQuotasRouter } from "./routes/quotas.js";
 import { parsePagination, paginatedResponse } from "./lib/pagination.js";
 import {
   InMemoryVaultRepository,
@@ -414,7 +415,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
   app.use("/api/quota/requests", quotaRequestsRouter);
-  app.use("/api/quotas/counts", quotaCountsRouter);
+  // /api/quotas — quota status endpoints with per-user token-bucket rate limiting
+  // (capacity and refill rate controlled by QUOTA_RATE_LIMIT_CAPACITY / QUOTA_RATE_LIMIT_REFILL_RATE)
+  app.use("/api/quotas", createQuotasRouter());
 
 
   // Prometheus metrics endpoint — auth-gated in production
