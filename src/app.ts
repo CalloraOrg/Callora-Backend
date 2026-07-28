@@ -22,6 +22,7 @@ import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createPluginsRouter } from './routes/marketplace/plugins.js';
+import { createLogsRouter } from './routes/logs.js';
 import { pool } from './db.js';
 import {
   InMemoryUsageEventsRepository,
@@ -416,6 +417,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   app.use("/api/quota/requests", quotaRequestsRouter);
   app.use("/api/quotas/counts", quotaCountsRouter);
 
+  // Developer-facing logs — X-Correlation-Id is propagated through every
+  // handler in this router via the correlationMiddleware so that callers
+  // can correlate multi-hop request chains.
+  app.use("/api/logs", createLogsRouter());
 
   // Prometheus metrics endpoint — auth-gated in production
   app.get("/api/metrics", metricsEndpoint);
