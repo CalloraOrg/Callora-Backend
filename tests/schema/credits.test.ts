@@ -97,10 +97,10 @@ jest.mock('../../src/logger', () => ({
 }));
 
 // ---- import modules AFTER mocks are configured ----
-import creditsRouter, { resetCreditsRateLimit } from '../../src/routes/billing/credits';
-import { errorHandler } from '../../src/middleware/errorHandler';
-import { defaultCreditsRepository } from '../../src/repositories/creditsRepository';
-import type { Credit } from '../../src/db/schema';
+import creditsRouter, { resetCreditsRateLimit } from '../../src/routes/billing/credits.js';
+import { errorHandler } from '../../src/middleware/errorHandler.js';
+import { defaultCreditsRepository } from '../../src/repositories/creditsRepository.js';
+import type { Credit } from '../../src/db/schema.js';
 
 // Fixed timestamps for deterministic snapshot output
 const FIXED_CREATED_AT = new Date('2026-01-01T00:00:00.000Z');

@@ -11,11 +11,18 @@ import {
 import { AppError, BadRequestError, NotFoundError } from '../errors/index.js';
 import { createRestRateLimitMiddleware } from '../middleware/restRateLimit.js';
 import { createWebhookAccessLogMiddleware } from '../middleware/webhookAccessLog.js';
+import { validate } from '../middleware/validate.js';
 import { config } from '../config/index.js';
 import { logger } from '../logger.js';
 import { validateRetryPolicy } from '../services/webhookRetry.js';
 import { createWebhookHealthRouter } from '../routes/webhooks/health.js';
 import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
+import {
+  registerWebhookSchema,
+  webhookDeveloperParamsSchema,
+  updateWebhookRetryPolicySchema,
+  webhookDeliveryPayloadSchema,
+} from '../validators/webhooks.js';
 
 const router = Router();
 

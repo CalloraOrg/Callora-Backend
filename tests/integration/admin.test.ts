@@ -92,8 +92,8 @@ describe('GET /api/admin/users — Integration', () => {
     process.env.JWT_SECRET = TEST_JWT_SECRET;
     mockFindUsers.mockResolvedValue({
       users: [
-        { id: 'user-1', email: 'admin@callora.com', role: 'admin' },
-        { id: 'user-2', email: 'dev@callora.com', role: 'developer' },
+        { id: 'user-1', stellar_address: 'GADMIN...STELLAR', created_at: new Date('2024-01-01T00:00:00Z') },
+        { id: 'user-2', stellar_address: 'GDEV...STELLAR', created_at: new Date('2024-01-02T00:00:00Z') },
       ],
       total: 2,
     });
@@ -123,10 +123,11 @@ describe('GET /api/admin/users — Integration', () => {
       .set('x-admin-api-key', TEST_ADMIN_API_KEY);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('data');
-    expect(res.body).toHaveProperty('meta');
-    expect(res.body.data).toHaveLength(2);
-    expect(res.body.meta.total).toBe(2);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveProperty('data');
+    expect(res.body.data).toHaveProperty('meta');
+    expect(res.body.data.data).toHaveLength(2);
+    expect(res.body.data.meta.total).toBe(2);
     expect(mockFindUsers).toHaveBeenCalledTimes(1);
     expect(logger.audit).toHaveBeenCalledWith(
       'LIST_USERS',
@@ -152,7 +153,7 @@ describe('GET /api/admin/users — Integration', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data.data).toHaveLength(2);
     expect(logger.audit).toHaveBeenCalledWith(
       'LIST_USERS',
       'admin-1',
@@ -385,8 +386,9 @@ describe('GET /api/admin/quota/requests — Integration', () => {
       .set('x-admin-api-key', TEST_ADMIN_API_KEY);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('data');
-    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveProperty('data');
+    expect(Array.isArray(res.body.data.data)).toBe(true);
     expect(logger.audit).toHaveBeenCalledWith(
       'LIST_QUOTA_REQUESTS',
       'admin-api-key',

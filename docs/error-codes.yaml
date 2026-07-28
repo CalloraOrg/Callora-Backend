@@ -337,6 +337,10 @@ error_codes:
     section: Quota self-service
     description: Quota request is invalid
 
+  - code: BULK_QUOTA_UPDATE_FAILED
+    section: Quota self-service
+    description: One or more operations in a bulk quota update request failed validation
+
   # HTTP fallback derived codes
   - code: REQUEST_TIMEOUT
     section: HTTP fallback derived codes referenced by documentation

@@ -74,7 +74,7 @@ const FIXED_REQUEST_ID = '00000000-0000-4000-8000-000000000001';
 
 const USERS_SUCCESS_KEYS = ['data', 'meta'];
 const USERS_META_KEYS = ['limit', 'offset', 'total'];
-const USER_ITEM_KEYS = ['email', 'id', 'role'];
+const USER_ITEM_KEYS = ['created_at', 'id', 'stellar_address'];
 const USAGE_SNAPSHOT_KEYS = [
   'apiCount',
   'developerId',
@@ -128,8 +128,8 @@ describe('/api/admin — response schema stability', () => {
 
     mockFindUsers.mockResolvedValue({
       users: [
-        { id: 'user-admin', email: 'admin@callora.test', role: 'admin' },
-        { id: 'user-dev', email: 'dev@callora.test', role: 'developer' },
+        { id: 'user-admin', stellar_address: 'GADMIN...STELLAR', created_at: new Date('2024-01-01T00:00:00.000Z') },
+        { id: 'user-dev', stellar_address: 'GDEV...STELLAR', created_at: new Date('2024-01-02T00:00:00.000Z') },
       ],
       total: 2,
     });

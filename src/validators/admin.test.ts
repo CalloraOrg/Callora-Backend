@@ -685,7 +685,7 @@ jest.mock('../logger', () => ({
 function buildApp(
   mountPath: string,
   router: express.Router,
-): supertest.SuperTest<supertest.Test> {
+): supertest.Agent {
   const app = express();
   app.use(express.json());
   app.use(requestIdMiddleware);

@@ -20,7 +20,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import request from 'supertest';
 import { Pool, Client } from 'pg';
-import { GenericContainer, Network, Wait } from 'testcontainers';
+import { GenericContainer, Network, StartedTestContainer, Wait } from 'testcontainers';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -41,7 +41,7 @@ const __dirname = path.dirname(__filename);
 const TEST_JWT_SECRET = 'test-secret-key-for-e2e-integration-tests';
 
 interface TestContext {
-  container: GenericContainer;
+  container: StartedTestContainer;
   pool: Pool;
   dbHost: string;
   dbPort: number;
@@ -172,7 +172,7 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
         POSTGRES_PASSWORD: 'testpassword',
       })
       .withExposedPorts(5432)
-      .waitingFor(Wait.forLogMessage(/database system is ready to accept connections/));
+      .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/));
 
     const startedContainer = await container.start();
     const host = startedContainer.getHost();

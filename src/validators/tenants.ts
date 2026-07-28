@@ -6,8 +6,8 @@ const tenantIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/;
 const trimmedString = (fieldName: string, maxLength: number) =>
   z
     .string({
-      required_error: `${fieldName} is required`,
-      invalid_type_error: `${fieldName} must be a string`,
+      error: (issue) =>
+        issue.input === undefined ? `${fieldName} is required` : `${fieldName} must be a string`,
     })
     .trim()
     .min(1, `${fieldName} is required`)
@@ -15,15 +15,15 @@ const trimmedString = (fieldName: string, maxLength: number) =>
 
 export const tenantIdSchema = z
   .string({
-    required_error: 'tenantId is required',
-    invalid_type_error: 'tenantId must be a string',
+    error: (issue) =>
+      issue.input === undefined ? 'tenantId is required' : 'tenantId must be a string',
   })
   .trim()
   .regex(tenantIdPattern, 'tenantId must be 3-64 characters using letters, numbers, underscores, or hyphens');
 
 export const tenantSlugSchema = z
   .string({
-    invalid_type_error: 'slug must be a string',
+    error: () => 'slug must be a string',
   })
   .trim()
   .toLowerCase()

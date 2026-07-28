@@ -27,7 +27,7 @@ import type { Socket } from "net";
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
-import { createWebhooksRouter } from './routes/webhooks.js';
+import webhooksRouter from './webhooks/webhook.routes.js';
 import adminRouter from './routes/admin.js';
 import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
 import { defaultDeveloperRepository } from './repositories/developerRepository.js';
@@ -234,7 +234,7 @@ if (isDirectExecution) {
   app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
 
   // Webhook management routes
-  app.use('/api/webhooks', createWebhooksRouter());
+  app.use('/api/webhooks', webhooksRouter);
 
   app.use('/api/admin', adminRouter);
 

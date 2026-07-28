@@ -197,6 +197,10 @@ class MockApiRegistry implements ApiRegistry {
     );
   }
 
+  list(): { entries: ApiRegistryEntry[]; nextCursor: string | null } {
+    return { entries: Array.from(this.apis.values()), nextCursor: null };
+  }
+
   clear(): void {
     this.apis.clear();
   }
@@ -1492,6 +1496,10 @@ class DatabaseApiRegistry implements ApiRegistry {
   }
 
   register(): void {
+    throw new Error("Not implemented for integration test");
+  }
+
+  list(): { entries: ApiRegistryEntry[]; nextCursor: string | null } {
     throw new Error("Not implemented for integration test");
   }
 }

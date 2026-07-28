@@ -2,6 +2,7 @@ import request from 'supertest';
 import { z } from 'zod';
 import { createApp } from '../../src/app.js';
 import { envelopeSchema, errorEnvelopeSchema, successEnvelopeSchema } from '../../src/middleware/envelope.js';
+import type { UpdateDeveloperProfileInput } from '../../src/types/developer.js';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-contract-uuid' }));
 
@@ -235,8 +236,18 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
         updated_at: new Date(),
       };
     },
-    async upsertProfile(userId: string, data: unknown) {
-      return { id: 1, user_id: userId, ...(typeof data === 'object' && data !== null ? data : {}), updated_at: new Date() };
+    async upsertProfile(userId: string, data: UpdateDeveloperProfileInput) {
+      return {
+        id: 1,
+        user_id: userId,
+        name: data.name ?? null,
+        website: data.website ?? null,
+        description: data.description ?? null,
+        category: data.category ?? null,
+        plan_overrides: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      };
     },
   };
 

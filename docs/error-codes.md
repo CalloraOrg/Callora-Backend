@@ -90,6 +90,7 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `QUOTA_REQUEST_NOT_FOUND` | Quota self-service |
 | `QUOTA_REQUEST_ALREADY_RESOLVED` | Quota self-service |
 | `INVALID_QUOTA_REQUEST` | Quota self-service |
+| `BULK_QUOTA_UPDATE_FAILED` | Quota self-service |
 | `REQUEST_TIMEOUT` | HTTP fallback derived codes referenced by documentation |
 | `REQUEST_BODY_TOO_LARGE` | HTTP fallback derived codes referenced by documentation |
 | `UNSUPPORTED_MEDIA_TYPE` | HTTP fallback derived codes referenced by documentation |
