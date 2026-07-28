@@ -50,7 +50,7 @@ export class InMemoryApiRegistry implements ApiRegistry {
             e.id === decoded.id,
         );
         if (startIndex === -1) startIndex = 0;
-        else startIndex += 1; // skip past the cursor entry
+        else startIndex += 1;
       }
     }
 
