@@ -1,4 +1,4 @@
-import type { NextFunction, Request, Response } from 'express';
+import type { NextFunction, Request, Response, RequestHandler } from 'express';
 import type { Pool } from 'pg';
 import { createHash } from 'crypto';
 import { config } from '../config/index.js';
@@ -342,3 +342,15 @@ export async function idempotencyMiddleware(
     next(error);
   }
 }
+
+/**
+ * Factory that returns a 3-parameter Express RequestHandler for idempotencyMiddleware.
+ * Express treats 4-parameter functions as error handlers, so this wrapper ensures
+ * Express dispatches the middleware during normal request processing.
+ */
+export function createIdempotencyMiddleware(opts?: IdempotencyConfig): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    idempotencyMiddleware(req, res, next, opts);
+  };
+}
+

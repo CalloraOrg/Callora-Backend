@@ -14,9 +14,10 @@
  *   - Token hashes are never exposed in the response
  */
 
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { correlationMiddleware } from '../middleware/correlation.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { getClientIp, DEFAULT_PROXY_HEADERS } from '../lib/clientIp.js';
 import { encodeCursor, parseCursor } from '../lib/cursorPagination.js';
 import {
@@ -45,6 +46,7 @@ export interface RefreshTokenRouterDeps {
   refreshTokenRepository?: RefreshTokenRepository;
   rateLimitMiddleware?: RequestHandler;
   rateLimiter?: TokenBucketRateLimiter;
+  idempotencyMiddleware?: RequestHandler;
 }
 
 export function createRefreshTokenRouter(deps: RefreshTokenRouterDeps = {}): Router {
@@ -57,6 +59,15 @@ export function createRefreshTokenRouter(deps: RefreshTokenRouterDeps = {}): Rou
       { capacity: 10, refillRate: 1 },
       deps.rateLimiter,
     );
+
+  const idempotencyHandler: RequestHandler =
+    deps.idempotencyMiddleware ??
+    ((req, res, next) =>
+      idempotencyMiddleware(req, res, next, {
+        methods: ['POST', 'PATCH'],
+      }));
+
+  router.use(idempotencyHandler);
 
   /**
    * GET /api/refresh-token
