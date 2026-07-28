@@ -8,6 +8,8 @@ import type { GatewayDeps, ApiKey } from '../types/gateway.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
+import { CircuitBreakerOpenError } from '../lib/errors.js';
+import { env } from '../config/env.js';
 
 import {
   BadGatewayError,
@@ -15,6 +17,7 @@ import {
   GatewayTimeoutError,
   NotFoundError,
   PaymentRequiredError,
+  ServiceUnavailableError,
   TooManyRequestsError,
   UnauthorizedError,
 } from '../errors/index.js';
@@ -277,6 +280,29 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           return;
         }
 
+        // Obtain (or lazily create) the per-endpoint circuit breaker keyed by
+        // apiId. A separate breaker per endpoint means one degraded upstream
+        // does not trip the breaker for healthy endpoints on the same gateway.
+        // We create this early so we can perform a pre-check BEFORE deducting
+        // billing credits — callers must not be charged when the circuit is open.
+        const endpointBreaker = breakerRegistry.getOrCreate(req.params.apiId, {
+          failureThreshold: env.GATEWAY_BREAKER_FAILURE_THRESHOLD,
+          cooldownMs: env.GATEWAY_BREAKER_COOLDOWN_MS,
+          successThreshold: env.GATEWAY_BREAKER_SUCCESS_THRESHOLD,
+        });
+
+        // Fast-fail before billing if the circuit breaker is OPEN and still in
+        // its cooldown window. wouldBlock() replicates the same cooldown logic
+        // as execute() — if cooldown has elapsed execute() will transition the
+        // breaker to HALF_OPEN and allow a probe, so we must NOT block here.
+        if (await endpointBreaker.wouldBlock(req.params.apiId)) {
+          next(new ServiceUnavailableError(
+            'Service Unavailable: endpoint circuit breaker is open',
+            'SERVICE_UNAVAILABLE',
+          ));
+          return;
+        }
+
         const billingResult = await billing.deductCredit(
           keyRecord.developerId,
           CREDIT_COST_PER_CALL,
@@ -299,12 +325,17 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         const timer = startUpstreamTimer(req.params.apiId, req.method);
 
         try {
-          const upstreamRes = await fetch(`${upstreamUrl}${req.path}`, {
-            method: req.method,
-            headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
-            body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
-            signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
-          });
+          const upstreamRes = await endpointBreaker.execute(
+            req.params.apiId,
+            async () => {
+              return fetch(`${upstreamUrl}${req.path}`, {
+                method: req.method,
+                headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+                body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
+                signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+              });
+            },
+          );
 
           upstreamStatus = upstreamRes.status;
           upstreamBody = await upstreamRes.text();
@@ -324,6 +355,18 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
             }
           });
         } catch (error) {
+          if (error instanceof CircuitBreakerOpenError) {
+            // Circuit breaker is open: fast-fail with 503 to protect the caller
+            // from waiting and to signal that the endpoint is temporarily unavailable.
+            // Billing is NOT deducted for circuit-breaker-rejected requests.
+            outcome = 'error';
+            timer.stop(503, outcome);
+            throw new ServiceUnavailableError(
+              'Service Unavailable: endpoint circuit breaker is open',
+              'SERVICE_UNAVAILABLE',
+            );
+          }
+
           if (
             (error instanceof DOMException && error.name === 'TimeoutError') ||
             (error instanceof TypeError &&
@@ -336,7 +379,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
 
           throw new BadGatewayError('Bad Gateway: upstream unreachable');
         } finally {
-          if (outcome !== 'timeout') {
+          if (outcome !== 'timeout' && outcome !== 'error') {
             timer.stop(upstreamStatus, outcome);
           }
         }

@@ -423,6 +423,28 @@ export class CircuitBreaker {
   }
 
   /**
+   * Returns true if the breaker would currently reject a call (i.e. the circuit
+   * is OPEN and still within its cooldown window).
+   *
+   * This mirrors the rejection logic in execute() so callers can perform a
+   * pre-flight check — for example, to skip billing before attempting a call
+   * that is guaranteed to be rejected.
+   *
+   * When this returns false the call MAY succeed: the breaker is either CLOSED,
+   * HALF_OPEN, or OPEN but past its cooldown (meaning execute() will transition
+   * to HALF_OPEN and allow a probe).
+   */
+  async wouldBlock(breakerKey: string): Promise<boolean> {
+    const now = Date.now();
+    const metrics = (await this.store.get(breakerKey)) || { ...DEFAULT_METRICS };
+    if (metrics.state !== CircuitBreakerState.OPEN) {
+      return false;
+    }
+    const timeSinceFailure = now - (metrics.lastFailureTime ?? 0);
+    return timeSinceFailure < this.config.cooldownMs;
+  }
+
+  /**
    * Force reset the circuit breaker to CLOSED state.
    * Use with caution - primarily for testing or manual intervention.
    */
@@ -455,6 +477,7 @@ export class CircuitBreaker {
       state: CircuitBreakerState.OPEN,
       consecutiveSuccesses: 0,
       lastStateChange: now,
+      lastFailureTime: now,
     };
     await this.store.set(breakerKey, newMetrics);
     this.activeTrials.delete(breakerKey);
