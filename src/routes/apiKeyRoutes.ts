@@ -1,7 +1,8 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
@@ -54,6 +55,15 @@ async function assertDeveloperOwnsApi(
   }
 }
 
+// Idempotency configuration for API key creation — uses the Idempotency-Key
+// header to allow safe retries of POST requests. Body key is disallowed since
+// the request body does not carry an idempotency key field.
+const keyIdempotency: RequestHandler = (req, res, next) =>
+  idempotencyMiddleware(req, res, next, {
+    methods: ['POST', 'PATCH'],
+    allowBodyKey: false,
+  });
+
 export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
   const router = Router();
 
@@ -61,6 +71,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
     '/apis/:apiId/keys',
     requireAuth,
     validate({ params: apiIdParamsSchema, body: createApiKeyBodySchema }),
+    keyIdempotency,
     async (req, res: import('express').Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const user = res.locals.authenticatedUser;
