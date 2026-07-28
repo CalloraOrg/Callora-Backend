@@ -251,6 +251,13 @@ export const envSchema = z
 
     // Health check
     HEALTH_CHECK_DB_TIMEOUT: z.coerce.number().default(2_000),
+    /**
+     * HEALTH_REQUEST_TIMEOUT_MS — maximum wall-clock time (ms) allowed for a
+     * full GET /api/health response. When the deadline is exceeded the request
+     * is cooperatively aborted and the caller receives HTTP 504.
+     * Default: 5 000 ms.
+     */
+    HEALTH_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
     APIS_CACHE_TTL_MS: z.coerce.number().int().positive().optional(),
     LISTINGS_CACHE_WARMUP_TIMEOUT_MS: z.coerce
       .number()

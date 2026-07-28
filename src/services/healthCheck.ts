@@ -244,16 +244,32 @@ export function determineOverallStatus(checks: {
 }
 
 /**
- * Performs comprehensive health check of all configured components
- * Returns detailed status suitable for load balancers and monitoring
+ * Performs comprehensive health check of all configured components.
+ *
+ * Returns detailed status suitable for load balancers and monitoring.
+ *
+ * @param config       - Health check configuration (pools, URLs, timeouts).
+ * @param abortSignal  - Optional signal from the per-request timeout middleware.
+ *                       When the signal fires, any pending component checks that
+ *                       respect it will be abandoned early — preventing the full
+ *                       per-component timeout from stalling a response that was
+ *                       already marked as timed-out by the caller.
  */
 export async function performHealthCheck(
-  config: HealthCheckConfig
+  config: HealthCheckConfig,
+  abortSignal?: AbortSignal,
 ): Promise<HealthCheckResult> {
   const checks: HealthCheckResult['checks'] = {
     api: 'ok', // API is healthy if we can respond
     database: 'down', // Default to down until checked
   };
+
+  // If the per-request abort signal has already fired before we start, bail
+  // immediately so the timeout middleware can send its own 504 without racing
+  // against a partial response from here.
+  if (abortSignal?.aborted) {
+    throw new DOMException('Request aborted before health check started', 'AbortError');
+  }
 
   const [dbCheck, sorobanCheck, horizonCheck] = await Promise.all([
     checkDatabase(config.database.pool, config.database.timeout),
