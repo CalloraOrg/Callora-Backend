@@ -282,6 +282,7 @@ export const envSchema = z
       .default("info"),
     ACCESS_LOG_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
     ACCESS_LOG_REDACT_FIELDS: z.string().optional(),
+    USAGE_ACCESS_LOG_REDACT_FIELDS: z.string().optional(),
 
     // Profiling
     GATEWAY_PROFILING_ENABLED: z
