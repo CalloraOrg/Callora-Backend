@@ -249,6 +249,13 @@ if (isDirectExecution) {
   app.use("/api/gateway", createGatewayIpAllowlist(), gatewayRouter);
 
   // New proxy route: /v1/call/:apiSlugOrId/*
+  //
+  // The proxyDrainTracker middleware (mounted below) counts in-flight requests
+  // and is wired as a shutdown subsystem so the process waits for them to
+  // finish before exiting.  The drainState hook passed to createProxyRouter
+  // lets the router immediately reject *new* requests with 503 once shutdown
+  // begins, while already-in-flight requests continue to completion.
+  const proxyDrainTracker = createInFlightDrainTracker("gateway-proxy");
   const proxyRouter = createProxyRouter({
     billing,
     rateLimiter,
@@ -259,8 +266,10 @@ if (isDirectExecution) {
       timeoutMs: config.proxy.timeoutMs,
       allowedHosts: config.proxy.allowedHosts,
     },
+    // Pass the drain state so the router can reject new requests with 503
+    // during the graceful shutdown window.
+    drainState: { isDraining: proxyDrainTracker.isDraining },
   });
-  const proxyDrainTracker = createInFlightDrainTracker("gateway-proxy");
   const keysDrainTracker = createInFlightDrainTracker("api-keys");
   const apiKeyRouter = createApiKeyRouter({
     apiRepository: defaultApiRepository,

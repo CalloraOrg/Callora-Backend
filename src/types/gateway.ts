@@ -143,6 +143,19 @@ export interface GatewayDeps {
 
 import type { CircuitBreakerStore } from '../lib/circuitBreaker.js';
 
+/**
+ * Optional drain-state hook for the proxy router.
+ *
+ * When provided, the proxy router checks `isDraining()` at the start of every
+ * new request and immediately returns `503 Service Unavailable` (with
+ * `Connection: close` and `Retry-After: 0`) so load balancers can quickly
+ * route traffic away during a graceful shutdown window.
+ */
+export interface ProxyDrainState {
+  /** Returns true once the server has begun its graceful shutdown drain. */
+  isDraining: () => boolean;
+}
+
 /** Dependencies injected into the proxy router factory. */
 export interface ProxyDeps {
   billing: BillingService;
@@ -155,4 +168,11 @@ export interface ProxyDeps {
   perKeyConcurrency?: RequestHandler;
   proxyConfig?: Partial<ProxyConfig>;
   circuitBreakerStore?: CircuitBreakerStore;
+  /**
+   * Optional drain-state hook.  When set the router will reject new requests
+   * with `503 Service Unavailable` once the server enters its shutdown drain
+   * phase.  Wire this to the `isDraining` function returned by
+   * `createInFlightDrainTracker` (see `src/lifecycle/shutdown.ts`).
+   */
+  drainState?: ProxyDrainState;
 }

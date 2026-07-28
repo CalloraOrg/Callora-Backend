@@ -64,8 +64,16 @@ Middleware-based tracker for monitoring active HTTP requests.
 function createInFlightDrainTracker(name: string): {
   middleware: RequestHandler;
   subsystem: DrainableSubsystem;
+  /** Returns true once beginShutdown() has been called. */
+  isDraining: () => boolean;
 };
 ```
+
+The `isDraining()` flag can be passed to the proxy router factory via `ProxyDeps.drainState`
+so that new requests arriving after shutdown begins are immediately rejected with
+`503 Service Unavailable` (with `Connection: close` and `Retry-After: 0`), while
+requests that were already in flight when the shutdown signal arrived are allowed
+to complete normally.  See the **Proxy drain guard** section below for details.
 
 ## Shutdown Sequence
 
@@ -192,6 +200,59 @@ const shutdown = createGracefulShutdownHandler({
 });
 ```
 
+### Proxy Drain Guard
+
+The `/v1/call` proxy router supports an optional `drainState` dependency that
+enables active request rejection during the shutdown drain window:
+
+```typescript
+import { createInFlightDrainTracker } from './lifecycle/shutdown.js';
+import { createProxyRouter } from './routes/proxyRoutes.js';
+
+// Create the tracker first so we can pass isDraining to the router
+const proxyDrainTracker = createInFlightDrainTracker('gateway-proxy');
+
+const proxyRouter = createProxyRouter({
+  // ... other deps
+  drainState: { isDraining: proxyDrainTracker.isDraining },
+});
+
+// Mount the drain tracker middleware BEFORE the proxy router
+// so that each request entering /v1/call is counted by the tracker
+app.use('/v1/call', proxyDrainTracker.middleware);
+app.use('/v1/call', proxyRouter);
+```
+
+**Behaviour during drain:**
+
+| Request timing | What happens |
+|---|---|
+| Arrived **before** `beginShutdown()` | Allowed to complete normally; counted by the tracker |
+| Arrived **after** `beginShutdown()` | Immediately rejected with `503 Service Unavailable` |
+
+The 503 response includes:
+
+- `Connection: close` — instructs the load balancer not to reuse the socket.
+- `Retry-After: 0` — advises the client to retry immediately on a healthy instance.
+- JSON body: `{ "code": "SERVICE_UNAVAILABLE", "message": "..." }`
+
+The `drainState` hook is optional; omitting it reverts to the original behaviour
+(requests proceed even during shutdown).
+
+### In-flight drain tracker — isDraining()
+
+The `isDraining()` accessor is exposed on the return value of
+`createInFlightDrainTracker` so it can be injected into any component that
+needs to know whether shutdown is in progress:
+
+```typescript
+const tracker = createInFlightDrainTracker('my-subsystem');
+
+tracker.isDraining(); // false — before beginShutdown()
+tracker.subsystem.beginShutdown();
+tracker.isDraining(); // true — from now on
+```
+
 ## Monitoring
 
 ### Log Output
@@ -253,6 +314,18 @@ The test suite covers:
 - ✅ Request tracking middleware
 - ✅ Multiple concurrent requests
 - ✅ Structured logging output
+- ✅ `isDraining()` flag — false before shutdown, true after
+- ✅ Proxy drain guard — 503 on new requests during shutdown
+- ✅ Proxy drain guard — `Connection: close` + `Retry-After: 0` headers
+- ✅ Proxy drain guard — upstream NOT called for rejected requests
+- ✅ Proxy drain guard — usage NOT recorded for rejected requests
+- ✅ Shutdown handler waits for in-flight proxy requests before closing DB
+- ✅ `isDraining()` flag — false before shutdown, true after
+- ✅ Proxy drain guard — 503 on new requests during shutdown
+- ✅ Proxy drain guard — `Connection: close` + `Retry-After: 0` headers
+- ✅ Proxy drain guard — upstream NOT called for rejected requests
+- ✅ Proxy drain guard — usage NOT recorded for rejected requests
+- ✅ Shutdown handler waits for in-flight proxy requests before closing DB
 
 ### Integration Tests
 
