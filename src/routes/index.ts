@@ -6,6 +6,7 @@ import path from "path";
 import billingRouter from "./billing.js";
 import { createBillingPortalRouter } from "./billing/portal.js";
 import healthRouter from "./health.js";
+import plansRouter from "./plans.js";
 import refundsRouter from "./refunds.js";
 import { createApisRouter, type ApisRouterDeps } from "./apis.js";
 import { createSpikeRouter } from "./spike.js";
@@ -52,6 +53,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   const router = Router();
 
   router.use("/health", healthRouter);
+  router.use("/plans", plansRouter);
   router.use("/spike", createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
 
