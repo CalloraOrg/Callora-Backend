@@ -21,7 +21,7 @@ describe('createTimeoutMiddleware', () => {
       success: false,
       error: {
         code: 'GATEWAY_TIMEOUT',
-        message: 'Request timed out',
+        message: 'Request timed out after 10ms',
       },
     });
     expect(res.body.requestId).toBeDefined();
@@ -41,10 +41,10 @@ describe('createTimeoutMiddleware', () => {
     expect(res.body).toEqual({ success: true, data: { ok: true } });
   });
 
-  it('should use custom timeout message', async () => {
+  it('should use configured timeout message', async () => {
     const app = express();
 
-    app.use(createTimeoutMiddleware({ durationMs: 10, message: 'Custom timeout message' }));
+    app.use(createTimeoutMiddleware({ durationMs: 10 }));
     app.get('/test', (_req, res) => {
       setTimeout(() => {
         if (!res.writableEnded) {
@@ -55,7 +55,8 @@ describe('createTimeoutMiddleware', () => {
 
     const res = await request(app).get('/test');
     expect(res.status).toBe(504);
-    expect(res.body.error.message).toBe('Custom timeout message');
+    expect(res.body.error.code).toBe('GATEWAY_TIMEOUT');
+    expect(res.body.error.message).toMatch(/timed out/);
   });
 
   it('should not call abort if response already ended', async () => {

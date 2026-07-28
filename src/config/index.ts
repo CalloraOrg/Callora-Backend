@@ -229,6 +229,8 @@ export const config = {
   bcrypt: {
     costFactor: env.BCRYPT_COST_FACTOR,
   },
+  billingTimeoutMs: env.BILLING_TIMEOUT_MS,
+
   billingConcurrency: {
     maxPerDeveloper: env.BILLING_MAX_CONCURRENCY_PER_DEV,
     semaphoreTtlMs: env.BILLING_SEMAPHORE_TTL_MS,

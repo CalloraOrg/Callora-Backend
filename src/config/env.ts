@@ -151,6 +151,9 @@ export const envSchema = z
     CREDITS_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(10),
     CREDITS_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
 
+    // Billing per-request graceful timeout
+    BILLING_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+
     // Billing endpoint per-user rate limiting (fixed-window)
     BILLING_RATE_LIMIT_WINDOW_MS: z.coerce
       .number()
