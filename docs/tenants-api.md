@@ -83,3 +83,46 @@ Invalid requests return `400` before route logic runs:
 ```
 
 Unknown JSON fields are rejected.
+
+## Schema Stability Tests
+
+`tests/schema/tenants.test.ts` contains snapshot tests that guard against
+accidental response-schema drift on both endpoints. Run them with:
+
+```bash
+npx jest --testPathPattern="tests/schema/tenants" --no-coverage
+```
+
+### What is covered
+
+| Group | Count | Purpose |
+|---|---:|---|
+| POST 201 success envelope shape | 8 | Exact top-level keys, `data` field types, optional-field omission |
+| POST full-response snapshot | 2 | `toMatchSnapshot` lock on the complete stabilized response |
+| POST 401 error envelope | 3 | Top-level keys, `UNAUTHORIZED` code, no details array |
+| POST 400 validation error | 5 | `VALIDATION_ERROR` code, details array shape, `body.name` field path, strict-mode unknown-field rejection, snapshot |
+| PATCH 200 success envelope shape | 6 | Same as POST checks plus `data.id` ↔ URL param echo |
+| PATCH full-response snapshot | 2 | `toMatchSnapshot` lock on the complete stabilized PATCH response |
+| PATCH 401 error envelope | 1 | `UNAUTHORIZED` code and envelope keys |
+| PATCH 400 validation error | 4 | Empty body, bad `tenantId` param, details shape, snapshot |
+| 500 error propagation | 2 | Repository errors surface as `INTERNAL_SERVER_ERROR` envelopes |
+| Cross-endpoint envelope invariants | 6 | Parameterized: every scenario carries `success`, `requestId`, `timestamp`, and `data`/`error` |
+
+**Total: 38 tests, 6 snapshots.**
+
+### Snapshot strategy
+
+Variable fields (`timestamp`, `createdAt`, `updatedAt`) are replaced with
+`<TIMESTAMP>` / `<CREATED_AT>` / `<UPDATED_AT>` placeholders before snapshotting
+so the stored snapshots are reproducible across runs at different wall-clock
+times. The stable snapshots live in
+`tests/schema/__snapshots__/tenants.test.ts.snap`.
+
+To update snapshots after an intentional schema change:
+
+```bash
+npx jest --testPathPattern="tests/schema/tenants" --updateSnapshot
+```
+
+Review the diff carefully before committing updated snapshots — any change
+represents a visible API contract change for clients.
