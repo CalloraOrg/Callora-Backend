@@ -11,6 +11,9 @@ import { UsageStore } from '../types/gateway.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { ReportExporterService } from '../services/reportExporter.js';
+import type { UsageEventsRepository } from '../repositories/usageEventsRepository.js';
+import { InMemoryUsageEventsRepository } from '../repositories/usageEventsRepository.js';
+import { createDeveloperMeUsageRouter } from './developers/me/usage.js';
 
 /**
  * Wraps an async Express route handler so that any thrown error is forwarded
@@ -30,11 +33,21 @@ export interface DeveloperRoutesDeps {
   usageStore: UsageStore;
   developerRepository: DeveloperRepository;
   reportExporterService?: ReportExporterService;
+  usageEventsRepository?: UsageEventsRepository;
 }
 
 export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
   const router = Router();
   const { settlementStore, usageStore, developerRepository, reportExporterService } = deps;
+  const usageEventsRepository = deps.usageEventsRepository ?? new InMemoryUsageEventsRepository();
+
+  router.use(
+    '/me/usage',
+    createDeveloperMeUsageRouter({
+      usageEventsRepository,
+      developerRepository,
+    }),
+  );
 
   // Validation schema for revenue query parameters
   const revenueQuerySchema = z.object({

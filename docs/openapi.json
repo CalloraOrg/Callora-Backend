@@ -1386,6 +1386,116 @@
         }
       }
     },
+    "/api/developers/me/usage/summary": {
+      "get": {
+        "summary": "Retrieve developer usage summary",
+        "description": "Returns aggregate usage metrics, per-API breakdown, and time-series buckets for the authenticated developer.",
+        "tags": [
+          "Developers"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start date for summary window (ISO 8601 string)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End date for summary window (ISO 8601 string)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupBy",
+            "in": "query",
+            "description": "Aggregation bucket period ('day', 'week', 'month')",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "default": "day"
+            }
+          },
+          {
+            "name": "apiId",
+            "in": "query",
+            "description": "Filter by specific API ID belonging to the developer",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Developer usage summary retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeveloperUsageSummaryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or date range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden (no developer profile or API not owned by developer)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/apis/{id}/endpoints/bulk": {
       "post": {
         "summary": "Bulk register endpoints for an API",
@@ -3373,6 +3483,95 @@
               },
               "hasMore": {
                 "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "DeveloperUsageSummaryResponse": {
+        "type": "object",
+        "required": [
+          "summary",
+          "breakdownByApi",
+          "buckets",
+          "period"
+        ],
+        "properties": {
+          "summary": {
+            "type": "object",
+            "required": [
+              "totalCalls",
+              "totalRevenue",
+              "activeApis"
+            ],
+            "properties": {
+              "totalCalls": {
+                "type": "integer"
+              },
+              "totalRevenue": {
+                "type": "string"
+              },
+              "activeApis": {
+                "type": "integer"
+              }
+            }
+          },
+          "breakdownByApi": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "apiId",
+                "calls",
+                "revenue"
+              ],
+              "properties": {
+                "apiId": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "revenue": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "period",
+                "calls",
+                "revenue"
+              ],
+              "properties": {
+                "period": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "revenue": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "period": {
+            "type": "object",
+            "required": [
+              "from",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
               }
             }
           }

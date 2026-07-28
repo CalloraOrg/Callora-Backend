@@ -221,6 +221,7 @@ if (isDirectExecution) {
     settlementStore,
     usageStore,
     developerRepository: defaultDeveloperRepository,
+    usageEventsRepository,
   });
   app.use("/api/developers", developerRouter);
   // Mounted before the generic admin router so it is not shadowed by
