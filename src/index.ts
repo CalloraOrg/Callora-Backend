@@ -28,6 +28,7 @@ import { createDeveloperRouter } from "./routes/developerRoutes.js";
 import { createGatewayRouter } from "./routes/gatewayRoutes.js";
 import { createProxyRouter } from "./routes/proxyRoutes.js";
 import adminRouter from "./routes/admin.js";
+import logsRouter from "./routes/logs.js";
 import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
 import refundsRouter from "./routes/refunds.js";
 import { defaultDeveloperRepository } from "./repositories/developerRepository.js";
@@ -243,6 +244,7 @@ if (isDirectExecution) {
   app.use("/api/admin/usage/anomalies", createUsageAnomaliesRouter({ pool }));
   app.use("/api/admin", adminRouter);
   app.use("/api/refunds", refundsRouter);
+  app.use("/api/logs", logsRouter);
 
   // Legacy gateway route (existing)
   const gatewayRouter = createGatewayRouter({

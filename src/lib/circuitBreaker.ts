@@ -28,6 +28,7 @@ export interface CircuitBreakerConfig {
   failureThreshold?: number;
   cooldownMs?: number;
   successThreshold?: number;
+  onOpenError?: (message: string) => Error;
 }
 
 export interface CircuitBreakerMetrics {
@@ -299,20 +300,16 @@ export class CircuitBreaker {
         metrics = this.transitionTo(metrics, CircuitBreakerState.HALF_OPEN, now, breakerKey);
         await this.store.set(breakerKey, metrics);
       } else {
-        throw new CircuitBreakerOpenError(
-          `Circuit breaker is open. Cooldown remaining: ${
-            this.config.cooldownMs - timeSinceFailure
-          }ms`
-        );
+        const msg = `Circuit breaker is open. Cooldown remaining: ${this.config.cooldownMs - timeSinceFailure}ms`;
+        throw this.config.onOpenError ? this.config.onOpenError(msg) : new CircuitBreakerOpenError(msg);
       }
     }
 
     // Enforce exactly one trial call in HALF_OPEN state
     if (metrics.state === CircuitBreakerState.HALF_OPEN) {
       if (this.activeTrials.has(breakerKey)) {
-        throw new CircuitBreakerOpenError(
-          'Circuit breaker is in half-open state. Only one trial call allowed at a time.'
-        );
+        const msg = 'Circuit breaker is in half-open state. Only one trial call allowed at a time.';
+        throw this.config.onOpenError ? this.config.onOpenError(msg) : new CircuitBreakerOpenError(msg);
       }
       this.activeTrials.add(breakerKey);
     }
