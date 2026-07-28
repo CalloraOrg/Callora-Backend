@@ -16,8 +16,8 @@ jest.mock('better-sqlite3', () => {
     prepare() {
       return { get: () => null };
     }
-    exec() {}
-    close() {}
+    exec() { }
+    close() { }
   };
 });
 
@@ -688,6 +688,47 @@ describe('GET /api/health/dependencies - Integration Tests', () => {
     const app = createApp();
     const response = await request(app)
       .get('/api/health/dependencies')
+      .set('x-request-id', customRequestId);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['x-request-id'], customRequestId);
+  });
+});
+
+describe('GET /api/health/db - DB Pool Stats Tests', () => {
+  test('returns 200 with current database pool statistics', async () => {
+    const testDb = createTestDb();
+
+    try {
+      // Mock the native pg.Pool properties on the pg-mem test instance
+      Object.defineProperty(testDb.pool, 'totalCount', { value: 10, configurable: true });
+      Object.defineProperty(testDb.pool, 'idleCount', { value: 8, configurable: true });
+      Object.defineProperty(testDb.pool, 'waitingCount', { value: 0, configurable: true });
+
+      const config: HealthCheckConfig = {
+        version: '1.0.0',
+        database: { pool: testDb.pool },
+      };
+
+      const app = createApp({ healthCheckConfig: config });
+      const response = await request(app).get('/api/health/db');
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.status, 'ok');
+      assert.ok(response.body.timestamp);
+      assert.equal(response.body.pool.total, 10);
+      assert.equal(response.body.pool.idle, 8);
+      assert.equal(response.body.pool.waiting, 0);
+    } finally {
+      await testDb.end();
+    }
+  });
+
+  test('preserves request correlation ID in response headers', async () => {
+    const customRequestId = 'db-stats-id-1234';
+    const app = createApp();
+    const response = await request(app)
+      .get('/api/health/db')
       .set('x-request-id', customRequestId);
 
     assert.equal(response.status, 200);

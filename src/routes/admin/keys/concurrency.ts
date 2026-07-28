@@ -59,6 +59,7 @@ export function createAdminKeyConcurrencyRouter(
         data: {
           keyCounts,
           totalActive,
+          maxConcurrencyPerKey: keySemaphore.maxConcurrency,
           campaign: GRANTFOX_FWC26_CAMPAIGN,
         },
       });
@@ -97,6 +98,7 @@ export function createAdminKeyConcurrencyRouter(
             keyId,
             activeCount,
             atLimit,
+            maxConcurrencyPerKey: keySemaphore.maxConcurrency,
             campaign: GRANTFOX_FWC26_CAMPAIGN,
           },
         });

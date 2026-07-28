@@ -2,11 +2,11 @@ import express from 'express';
 import request from 'supertest';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
-import { createBillingPortalRouter, type PrismaClient } from './portal.js';
+import { createBillingPortalRouter, type PrismaClient, type PrismaInvoice } from './portal.js';
 import { generateInvoicePdf } from '../../services/invoicePdf.js';
 
-function createMockPrisma(): PrismaClient & { __mockData: Record<string, unknown>[] } {
-  const store: Record<string, unknown>[] = [];
+function createMockPrisma(): PrismaClient & { __mockData: PrismaInvoice[] } {
+  const store: PrismaInvoice[] = [];
 
   return {
     __mockData: store,
@@ -17,14 +17,14 @@ function createMockPrisma(): PrismaClient & { __mockData: Record<string, unknown
             if (where?.user_id && inv.user_id !== where.user_id) return false;
             if (where?.status && inv.status !== where.status) return false;
             if (where?.OR) {
-              for (const condition of where.OR) {
+              for (const condition of where.OR as { created_at?: { lt?: Date }; id?: { lt?: string } }[]) {
                 if (condition.created_at?.lt && inv.created_at >= condition.created_at.lt) {
                   return false;
                 }
                 if (
-                  condition.created_at &&
+                  condition.created_at?.lt &&
                   condition.id?.lt &&
-                  inv.created_at.getTime() === condition.created_at.lt?.getTime &&
+                  inv.created_at.getTime() === condition.created_at.lt.getTime() &&
                   inv.id >= condition.id.lt
                 ) {
                   return false;
@@ -33,55 +33,55 @@ function createMockPrisma(): PrismaClient & { __mockData: Record<string, unknown
             }
             return true;
           })
-          .sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
-            const cmp = (b.created_at as Date).getTime() - (a.created_at as Date).getTime();
-            return cmp !== 0 ? cmp : (b.id as string).localeCompare(a.id as string);
+          .sort((a, b) => {
+            const cmp = b.created_at.getTime() - a.created_at.getTime();
+            return cmp !== 0 ? cmp : b.id.localeCompare(a.id);
           })
           .slice(0, take);
 
-        return results;
+        return results as PrismaInvoice[];
       }),
       findFirst: jest.fn(async ({ where, include }: { where?: Record<string, unknown>; include?: Record<string, unknown> }) => {
         const inv = store.find(
-          (i) => i.id === where?.id && i.user_id === where?.user_id,
+          (i) => i.id === (where?.id as string) && i.user_id === (where?.user_id as string),
         );
         if (!inv) return null;
         if (include?.line_items) {
-          return { ...inv, line_items: inv.line_items ?? [] };
+          return { ...inv, line_items: inv.line_items ?? [] } as PrismaInvoice;
         }
-        return { ...inv, line_items: inv.line_items ?? [] };
+        return { ...inv, line_items: inv.line_items ?? [] } as PrismaInvoice;
       }),
       findUnique: jest.fn(async ({ where }: { where?: Record<string, unknown> }) => {
-        return store.find((i) => i.id === where?.id) || null;
+        return store.find((i) => i.id === (where?.id as string)) || null;
       }),
       update: jest.fn(async ({ where, data }: { where?: Record<string, unknown>; data?: Record<string, unknown> }) => {
-        const idx = store.findIndex((i) => i.id === where?.id);
-        if (idx === -1) return null;
-        store[idx] = { ...store[idx], ...data };
+        const idx = store.findIndex((i) => i.id === (where?.id as string));
+        if (idx === -1) throw new Error('Invoice not found');
+        store[idx] = { ...store[idx], ...data } as PrismaInvoice;
         return store[idx];
       }),
     },
   };
 }
 
-function seedInvoice(store: Record<string, unknown>[], overrides: Record<string, unknown> = {}) {
+function seedInvoice(store: PrismaInvoice[], overrides: Record<string, unknown> = {}) {
   const now = new Date();
-  const invoice = {
-    id: overrides.id ?? '00000000-0000-0000-0000-000000000001',
-    user_id: overrides.user_id ?? 'test-user',
-    invoice_number: overrides.invoice_number ?? 'INV-001',
-    status: overrides.status ?? 'pending',
-    total_amount_usdc: overrides.total_amount_usdc ?? 150.5,
-    currency: overrides.currency ?? 'USDC',
-    description: overrides.description ?? 'Test invoice',
-    period_start: overrides.period_start ?? new Date('2026-01-01'),
-    period_end: overrides.period_end ?? new Date('2026-01-31'),
-    created_at: overrides.created_at ?? now,
-    updated_at: overrides.updated_at ?? now,
-    pdf_generated_at: overrides.pdf_generated_at ?? null,
-    line_items: overrides.line_items ?? [],
+  const invoice: PrismaInvoice = {
+    id: (overrides.id as string) ?? '00000000-0000-0000-0000-000000000001',
+    user_id: (overrides.user_id as string) ?? 'test-user',
+    invoice_number: (overrides.invoice_number as string) ?? 'INV-001',
+    status: (overrides.status as string) ?? 'pending',
+    total_amount_usdc: (overrides.total_amount_usdc as bigint) ?? BigInt(150500000),
+    currency: (overrides.currency as string) ?? 'USDC',
+    description: (overrides.description as string) ?? 'Test invoice',
+    period_start: (overrides.period_start as Date) ?? new Date('2026-01-01'),
+    period_end: (overrides.period_end as Date) ?? new Date('2026-01-31'),
+    created_at: (overrides.created_at as Date) ?? now,
+    updated_at: (overrides.updated_at as Date) ?? now,
+    pdf_generated_at: (overrides.pdf_generated_at as Date | null) ?? null,
+    line_items: (overrides.line_items as PrismaInvoice['line_items']) ?? [],
     ...overrides,
-  };
+  } as PrismaInvoice;
   store.push(invoice);
   return invoice;
 }
@@ -96,7 +96,7 @@ function buildApp(prisma: PrismaClient) {
 }
 
 describe('Billing Portal Routes', () => {
-  let prisma: PrismaClient & { __mockData: Record<string, unknown>[] };
+  let prisma: PrismaClient & { __mockData: PrismaInvoice[] };
 
   beforeEach(() => {
     prisma = createMockPrisma();
@@ -520,6 +520,234 @@ describe('Billing Portal Routes', () => {
       expect(content).toContain('Compute hours');
       expect(content).toContain('Storage');
       expect(content).toContain('USDC');
+    });
+  });
+
+  describe('GET /api/billing/portal/summary', () => {
+    it('returns 401 without auth', async () => {
+      const app = buildApp(prisma);
+      const res = await request(app).get('/api/billing/portal/summary');
+      expect(res.status).toBe(401);
+    });
+
+    it('returns zeroed summary when user has no invoices', async () => {
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/summary')
+        .set('x-user-id', 'empty-user');
+      expect(res.status).toBe(200);
+      expect(res.body.data.totalOutstanding).toBe('0');
+      expect(res.body.data.totalPaid).toBe('0');
+      expect(res.body.data.invoiceCount).toBe(0);
+      expect(res.body.data.currentBillingPeriod).toBeNull();
+      expect(res.body.data.lastPaymentDate).toBeNull();
+    });
+
+    it('computes outstanding and paid totals', async () => {
+      seedInvoice(prisma.__mockData, {
+        id: 'i1',
+        user_id: 'user-a',
+        status: 'pending',
+        total_amount_usdc: BigInt(100000000),
+        created_at: new Date('2026-01-01'),
+      });
+      seedInvoice(prisma.__mockData, {
+        id: 'i2',
+        user_id: 'user-a',
+        status: 'paid',
+        total_amount_usdc: BigInt(250000000),
+        created_at: new Date('2026-01-02'),
+      });
+      seedInvoice(prisma.__mockData, {
+        id: 'i3',
+        user_id: 'user-a',
+        status: 'paid',
+        total_amount_usdc: BigInt(50000000),
+        created_at: new Date('2026-01-03'),
+      });
+
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/summary')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(200);
+      expect(res.body.data.totalOutstanding).toBe('100000000');
+      expect(res.body.data.totalPaid).toBe('300000000');
+      expect(res.body.data.invoiceCount).toBe(3);
+    });
+
+    it('returns current billing period from most recent invoice', async () => {
+      seedInvoice(prisma.__mockData, {
+        id: 'i1',
+        user_id: 'user-a',
+        period_start: new Date('2026-01-01'),
+        period_end: new Date('2026-01-31'),
+        created_at: new Date('2026-01-01'),
+      });
+      seedInvoice(prisma.__mockData, {
+        id: 'i2',
+        user_id: 'user-a',
+        period_start: new Date('2026-02-01'),
+        period_end: new Date('2026-02-28'),
+        created_at: new Date('2026-02-01'),
+      });
+
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/summary')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(200);
+      expect(res.body.data.currentBillingPeriod.start).toBe('2026-02-01T00:00:00.000Z');
+      expect(res.body.data.currentBillingPeriod.end).toBe('2026-02-28T00:00:00.000Z');
+    });
+
+    it('returns last payment date from most recent paid invoice', async () => {
+      seedInvoice(prisma.__mockData, {
+        id: 'i1',
+        user_id: 'user-a',
+        status: 'paid',
+        created_at: new Date('2026-01-15'),
+      });
+      seedInvoice(prisma.__mockData, {
+        id: 'i2',
+        user_id: 'user-a',
+        status: 'paid',
+        created_at: new Date('2026-02-15'),
+      });
+
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/summary')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(200);
+      expect(res.body.data.lastPaymentDate).toBe('2026-02-15T00:00:00.000Z');
+    });
+
+    it('does not count invoices from other users', async () => {
+      seedInvoice(prisma.__mockData, {
+        id: 'i1',
+        user_id: 'user-a',
+        status: 'pending',
+        total_amount_usdc: BigInt(100),
+      });
+      seedInvoice(prisma.__mockData, {
+        id: 'i2',
+        user_id: 'user-b',
+        status: 'pending',
+        total_amount_usdc: BigInt(999),
+      });
+
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/summary')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(200);
+      expect(res.body.data.totalOutstanding).toBe('100');
+      expect(res.body.data.invoiceCount).toBe(1);
+    });
+  });
+
+  describe('GET /api/billing/portal/invoices/:id', () => {
+    it('returns 401 without auth', async () => {
+      const app = buildApp(prisma);
+      const res = await request(app).get(
+        '/api/billing/portal/invoices/00000000-0000-0000-0000-000000000001',
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 404 for non-existent invoice', async () => {
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000099')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for invoice belonging to another user', async () => {
+      seedInvoice(prisma.__mockData, {
+        id: '00000000-0000-0000-0000-000000000002',
+        user_id: 'user-b',
+      });
+
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000002')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(404);
+    });
+
+    it('returns invoice with line items', async () => {
+      const li = [
+        {
+          id: '00000000-0000-0000-0000-000000000010',
+          invoice_id: '00000000-0000-0000-0000-000000000001',
+          description: 'API calls',
+          amount_usdc: 25.0,
+          quantity: 5,
+          unit_price_usdc: 5.0,
+          item_type: 'usage',
+          created_at: new Date(),
+        },
+        {
+          id: '00000000-0000-0000-0000-000000000011',
+          invoice_id: '00000000-0000-0000-0000-000000000001',
+          description: 'Storage fee',
+          amount_usdc: 10.0,
+          quantity: 1,
+          unit_price_usdc: 10.0,
+          item_type: 'fee',
+          created_at: new Date(),
+        },
+      ];
+
+      seedInvoice(prisma.__mockData, {
+        id: '00000000-0000-0000-0000-000000000001',
+        user_id: 'user-a',
+        invoice_number: 'INV-001',
+        status: 'pending',
+        total_amount_usdc: BigInt(35000000),
+        line_items: li,
+      });
+
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000001')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(200);
+      expect(res.body.data.id).toBe('00000000-0000-0000-0000-000000000001');
+      expect(res.body.data.invoiceNumber).toBe('INV-001');
+      expect(res.body.data.status).toBe('pending');
+      expect(res.body.data.lineItems).toHaveLength(2);
+      expect(res.body.data.lineItems[0].description).toBe('API calls');
+      expect(res.body.data.lineItems[0].amountUsdc).toBe('25');
+      expect(res.body.data.lineItems[1].description).toBe('Storage fee');
+      expect(res.body.data.lineItems[1].itemType).toBe('fee');
+    });
+
+    it('returns invoice with empty line items', async () => {
+      seedInvoice(prisma.__mockData, {
+        id: '00000000-0000-0000-0000-000000000003',
+        user_id: 'user-a',
+        invoice_number: 'INV-003',
+        line_items: [],
+      });
+
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000003')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(200);
+      expect(res.body.data.id).toBe('00000000-0000-0000-0000-000000000003');
+      expect(res.body.data.lineItems).toEqual([]);
+    });
+
+    it('rejects malformed invoice id', async () => {
+      const app = buildApp(prisma);
+      const res = await request(app)
+        .get('/api/billing/portal/invoices/not-a-uuid')
+        .set('x-user-id', 'user-a');
+      expect(res.status).toBe(400);
     });
   });
 

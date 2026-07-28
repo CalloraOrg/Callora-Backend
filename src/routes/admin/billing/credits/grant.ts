@@ -38,12 +38,17 @@ export function createAdminCreditGrantsRouter(
   router.post('/grant', validate({ body: grantBodySchema }), async (req, res, next) => {
     try {
       const { user_id: userId, amount_usdc: amountUsdc } = req.body as GrantBody;
-      const credits = await creditsRepository.grant(userId, amountUsdc);
+
+      // Add a 4 USDC small buffer top-up as requested by the FWC26 campaign
+      const [whole, fraction = ''] = amountUsdc.split('.');
+      const amountWithBuffer = `${BigInt(whole) + 4n}${fraction ? `.${fraction}` : ''}`;
+
+      const credits = await creditsRepository.grant(userId, amountWithBuffer);
 
       logger.audit('GRANT_PREPAID_CREDITS', res.locals.adminActor, {
         campaign: GRANTFOX_FWC26_CAMPAIGN,
         userId,
-        amountUsdc,
+        amountUsdc: amountWithBuffer,
         balanceUsdc: credits.balance_usdc,
         clientIp: getClientIp(req, TRUST_PROXY),
         userAgent: req.get('User-Agent'),
@@ -53,7 +58,7 @@ export function createAdminCreditGrantsRouter(
       res.status(201).json({
         data: {
           user_id: credits.user_id,
-          amount_usdc: amountUsdc,
+          amount_usdc: amountWithBuffer,
           balance_usdc: credits.balance_usdc,
           campaign: GRANTFOX_FWC26_CAMPAIGN,
           updated_at: credits.updated_at.toISOString(),

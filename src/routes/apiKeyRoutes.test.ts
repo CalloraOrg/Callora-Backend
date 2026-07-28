@@ -91,6 +91,9 @@ const createApiRepository = (apis: Api[]): ApiRepository => ({
   async getEndpoints() {
     return [];
   },
+  async findRawById() {
+    return null;
+  },
 });
 
 function createTestApp(apis: Api[] = [ownedApi]) {

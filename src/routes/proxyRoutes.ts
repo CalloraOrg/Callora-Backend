@@ -2,8 +2,16 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
 import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
-import { startUpstreamTimer, recordProxyPrematureAbort, type UpstreamOutcome, setGatewayUpstreamBreakerState } from '../metrics.js';
+import {
+  startUpstreamTimer,
+  recordProxyPrematureAbort,
+  type UpstreamOutcome,
+  setGatewayUpstreamBreakerState,
+  recordEndpointThroughputSaturation,
+} from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
+import { createConfiguredPerKeyConcurrencyMiddleware } from '../middleware/perKeyConcurrency.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import {
   buildUpstreamTargetUrl,
@@ -103,10 +111,41 @@ export function createProxyRouter(deps: ProxyDeps): Router {
     },
   });
 
+  // Tracks in-flight requests per API key on the shared semaphore that
+  // GET /api/admin/keys/concurrency reads from. Must run after authMiddleware
+  // so that req.apiKeyRecord is populated.
+  const perKeyConcurrency = deps.perKeyConcurrency ?? createConfiguredPerKeyConcurrencyMiddleware();
+
+  // Idempotency middleware for POST/PATCH to prevent duplicate downstream calls.
+  // Caches request→response keyed by Idempotency-Key header, ensuring safe retries.
+  // See docs/api-proxy-idempotency.md for the contract.
+  const idempotencyForProxy = (req: Request, res: Response, next: NextFunction): void => {
+    idempotencyMiddleware(req, res, next, {
+      keyFromHeader: 'idempotency-key',
+      retentionSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
+      bodyExcludingKeys: ['idempotencyKey'],
+    });
+  };
+
   // Use a param of 0 to capture the wildcard path (everything after the slug)
-  router.all('/:apiSlugOrId/*', authMiddleware, handleProxy);
-  // Also handle requests without a trailing path (e.g. /v1/call/my-api)
-  router.all('/:apiSlugOrId', authMiddleware, handleProxy);
+  // POST and PATCH routes get idempotency protection; GET/DELETE are naturally safe.
+  router.post('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.post('/:apiSlugOrId', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+
+  // GET, DELETE, and other methods pass through without idempotency caching
+  router.get('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.delete('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.put('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.options('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.head('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+
+  router.get('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.delete('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.put('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.options('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.head('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -114,7 +153,12 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const apiEntry = req.api as unknown as ApiRegistryEntry | undefined;
       const endpoint = req.endpoint as unknown as EndpointPricing | undefined;
       const apiKeyHeader = req.apiKeyValue;
-      const keyRecord = req.apiKeyRecord as { id: string; userId: string; apiId: string } | undefined;
+      const keyRecord = req.apiKeyRecord as {
+        id: string;
+        userId: string;
+        apiId: string;
+        rateLimitPerMinute?: number | null;
+      } | undefined;
 
       if (!apiEntry || !endpoint || !apiKeyHeader || !keyRecord) {
         next(
@@ -331,6 +375,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                     timestamp: new Date().toISOString(),
                   });
                 }
+
+                recordEndpointThroughputSaturation({
+                  apiId: String(apiEntry.id),
+                  endpointId: endpoint.endpointId,
+                  endpointPath: endpoint.path,
+                  advertisedLimitPerMinute: Number(keyRecord?.rateLimitPerMinute ?? 0),
+                  observedAt: Date.now(),
+                });
 
                 // Only deduct billing if this requestId hasn't been processed
                 // before (idempotency guard inside usageStore.record).

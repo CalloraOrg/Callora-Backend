@@ -88,5 +88,3 @@ export function createLoginThrottle(
         next();
     };
 }
-
-export type { LoginThrottleOptions };

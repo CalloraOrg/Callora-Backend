@@ -411,7 +411,7 @@ describe('responseEnrichMiddleware', () => {
     // If neither req.id nor ALS context provides a requestId,
     // the original res.json should be left untouched.
     let called = false;
-    const originalJson = function (body: unknown) {
+    const originalJson = function (this: unknown, _body: unknown) {
       called = true;
       return this as unknown as Response;
     };

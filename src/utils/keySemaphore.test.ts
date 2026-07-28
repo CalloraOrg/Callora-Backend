@@ -1,5 +1,3 @@
-import assert from 'node:assert';
-import { test, describe, beforeEach, afterEach } from 'node:test';
 import { KeySemaphore } from './keySemaphore.js';
 
 describe('KeySemaphore', () => {
@@ -25,11 +23,8 @@ describe('KeySemaphore', () => {
       ]);
 
       // The semaphore should never exceed maxConcurrency per key
-      assert.ok(
-        activeAtPeak.every((c) => c <= 2),
-        `Active count never exceeded 2: ${activeAtPeak}`,
-      );
-      assert.equal(semaphore.getTotalActiveSlotCount(), 0);
+      expect(activeAtPeak.every((c) => c <= 2)).toBe(true);
+      expect(semaphore.getTotalActiveSlotCount()).toBe(0);
     });
 
     test('isolates concurrency limits between keys', async () => {
@@ -48,7 +43,29 @@ describe('KeySemaphore', () => {
       ]);
 
       // Two different keys should both be active concurrently
-      assert.equal(peakTotal, 2);
+      expect(peakTotal).toBe(2);
+    });
+
+    test('queues work beyond the limit rather than dropping it', async () => {
+      const semaphore = new KeySemaphore(1, 1000);
+      const order: number[] = [];
+
+      await Promise.all([
+        semaphore.withSlot('key-fifo', async () => {
+          order.push(1);
+          await new Promise((r) => setTimeout(r, 20));
+        }),
+        semaphore.withSlot('key-fifo', async () => {
+          order.push(2);
+        }),
+        semaphore.withSlot('key-fifo', async () => {
+          order.push(3);
+        }),
+      ]);
+
+      // All three tasks ran, in FIFO order, despite a limit of one slot
+      expect(order).toEqual([1, 2, 3]);
+      expect(semaphore.getActiveSlotCount('key-fifo')).toBe(0);
     });
   });
 
@@ -56,27 +73,27 @@ describe('KeySemaphore', () => {
     test('getCurrentActiveSlotCounts returns only active keys', async () => {
       const semaphore = new KeySemaphore(5, 1000);
 
-      assert.deepEqual(semaphore.getCurrentActiveSlotCounts(), {});
+      expect(semaphore.getCurrentActiveSlotCounts()).toEqual({});
 
       await semaphore.withSlot('key-x', async () => {
         const counts = semaphore.getCurrentActiveSlotCounts();
-        assert.equal(counts['key-x'], 1);
-        assert.equal(Object.keys(counts).length, 1);
+        expect(counts['key-x']).toBe(1);
+        expect(Object.keys(counts)).toHaveLength(1);
       });
 
-      assert.deepEqual(semaphore.getCurrentActiveSlotCounts(), {});
+      expect(semaphore.getCurrentActiveSlotCounts()).toEqual({});
     });
 
     test('getActiveSlotCount returns count for specific key', async () => {
       const semaphore = new KeySemaphore(5, 1000);
 
-      assert.equal(semaphore.getActiveSlotCount('key-y'), 0);
+      expect(semaphore.getActiveSlotCount('key-y')).toBe(0);
 
       await semaphore.withSlot('key-y', async () => {
-        assert.equal(semaphore.getActiveSlotCount('key-y'), 1);
+        expect(semaphore.getActiveSlotCount('key-y')).toBe(1);
       });
 
-      assert.equal(semaphore.getActiveSlotCount('key-y'), 0);
+      expect(semaphore.getActiveSlotCount('key-y')).toBe(0);
     });
 
     test('getTotalActiveSlotCount sums all active slots', async () => {
@@ -98,8 +115,8 @@ describe('KeySemaphore', () => {
         }),
       ]);
 
-      assert.equal(total, 3);
-      assert.equal(semaphore.getTotalActiveSlotCount(), 0);
+      expect(total).toBe(3);
+      expect(semaphore.getTotalActiveSlotCount()).toBe(0);
     });
   });
 
@@ -108,18 +125,24 @@ describe('KeySemaphore', () => {
       const semaphore = new KeySemaphore(1, 1000);
 
       await semaphore.withSlot('key-limit', async () => {
-        assert.equal(semaphore.isAtLimit('key-limit'), true);
+        expect(semaphore.isAtLimit('key-limit')).toBe(true);
       });
 
-      assert.equal(semaphore.isAtLimit('key-limit'), false);
+      expect(semaphore.isAtLimit('key-limit')).toBe(false);
     });
 
     test('returns false when key is under its concurrency limit', async () => {
       const semaphore = new KeySemaphore(2, 1000);
 
       await semaphore.withSlot('key-under', async () => {
-        assert.equal(semaphore.isAtLimit('key-under'), false);
+        expect(semaphore.isAtLimit('key-under')).toBe(false);
       });
+    });
+  });
+
+  describe('maxConcurrency', () => {
+    test('exposes the configured per-key ceiling', () => {
+      expect(new KeySemaphore(7, 1000).maxConcurrency).toBe(7);
     });
   });
 
@@ -133,30 +156,26 @@ describe('KeySemaphore', () => {
 
       // Should be able to acquire the slot again
       await semaphore.withSlot('key-release', async () => {
-        assert.equal(semaphore.getActiveSlotCount('key-release'), 1);
+        expect(semaphore.getActiveSlotCount('key-release')).toBe(1);
       });
 
-      assert.equal(semaphore.getActiveSlotCount('key-release'), 0);
+      expect(semaphore.getActiveSlotCount('key-release')).toBe(0);
     });
 
     test('releases slot on error', async () => {
       const semaphore = new KeySemaphore(1, 1000);
 
-      let errorCaught = false;
-      try {
-        await semaphore.withSlot('key-err', async () => {
+      await expect(
+        semaphore.withSlot('key-err', async () => {
           throw new Error('test error');
-        });
-      } catch {
-        errorCaught = true;
-      }
+        }),
+      ).rejects.toThrow('test error');
 
-      assert.ok(errorCaught);
-      assert.equal(semaphore.getActiveSlotCount('key-err'), 0);
+      expect(semaphore.getActiveSlotCount('key-err')).toBe(0);
 
       // Should be able to acquire the slot again
       await semaphore.withSlot('key-err', async () => {
-        assert.equal(semaphore.getActiveSlotCount('key-err'), 1);
+        expect(semaphore.getActiveSlotCount('key-err')).toBe(1);
       });
     });
   });
@@ -167,13 +186,13 @@ describe('KeySemaphore', () => {
 
       // Acquire a slot so we have state
       await semaphore.withSlot('key-clr', async () => {
-        assert.equal(semaphore.getActiveSlotCount('key-clr'), 1);
+        expect(semaphore.getActiveSlotCount('key-clr')).toBe(1);
       });
 
       semaphore.clear();
-      assert.equal(semaphore.getTotalActiveSlotCount(), 0);
-      assert.equal(semaphore.getActiveSlotCount('key-clr'), 0);
-      assert.deepEqual(semaphore.getCurrentActiveSlotCounts(), {});
+      expect(semaphore.getTotalActiveSlotCount()).toBe(0);
+      expect(semaphore.getActiveSlotCount('key-clr')).toBe(0);
+      expect(semaphore.getCurrentActiveSlotCounts()).toEqual({});
     });
   });
 });

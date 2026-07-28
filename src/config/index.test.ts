@@ -77,6 +77,70 @@ describe('config validation', () => {
     });
   });
 
+  it('should expose gateway rate limiter defaults matching the current hardcoded behavior', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+
+    let cfg:
+      | {
+          config: {
+            rateLimiter: {
+              maxRequests: number;
+              windowMs: number;
+              store: 'memory' | 'postgres';
+              postgresTable: string;
+            };
+          };
+        }
+      | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.rateLimiter).toEqual({
+      maxRequests: 5,
+      windowMs: 60_000,
+      store: 'memory',
+      postgresTable: 'gateway_rate_limit_buckets',
+    });
+  });
+
+  it('should expose configured postgres-backed gateway rate limiter values', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+    process.env.RATE_LIMIT_MAX_REQUESTS = '50';
+    process.env.RATE_LIMIT_WINDOW_MS = '10000';
+    process.env.RATE_LIMIT_STORE = 'postgres';
+    process.env.RATE_LIMIT_PG_TABLE = 'custom_rate_limit_buckets';
+
+    let cfg:
+      | {
+          config: {
+            rateLimiter: {
+              maxRequests: number;
+              windowMs: number;
+              store: 'memory' | 'postgres';
+              postgresTable: string;
+            };
+          };
+        }
+      | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.rateLimiter).toEqual({
+      maxRequests: 50,
+      windowMs: 10_000,
+      store: 'postgres',
+      postgresTable: 'custom_rate_limit_buckets',
+    });
+  });
+
   it('should call process.exit(1) when required env vars are missing', async () => {
     // Remove fields that have no defaults — env.ts will fail to parse and call process.exit(1)
     delete process.env.JWT_SECRET;

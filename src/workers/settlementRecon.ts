@@ -71,7 +71,7 @@ export function createSettlementReconWorker(
   }
 
   const db: ReconciliationQueryable = {
-    query: <T = unknown>(text: string, params?: unknown[]) => pool.query<T>(text, params),
+    query: (text: string, params?: unknown[]) => pool.query(text, params) as any,
   };
 
   const job = new SettlementReconciliationJob(db, options);

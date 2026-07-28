@@ -144,6 +144,60 @@ describe('env schema — REST rate limit config', () => {
   });
 });
 
+describe('env schema — gateway rate limit config', () => {
+  it('defaults gateway rate limit values when omitted', () => {
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.RATE_LIMIT_MAX_REQUESTS).toBe(5);
+      expect(result.data.RATE_LIMIT_WINDOW_MS).toBe(60_000);
+      expect(result.data.RATE_LIMIT_STORE).toBe('memory');
+      expect(result.data.RATE_LIMIT_PG_TABLE).toBe('gateway_rate_limit_buckets');
+    }
+  });
+
+  it('accepts explicit postgres store configuration', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      RATE_LIMIT_MAX_REQUESTS: '50',
+      RATE_LIMIT_WINDOW_MS: '10000',
+      RATE_LIMIT_STORE: 'postgres',
+      RATE_LIMIT_PG_TABLE: 'custom_rate_limit_buckets',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.RATE_LIMIT_MAX_REQUESTS).toBe(50);
+      expect(result.data.RATE_LIMIT_WINDOW_MS).toBe(10_000);
+      expect(result.data.RATE_LIMIT_STORE).toBe('postgres');
+      expect(result.data.RATE_LIMIT_PG_TABLE).toBe('custom_rate_limit_buckets');
+    }
+  });
+
+  it('rejects a store value other than "memory" or "postgres"', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      RATE_LIMIT_STORE: 'redis',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a non-positive RATE_LIMIT_MAX_REQUESTS', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      RATE_LIMIT_MAX_REQUESTS: '0',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a table name with characters outside [A-Za-z0-9_]', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      RATE_LIMIT_PG_TABLE: 'buckets; DROP TABLE users;',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('env schema — revenue ledger indexer config', () => {
   it('defaults revenue ledger indexer values when omitted', () => {
     const result = envSchema.safeParse({ ...baseEnv });

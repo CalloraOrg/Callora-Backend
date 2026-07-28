@@ -181,17 +181,33 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
     expect(response.status).toBe(401);
   });
 
-  it('rejects empty keyId param', async () => {
+  it('treats a trailing slash as the collection endpoint, not an empty keyId', async () => {
     const app = buildApp(keySemaphore);
 
-    // This test uses supertest to send a request with an empty keyId
-    // The validate middleware should catch it as 400
+    // Express (with strict routing off) normalises the trailing slash, so this
+    // matches GET /concurrency rather than /concurrency/:keyId with an empty
+    // param. The detail handler is therefore never reached with a blank keyId.
     const response = await request(app)
       .get('/api/admin/keys/concurrency/')
       .set('x-admin-api-key', ADMIN_KEY);
 
-    // Without a keyId, the route won't match :keyId, so it'll either 404 or
-    // fall through. The app should return a standard error.
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    expect(response.body.data).toHaveProperty('keyCounts');
+    expect(response.body.data).not.toHaveProperty('keyId');
+  });
+
+  it('reports the configured per-key ceiling alongside the counts', async () => {
+    const sem = new KeySemaphore(9, 1000);
+    const app = buildApp(sem);
+
+    const listResponse = await request(app)
+      .get('/api/admin/keys/concurrency')
+      .set('x-admin-api-key', ADMIN_KEY);
+    expect(listResponse.body.data.maxConcurrencyPerKey).toBe(9);
+
+    const detailResponse = await request(app)
+      .get('/api/admin/keys/concurrency/key_abc')
+      .set('x-admin-api-key', ADMIN_KEY);
+    expect(detailResponse.body.data.maxConcurrencyPerKey).toBe(9);
   });
 });

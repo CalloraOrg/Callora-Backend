@@ -5,46 +5,13 @@ import { createAdminIpAllowlist } from '../../../middleware/ipAllowlist.js';
 import { BadRequestError, InternalServerError } from '../../../errors/index.js';
 import { logger } from '../../../logger.js';
 import { getClientIp } from '../../../lib/clientIp.js';
+import { validate } from '../../../middleware/validate.js';
+import { usageByEndpointQuerySchema } from '../../../validators/admin.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
 const DEFAULT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_LIMIT = 10;
-const MAX_LIMIT = 1000;
-
-const parseDateParam = (value: unknown): Date | null | undefined => {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-const parseNumberParam = (
-  value: unknown,
-  opts: { min: number; max: number; integer: boolean; fallback: number },
-): number | null => {
-  if (value === undefined) {
-    return opts.fallback;
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  if (opts.integer && !Number.isInteger(parsed)) {
-    return null;
-  }
-  if (parsed < opts.min || parsed > opts.max) {
-    return null;
-  }
-  return parsed;
-};
 
 interface EndpointUsageRow {
   endpoint: string;
@@ -62,6 +29,13 @@ export interface AdminUsageByEndpointRouterDeps {
  *
  * Admin-only: gated behind the admin IP allowlist and admin authentication.
  * Queries the `usage_events` table directly for efficient grouped aggregation.
+ *
+ * All query-parameter validation is performed by {@link usageByEndpointQuerySchema}
+ * via the {@link validate} middleware, which returns a structured
+ * `{ code, message, details }` 400 response for any invalid input.
+ *
+ * Optional filters: `from`, `to` (ISO-8601), `apiId`, `developerId`,
+ * `limit` (integer 1–1000, default 10).
  */
 export function createAdminUsageByEndpointRouter(deps: AdminUsageByEndpointRouterDeps = {}): Router {
   const router = Router();
@@ -69,124 +43,102 @@ export function createAdminUsageByEndpointRouter(deps: AdminUsageByEndpointRoute
   router.use(createAdminIpAllowlist());
   router.use(adminAuth);
 
-  router.get('/', async (req, res, next) => {
-    try {
-      const from = parseDateParam(req.query.from);
-      if (from === null) {
-        next(new BadRequestError('Invalid "from" date'));
-        return;
-      }
-      const to = parseDateParam(req.query.to);
-      if (to === null) {
-        next(new BadRequestError('Invalid "to" date'));
-        return;
-      }
-
-      const limit = parseNumberParam(req.query.limit, {
-        min: 1,
-        max: MAX_LIMIT,
-        integer: true,
-        fallback: DEFAULT_LIMIT,
-      });
-      if (limit === null) {
-        next(new BadRequestError(`limit must be an integer between 1 and ${MAX_LIMIT}`));
-        return;
-      }
-
-      if (req.query.apiId !== undefined && typeof req.query.apiId !== 'string') {
-        next(new BadRequestError('apiId must be a single string value'));
-        return;
-      }
-      const apiId =
-        typeof req.query.apiId === 'string' && req.query.apiId.length > 0
-          ? req.query.apiId
-          : undefined;
-
-      if (req.query.developerId !== undefined && typeof req.query.developerId !== 'string') {
-        next(new BadRequestError('developerId must be a single string value'));
-        return;
-      }
-      const developerId =
-        typeof req.query.developerId === 'string' && req.query.developerId.length > 0
-          ? req.query.developerId
-          : undefined;
-
-      const now = new Date();
-      const queryFrom = from ?? new Date(now.getTime() - DEFAULT_WINDOW_MS);
-      const queryTo = to ?? now;
-
-      if (queryFrom > queryTo) {
-        next(new BadRequestError('from must be before or equal to to'));
-        return;
-      }
-
-      const { pool } = deps;
-      if (!pool) {
-        next(new InternalServerError('Database pool not available'));
-        return;
-      }
-
-      const params: unknown[] = [queryFrom, queryTo];
-      const clauses: string[] = ['created_at >= $1', 'created_at <= $2'];
-
-      if (apiId !== undefined) {
-        params.push(apiId);
-        clauses.push(`api_id = $${params.length}`);
-      }
-
-      if (developerId !== undefined) {
-        params.push(developerId);
-        clauses.push(`developer_id = $${params.length}`);
-      }
-
-      params.push(limit);
-      const sql = `
-        SELECT
-          endpoint_id AS endpoint,
-          COUNT(*)::int AS calls,
-          COALESCE(SUM(amount_usdc), 0)::text AS revenue
-        FROM usage_events
-        WHERE ${clauses.join(' AND ')}
-        GROUP BY endpoint_id
-        ORDER BY calls DESC, endpoint ASC
-        LIMIT $${params.length}
-      `;
-
-      let rows: EndpointUsageRow[];
+  router.get(
+    '/',
+    // ── Input validation at the boundary ──────────────────────────────────
+    // usageByEndpointQuerySchema coerces date strings to Date objects and
+    // numeric strings to numbers; any violation yields a structured 400.
+    validate({ query: usageByEndpointQuerySchema }),
+    async (req, res, next) => {
       try {
-        const result = await pool.query<EndpointUsageRow>(sql, params);
-        rows = result.rows;
-      } catch (dbError) {
-        logger.error('[admin.usage.byEndpoint] aggregation query failed', { error: dbError });
-        next(new InternalServerError());
-        return;
+        // Re-parse to obtain coerced types.  validate() has already confirmed
+        // the shape is valid; this safeParse is effectively free.
+        const parsed = usageByEndpointQuerySchema.safeParse(req.query);
+        if (!parsed.success) {
+          next(new BadRequestError('Invalid query parameters'));
+          return;
+        }
+
+        const { from, to, limit, apiId, developerId } = parsed.data;
+
+        const now = new Date();
+        const queryFrom = from ?? new Date(now.getTime() - DEFAULT_WINDOW_MS);
+        const queryTo = to ?? now;
+        const resolvedLimit = limit ?? DEFAULT_LIMIT;
+
+        if (queryFrom > queryTo) {
+          next(new BadRequestError('from must be before or equal to to'));
+          return;
+        }
+
+        const { pool } = deps;
+        if (!pool) {
+          next(new InternalServerError('Database pool not available'));
+          return;
+        }
+
+        const params: unknown[] = [queryFrom, queryTo];
+        const clauses: string[] = ['created_at >= $1', 'created_at <= $2'];
+
+        if (apiId !== undefined) {
+          params.push(apiId);
+          clauses.push(`api_id = $${params.length}`);
+        }
+
+        if (developerId !== undefined) {
+          params.push(developerId);
+          clauses.push(`developer_id = $${params.length}`);
+        }
+
+        params.push(resolvedLimit);
+        const sql = `
+          SELECT
+            endpoint_id AS endpoint,
+            COUNT(*)::int AS calls,
+            COALESCE(SUM(amount_usdc), 0)::text AS revenue
+          FROM usage_events
+          WHERE ${clauses.join(' AND ')}
+          GROUP BY endpoint_id
+          ORDER BY calls DESC, endpoint ASC
+          LIMIT $${params.length}
+        `;
+
+        let rows: EndpointUsageRow[];
+        try {
+          const result = await pool.query<EndpointUsageRow>(sql, params);
+          rows = result.rows;
+        } catch (dbError) {
+          logger.error('[admin.usage.byEndpoint] aggregation query failed', { error: dbError });
+          next(new InternalServerError());
+          return;
+        }
+
+        logger.audit('LIST_USAGE_BY_ENDPOINT', res.locals.adminActor, {
+          clientIp: getClientIp(req, TRUST_PROXY),
+          userAgent: req.get('User-Agent'),
+          window: { from: queryFrom.toISOString(), to: queryTo.toISOString() },
+          apiId,
+          developerId,
+          limit: resolvedLimit,
+          endpointCount: rows.length,
+        });
+
+        res.json({
+          data: rows.map((row) => ({
+            endpoint: row.endpoint,
+            calls: row.calls,
+            revenue: row.revenue,
+          })),
+          period: {
+            from: queryFrom.toISOString(),
+            to: queryTo.toISOString(),
+          },
+        });
+      } catch (error) {
+        next(error);
       }
-
-      logger.audit('LIST_USAGE_BY_ENDPOINT', res.locals.adminActor, {
-        clientIp: getClientIp(req, TRUST_PROXY),
-        userAgent: req.get('User-Agent'),
-        window: { from: queryFrom.toISOString(), to: queryTo.toISOString() },
-        apiId,
-        developerId,
-        limit,
-        endpointCount: rows.length,
-      });
-
-      res.json({
-        data: rows.map((row) => ({
-          endpoint: row.endpoint,
-          calls: row.calls,
-          revenue: row.revenue,
-        })),
-        period: {
-          from: queryFrom.toISOString(),
-          to: queryTo.toISOString(),
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+    },
+  );
 
   return router;
 }

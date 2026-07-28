@@ -1,17 +1,24 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { type UsageEventsRepository, type GroupBy, type UsageEvent, type UsageStats, type UsageBucket } from '../repositories/usageEventsRepository.js';
 import { type UsageEventsPgRepository } from '../repositories/usageEventsRepository.pg.js';
-import { BadRequestError, InternalServerError, UnauthorizedError } from '../errors/index.js';
+import { InternalServerError, UnauthorizedError } from '../errors/index.js';
 import { parsePagination, parseCursorPagination, decodeCursor } from '../lib/pagination.js';
 import { parseCursor } from '../lib/cursorPagination.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { createUsageAccessLogMiddleware } from '../middleware/usageAccessLog.js';
+import { etagMiddleware } from '../middleware/etag.js';
+import { logger } from '../logger.js';
 
 export interface UsageRouterDeps {
   usageEventsRepository: UsageEventsRepository & Partial<UsageEventsPgRepository>;
+  rateLimitMiddleware?: ReturnType<typeof createRateLimitMiddleware>;
 }
 
-const isValidGroupBy = (value: string): value is GroupBy =>
-  value === 'day' || value === 'week' || value === 'month';
+// ============================================================================
+// Types & Interfaces
+// ============================================================================
 
 interface CursorAugmentedEvents extends Array<UsageEvent> {
   _nextCursor?: string;
@@ -40,95 +47,116 @@ interface UsageResponse {
   pagination?: Record<string, unknown>;
 }
 
-const parseDate = (value: unknown): Date | null => {
-  if (typeof value !== 'string') {
-    return null;
+// ============================================================================
+// Boundary Validation Schema (Zod)
+// ============================================================================
+const UsageQuerySchema = z.object({
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  apiId: z.string().optional(),
+  groupBy: z.enum(['day', 'week', 'month']).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().optional(),
+  after: z.string().optional(),
+  before: z.string().optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+}).refine(data => {
+  if (data.from && data.to) {
+    return new Date(data.from) <= new Date(data.to);
   }
+  return true;
+}, { message: "'from' date must be before or equal to 'to' date", path: ["from"] });
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  return date;
-};
-
+// ============================================================================
+// Router Implementation
+// ============================================================================
 export function createUsageRouter(deps: UsageRouterDeps): Router {
   const router = Router();
   const { usageEventsRepository } = deps;
+  const rateLimitMiddleware = deps.rateLimitMiddleware ?? createRateLimitMiddleware({
+    windowMs: 60_000,
+    maxRequests: 60,
+  });
 
-  router.get('/', requireAuth, async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+  router.use(rateLimitMiddleware);
+
+  const usageAccessLog = createUsageAccessLogMiddleware();
+
+  router.get('/', requireAuth, usageAccessLog, etagMiddleware, async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
     const user = res.locals.authenticatedUser;
+    const correlationId = req.headers['x-correlation-id'] as string | undefined;
+
     if (!user) {
+      logger.warn('Unauthorized access attempt to usage API', { correlationId });
       next(new UnauthorizedError());
       return;
     }
 
-    // Parse and validate query parameters
-    const from = parseDate(req.query.from);
-    const to = parseDate(req.query.to);
-    
-    // Set default period: last 30 days if not provided
+    const queryResult = UsageQuerySchema.safeParse(req.query);
+    if (!queryResult.success) {
+      logger.warn('Usage API input validation failed', { correlationId, errors: queryResult.error.errors });
+      return res.status(400).json({
+        error: {
+          code: 'BAD_REQUEST',
+          message: 'Invalid query parameters provided.',
+          details: queryResult.error.errors
+        }
+      });
+    }
+
+    const query = queryResult.data;
+
+    logger.info('Fetching user usage events', {
+      correlationId,
+      userId: user.id,
+      apiId: query.apiId,
+      limit: query.limit,
+      hasCursor: !!(query.cursor || query.after || query.before)
+    });
+
     const now = new Date();
-    const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const defaultTo = now;
-    
-    let queryFrom = from || defaultFrom;
-    let queryTo = to || defaultTo;
-    
-    if (from && !to) {
+    let queryFrom = query.from ? new Date(query.from) : undefined;
+    let queryTo = query.to ? new Date(query.to) : undefined;
+
+    if (queryFrom && !queryTo) {
       queryTo = now;
-    } else if (!from && to) {
-      queryFrom = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
-    }
-    
-    if (queryFrom > queryTo) {
-      next(new BadRequestError('from must be before or equal to to'));
-      return;
+    } else if (!queryFrom && queryTo) {
+      queryFrom = new Date(queryTo.getTime() - 30 * 24 * 60 * 60 * 1000);
+    } else if (!queryFrom && !queryTo) {
+      queryFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      queryTo = now;
     }
 
-    const apiId = typeof req.query.apiId === 'string' ? req.query.apiId : undefined;
-    
-    const groupBy = req.query.groupBy;
-    let queryGroupBy: GroupBy | undefined;
-    if (typeof groupBy === 'string') {
-      if (!isValidGroupBy(groupBy)) {
-        next(new BadRequestError('groupBy must be one of: day, week, month'));
-        return;
-      }
-      queryGroupBy = groupBy;
-    }
-
-    // Parse limit for cursor branch
-    const limit = parseInt((req.query.limit as string) || '20', 10);
+    const apiId = query.apiId;
+    const queryGroupBy = query.groupBy as GroupBy | undefined;
+    const limit = query.limit;
 
     // -----------------------------------------------------------------------
-    // Cursor pagination branch — activated when `cursor`, `after`, or `before`
-    // query param is present AND the repository supports the cursor method.
+    // Cursor pagination branch (Stable ordering on created_at, id)
     // -----------------------------------------------------------------------
-    const rawAfter = req.query.after ?? req.query.cursor;
-    const rawBefore = req.query.before;
-    const wantsCursor = rawAfter !== undefined || rawBefore !== undefined;
+    const wantsCursor = query.after !== undefined || query.before !== undefined;
 
     if (wantsCursor && typeof usageEventsRepository.findByUserIdCursor === 'function') {
-      // Validate cursors — return 400 for non-null but unparseable values.
-      const afterCursor = rawAfter !== undefined ? parseCursor(rawAfter) : undefined;
-      const beforeCursor = rawBefore !== undefined ? parseCursor(rawBefore) : undefined;
+      const afterCursor = query.after ? parseCursor(query.after) : undefined;
+      const beforeCursor = query.before ? parseCursor(query.before) : undefined;
 
-      if (rawAfter !== undefined && rawAfter !== '' && afterCursor === null) {
-        next(new BadRequestError('Invalid cursor value for "after"'));
-        return;
+      if (query.after && afterCursor === null) {
+        return res.status(400).json({
+          error: { code: 'BAD_REQUEST', message: 'Invalid cursor value for "after". Must be base64 encoded.' }
+        });
       }
-      if (rawBefore !== undefined && rawBefore !== '' && beforeCursor === null) {
-        next(new BadRequestError('Invalid cursor value for "before"'));
-        return;
+      if (query.before && beforeCursor === null) {
+        return res.status(400).json({
+          error: { code: 'BAD_REQUEST', message: 'Invalid cursor value for "before". Must be base64 encoded.' }
+        });
       }
 
       try {
         const { events, nextCursor, prevCursor } =
           await usageEventsRepository.findByUserIdCursor({
             userId: user.id,
-            from: queryFrom,
-            to: queryTo,
+            from: queryFrom!,
+            to: queryTo!,
             limit,
             afterCursor: afterCursor ?? undefined,
             beforeCursor: beforeCursor ?? undefined,
@@ -149,18 +177,17 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
           },
         });
       } catch (error) {
-        console.error('Error fetching user usage (cursor):', error);
+        logger.error('Error fetching user usage (cursor)', { correlationId, error });
         next(new InternalServerError());
         return;
       }
     }
 
     // -----------------------------------------------------------------------
-    // Legacy offset pagination — unchanged, fully backward compatible.
+    // Legacy / Alternative offset & cursor pagination branch
     // -----------------------------------------------------------------------
     try {
-      // Check if cursor pagination is requested
-      const hasCursor = req.query.cursor !== undefined && req.query.cursor !== '';
+      const hasCursor = query.cursor !== undefined;
       
       let events: UsageEvent[];
       let nextCursor: string | undefined;
@@ -168,58 +195,55 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
       let total: number | undefined;
 
       if (hasCursor) {
-        // Cursor-based pagination
-        // Validate cursor format first
         try {
-          const cursorStr = req.query.cursor as string;
-          decodeCursor(cursorStr);
+          if (query.cursor) decodeCursor(query.cursor);
         } catch {
-          next(new BadRequestError('Invalid cursor format. Cursor must be base64 encoded created_at|id'));
-          return;
+          return res.status(400).json({
+            error: {
+              code: 'BAD_REQUEST',
+              message: 'Invalid cursor format. Cursor must be base64 encoded (created_at, id).'
+            }
+          });
         }
 
-        const { limit, cursor } = parseCursorPagination(req.query as Record<string, string>);
+        const paginationParams = parseCursorPagination(req.query as Record<string, string>);
         
         const result = await usageEventsRepository.findByUser({
           userId: user.id,
-          from: queryFrom,
-          to: queryTo,
+          from: queryFrom!,
+          to: queryTo!,
           apiId,
-          limit,
-          cursor: cursor || undefined,
+          limit: paginationParams.limit || limit,
+          cursor: paginationParams.cursor || undefined,
         });
 
         events = result;
         nextCursor = (result as CursorAugmentedEvents)._nextCursor;
         hasMore = (result as CursorAugmentedEvents)._hasMore || false;
-        total = undefined;
       } else {
         // Legacy offset/limit pagination
-        const { limit, offset } = parsePagination(req.query as Record<string, string>);
+        const paginationParams = parsePagination(req.query as Record<string, string>);
         
         events = await usageEventsRepository.findByUser({
           userId: user.id,
-          from: queryFrom,
-          to: queryTo,
+          from: queryFrom!,
+          to: queryTo!,
           apiId,
-          limit,
-          offset,
+          limit: paginationParams.limit || limit,
+          offset: paginationParams.offset,
         });
         
-        hasMore = events.length === limit;
-        total = undefined;
+        hasMore = events.length === (paginationParams.limit || limit);
       }
 
-      // Get aggregated statistics (independent of pagination)
       const stats = await usageEventsRepository.aggregateByUser({
         userId: user.id,
-        from: queryFrom,
-        to: queryTo,
+        from: queryFrom!,
+        to: queryTo!,
         apiId,
         groupBy: queryGroupBy,
       });
 
-      // Format events
       const formattedEvents = events.map((event: UsageEvent) => ({
         id: event.id,
         apiId: event.apiId,
@@ -228,7 +252,6 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
         revenue: event.revenue?.toString() || '0',
       }));
 
-      // Build response
       const response: UsageResponse = {
         events: formattedEvents,
         stats: {
@@ -246,35 +269,25 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
           })),
         },
         period: {
-          from: queryFrom.toISOString(),
-          to: queryTo.toISOString(),
+          from: queryFrom!.toISOString(),
+          to: queryTo!.toISOString(),
         },
       };
 
-      // Add pagination metadata
       if (hasCursor) {
-        response.pagination = {
-          limit: parseInt((req.query.limit as string) || '20', 10),
-          nextCursor,
-          hasMore,
-        };
+        response.pagination = { limit, nextCursor, hasMore };
         formattedEvents.forEach((e: FormattedEvent) => {
           delete e._cursor;
           delete e._hasMore;
         });
       } else {
-        const { limit, offset } = parsePagination(req.query as Record<string, string>);
-        response.pagination = {
-          limit,
-          offset,
-          hasMore,
-          ...(total !== undefined ? { total } : {}),
-        };
+        const { offset } = parsePagination(req.query as Record<string, string>);
+        response.pagination = { limit, offset, hasMore, ...(total !== undefined ? { total } : {}) };
       }
 
       res.json(response);
     } catch (error) {
-      console.error('Error fetching user usage:', error);
+      logger.error('Error fetching user usage', { correlationId, error });
       next(new InternalServerError());
     }
   });

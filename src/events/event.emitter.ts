@@ -25,6 +25,7 @@ export interface CalloraEventPayloadMap {
   low_balance_alert: LowBalanceAlertData;
   invoice_created: InvoiceCreatedData;
   'usage.anomaly.detected': UsageAnomalyDetectedData;
+  'fee_abstraction.executed': FeeAbstractionExecutedData;
   'usage_event.created': UsageEventCreatedData;
 }
 export type CalloraEventName = keyof CalloraEventPayloadMap;
@@ -46,6 +47,7 @@ const createListenerSetMap = (): ListenerSetMap => ({
   low_balance_alert: new Set<CalloraEventListener<'low_balance_alert'>>(),
   invoice_created: new Set<CalloraEventListener<'invoice_created'>>(),
   'usage.anomaly.detected': new Set<CalloraEventListener<'usage.anomaly.detected'>>(),
+  'fee_abstraction.executed': new Set<CalloraEventListener<'fee_abstraction.executed'>>(),
   'usage_event.created': new Set<CalloraEventListener<'usage_event.created'>>(),
 });
 
@@ -133,6 +135,9 @@ calloraEvents.on('invoice_created', (developerId, data) => {
 });
 calloraEvents.on('usage.anomaly.detected', (developerId, data) => {
   return handleEvent('usage.anomaly.detected', developerId, data);
+});
+calloraEvents.on('fee_abstraction.executed', (developerId, data) => {
+  return handleEvent('fee_abstraction.executed', developerId, data);
 });
 calloraEvents.on('usage_event.created', (developerId, data) => {
   return handleEvent('usage_event.created', developerId, data);

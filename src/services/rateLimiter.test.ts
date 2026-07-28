@@ -8,6 +8,7 @@ import {
   isPersistentRateLimiterStore,
   type PersistentRateLimiterPool,
   PostgresRateLimiterStore,
+  resolveRateLimiterConfig,
 } from './rateLimiter.js';
 
 type StoredBucket = {
@@ -596,6 +597,72 @@ describe('createConfiguredRateLimiter', () => {
     assert.equal(
       isPersistentRateLimiterStore(new PostgresRateLimiterStore(new MockPersistentPool())),
       true,
+    );
+  });
+});
+
+describe('resolveRateLimiterConfig', () => {
+  test('maps a memory store config without a tableName field', () => {
+    const result = resolveRateLimiterConfig({
+      maxRequests: 5,
+      windowMs: 60_000,
+      store: 'memory',
+      postgresTable: 'gateway_rate_limit_buckets',
+    });
+
+    assert.deepEqual(result, {
+      store: 'memory',
+      maxRequests: 5,
+      windowMs: 60_000,
+    });
+    assert.equal('tableName' in result, false);
+  });
+
+  test('maps a postgres store config, carrying postgresTable over as tableName', () => {
+    const result = resolveRateLimiterConfig({
+      maxRequests: 50,
+      windowMs: 10_000,
+      store: 'postgres',
+      postgresTable: 'custom_rate_limit_buckets',
+    });
+
+    assert.deepEqual(result, {
+      store: 'postgres',
+      maxRequests: 50,
+      windowMs: 10_000,
+      tableName: 'custom_rate_limit_buckets',
+    });
+  });
+
+  test('feeds directly into createConfiguredRateLimiter for the memory case', async () => {
+    const limiter = createConfiguredRateLimiter(
+      resolveRateLimiterConfig({
+        maxRequests: 1,
+        windowMs: 60_000,
+        store: 'memory',
+        postgresTable: 'gateway_rate_limit_buckets',
+      }),
+    );
+
+    assert.ok(limiter instanceof InMemoryRateLimiter);
+    assert.deepEqual(await limiter.check('resolve-config-key'), { allowed: true });
+    const second = await limiter.check('resolve-config-key');
+    assert.equal(second.allowed, false);
+    assert.ok((second.retryAfterMs ?? 0) > 0 && (second.retryAfterMs ?? 0) <= 60_000);
+  });
+
+  test('feeds directly into createConfiguredRateLimiter for the postgres case', () => {
+    assert.throws(
+      () =>
+        createConfiguredRateLimiter(
+          resolveRateLimiterConfig({
+            maxRequests: 5,
+            windowMs: 60_000,
+            store: 'postgres',
+            postgresTable: 'gateway_rate_limit_buckets',
+          }),
+        ),
+      /PostgreSQL pool is required/,
     );
   });
 });

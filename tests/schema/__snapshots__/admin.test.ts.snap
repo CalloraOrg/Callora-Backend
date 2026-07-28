@@ -1,0 +1,95 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`/api/admin — response schema stability GET /api/admin/usage/:developerId matches the known success response shape 1`] = `
+{
+  "data": {
+    "apiCount": 2,
+    "developerId": "dev_001",
+    "endpointCount": 2,
+    "firstEventAt": "2026-06-25T10:00:00.000Z",
+    "lastEventAt": "2026-06-25T10:05:00.000Z",
+    "settledAmountUsdc": 2,
+    "settledEvents": 1,
+    "statusCodes": {
+      "200": 1,
+      "500": 1,
+    },
+    "totalAmountUsdc": 3.5,
+    "totalEvents": 2,
+    "unsettledAmountUsdc": 1.5,
+    "unsettledEvents": 1,
+  },
+}
+`;
+
+exports[`/api/admin — response schema stability GET /api/admin/usage/:developerId matches the standardized not-found envelope 1`] = `
+{
+  "error": {
+    "code": "USAGE_AGGREGATE_NOT_FOUND",
+    "message": "Usage aggregate not found",
+  },
+  "requestId": Any<String>,
+  "success": false,
+  "timestamp": Any<String>,
+}
+`;
+
+exports[`/api/admin — response schema stability GET /api/admin/users matches the known success response shape 1`] = `
+{
+  "data": [
+    {
+      "email": "admin@callora.test",
+      "id": "user-admin",
+      "role": "admin",
+    },
+    {
+      "email": "dev@callora.test",
+      "id": "user-dev",
+      "role": "developer",
+    },
+  ],
+  "meta": {
+    "limit": 20,
+    "offset": 0,
+    "total": 2,
+  },
+}
+`;
+
+exports[`/api/admin — response schema stability GET /api/admin/users matches the standardized error envelope when unauthenticated 1`] = `
+{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Unauthorized: admin access required",
+  },
+  "requestId": Any<String>,
+  "success": false,
+  "timestamp": Any<String>,
+}
+`;
+
+exports[`/api/admin — response schema stability POST /api/admin/usage/:developerId/reset matches the known success response shape 1`] = `
+{
+  "data": {
+    "developerId": "dev_001",
+    "priorValues": {
+      "apiCount": 2,
+      "developerId": "dev_001",
+      "endpointCount": 2,
+      "firstEventAt": "2026-06-25T10:00:00.000Z",
+      "lastEventAt": "2026-06-25T10:05:00.000Z",
+      "settledAmountUsdc": 2,
+      "settledEvents": 1,
+      "statusCodes": {
+        "200": 1,
+        "500": 1,
+      },
+      "totalAmountUsdc": 3.5,
+      "totalEvents": 2,
+      "unsettledAmountUsdc": 1.5,
+      "unsettledEvents": 1,
+    },
+    "reset": true,
+  },
+}
+`;

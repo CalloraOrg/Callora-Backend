@@ -227,6 +227,23 @@ describe('Security Headers and CORS Configuration', () => {
       }
     });
 
+    test('exposes X-Request-Id header in responses', async () => {
+      const originalEnv = process.env.CORS_ALLOWED_ORIGINS;
+      process.env.CORS_ALLOWED_ORIGINS = 'https://app.example.com';
+      
+      try {
+        const app = createApp();
+        const response = await request(app)
+          .get('/api/health')
+          .set('Origin', 'https://app.example.com');
+        
+        expect(response.status).toBe(200);
+        expect(response.headers['access-control-expose-headers']).toContain('X-Request-Id');
+      } finally {
+        process.env.CORS_ALLOWED_ORIGINS = originalEnv;
+      }
+    });
+
     test('uses shorter max-age in production for security', async () => {
       const originalEnv = { ...process.env };
       process.env.NODE_ENV = 'production';

@@ -1,4 +1,5 @@
 import { resetAllMetrics, register } from '../metrics.js';
+import type { Pool } from 'pg';
 import {
   createIdempotencySweeperJob,
   sweepIdempotencyStoreRows,
@@ -18,7 +19,7 @@ describe('idempotency sweeper', () => {
         .mockResolvedValueOnce({ rowCount: 2 })
         .mockResolvedValueOnce({ rows: [{ row_count: '5' }] })
         .mockResolvedValueOnce({}),
-    } as unknown as { query: jest.Mock };
+    } as unknown as Pool;
 
     const rowCount = await sweepIdempotencyStoreRows(mockPool);
 
@@ -49,7 +50,7 @@ describe('idempotency sweeper', () => {
         .fn()
         .mockResolvedValueOnce({ rows: [{ acquired: false }] })
         .mockResolvedValueOnce({ rows: [{ row_count: '3' }] }),
-    } as unknown as { query: jest.Mock };
+    } as unknown as Pool;
 
     const rowCount = await sweepIdempotencyStoreRows(mockPool);
 
@@ -84,7 +85,7 @@ describe('idempotency sweeper', () => {
         }
         return { rows: [] };
       }),
-    } as unknown as { query: jest.Mock };
+    } as unknown as Pool;
 
     const job = createIdempotencySweeperJob(mockPool, { intervalMs: 1000 });
     job.start();

@@ -2,6 +2,7 @@ import { Router, type Response } from 'express';
 import { requireAuth, type AuthenticatedLocals } from '../../middleware/requireAuth.js';
 import { UnauthorizedError } from '../../errors/index.js';
 import { logger } from '../../logger.js';
+import { getRequestId } from '../../utils/asyncContext.js';
 
 export interface UsageSseDeps {
   broadcaster?: UsageSseBroadcaster;
@@ -50,13 +51,17 @@ export class UsageSseBroadcaster {
       }
     }
   }
+
+  clear(): void {
+    this.listeners.clear();
+  }
 }
 
 export const defaultUsageSseBroadcaster = new UsageSseBroadcaster();
 
 export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
   const router = Router();
-  const broadcaster = deps.broadcaster ?? new UsageSseBroadcaster();
+  const broadcaster = deps.broadcaster ?? defaultUsageSseBroadcaster;
 
   router.get('/', requireAuth, async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
     const user = res.locals.authenticatedUser;
@@ -64,6 +69,13 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
       next(new UnauthorizedError());
       return;
     }
+
+    const requestId = req.id ?? getRequestId();
+
+    logger.info('[usage.sse] client connected', {
+      userId: user.id,
+      requestId,
+    });
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
@@ -73,6 +85,9 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
 
     const writeSse = (event: string, payload: unknown): void => {
       const data = JSON.stringify(payload);
+      if (payload !== null && typeof payload === 'object' && 'id' in payload) {
+        res.write(`id: ${(payload as { id: string }).id}\n`);
+      }
       res.write(`event: ${event}\n`);
       res.write(`data: ${data}\n\n`);
     };
@@ -85,7 +100,10 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
 
     req.on('close', () => {
       unsubscribe();
-      logger.info('[usage.sse] client disconnected', { userId: user.id });
+      logger.info('[usage.sse] client disconnected', {
+        userId: user.id,
+        requestId,
+      });
     });
 
     req.on('aborted', () => {

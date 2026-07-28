@@ -239,6 +239,10 @@ class FakeApiRepository implements ApiRepository {
     return restored;
   }
 
+  async findRawById(id: number): Promise<Api | null> {
+    return null;
+  }
+
   async bulkCreateEndpoints() {
     return [];
   }
@@ -1276,7 +1280,7 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
           // normalize path variables like /apis/:id -> /apis/{id}
           const normalizedPath = path.replace(/:([a-zA-Z0-9_]+)/g, '{$1}');
           registeredRoutes.push(normalizedPath);
-        } else if (layer.name === 'router' && layer.handle.stack) {
+        } else if (layer.name === 'router' && layer.handle?.stack) {
           let newPrefix = prefix;
           if (layer.regexp) {
             // Extract route prefix from layer regexp
@@ -1285,7 +1289,7 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
               newPrefix += match[1];
             }
           }
-          extractRoutes(layer.handle.stack, newPrefix);
+          extractRoutes(layer.handle!.stack, newPrefix);
         }
       }
     }

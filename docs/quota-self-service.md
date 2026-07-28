@@ -166,6 +166,56 @@ Content-Type: application/json
 - The developer's plan is **not** modified.
 - Returns `409 QUOTA_REQUEST_ALREADY_RESOLVED` if already resolved.
 
+### Bulk update developer quotas (admin)
+
+```
+POST /api/admin/quotas/bulk-update
+x-admin-api-key: <key>
+Content-Type: application/json
+
+{
+  "items": [
+    {
+      "developer_id": "dev-123",
+      "plan_tier": "pro",
+      "monthly_call_limit": 250000,
+      "rate_limit_max_requests": 2000
+    },
+    {
+      "developer_id": "dev-456",
+      "plan_tier": "enterprise"
+    }
+  ]
+}
+```
+
+- Atomically updates `plan_overrides` for multiple developers in a single
+  transaction.
+- Validates each item and rejects the entire batch if any item is invalid.
+- Returns `404 NOT_FOUND` if any referenced developer does not exist.
+
+**Request fields**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `developer_id` | string | yes | Developer user ID to update |
+| `plan_tier` | `freeul`, `pro`, `enterprise` | yes | New subscription tier |
+| `monthly_call_limit` | integer | no | Optional monthly call quota override |
+| `rate_limit_max_requests` | integer | no | Optional per-minute rate limit override |
+
+**Response (200 OK)**
+
+```json
+{
+  "data": {
+    "updated": 2
+  }
+}
+```
+
+- The response reports the number of developers updated.
+- Structured audit logging is emitted for the bulk operation.
+
 ---
 
 ## QuotaRequest schema

@@ -16,6 +16,7 @@ import {
 import type { VaultRepository } from '../repositories/vaultRepository.js';
 import { config } from '../config/index.js';
 import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
+import { successEnvelope, errorEnvelope, getRequestId } from '../lib/envelope.js';
 
 export interface DepositPrepareRequest {
   amount_usdc: string;
@@ -60,13 +61,14 @@ export class DepositController {
     res: Response<unknown, AuthenticatedLocals>
   ): Promise<void> {
     try {
+      const requestId = getRequestId(req);
+
       // Step 1: Extract authenticated user
       const user = res.locals.authenticatedUser;
       if (!user) {
-        res.status(401).json({
-          error: 'Authentication required',
-          code: 'UNAUTHORIZED',
-        });
+        res.status(401).json(
+          errorEnvelope('UNAUTHORIZED', 'Authentication required', requestId)
+        );
         return;
       }
 
@@ -74,61 +76,77 @@ export class DepositController {
       const requestBody = req.body as DepositPrepareRequest;
 
       if (!requestBody.amount_usdc) {
-        res.status(400).json({
-          error: 'amount_usdc is required',
-          code: 'MISSING_AMOUNT',
-        });
+        res.status(400).json(
+          errorEnvelope('MISSING_AMOUNT', 'amount_usdc is required', requestId)
+        );
         return;
       }
 
       if (typeof requestBody.amount_usdc !== 'string') {
-        res.status(400).json({
-          error: 'amount_usdc must be a string',
-          code: 'INVALID_AMOUNT_TYPE',
-        });
+        res.status(400).json(
+          errorEnvelope(
+            'INVALID_AMOUNT_TYPE',
+            'amount_usdc must be a string',
+            requestId
+          )
+        );
         return;
       }
 
       // Step 3: Validate amount format
       const validation = AmountValidator.validateUsdcAmount(requestBody.amount_usdc);
       if (!validation.valid) {
-        res.status(400).json({
-          error: validation.error,
-          code: 'INVALID_AMOUNT_FORMAT',
-          provided: requestBody.amount_usdc,
-        });
+        res.status(400).json(
+          errorEnvelope(
+            'INVALID_AMOUNT_FORMAT',
+            validation.error!,
+            requestId,
+            { provided: requestBody.amount_usdc }
+          )
+        );
         return;
       }
 
       // Step 4: Validate and default network
       const network = (requestBody.network ?? config.stellar.network) as StellarNetwork;
       if (network !== 'testnet' && network !== 'mainnet') {
-        res.status(400).json({
-          error: 'network must be either "testnet" or "mainnet"',
-          code: 'INVALID_NETWORK',
-          provided: requestBody.network,
-        });
+        res.status(400).json(
+          errorEnvelope(
+            'INVALID_NETWORK',
+            'network must be either "testnet" or "mainnet"',
+            requestId,
+            { provided: requestBody.network }
+          )
+        );
         return;
       }
 
       if (network !== config.stellar.network) {
-        res.status(400).json({
-          error: `Configured network is '${config.stellar.network}'. Cross-network requests are not allowed.`,
-          code: 'NETWORK_MISMATCH',
-          provided: network,
-          configured: config.stellar.network,
-        });
+        res.status(400).json(
+          errorEnvelope(
+            'NETWORK_MISMATCH',
+            `Configured network is '${config.stellar.network}'. Cross-network requests are not allowed.`,
+            requestId,
+            {
+              provided: network,
+              configured: config.stellar.network,
+            }
+          )
+        );
         return;
       }
 
       // Step 5: Validate source account if provided
       if (requestBody.source_account) {
         if (!this.isValidStellarPublicKey(requestBody.source_account)) {
-          res.status(400).json({
-            error: 'source_account must be a valid Stellar public key (G...)',
-            code: 'INVALID_SOURCE_ACCOUNT',
-            provided: requestBody.source_account,
-          });
+          res.status(400).json(
+            errorEnvelope(
+              'INVALID_SOURCE_ACCOUNT',
+              'source_account must be a valid Stellar public key (G...)',
+              requestId,
+              { provided: requestBody.source_account }
+            )
+          );
           return;
         }
       }
@@ -136,10 +154,13 @@ export class DepositController {
       // Step 6: Retrieve user's vault
       const vault = await this.vaultRepository.findByUserId(user.id, network);
       if (!vault) {
-        res.status(404).json({
-          error: `Vault not found for user on network '${network}'. Please create a vault first.`,
-          code: 'VAULT_NOT_FOUND',
-        });
+        res.status(404).json(
+          errorEnvelope(
+            'VAULT_NOT_FOUND',
+            `Vault not found for user on network '${network}'. Please create a vault first.`,
+            requestId
+          )
+        );
         return;
       }
 
@@ -169,9 +190,9 @@ export class DepositController {
         },
       };
 
-      res.status(200).json(response);
+      res.status(200).json(successEnvelope(response, requestId));
     } catch (error) {
-      this.handleError(error, res);
+      this.handleError(error, res, getRequestId(req));
     }
   }
 
@@ -180,31 +201,39 @@ export class DepositController {
     return /^G[A-Z0-9]{55}$/.test(key);
   }
 
-  private handleError(error: unknown, res: Response): void {
+  private handleError(error: unknown, res: Response, requestId: string): void {
     if (error instanceof VaultNotFoundError) {
-      res.status(404).json({
-        error: error.message,
-        code: 'VAULT_NOT_FOUND',
-      });
+      res.status(404).json(
+        errorEnvelope('VAULT_NOT_FOUND', error.message, requestId)
+      );
     } else if (
       error instanceof InvalidAmountError ||
       error instanceof InvalidMemoError ||
       error instanceof InvalidStellarAddressError
     ) {
-      res.status(400).json({
-        error: error.message,
-        code: 'INVALID_TRANSACTION_INPUT',
-      });
+      res.status(400).json(
+        errorEnvelope(
+          'INVALID_TRANSACTION_INPUT',
+          error.message,
+          requestId
+        )
+      );
     } else if (error instanceof SourceAccountNotFoundError) {
-      res.status(400).json({
-        error: error.message,
-        code: 'SOURCE_ACCOUNT_NOT_FOUND',
-      });
+      res.status(400).json(
+        errorEnvelope(
+          'SOURCE_ACCOUNT_NOT_FOUND',
+          error.message,
+          requestId
+        )
+      );
     } else if (error instanceof InvalidContractIdError) {
-      res.status(500).json({
-        error: 'Invalid vault contract configuration. Please contact support.',
-        code: 'INVALID_CONTRACT_ID',
-      });
+      res.status(500).json(
+        errorEnvelope(
+          'INVALID_CONTRACT_ID',
+          'Invalid vault contract configuration. Please contact support.',
+          requestId
+        )
+      );
     } else if (error instanceof NetworkError) {
       res.status(503).json({
         error: 'Unable to connect to Stellar network. Please try again later.',
@@ -221,16 +250,22 @@ export class DepositController {
         simulationDetails: redacted,
       });
     } else if (error instanceof TransactionBuildError) {
-      res.status(502).json({
-        error: 'Failed to build Stellar transaction. Please try again later.',
-        code: 'TRANSACTION_BUILD_FAILED',
-      });
+      res.status(502).json(
+        errorEnvelope(
+          'TRANSACTION_BUILD_FAILED',
+          'Failed to build Stellar transaction. Please try again later.',
+          requestId
+        )
+      );
     } else {
       // Generic error - don't reveal sensitive details
-      res.status(500).json({
-        error: 'Failed to prepare deposit transaction',
-        code: 'INTERNAL_ERROR',
-      });
+      res.status(500).json(
+        errorEnvelope(
+          'INTERNAL_ERROR',
+          'Failed to prepare deposit transaction',
+          requestId
+        )
+      );
     }
   }
 

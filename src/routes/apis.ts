@@ -1,78 +1,245 @@
-import { Router, type Response } from 'express';
-import { BadRequestError, NotFoundError, UnauthorizedError } from '../errors/index.js';
-import { parsePagination, paginatedResponse } from '../lib/pagination.js';
-import { buildCacheKey, listingsCache, type ListingsCache } from '../lib/listingsCache.js';
-import { recordCacheHit, recordCacheMiss } from '../metrics.js';
-import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
-import { bodyValidator } from '../middleware/validate.js';
-import { etagMiddleware } from '../middleware/etag.js';
+import { Router, type Response } from "express";
+import {
+  BadRequestError,
+  NotFoundError,
+  UnauthorizedError,
+} from "../errors/index.js";
+import {
+  parsePagination,
+  paginatedResponse,
+  parseCursorPagination,
+  decodeCursor,
+  generateCursor,
+  cursorPaginatedResponse,
+} from "../lib/pagination.js";
+import {
+  buildCacheKey,
+  listingsCache,
+  type ListingsCache,
+} from "../lib/listingsCache.js";
+import { recordCacheHit, recordCacheMiss } from "../metrics.js";
+import { recordApisLatency } from "../metrics/registry.js";
+import {
+  requireAuth,
+  type AuthenticatedLocals,
+} from "../middleware/requireAuth.js";
+import { bodyValidator } from "../middleware/validate.js";
+import { etagMiddleware } from "../middleware/etag.js";
 import {
   defaultApiRepository,
   type ApiRepository,
-} from '../repositories/apiRepository.js';
+} from "../repositories/apiRepository.js";
 import {
   defaultDeveloperRepository,
   type DeveloperRepository,
-} from '../repositories/developerRepository.js';
-import { apiRegistrationSchema, bulkEndpointsSchema } from '../validators/apiRegistration.js';
+} from "../repositories/developerRepository.js";
+import {
+  apiRegistrationSchema,
+  bulkEndpointsSchema,
+} from "../validators/apis.js";
+import { createRateLimitMiddleware } from "../middleware/rateLimit.js";
+import {
+  defaultAuditService,
+  type AuditService,
+} from "../services/auditService.js";
+import type { AuditContext } from "../middleware/auditEnrich.js";
+import { logger } from "../middleware/logging.js";
+import type { Request } from "express";
 
 export interface ApisRouterDeps {
   apiRepository?: ApiRepository;
   developerRepository?: DeveloperRepository;
   /** Inject a custom cache instance (useful in tests). Defaults to the shared singleton. */
   cache?: ListingsCache;
+  /** Optional rate limit middleware for the public API routes. */
+  rateLimitMiddleware?: ReturnType<typeof createRateLimitMiddleware>;
+  /** Persists audit rows for state-changing calls. Defaults to the pg-backed service. */
+  auditService?: AuditService;
 }
 
 export function createApisRouter(deps: ApisRouterDeps = {}): Router {
   const router = Router();
   const apiRepository = deps.apiRepository ?? defaultApiRepository;
-  const developerRepository = deps.developerRepository ?? defaultDeveloperRepository;
+  const developerRepository =
+    deps.developerRepository ?? defaultDeveloperRepository;
+  const auditService = deps.auditService ?? defaultAuditService;
   const cache = deps.cache ?? listingsCache;
 
-  router.get('/', etagMiddleware, async (req, res, next) => {
+  // Persist an audit row for a state-changing call. Best-effort: a failed audit
+  // write is logged but never fails the underlying request, which has already
+  // committed by the time this runs.
+  async function recordApiAudit(
+    req: Request,
+    event: string,
+    actor: string,
+    details: Record<string, unknown>,
+  ): Promise<void> {
+    const ctx = (req as Request & { auditContext?: AuditContext }).auditContext;
     try {
-      const { limit, offset } = parsePagination(req.query as Record<string, string>);
-      const category = typeof req.query.category === 'string' ? req.query.category : undefined;
-      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      await auditService.record({
+        event,
+        actor,
+        tenantId: ctx?.tenantId ?? null,
+        clientIp: ctx?.clientIp ?? null,
+        userAgent: ctx?.userAgent ?? null,
+        correlationId: ctx?.correlationId ?? null,
+        bodyHash: ctx?.bodyHash ?? null,
+        details,
+      });
+    } catch (error) {
+      logger.error(
+        { event, actor, correlationId: ctx?.correlationId, err: error },
+        "Failed to persist audit log for API mutation",
+      );
+    }
+  }
+  const rateLimitMiddleware =
+    deps.rateLimitMiddleware ??
+    createRateLimitMiddleware({
+      windowMs: 60_000,
+      maxRequests: 60,
+    });
 
-      // ── Cache lookup ──────────────────────────────────────────────────────
+  router.use(rateLimitMiddleware);
+
+  /**
+   * Middleware to record request timing for all /api/apis routes.
+   * Captures the full request lifecycle and records the duration to the histogram
+   * with method and status code labels.
+   */
+  const recordApisTimingMiddleware = (req: Request, res: Response, next) => {
+    const startTime = Date.now();
+
+    res.on('finish', () => {
+      const duration = Date.now() - startTime;
+      recordApisLatency(req.method, res.statusCode, duration);
+    });
+
+    next();
+  };
+
+  router.use(recordApisTimingMiddleware);
+
+  /**
+   * GET /api/apis — public marketplace listings with conditional GET support.
+   *
+   * `etagMiddleware` attaches a strong SHA-256 `ETag` to successful 200
+   * responses. Clients may send `If-None-Match: <etag>` on subsequent polls;
+   * an unchanged listing returns `304 Not Modified` with an empty body.
+   */
+  router.get("/", etagMiddleware, async (req, res, next) => {
+    try {
+      const query = req.query as Record<string, string>;
+      const category =
+        typeof req.query.category === "string" ? req.query.category : undefined;
+      const search =
+        typeof req.query.search === "string" ? req.query.search : undefined;
+
+      // ── Cursor-based pagination path ───────────────────────────────────────
+      if (query.cursor !== undefined && query.cursor.trim() !== "") {
+        const { limit, cursor: rawCursor } = parseCursorPagination(query);
+
+        // decodeCursor throws a ValidationError (400) on malformed input.
+        const { created_at: cursorCreatedAt, id: cursorId } = decodeCursor(
+          rawCursor!,
+        );
+        const cursorDate = new Date(cursorCreatedAt);
+        const cursorIdNum = parseInt(cursorId, 10);
+        if (!Number.isFinite(cursorIdNum) || cursorIdNum <= 0) {
+          next(
+            new BadRequestError(
+              "Invalid cursor: id component must be a positive integer",
+            ),
+          );
+          return;
+        }
+
+        const cacheKey = buildCacheKey({
+          limit,
+          offset: 0,
+          category,
+          search,
+          cursor: rawCursor,
+        });
+        const cached = cache.get(cacheKey);
+        if (cached !== undefined) {
+          recordCacheHit();
+          res.json(cached);
+          return;
+        }
+
+        recordCacheMiss();
+        // Fetch limit+1 rows; the repository already applies +1 internally.
+        const rows = await apiRepository.listPublic({
+          limit,
+          category,
+          search,
+          cursor: { after_created_at: cursorDate, after_id: cursorIdNum },
+        });
+
+        const hasMore = rows.length > limit;
+        const pageRows = rows.slice(0, limit);
+
+        // Generate the next cursor from the last item in this page.
+        let nextCursor: string | undefined;
+        if (hasMore && pageRows.length > 0) {
+          const last = pageRows[pageRows.length - 1];
+          nextCursor = generateCursor(
+            last.created_at.toISOString(),
+            String(last.id),
+          );
+        }
+
+        const response = cursorPaginatedResponse(pageRows, {
+          limit,
+          nextCursor,
+          hasMore,
+        });
+
+        cache.set(cacheKey, response);
+        res.json(response);
+        return;
+      }
+
+      // ── Offset-based pagination path (legacy / default) ────────────────────
+      const { limit, offset } = parsePagination(query);
+
       const cacheKey = buildCacheKey({ limit, offset, category, search });
       const cached = cache.get(cacheKey);
-
       if (cached !== undefined) {
-        // Serve from cache and record a hit metric.
         recordCacheHit();
         res.json(cached);
         return;
       }
 
-      // ── Cache miss: read from DB, populate cache ──────────────────────────
       recordCacheMiss();
-      const apis = await apiRepository.listPublic({ limit, offset, category, search });
+      const apis = await apiRepository.listPublic({
+        limit,
+        offset,
+        category,
+        search,
+      });
       const response = paginatedResponse(apis, { limit, offset });
 
-      // Store the serialisable response object so subsequent requests within
-      // the TTL window skip the DB entirely.
       cache.set(cacheKey, response);
-
       res.json(response);
     } catch (error) {
       next(error);
     }
   });
 
-  router.get('/:id', async (req, res, next) => {
+  router.get("/:id", etagMiddleware, async (req, res, next) => {
     try {
       const id = Number(req.params.id);
 
       if (!Number.isInteger(id) || id <= 0) {
-        next(new BadRequestError('id must be a positive integer'));
+        next(new BadRequestError("id must be a positive integer"));
         return;
       }
 
       const api = await apiRepository.findById(id);
       if (!api) {
-        next(new NotFoundError('API not found or not active'));
+        next(new NotFoundError("API not found or not active"));
         return;
       }
 
@@ -95,7 +262,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
   });
 
   router.post(
-    '/',
+    "/",
     requireAuth,
     bodyValidator(apiRegistrationSchema),
     async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
@@ -108,7 +275,12 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
 
         const developer = await developerRepository.findByUserId(user.id);
         if (!developer) {
-          next(new BadRequestError('Developer profile not found. Create a developer profile first.', 'DEVELOPER_NOT_FOUND'));
+          next(
+            new BadRequestError(
+              "Developer profile not found. Create a developer profile first.",
+              "DEVELOPER_NOT_FOUND",
+            ),
+          );
           return;
         }
 
@@ -119,13 +291,25 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
           description: payload.description ?? null,
           base_url: payload.base_url,
           category: payload.category,
-          status: 'active',
+          status: "active",
           endpoints: payload.endpoints.map((endpoint) => ({
             path: endpoint.path,
             method: endpoint.method,
             price_per_call_usdc: endpoint.price_per_call_usdc,
             description: endpoint.description ?? null,
           })),
+        });
+
+        await recordApiAudit(req, "API_CREATE", user.id, {
+          apiId: api.id,
+          before: null,
+          after: {
+            name: payload.name,
+            base_url: payload.base_url,
+            category: payload.category,
+            status: "active",
+            endpointCount: payload.endpoints.length,
+          },
         });
 
         res.status(201).json(api);
@@ -136,7 +320,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
   );
 
   router.post(
-    '/:id/endpoints/bulk',
+    "/:id/endpoints/bulk",
     requireAuth,
     bodyValidator(bulkEndpointsSchema),
     async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
@@ -149,7 +333,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
 
         const apiId = Number(req.params.id);
         if (!Number.isInteger(apiId) || apiId <= 0) {
-          next(new BadRequestError('id must be a positive integer'));
+          next(new BadRequestError("id must be a positive integer"));
           return;
         }
 
@@ -157,8 +341,8 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         if (!developer) {
           next(
             new BadRequestError(
-              'Developer profile not found. Create a developer profile first.',
-              'DEVELOPER_NOT_FOUND',
+              "Developer profile not found. Create a developer profile first.",
+              "DEVELOPER_NOT_FOUND",
             ),
           );
           return;
@@ -167,7 +351,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         const developerApis = await apiRepository.listByDeveloper(developer.id);
         const api = developerApis.find((a) => a.id === apiId);
         if (!api) {
-          next(new NotFoundError('API not found'));
+          next(new NotFoundError("API not found"));
           return;
         }
 
@@ -181,6 +365,18 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
             description: ep.description ?? null,
           })),
         );
+
+        await recordApiAudit(req, "API_ENDPOINTS_BULK_CREATE", user.id, {
+          apiId,
+          before: null,
+          after: {
+            addedEndpointCount: payload.endpoints.length,
+            addedEndpoints: payload.endpoints.map((ep) => ({
+              path: ep.path,
+              method: ep.method,
+            })),
+          },
+        });
 
         res.status(201).json({ endpoints });
       } catch (error) {

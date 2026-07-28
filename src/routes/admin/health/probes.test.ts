@@ -255,6 +255,61 @@ describe('Admin Health Probes Endpoint', () => {
       expect(res.body.error).toBe('Network error');
     });
 
+    it('returns 404 for horizon when not configured', async () => {
+      const app = buildApp({
+        config: {},
+      });
+
+      const res = await request(app)
+        .get('/api/admin/health/probes/horizon')
+        .set('x-admin-api-key', ADMIN_KEY);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 200 for horizon when healthy', async () => {
+      const mockFetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({}),
+      }));
+      global.fetch = mockFetch as unknown as typeof fetch;
+
+      const app = buildApp({
+        config: {
+          horizon: { url: 'https://horizon-testnet.stellar.org', timeout: 1000 },
+        },
+      });
+
+      const res = await request(app)
+        .get('/api/admin/health/probes/horizon')
+        .set('x-admin-api-key', ADMIN_KEY);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('ok');
+      expect(typeof res.body.responseTime).toBe('number');
+    });
+
+    it('returns 503 for horizon when down', async () => {
+      const mockFetch = jest.fn(async () => {
+        throw new Error('Connection timed out');
+      });
+      global.fetch = mockFetch as unknown as typeof fetch;
+
+      const app = buildApp({
+        config: {
+          horizon: { url: 'https://horizon-testnet.stellar.org', timeout: 1000 },
+        },
+      });
+
+      const res = await request(app)
+        .get('/api/admin/health/probes/horizon')
+        .set('x-admin-api-key', ADMIN_KEY);
+
+      expect(res.status).toBe(503);
+      expect(res.body.status).toBe('down');
+      expect(res.body.error).toBe('Connection timed out');
+    });
+
     it('returns 400 for an invalid component name', async () => {
       const app = buildApp();
       const res = await request(app)
@@ -262,6 +317,55 @@ describe('Admin Health Probes Endpoint', () => {
         .set('x-admin-api-key', ADMIN_KEY);
 
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('Response shape validation', () => {
+    it('includes timestamp and version in the all-probes response', async () => {
+      const pool = createMockPool({ rows: [{ result: 1 }] } as QueryResult);
+      const app = buildApp({
+        pool,
+        config: {
+          version: '2.0.0',
+          database: { timeout: 1000 },
+        },
+      });
+
+      const res = await request(app)
+        .get('/api/admin/health/probes')
+        .set('x-admin-api-key', ADMIN_KEY);
+
+      expect(res.status).toBe(200);
+      expect(res.body.version).toBe('2.0.0');
+      expect(res.body.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      // soroban_rpc and horizon are absent when not configured
+      expect(res.body.components.soroban_rpc).toBeUndefined();
+      expect(res.body.components.horizon).toBeUndefined();
+    });
+
+    it('returns 200 degraded when horizon is down but database is healthy', async () => {
+      const pool = createMockPool({ rows: [{ result: 1 }] } as QueryResult);
+      const mockFetch = jest.fn(async () => {
+        throw new Error('Horizon unreachable');
+      });
+      global.fetch = mockFetch as unknown as typeof fetch;
+
+      const app = buildApp({
+        pool,
+        config: {
+          database: { timeout: 1000 },
+          horizon: { url: 'https://horizon-testnet.stellar.org', timeout: 1000 },
+        },
+      });
+
+      const res = await request(app)
+        .get('/api/admin/health/probes')
+        .set('x-admin-api-key', ADMIN_KEY);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('degraded');
+      expect(res.body.components.database.status).toBe('ok');
+      expect(res.body.components.horizon.status).toBe('down');
     });
   });
 });

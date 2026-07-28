@@ -1,0 +1,50 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`GET /api/billing/credits — Response Schema Stability 200 success response shape matches the full 200 success response shape snapshot: credits-200-success-schema 1`] = `
+{
+  "balance_usdc": "42.50",
+  "created_at": "<CREATED_AT>",
+  "updated_at": "<UPDATED_AT>",
+  "user_id": "dev-schema-test-user",
+}
+`;
+
+exports[`GET /api/billing/credits — Response Schema Stability 400 error shape — unexpected query parameter matches the 400 error envelope shape snapshot 1`] = `
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "details": [
+      {
+        "code": "UNRECOGNIZED_KEYS",
+        "field": "query",
+        "message": "Unrecognized key: "unexpected"",
+      },
+    ],
+    "message": "Request validation failed",
+  },
+  "requestId": "unknown",
+  "success": false,
+  "timestamp": Any<String>,
+}
+`;
+
+exports[`GET /api/billing/credits — Response Schema Stability 401 error shape — unauthenticated request matches the 401 error envelope shape snapshot 1`] = `
+{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Unauthorized",
+  },
+  "requestId": "unknown",
+  "success": false,
+  "timestamp": Any<String>,
+}
+`;
+
+exports[`GET /api/billing/credits — Response Schema Stability new user — zero balance auto-creation matches the zero-balance response shape snapshot: credits-200-zero-balance-schema 1`] = `
+{
+  "balance_usdc": "0.00",
+  "created_at": "<CREATED_AT>",
+  "updated_at": "<UPDATED_AT>",
+  "user_id": "new-user-no-history",
+}
+`;

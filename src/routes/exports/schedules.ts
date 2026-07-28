@@ -2,8 +2,20 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../../middleware/requireAuth.js';
 import { validate } from '../../middleware/validate.js';
+import { idempotencyMiddleware, type IdempotencyConfig } from '../../middleware/idempotency.js';
 import { BadRequestError, NotFoundError, UnauthorizedError } from '../../errors/index.js';
 import type { ScheduledExportsService } from '../../services/scheduledExports.js';
+import { exportsAccessLogMiddleware } from '../../middleware/exportsAccessLog.js';
+
+const EXPORT_IDEMPOTENCY_CONFIG: IdempotencyConfig = {
+  keyFromHeader: 'idempotency-key',
+  keyFromBody: 'idempotencyKey',
+  bodyExcludingKeys: ['idempotencyKey'],
+  retentionSeconds: 3600,
+  cleanExpiredTTL: true,
+  conflictErrorCode: 'IDEMPOTENCY_KEY_REUSE_MISMATCH',
+  inProgressErrorCode: 'IDEMPOTENCY_IN_PROGRESS',
+};
 
 const scheduleBodySchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -24,6 +36,9 @@ const schedulePatchSchema = scheduleBodySchema.partial().refine((value) => Objec
 export function createExportSchedulesRouter(service: ScheduledExportsService): Router {
   const router = Router();
 
+  const idempotencyHandler = (req: Parameters<typeof idempotencyMiddleware>[0], res: Parameters<typeof idempotencyMiddleware>[1], next: Parameters<typeof idempotencyMiddleware>[2]) =>
+    idempotencyMiddleware(req, res, next, EXPORT_IDEMPOTENCY_CONFIG);
+
   router.get('/', requireAuth, async (_req, res, next) => {
     try {
       const user = (res as typeof res & { locals: AuthenticatedLocals }).locals.authenticatedUser;
@@ -35,7 +50,7 @@ export function createExportSchedulesRouter(service: ScheduledExportsService): R
     }
   });
 
-  router.post('/', requireAuth, validate({ body: scheduleBodySchema }), async (req, res, next) => {
+  router.post('/', requireAuth, idempotencyHandler, validate({ body: scheduleBodySchema }), async (req, res, next) => {
     try {
       const user = (res as typeof res & { locals: AuthenticatedLocals }).locals.authenticatedUser;
       if (!user) throw new UnauthorizedError();
@@ -50,7 +65,7 @@ export function createExportSchedulesRouter(service: ScheduledExportsService): R
     }
   });
 
-  router.patch('/:scheduleId', requireAuth, validate({ body: schedulePatchSchema }), async (req, res, next) => {
+  router.patch('/:scheduleId', requireAuth, idempotencyHandler, validate({ body: schedulePatchSchema }), async (req, res, next) => {
     try {
       const user = (res as typeof res & { locals: AuthenticatedLocals }).locals.authenticatedUser;
       if (!user) throw new UnauthorizedError();

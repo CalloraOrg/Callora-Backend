@@ -17,8 +17,8 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      assert.equal((redacted as Record<string, unknown>).headers['x-api-key'], REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).headers['content-type'], 'application/json');
+      assert.equal((redacted as Record<string, any>).headers['x-api-key'], REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).headers['content-type'], 'application/json');
     });
 
     test('redacts authorization bearer tokens', async () => {
@@ -31,8 +31,8 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      assert.equal((redacted as Record<string, unknown>).headers.authorization, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).headers['user-agent'], 'Mozilla/5.0');
+      assert.equal((redacted as Record<string, any>).headers.authorization, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).headers['user-agent'], 'Mozilla/5.0');
     });
 
     test('redacts apiKey field in various cases', async () => {
@@ -46,11 +46,11 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      assert.equal((redacted as Record<string, unknown>).apiKey, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).ApiKey, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).API_KEY, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).api_key, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).safe, 'value');
+      assert.equal((redacted as Record<string, any>).apiKey, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).ApiKey, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).API_KEY, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).api_key, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).safe, 'value');
     });
 
     test('redacts token field in various cases', async () => {
@@ -63,10 +63,10 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      assert.equal((redacted as Record<string, unknown>).token, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).Token, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).TOKEN, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).safe, 'request-token-123');
+      assert.equal((redacted as Record<string, any>).token, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).Token, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).TOKEN, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).safe, 'request-token-123');
     });
 
     test('redacts admin/special API keys', async () => {
@@ -78,9 +78,9 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      assert.equal((redacted as Record<string, unknown>)['x-admin-api-key'], REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>)['x-auth-token'], REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>)['proxy-authorization'], REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>)['x-admin-api-key'], REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>)['x-auth-token'], REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>)['proxy-authorization'], REDACTED_LOG_VALUE);
     });
 
     test('redacts nested API keys in request body', async () => {
@@ -100,7 +100,7 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      const body = (redacted as Record<string, unknown>).body;
+      const body = (redacted as Record<string, any>).body;
       assert.equal(body.user.credentials.apiKey, REDACTED_LOG_VALUE);
       assert.equal(body.user.credentials.password, REDACTED_LOG_VALUE);
       assert.equal(body.user.credentials.token, REDACTED_LOG_VALUE);
@@ -118,7 +118,7 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      const webhooks = (redacted as Record<string, unknown>).webhooks;
+      const webhooks = (redacted as Record<string, any>).webhooks;
       assert.equal(webhooks[0].apiKey, REDACTED_LOG_VALUE);
       assert.equal(webhooks[0].url, 'https://example.com/1');
       assert.equal(webhooks[1].apiKey, REDACTED_LOG_VALUE);
@@ -141,8 +141,8 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      const headers = (redacted as Record<string, unknown>).headers;
-      const body = (redacted as Record<string, unknown>).body;
+      const headers = (redacted as Record<string, any>).headers;
+      const body = (redacted as Record<string, any>).body;
 
       assert.equal(headers.authorization, REDACTED_LOG_VALUE);
       assert.equal(headers['x-api-key'], REDACTED_LOG_VALUE);
@@ -181,7 +181,7 @@ describe('API Key Redaction Regression Tests', () => {
         res.emit('finish');
 
         // The log should only contain safe metadata, not headers or body
-        const [payload] = infoSpy.mock.calls[0] as [Record<string, unknown>, string];
+        const [payload] = infoSpy.mock.calls[0] as [Record<string, any>, string];
         assert(!('headers' in payload), 'headers should not be in log payload');
         assert(!('body' in payload), 'body should not be in log payload');
         assert(payload.requestId, 'requestId should be in log payload');
@@ -260,7 +260,7 @@ describe('API Key Redaction Regression Tests', () => {
         expect(logSpy).toHaveBeenCalled();
         const logCall = logSpy.mock.calls[0][0];
         assert(typeof logCall === 'object', 'audit log should be an object');
-        const auditLog = logCall as Record<string, unknown>;
+        const auditLog = logCall as Record<string, any>;
         assert.equal(auditLog.type, 'AUDIT');
         assert.equal(auditLog.event, 'api_key_created');
         assert.equal(auditLog.actor, 'admin@example.com');
@@ -275,7 +275,7 @@ describe('API Key Redaction Regression Tests', () => {
 
   describe('edge cases - API key redaction robustness', () => {
     test('redacts API keys in circular reference objects', async () => {
-      const input: Record<string, unknown> = {
+      const input: Record<string, any> = {
         apiKey: 'secret_key_123',
         safe: 'value',
       };
@@ -284,8 +284,8 @@ describe('API Key Redaction Regression Tests', () => {
       const redacted = redactLogValue(input);
 
       // Should handle circular reference without crashing
-      assert.equal((redacted as Record<string, unknown>).apiKey, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).safe, 'value');
+      assert.equal((redacted as Record<string, any>).apiKey, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).safe, 'value');
     });
 
     test('redacts API keys in deeply nested structures', async () => {
@@ -306,7 +306,7 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      const deepValue = ((((redacted as Record<string, unknown>).level1).level2).level3).level4.level5;
+      const deepValue = ((((redacted as Record<string, any>).level1).level2).level3).level4.level5;
       assert.equal(deepValue.apiKey, REDACTED_LOG_VALUE);
       assert.equal(deepValue.safe, 'deep_value');
     });
@@ -325,7 +325,7 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      const data = (redacted as Record<string, unknown>).data;
+      const data = (redacted as Record<string, any>).data;
       assert.equal(data[0], 'string_value');
       assert.equal(data[1], 123);
       assert.equal(data[2].apiKey, REDACTED_LOG_VALUE);
@@ -342,7 +342,7 @@ describe('API Key Redaction Regression Tests', () => {
       error.apiKey = 'sk_live_error_context_secret';
       error.code = 'AUTH_FAILED';
 
-      const redacted = redactLogValue(error) as Record<string, unknown>;
+      const redacted = redactLogValue(error) as Record<string, any>;
 
       assert.equal(redacted.name, 'Error');
       assert.equal(redacted.message, 'API authentication failed');
@@ -360,9 +360,9 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      assert.equal((redacted as Record<string, unknown>).apiKey, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).password, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).token, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).apiKey, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).password, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).token, REDACTED_LOG_VALUE);
     });
 
     test('redacts all variations of "secret" field naming', async () => {
@@ -377,12 +377,12 @@ describe('API Key Redaction Regression Tests', () => {
 
       const redacted = redactLogValue(input);
 
-      assert.equal((redacted as Record<string, unknown>).secret, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).Secret, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).SECRET, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).clientSecret, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).ClientSecret, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).webhookSecret, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).secret, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).Secret, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).SECRET, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).clientSecret, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).ClientSecret, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).webhookSecret, REDACTED_LOG_VALUE);
     });
 
     test('only redacts exact key matches, not substring matches', async () => {
@@ -398,13 +398,13 @@ describe('API Key Redaction Regression Tests', () => {
       const redacted = redactLogValue(input);
 
       // Non-exact matches should be preserved
-      assert.equal((redacted as Record<string, unknown>).api_key_id, 'safe_id_123');
-      assert.equal((redacted as Record<string, unknown>).user_token_id, 'safe_id_456');
-      assert.equal((redacted as Record<string, unknown>).authorization_code, 'safe_code_789');
+      assert.equal((redacted as Record<string, any>).api_key_id, 'safe_id_123');
+      assert.equal((redacted as Record<string, any>).user_token_id, 'safe_id_456');
+      assert.equal((redacted as Record<string, any>).authorization_code, 'safe_code_789');
       // Exact matches should be redacted
-      assert.equal((redacted as Record<string, unknown>).apiKey, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).token, REDACTED_LOG_VALUE);
-      assert.equal((redacted as Record<string, unknown>).authorization, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).apiKey, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).token, REDACTED_LOG_VALUE);
+      assert.equal((redacted as Record<string, any>).authorization, REDACTED_LOG_VALUE);
     });
   });
 
@@ -453,7 +453,7 @@ describe('API Key Redaction Regression Tests', () => {
         const input = { [key]: `sensitive_value_for_${key}` };
         const redacted = redactLogValue(input);
         assert.equal(
-          (redacted as Record<string, unknown>)[key],
+          (redacted as Record<string, any>)[key],
           REDACTED_LOG_VALUE,
           `Key "${key}" should be redacted`,
         );

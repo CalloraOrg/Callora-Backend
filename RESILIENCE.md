@@ -446,6 +446,98 @@ src/
 - Express controller for deposit endpoint
 - Maps errors to appropriate HTTP status codes
 
+## Admin Circuit Breaker Endpoints
+
+Administrators can inspect and manage circuit breaker state via the admin API. These endpoints are protected by IP allowlist and admin authentication (API key or JWT).
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/admin/circuit-breakers` | List all registered circuit breakers with state and metrics |
+| `GET` | `/api/admin/circuit-breakers/:breakerKey` | Get detailed state and metrics for a specific breaker |
+| `POST` | `/api/admin/circuit-breakers/:breakerKey/reset` | Force-reset a breaker to CLOSED (resume traffic) |
+| `POST` | `/api/admin/circuit-breakers/:breakerKey/trip` | Force-trip a breaker to OPEN (block traffic) |
+
+### Examples
+
+**List all breakers:**
+```bash
+curl -H "x-admin-api-key: $ADMIN_KEY" http://localhost:3000/api/admin/circuit-breakers
+```
+
+Response:
+```json
+{
+  "data": [
+    {
+      "slug": "stellar-horizon",
+      "state": "open",
+      "metrics": {
+        "state": "OPEN",
+        "consecutiveFailures": 7,
+        "totalFailures": 12,
+        "totalSuccesses": 45
+      }
+    }
+  ]
+}
+```
+
+**Reset a breaker (resume traffic):**
+```bash
+curl -X POST -H "x-admin-api-key: $ADMIN_KEY" \
+  http://localhost:3000/api/admin/circuit-breakers/stellar-horizon/reset
+```
+
+Response:
+```json
+{
+  "data": {
+    "slug": "stellar-horizon",
+    "priorState": "open",
+    "currentState": "closed"
+  }
+}
+```
+
+**Trip a breaker (emergency shutdown):**
+```bash
+curl -X POST -H "x-admin-api-key: $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Scheduled upstream maintenance"}' \
+  http://localhost:3000/api/admin/circuit-breakers/stellar-horizon/trip
+```
+
+Response:
+```json
+{
+  "data": {
+    "slug": "stellar-horizon",
+    "priorState": "closed",
+    "currentState": "open",
+    "reason": "Scheduled upstream maintenance"
+  }
+}
+```
+
+### Input Validation
+
+- `breakerKey` parameter: 1-128 characters, alphanumeric, hyphens, underscores only
+- `reason` field (trip only): optional, max 512 characters
+- Invalid input returns `400 Bad Request` with validation details
+- Non-existent breaker returns `404 Not Found` (except trip, which auto-creates)
+
+### Audit Logging
+
+All admin circuit breaker actions are logged with structured audit events:
+- `LIST_CIRCUIT_BREAKERS` — when listing all breakers
+- `READ_CIRCUIT_BREAKER` — when inspecting a specific breaker
+- `RESET_CIRCUIT_BREAKER` — when force-closing a breaker
+- `TRIP_CIRCUIT_BREAKER` — when force-opening a breaker
+
+Each audit entry includes: `clientIp`, `userAgent`, `correlationId`, and action-specific details.
+
 ## References
 
 - [Circuit Breaker Pattern - Martin Fowler](https://martinfowler.com/bliki/CircuitBreaker.html)

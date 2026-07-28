@@ -388,6 +388,39 @@ export function createRateLimiter(
   return new InMemoryRateLimiter(maxRequests, windowMs, tierPolicies);
 }
 
+export interface AppRateLimiterConfig {
+  maxRequests: number;
+  windowMs: number;
+  store: 'memory' | 'postgres';
+  postgresTable: string;
+}
+
+/**
+ * Translates the app-level `config.rateLimiter` shape (as produced by
+ * `src/config/index.ts` from RATE_LIMIT_* env vars) into the discriminated
+ * `RateLimiterConfig` expected by `createConfiguredRateLimiter`. Kept as a
+ * standalone pure function so the store/table wiring used by the gateway and
+ * proxy routes is unit-testable without booting the full server.
+ */
+export function resolveRateLimiterConfig(
+  config: AppRateLimiterConfig,
+): RateLimiterConfig {
+  if (config.store === 'postgres') {
+    return {
+      store: 'postgres',
+      maxRequests: config.maxRequests,
+      windowMs: config.windowMs,
+      tableName: config.postgresTable,
+    };
+  }
+
+  return {
+    store: 'memory',
+    maxRequests: config.maxRequests,
+    windowMs: config.windowMs,
+  };
+}
+
 export function createConfiguredRateLimiter(
   config: RateLimiterConfig,
   persistentPool?: PersistentRateLimiterPool,

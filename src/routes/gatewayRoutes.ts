@@ -8,6 +8,7 @@ import type { GatewayDeps, ApiKey } from '../types/gateway.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
+
 import {
   BadGatewayError,
   ForbiddenError,
@@ -131,6 +132,37 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
   // as 413 via the app-level error handler.
   router.use(express.json({ limit: maxBodySize }));
   router.use(express.urlencoded({ extended: false, limit: maxBodySize }));
+
+  // ── Gateway cursor-paginated listing endpoint ─────────────────────────────
+  //
+  // GET /
+  //
+  // Returns registered APIs with cursor-based pagination over (created_at, id).
+  // Query params:
+  //   cursor  - Opaque base64 cursor from a previous response
+  //   limit   - Page size (default: 20, max: 100)
+  //
+  // Stable ordering prevents duplicates under concurrent writes.
+  // ──────────────────────────────────────────────────────────────────────────
+  router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!registry) {
+        res.json({ entries: [], nextCursor: null });
+        return;
+      }
+
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const rawLimit = Number(req.query.limit);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0
+        ? Math.min(rawLimit, 100)
+        : 20;
+
+      const result = registry.list(cursor ?? null, limit);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
 
   // ── Gateway health endpoint ──────────────────────────────────────────────
   //

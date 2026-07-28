@@ -8,12 +8,24 @@ The `/api/health` endpoint provides comprehensive health monitoring for all syst
 
 - `GET /api/health` — Aggregate system health check (used by load balancers)
 - `GET /api/health/dependencies` — Per-dependency health probe (used for internal dashboards and deep diagnostics)
+- `GET /api/health/db` — Database pool statistics (used for monitoring database connection saturation)
 
-## Per-Dependency Health Probe (`GET /api/health/dependencies`)
+## Database Pool Stats (`GET /api/health/db`)
 
-Returns fine-grained probe data for each configured system dependency, including individual status, response time, and sanitized error messages.
+Returns the current state of the PostgreSQL connection pool, outlining total active connections, idle connections, and queries waiting for an available client.
 
 ### Response Format (200 OK)
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-07-24T15:00:00.000Z",
+  "pool": {
+    "total": 10,
+    "idle": 8,
+    "waiting": 0
+  }
+}
 
 ```json
 {
@@ -198,7 +210,7 @@ upstream backend {
 server {
     location / {
         proxy_pass http://backend;
-        
+
         # Health check
         health_check interval=10s fails=3 passes=2 uri=/api/health;
     }
@@ -214,24 +226,24 @@ metadata:
   name: callora-backend
 spec:
   containers:
-  - name: app
-    image: callora-backend:latest
-    livenessProbe:
-      httpGet:
-        path: /api/health
-        port: 3000
-      initialDelaySeconds: 30
-      periodSeconds: 10
-      timeoutSeconds: 5
-      failureThreshold: 3
-    readinessProbe:
-      httpGet:
-        path: /api/health
-        port: 3000
-      initialDelaySeconds: 10
-      periodSeconds: 5
-      timeoutSeconds: 3
-      failureThreshold: 2
+    - name: app
+      image: callora-backend:latest
+      livenessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+      readinessProbe:
+        httpGet:
+          path: /api/health
+          port: 3000
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
 ```
 
 ## Security Considerations
@@ -277,30 +289,30 @@ npm run test:coverage
 Example metrics endpoint integration:
 
 ```typescript
-import { register, Counter, Histogram } from 'prom-client';
+import { register, Counter, Histogram } from "prom-client";
 
 const healthCheckDuration = new Histogram({
-  name: 'health_check_duration_seconds',
-  help: 'Duration of health checks',
-  labelNames: ['component', 'status'],
+  name: "health_check_duration_seconds",
+  help: "Duration of health checks",
+  labelNames: ["component", "status"],
 });
 
 const healthCheckTotal = new Counter({
-  name: 'health_check_total',
-  help: 'Total number of health checks',
-  labelNames: ['component', 'status'],
+  name: "health_check_total",
+  help: "Total number of health checks",
+  labelNames: ["component", "status"],
 });
 ```
 
 ### Datadog
 
 ```javascript
-const StatsD = require('node-dogstatsd').StatsD;
+const StatsD = require("node-dogstatsd").StatsD;
 const dogstatsd = new StatsD();
 
 // After health check
-dogstatsd.gauge('health.status', status === 'ok' ? 1 : 0);
-dogstatsd.histogram('health.response_time', responseTime);
+dogstatsd.gauge("health.status", status === "ok" ? 1 : 0);
+dogstatsd.histogram("health.response_time", responseTime);
 ```
 
 ## Troubleshooting

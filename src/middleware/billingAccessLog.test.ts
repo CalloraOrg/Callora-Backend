@@ -260,6 +260,102 @@ describe('createBillingAccessLogMiddleware', () => {
     }
   });
 
+  test('tracks response size in bytes and surfaces actor alongside userId', () => {
+    const infoSpy = jest.spyOn(billingLogger, 'info').mockImplementation(() => billingLogger);
+
+    try {
+      const middleware = createBillingAccessLogMiddleware();
+
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/billing/request/test-1',
+        headers: {},
+        id: 'billing-size',
+        body: {},
+      }) as unknown as EventEmitter & Request & { id?: string; body: Record<string, unknown> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+        setHeader: jest.fn(),
+        locals: {
+          authenticatedUser: { id: 'user-42' },
+        },
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+          locals: Record<string, unknown>;
+        };
+
+      middleware(req, res, jest.fn());
+
+      const body = JSON.stringify({ success: true, usageEventId: 'evt-1' });
+      res.write(Buffer.from('partial-'));
+      res.end(body);
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          responseBytes: Buffer.byteLength('partial-') + Buffer.byteLength(body),
+          userId: 'user-42',
+          actor: 'user-42',
+        }),
+      );
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  test('responseBytes is 0 and actor is absent when nothing is written and no auth user', () => {
+    const infoSpy = jest.spyOn(billingLogger, 'info').mockImplementation(() => billingLogger);
+
+    try {
+      const middleware = createBillingAccessLogMiddleware();
+
+      const req = Object.assign(new EventEmitter(), {
+        method: 'POST',
+        path: '/billing/deduct',
+        headers: {},
+        id: 'billing-no-body',
+        body: {},
+      }) as unknown as EventEmitter & Request & { id?: string; body: Record<string, unknown> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 204,
+        writableEnded: true,
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+        setHeader: jest.fn(),
+        locals: {},
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+          locals: Record<string, unknown>;
+        };
+
+      middleware(req, res, jest.fn());
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+      expect(payload.responseBytes).toBe(0);
+      expect(payload.actor).toBeUndefined();
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
   test('emits only once on finish + close', () => {
     const infoSpy = jest.spyOn(billingLogger, 'info').mockImplementation(() => billingLogger);
 

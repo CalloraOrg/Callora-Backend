@@ -18,7 +18,9 @@ export interface BillingAccessLogPayload {
   statusCode: number;
   ms: number;
   durationMs: number;
+  responseBytes: number;
   userId?: string;
+  actor?: string;
   clientIp?: string;
   apiId?: string;
   endpointId?: string;
@@ -33,6 +35,13 @@ export interface BillingAccessLogOptions {
 }
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
+
+function byteLength(chunk: unknown, encoding?: BufferEncoding): number {
+  if (chunk === null || chunk === undefined) return 0;
+  if (Buffer.isBuffer(chunk)) return chunk.length;
+  if (typeof chunk === 'string') return Buffer.byteLength(chunk, encoding);
+  return Buffer.byteLength(String(chunk));
+}
 
 function extractBillingPayload(req: Request): Partial<BillingAccessLogPayload> {
   const body = req.body as Record<string, unknown> | undefined;
@@ -71,6 +80,30 @@ export function createBillingAccessLogMiddleware(options: BillingAccessLogOption
 
     const clientIp = getClientIp(req, TRUST_PROXY);
 
+    let responseBytes = 0;
+    const originalWrite = typeof res.write === 'function' ? res.write.bind(res) : undefined;
+    const originalEnd = typeof res.end === 'function' ? res.end.bind(res) : undefined;
+
+    if (originalWrite) {
+      res.write = ((chunk: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(
+          chunk,
+          typeof encoding === 'string' ? (encoding as BufferEncoding) : undefined,
+        );
+        return originalWrite(chunk as never, encoding as never, callback as never);
+      }) as typeof res.write;
+    }
+
+    if (originalEnd) {
+      res.end = ((chunk?: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(
+          chunk,
+          typeof encoding === 'string' ? (encoding as BufferEncoding) : undefined,
+        );
+        return originalEnd(chunk as never, encoding as never, callback as never);
+      }) as typeof res.end;
+    }
+
     const emitLog = (): void => {
       const elapsedMs = Number(process.hrtime.bigint() - startAt) / 1_000_000;
       const status = res.statusCode;
@@ -86,7 +119,8 @@ export function createBillingAccessLogMiddleware(options: BillingAccessLogOption
         statusCode: status,
         ms: Number(elapsedMs.toFixed(3)),
         durationMs: Number(elapsedMs.toFixed(3)),
-        ...(userId ? { userId } : {}),
+        responseBytes,
+        ...(userId ? { userId, actor: userId } : {}),
         ...(clientIp ? { clientIp } : {}),
         ...billingContext,
       };

@@ -2,6 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { createSubscriptionCorsMiddleware } from '../middleware/cors.js';
 import {
   BadRequestError,
   ConflictError,
@@ -12,6 +14,8 @@ import {
 import type { SubscriptionRepository } from '../repositories/subscriptionRepository.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
+import { validateRetryPolicy } from '../services/webhookRetry.js';
+import { logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
 // Async handler helper
@@ -37,7 +41,34 @@ export interface SubscriptionRoutesDeps {
   subscriptionRepository: SubscriptionRepository;
   apiRepository: ApiRepository;
   developerRepository: DeveloperRepository;
+  /** Rate limit window in ms (default: 60_000). */
+  rateLimitWindowMs?: number;
+  /** Max requests per window (default: 30). */
+  rateLimitMaxRequests?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Retry policy sub-schema (Zod)
+// Mirrors the server-side constraints in validateRetryPolicy() — validated
+// again in the service layer for belt-and-suspenders safety.
+// ---------------------------------------------------------------------------
+
+const retryPolicySchema = z
+  .object({
+    maxRetries: z
+      .number()
+      .int('maxRetries must be an integer')
+      .min(0, 'maxRetries must be between 0 and 10')
+      .max(10, 'maxRetries must be between 0 and 10')
+      .optional(),
+    baseDelayMs: z
+      .number()
+      .int('baseDelayMs must be an integer')
+      .min(100, 'baseDelayMs must be between 100 and 60000')
+      .max(60000, 'baseDelayMs must be between 100 and 60000')
+      .optional(),
+  })
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Validation schemas
@@ -46,12 +77,22 @@ export interface SubscriptionRoutesDeps {
 const createSubscriptionSchema = z.object({
   api_id: z.number().int().positive(),
   metering_limit: z.number().int().positive().nullable().optional(),
+  /**
+   * Optional per-subscription webhook retry policy override.
+   * When omitted the platform defaults are used (maxRetries: 5, baseDelayMs: 1000 ms).
+   */
+  retry_policy: retryPolicySchema.nullable().optional(),
 });
 
 const updateSubscriptionSchema = z
   .object({
     status: z.enum(['active', 'paused']).optional(),
     metering_limit: z.number().int().positive().nullable().optional(),
+    /**
+     * Optional per-subscription webhook retry policy override.
+     * Pass null to clear and revert to the platform default.
+     */
+    retry_policy: retryPolicySchema.nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, {
     message: 'At least one field must be provided',
@@ -69,9 +110,24 @@ export function createSubscriptionRouter(deps: SubscriptionRoutesDeps): Router {
   const router = Router();
   const { subscriptionRepository, apiRepository, developerRepository } = deps;
 
+  // Env-driven CORS allowlist (deny by default; preflight cached).
+  // Applied before auth so the preflight OPTIONS request can succeed
+  // without requiring credentials.
+  router.use(createSubscriptionCorsMiddleware());
+
+  // Per-user token-bucket rate limit. Configurable via deps for testing.
+  const subscriptionRateLimit = createRateLimitMiddleware({
+    windowMs: deps.rateLimitWindowMs ?? 60_000,
+    maxRequests: deps.rateLimitMaxRequests ?? 30,
+  });
+
+  // Apply rate limiting to all subscription routes
+  router.use(subscriptionRateLimit);
+
   // -------------------------------------------------------------------------
   // POST /api/subscriptions
   // Subscribe the authenticated user to a marketplace API.
+  // Accepts an optional retry_policy override for webhook delivery.
   // -------------------------------------------------------------------------
   router.post(
     '/',
@@ -82,6 +138,14 @@ export function createSubscriptionRouter(deps: SubscriptionRoutesDeps): Router {
       if (!user) throw new UnauthorizedError();
 
       const body = createSubscriptionSchema.parse(req.body);
+
+      // Validate retry_policy via the service layer (belt-and-suspenders)
+      if (body.retry_policy != null) {
+        const policyValidation = validateRetryPolicy(body.retry_policy);
+        if (!policyValidation.valid) {
+          throw new BadRequestError(policyValidation.error!, 'INVALID_RETRY_POLICY');
+        }
+      }
 
       // Verify the API exists
       const api = await apiRepository.findRawById(body.api_id);
@@ -110,7 +174,15 @@ export function createSubscriptionRouter(deps: SubscriptionRoutesDeps): Router {
         user_id: user.id,
         api_id: body.api_id,
         metering_limit: body.metering_limit ?? null,
+        retry_policy: body.retry_policy ?? null,
       });
+
+      if (body.retry_policy != null) {
+        logger.audit('SUBSCRIPTION_RETRY_POLICY_SET', user.id, {
+          subscriptionId: subscription.id,
+          retryPolicy: body.retry_policy,
+        });
+      }
 
       res.status(201).json(subscription);
     }),
@@ -166,7 +238,7 @@ export function createSubscriptionRouter(deps: SubscriptionRoutesDeps): Router {
 
   // -------------------------------------------------------------------------
   // PATCH /api/subscriptions/:id
-  // Update metering preferences or pause/resume a subscription.
+  // Update metering preferences, pause/resume, or set a custom retry policy.
   // -------------------------------------------------------------------------
   router.patch(
     '/:id',
@@ -191,9 +263,25 @@ export function createSubscriptionRouter(deps: SubscriptionRoutesDeps): Router {
 
       const body = updateSubscriptionSchema.parse(req.body);
 
+      // Validate retry_policy via the service layer (belt-and-suspenders)
+      if (body.retry_policy != null) {
+        const policyValidation = validateRetryPolicy(body.retry_policy);
+        if (!policyValidation.valid) {
+          throw new BadRequestError(policyValidation.error!, 'INVALID_RETRY_POLICY');
+        }
+      }
+
       const updated = await subscriptionRepository.update(req.params.id, body);
       if (!updated) {
         throw new NotFoundError('Subscription not found');
+      }
+
+      // Audit log when retry policy changes
+      if (body.retry_policy !== undefined) {
+        logger.audit('SUBSCRIPTION_RETRY_POLICY_UPDATED', user.id, {
+          subscriptionId: req.params.id,
+          retryPolicy: body.retry_policy,
+        });
       }
 
       res.json(updated);

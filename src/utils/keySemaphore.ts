@@ -1,3 +1,5 @@
+import { config } from '../config/index.js';
+
 type QueueEntry = (release: () => void) => void;
 
 /**
@@ -70,6 +72,11 @@ export class KeySemaphore {
   isAtLimit(keyId: string): boolean {
     const active = this.getActiveSlotCount(keyId);
     return active >= this.maxConcurrencyPerKey;
+  }
+
+  /** The configured maximum number of concurrent slots per API key. */
+  get maxConcurrency(): number {
+    return this.maxConcurrencyPerKey;
   }
 
   private acquireSlot(keyId: string): Promise<() => void> {
@@ -150,5 +157,12 @@ export class KeySemaphore {
  * Shared singleton KeySemaphore instance used across the gateway middleware
  * and the admin concurrency stats route. Tests should create isolated
  * instances via the class constructor directly.
+ *
+ * Both sides must use this same instance: the gateway proxy acquires slots on
+ * it (see `createPerKeyConcurrencyMiddleware`) and the admin stats route reads
+ * from it. A separate instance on either side would report counts of zero.
  */
-export const sharedKeySemaphore = new KeySemaphore();
+export const sharedKeySemaphore = new KeySemaphore(
+  config.keyConcurrency.maxPerKey,
+  config.keyConcurrency.semaphoreTtlMs,
+);

@@ -1,4 +1,4 @@
-import { eq, and, like, isNull, isNotNull, type SQL, count } from "drizzle-orm";
+import { eq, and, like, isNull, isNotNull, lt, or, desc, type SQL, count } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
 import type {
   Api,
@@ -16,6 +16,14 @@ export interface ApiListFilters {
   search?: string;
   limit?: number;
   offset?: number;
+  /**
+   * Opaque cursor for keyset pagination over (created_at DESC, id DESC).
+   * When supplied, offset is ignored and results are fetched starting
+   * immediately after the row identified by the cursor.
+   * The cursor is the raw decoded pair — callers obtain it from
+   * `decodeCursor()` in pagination.ts.
+   */
+  cursor?: { after_created_at: Date; after_id: number };
 }
 
 export interface ApiCreateInput {
@@ -99,6 +107,11 @@ export interface ApiRepository {
   ): Promise<Api[]>;
   listPublic(filters?: ApiListFilters): Promise<Api[]>;
   findById(id: number): Promise<ApiDetails | null>;
+  /**
+   * Returns the raw API row without filtering by status or deleted_at.
+   * Used by subscription routes that need to inspect soft-deleted records.
+   */
+  findRawById(id: number): Promise<Api | null>;
   getEndpoints(apiId: number): Promise<ApiEndpointInfo[]>;
   bulkCreateEndpoints(
     apiId: number,
@@ -273,15 +286,43 @@ export const defaultApiRepository: ApiRepository = {
       return [];
     }
 
+    // Keyset condition: (created_at, id) < (cursor_created_at, cursor_id)
+    // ORDER: newest-first (created_at DESC, id DESC)
+    // Composite row: a < b iff (a.created_at < b.created_at) OR
+    //                           (a.created_at = b.created_at AND a.id < b.id)
+    if (filters.cursor) {
+      const { after_created_at, after_id } = filters.cursor;
+      // SQLite stores timestamps as unix epoch integers.
+      const cursorTs = Math.floor(after_created_at.getTime() / 1000);
+      conditions.push(
+        or(
+          lt(schema.apis.created_at, new Date(cursorTs * 1000)),
+          and(
+            eq(schema.apis.created_at, new Date(cursorTs * 1000)),
+            lt(schema.apis.id, after_id),
+          ),
+        ) as SQL,
+      );
+    }
+
     let query = db
       .select()
       .from(schema.apis)
-      .where(and(...conditions));
+      .where(and(...conditions))
+      // Stable newest-first ordering ensures consistent cursor traversal.
+      .orderBy(desc(schema.apis.created_at), desc(schema.apis.id));
 
     if (typeof filters.limit === "number") {
-      query = query.limit(filters.limit) as typeof query;
+      // Fetch limit+1 when using cursor pagination so the route layer can detect
+      // whether there is a next page without an extra COUNT query.
+      // In the offset path a plain limit is sufficient because the route
+      // calls paginatedResponse which does its own truncation.
+      const fetchLimit = filters.cursor ? filters.limit + 1 : filters.limit;
+      query = query.limit(fetchLimit) as typeof query;
     }
-    if (typeof filters.offset === "number") {
+
+    // Offset is only relevant in the non-cursor (legacy) path.
+    if (!filters.cursor && typeof filters.offset === "number") {
       query = query.offset(filters.offset) as typeof query;
     }
 
@@ -334,6 +375,16 @@ export const defaultApiRepository: ApiRepository = {
         description: row.developer_description ?? null,
       },
     };
+  },
+
+  async findRawById(id) {
+    const rows = await db
+      .select()
+      .from(schema.apis)
+      .where(eq(schema.apis.id, id))
+      .limit(1);
+
+    return rows[0] ?? null;
   },
 
   async getEndpoints(apiId) {
@@ -601,12 +652,39 @@ export class InMemoryApiRepository implements ApiRepository {
         api.name.toLowerCase().includes(needle),
       );
     }
-    if (typeof filters.offset === "number") {
+
+    // Sort newest-first (created_at DESC, id DESC) to match the DB ordering.
+    results = results.slice().sort((a, b) => {
+      const tsDiff = b.created_at.getTime() - a.created_at.getTime();
+      if (tsDiff !== 0) return tsDiff;
+      return b.id - a.id;
+    });
+
+    // Keyset cursor filter: keep only rows that come *after* the cursor row
+    // in the (created_at DESC, id DESC) ordering.
+    if (filters.cursor) {
+      const { after_created_at, after_id } = filters.cursor;
+      const cursorTs = after_created_at.getTime();
+      results = results.filter((api) => {
+        const apiTs = api.created_at.getTime();
+        if (apiTs < cursorTs) return true;
+        if (apiTs === cursorTs && api.id < after_id) return true;
+        return false;
+      });
+    }
+
+    // In the non-cursor path only, apply offset (legacy compatibility).
+    if (!filters.cursor && typeof filters.offset === "number") {
       results = results.slice(filters.offset);
     }
+
+    // Fetch limit+1 in the cursor path so the route layer can detect hasMore
+    // without an extra query. In the offset path, use plain limit.
     if (typeof filters.limit === "number") {
-      results = results.slice(0, filters.limit);
+      const fetchLimit = filters.cursor ? filters.limit + 1 : filters.limit;
+      results = results.slice(0, fetchLimit);
     }
+
     return results;
   }
 
@@ -664,6 +742,10 @@ export class InMemoryApiRepository implements ApiRepository {
     const api = this.apis.find((a) => a.id === id && !a.deleted_at);
     if (!api) return null;
     return this.detailsById.get(id) ?? null;
+  }
+
+  async findRawById(id: number): Promise<Api | null> {
+    return this.apis.find((a) => a.id === id) ?? null;
   }
 
   async getEndpoints(apiId: number): Promise<ApiEndpointInfo[]> {

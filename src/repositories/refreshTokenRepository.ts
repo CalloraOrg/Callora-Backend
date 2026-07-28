@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { RefreshToken } from '../types/auth.js';
+import type { CursorPayload } from '../lib/cursorPagination.js';
 import { readQuery, writeQuery } from '../db.js';
 
 /** Injectable queryable for tests. */
@@ -52,6 +53,22 @@ export interface RefreshTokenRepository {
    * Count active refresh tokens for a user
    */
   countActiveTokens(userId: string): Promise<number>;
+
+  /**
+   * List refresh tokens for a user with cursor-based pagination.
+   * Uses stable keyset ordering over (created_at DESC, id DESC) to
+   * guarantee consistent results under concurrent writes.
+   *
+   * @param userId     - The user whose tokens to list
+   * @param limit      - Maximum number of tokens to return (clamped to 1..100)
+   * @param afterCursor - Optional cursor encoding the last seen (created_at, id)
+   * @returns          - Array of refresh tokens and a hasMore flag
+   */
+  listRefreshTokens(
+    userId: string,
+    limit: number,
+    afterCursor?: CursorPayload,
+  ): Promise<{ tokens: RefreshToken[]; hasMore: boolean }>;
 }
 
 /**
@@ -205,5 +222,62 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
     );
     const row = result.rows[0] as Record<string, unknown> | undefined;
     return parseInt(String(row?.['count'] ?? '0'), 10);
+  }
+
+  async listRefreshTokens(
+    userId: string,
+    limit: number,
+    afterCursor?: CursorPayload,
+  ): Promise<{ tokens: RefreshToken[]; hasMore: boolean }> {
+    // Fetch one extra row to determine if there are more results beyond the limit.
+    const fetchLimit = limit + 1;
+
+    let query: string;
+    let params: unknown[];
+
+    if (afterCursor) {
+      // Keyset pagination: rows strictly after the cursor position.
+      // Ordering is (created_at DESC, id DESC) so we fetch rows that are
+      // either created earlier, or same timestamp with a smaller id.
+      query = `
+        SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id
+        FROM refresh_tokens
+        WHERE user_id = $1
+          AND (created_at, id) < ($2, $3)
+        ORDER BY created_at DESC, id DESC
+        LIMIT $4`;
+      params = [userId, afterCursor.timestamp.toISOString(), afterCursor.id, fetchLimit];
+    } else {
+      query = `
+        SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id
+        FROM refresh_tokens
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2`;
+      params = [userId, fetchLimit];
+    }
+
+    const result = await this.readDb.query(query, params);
+
+    const tokens: RefreshToken[] = result.rows.map((row) => {
+      const r = row as Record<string, unknown>;
+      return {
+        id: r['id'] as string,
+        userId: r['user_id'] as string,
+        tokenHash: r['token_hash'] as string,
+        expiresAt: new Date(r['expires_at'] as string),
+        createdAt: new Date(r['created_at'] as string),
+        lastUsedAt: r['last_used_at'] ? new Date(r['last_used_at'] as string) : undefined,
+        isRevoked: r['is_revoked'] as boolean,
+        familyId: r['family_id'] as string,
+      };
+    });
+
+    const hasMore = tokens.length > limit;
+    if (hasMore) {
+      tokens.length = limit;
+    }
+
+    return { tokens, hasMore };
   }
 }

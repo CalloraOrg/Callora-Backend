@@ -436,6 +436,33 @@ export class CircuitBreaker {
     logger.info('Circuit breaker manually reset to CLOSED state', { breakerKey, oldState });
     circuitBreakerStateGauge.set({ breaker_key: breakerKey }, stateToNumber(CircuitBreakerState.CLOSED));
   }
+
+  /**
+   * Force-trip the circuit breaker to OPEN state, immediately rejecting all requests.
+   * Use with caution - primarily for manual intervention or emergency shutdown.
+   */
+  async trip(breakerKey: string): Promise<void> {
+    const now = Date.now();
+    const metrics = await this.getMetrics(breakerKey);
+    const oldState = metrics.state;
+
+    if (oldState === CircuitBreakerState.OPEN) {
+      return;
+    }
+
+    const newMetrics: CircuitBreakerMetrics = {
+      ...metrics,
+      state: CircuitBreakerState.OPEN,
+      consecutiveSuccesses: 0,
+      lastStateChange: now,
+    };
+    await this.store.set(breakerKey, newMetrics);
+    this.activeTrials.delete(breakerKey);
+
+    logger.info('Circuit breaker manually tripped to OPEN state', { breakerKey, oldState });
+    circuitBreakerTransitionsCounter.inc({ breaker_key: breakerKey, from: oldState, to: CircuitBreakerState.OPEN });
+    circuitBreakerStateGauge.set({ breaker_key: breakerKey }, stateToNumber(CircuitBreakerState.OPEN));
+  }
 }
 
 /**
@@ -467,6 +494,14 @@ export class BreakerRegistry {
   }
 
   /**
+   * Retrieve the existing breaker for the given slug without creating one.
+   * Returns undefined if no breaker has been registered for this slug.
+   */
+  get(slug: string): CircuitBreaker | undefined {
+    return this.breakers.get(slug);
+  }
+
+  /**
    * Retrieve the current state of the circuit breaker for a given slug.
    * Returns CLOSED if no breaker exists yet (no failures recorded).
    */
@@ -476,6 +511,18 @@ export class BreakerRegistry {
       return CircuitBreakerState.CLOSED;
     }
     return breaker.getState(slug);
+  }
+
+  /**
+   * List all registered breakers with their current state and metrics.
+   */
+  async list(): Promise<Array<{ slug: string; state: CircuitBreakerState; metrics: CircuitBreakerMetrics }>> {
+    const entries: Array<{ slug: string; state: CircuitBreakerState; metrics: CircuitBreakerMetrics }> = [];
+    for (const [slug, breaker] of this.breakers) {
+      const metrics = await breaker.getMetrics(slug);
+      entries.push({ slug, state: metrics.state, metrics });
+    }
+    return entries;
   }
 }
 

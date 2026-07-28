@@ -365,3 +365,15 @@ error_codes:
   - code: EXPORT_SCHEDULE_NOT_FOUND
     section: Export schedules
     description: Export schedule not found
+
+  - code: MISSING_AUTH_FIELDS
+    section: Auth
+    description: Required authentication fields are missing from the request
+
+  - code: AUTH_NOT_IMPLEMENTED
+    section: Auth
+    description: The authentication method is not yet implemented
+
+  - code: COMPONENT_NOT_CONFIGURED
+    section: Health / dependency probes
+    description: A required system component is not configured

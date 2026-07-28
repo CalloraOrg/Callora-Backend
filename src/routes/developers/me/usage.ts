@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { requireAuth, type AuthenticatedLocals } from '../../../middleware/requireAuth.js';
-import type { UsageEventsRepository, GroupBy, UsageEvent } from '../../../repositories/usageEventsRepository.js';
+import type { UsageEventsRepository, GroupBy } from '../../../repositories/usageEventsRepository.js';
 import type { DeveloperRepository } from '../../../repositories/developerRepository.js';
 import { BadRequestError, ForbiddenError, UnauthorizedError, InternalServerError } from '../../../errors/index.js';
 import { logger } from '../../../logger.js';
@@ -9,6 +9,8 @@ export interface DeveloperMeUsageRouterDeps {
   usageEventsRepository: UsageEventsRepository;
   developerRepository: DeveloperRepository;
 }
+
+export type DeveloperUsageSummaryDeps = DeveloperMeUsageRouterDeps;
 
 const isValidGroupBy = (value: string): value is GroupBy =>
   value === 'day' || value === 'week' || value === 'month';
@@ -236,4 +238,5 @@ export function createDeveloperMeUsageRouter(deps: DeveloperMeUsageRouterDeps): 
   return router;
 }
 
+export const createDeveloperUsageSummaryRouter = createDeveloperMeUsageRouter;
 export default createDeveloperMeUsageRouter;

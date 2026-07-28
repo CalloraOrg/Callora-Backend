@@ -574,12 +574,21 @@ describe("RevenueSettlementService - End-to-End Integration Tests", () => {
 
     usageStore.addEvents(usageEvents);
 
+    const horizonFetch = (async () =>
+      new Response(JSON.stringify({ successful: true }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
     const settlementService = new RevenueSettlementService(
       usageStore,
       settlementStore,
       apiRegistry,
       settlementClient,
-      { minPayoutUsdc: 5.0 }, // Total: 6.00, exceeds minimum
+      {
+        minPayoutUsdc: 5.0, // Total: 6.00, exceeds minimum
+        horizonUrl: "https://horizon-testnet.stellar.org",
+        fetchImpl: horizonFetch,
+      },
     );
 
     const result = await settlementService.runBatch();
@@ -590,18 +599,31 @@ describe("RevenueSettlementService - End-to-End Integration Tests", () => {
     assert.equal(result.errors, 0);
     assert.equal(settlementClient.getCallCount(), 1);
 
-    // Verify settlement record was created
+    // Verify settlement record was created and starts 'pending' — it is only
+    // promoted to 'completed' once reconcilePendingSettlements() confirms the
+    // transaction on Horizon.
     const settlements = settlementStore.getDeveloperSettlements("dev_123");
     assert.equal(settlements.length, 1);
     assert.equal(settlements[0].developerId, "dev_123");
     assert.equal(settlements[0].amount, 6.0);
-    assert.equal(settlements[0].status, "completed");
+    assert.equal(settlements[0].status, "pending");
     assert.ok(settlements[0].tx_hash);
     assert.ok(settlements[0].created_at);
 
     // Verify events are marked as settled
     const unsettledEvents = usageStore.getUnsettledEvents();
     assert.equal(unsettledEvents.length, 0);
+
+    // Reconcile against (mocked) Horizon — the end-to-end confirmation step
+    const reconcileResult = await settlementService.reconcilePendingSettlements();
+    assert.equal(reconcileResult.checked, 1);
+    assert.equal(reconcileResult.completed, 1);
+    assert.equal(reconcileResult.failed, 0);
+    assert.equal(reconcileResult.errors, 0);
+
+    const reconciledSettlements =
+      settlementStore.getDeveloperSettlements("dev_123");
+    assert.equal(reconciledSettlements[0].status, "completed");
   });
 
   test("skips settlement when below minimum payout threshold", async () => {
@@ -860,13 +882,14 @@ describe("RevenueSettlementService - End-to-End Integration Tests", () => {
       settlementStore.getDeveloperSettlements("dev_123");
     assert.equal(dev123Settlements.length, 1);
     assert.equal(dev123Settlements[0].amount, 6.0);
-    assert.equal(dev123Settlements[0].status, "completed");
+    // Stays 'pending' until reconcilePendingSettlements() confirms on Horizon
+    assert.equal(dev123Settlements[0].status, "pending");
 
     const dev456Settlements =
       settlementStore.getDeveloperSettlements("dev_456");
     assert.equal(dev456Settlements.length, 1);
     assert.equal(dev456Settlements[0].amount, 8.0);
-    assert.equal(dev456Settlements[0].status, "completed");
+    assert.equal(dev456Settlements[0].status, "pending");
 
     // dev_789 should have no settlement (below threshold)
     const dev789Settlements =
@@ -932,7 +955,8 @@ describe("RevenueSettlementService - End-to-End Integration Tests", () => {
     const settlements = settlementStore.getDeveloperSettlements("dev_123");
     assert.equal(settlements.length, 1);
     assert.equal(settlements[0].amount, 6.0);
-    assert.equal(settlements[0].status, "completed");
+    // Stays 'pending' until reconcilePendingSettlements() confirms on Horizon
+    assert.equal(settlements[0].status, "pending");
 
     // Verify 2 events remain unsettled for next batch
     const unsettledEvents = usageStore.getUnsettledEvents();
@@ -1065,7 +1089,8 @@ describe("RevenueSettlementService - End-to-End Integration Tests", () => {
     const settlements = settlementStore.getDeveloperSettlements("dev_123");
     assert.equal(settlements.length, 1);
     assert.equal(settlements[0].amount, 3.0);
-    assert.equal(settlements[0].status, "completed");
+    // Stays 'pending' until reconcilePendingSettlements() confirms on Horizon
+    assert.equal(settlements[0].status, "pending");
 
     // Zero and negative events remain unsettled (will be skipped in future batches)
     const unsettledEvents = usageStore.getUnsettledEvents();
@@ -1210,7 +1235,8 @@ describe("Invoice Generation - Database Integration Tests", () => {
       assert.equal(settlementDbResult.rows.length, 1);
       assert.equal(settlementDbResult.rows[0].developer_id, "dev_123");
       assert.equal(Number(settlementDbResult.rows[0].amount), 6.0);
-      assert.equal(settlementDbResult.rows[0].status, "completed");
+      // Stays 'pending' until reconcilePendingSettlements() confirms on Horizon
+      assert.equal(settlementDbResult.rows[0].status, "pending");
       assert.ok(settlementDbResult.rows[0].tx_hash);
 
       // Verify all usage events are marked as settled (no unsettled events remain)
@@ -1703,7 +1729,8 @@ describe("Invoice Generation - Security & Data Integrity Tests", () => {
     // Verify atomic operation: settlement record exists and events are marked settled
     const settlements = settlementStore.getDeveloperSettlements("dev_123");
     assert.equal(settlements.length, 1);
-    assert.equal(settlements[0].status, "completed");
+    // Stays 'pending' until reconcilePendingSettlements() confirms on Horizon
+    assert.equal(settlements[0].status, "pending");
     assert.ok(settlements[0].tx_hash);
 
     const unsettledEvents = usageStore.getUnsettledEvents();
@@ -1852,7 +1879,8 @@ describe("Invoice Generation - Concurrent Processing Tests", () => {
     const settlements = settlementStore.getDeveloperSettlements("dev_123");
     assert.equal(settlements.length, 1);
     assert.equal(settlements[0].amount, 10.0);
-    assert.equal(settlements[0].status, "completed");
+    // Stays 'pending' until reconcilePendingSettlements() confirms on Horizon
+    assert.equal(settlements[0].status, "pending");
   });
 
   test("handles concurrent billing and settlement processing", async () => {
@@ -2137,7 +2165,8 @@ describe("Invoice Generation - Edge Cases & Failure Recovery", () => {
     const dev123Settlements =
       settlementStore.getDeveloperSettlements("dev_123");
     assert.equal(dev123Settlements.length, 1);
-    assert.equal(dev123Settlements[0].status, "completed");
+    // Stays 'pending' until reconcilePendingSettlements() confirms on Horizon
+    assert.equal(dev123Settlements[0].status, "pending");
 
     // Verify failed settlement for dev_456
     const dev456Settlements =

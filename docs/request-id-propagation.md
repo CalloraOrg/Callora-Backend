@@ -25,6 +25,7 @@ Both logger paths attach the active request id:
 - `src/logger.ts` prefixes console-style logs with `[request_id:<id>]`.
 - `src/middleware/logging.ts` injects `requestId` into Pino structured payloads.
 - `src/middleware/accessLog.ts` emits JSON access logs with `method`, `path`, `status`, `ms`, request/response byte counts, and a `correlationId`.
+- `src/middleware/usageAccessLog.ts` emits route-level structured logs for usage queries with usage-specific context (`apiId`, `groupBy`, `from`, `to`).
 - Access-log sampling defaults to 100% and can be reduced with `ACCESS_LOG_SAMPLE_RATE`.
 - Access-log redaction is configurable with `ACCESS_LOG_REDACT_FIELDS`.
 

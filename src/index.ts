@@ -11,6 +11,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { createGatewayIpAllowlist } from "./middleware/ipAllowlist.js";
 import { createAccessLogMiddleware } from "./middleware/accessLog.js";
 import { requestIdMiddleware, responseEnrichMiddleware } from "./middleware/requestId.js";
+import { createRouteBodyLimitMiddleware } from "./middleware/routeBodyLimit.js";
 import { metricsEndpoint } from "./metrics.js";
 import {
   awaitWebhookDispatcherIdle,
@@ -23,33 +24,28 @@ import {
 } from "./lifecycle/shutdown.js";
 import type { Socket } from "net";
 
-import { createDeveloperRouter } from "./routes/developerRoutes.js";
-import { createGatewayRouter } from "./routes/gatewayRoutes.js";
-import { createProxyRouter } from "./routes/proxyRoutes.js";
-import adminRouter from "./routes/admin.js";
-import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
-import { defaultDeveloperRepository } from "./repositories/developerRepository.js";
-import { createBillingService } from "./services/billingService.js";
-import { createRateLimiter } from "./services/rateLimiter.js";
-import { PgUsageEventsRepository } from "./repositories/usageEventsRepository.pg.js";
-import { createRevenueLedgerIndexerJob } from "./services/revenueLedgerIndexer.js";
-import { RevenueSettlementService } from "./services/revenueSettlementService.js";
-import { createSettlementStatusSyncJob } from "./services/settlementStatusSyncJob.js";
-import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
-import { createPostgresUsageStore } from "./services/usageStore.js";
-import { createPostgresSettlementStore } from "./services/settlementStore.js";
-import { createApiRegistry } from "./data/apiRegistry.js";
-import { ApiKey } from "./types/gateway.js";
-import { listingsCache } from "./lib/listingsCache.js";
-import { createSlowQueryAlerterJob } from "./workers/slowQueryAlerter.js";
-import { createAnomalyDetectorJob } from "./workers/anomalyDetector.js";
-import {
-  initSloRecorder,
-  sloRecorderMiddleware,
-} from "./workers/sloAlertRecorder.js";
-import { createSloAlertJob } from "./workers/sloAlertJob.js";
-import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
-import { createSettlementReconWorker } from "./workers/settlementRecon.js";
+import { createDeveloperRouter } from './routes/developerRoutes.js';
+import { createGatewayRouter } from './routes/gatewayRoutes.js';
+import { createProxyRouter } from './routes/proxyRoutes.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
+import adminRouter from './routes/admin.js';
+import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
+import { defaultDeveloperRepository } from './repositories/developerRepository.js';
+import { createBillingService } from './services/billingService.js';
+import { createRateLimiter } from './services/rateLimiter.js';
+import { PgUsageEventsRepository } from './repositories/usageEventsRepository.pg.js';
+import { createRevenueLedgerIndexerJob } from './services/revenueLedgerIndexer.js';
+import { RevenueSettlementService } from './services/revenueSettlementService.js';
+import { createSettlementStatusSyncJob } from './services/settlementStatusSyncJob.js';
+import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
+import { createIdempotencySweeperJob } from './services/idempotencySweeper.js';
+import { createPostgresUsageStore } from './services/usageStore.js';
+import { createPostgresSettlementStore } from './services/settlementStore.js';
+import { createApiRegistry } from './data/apiRegistry.js';
+import { ApiKey } from './types/gateway.js';
+import { listingsCache } from './lib/listingsCache.js';
+import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
+import { createAnomalyDetectorJob } from './workers/anomalyDetector.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -84,6 +80,8 @@ initSloRecorder({
   observationWindowMs: config.sloAlert.observationWindowMs,
 });
 app.use(sloRecorderMiddleware);
+
+app.use(createRouteBodyLimitMiddleware(config.routeBodyLimits));
 
 // Standard JSON middleware for non-webhook routes
 app.use((req, res, next) => {
@@ -127,7 +125,14 @@ if (isDirectExecution) {
   };
 
   const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
-  const rateLimiter = createRateLimiter(5, 60_000); // 5 reqs per minute
+  // Per-API-key token-bucket rate limit shared by /api/gateway and /v1/call.
+  // Backed by Postgres (RATE_LIMIT_STORE=postgres) so the bucket state is
+  // consistent across multiple gateway instances; defaults to an in-memory
+  // store otherwise. See RATE_LIMIT_* in src/config/env.ts.
+  const rateLimiter = createConfiguredRateLimiter(
+    resolveRateLimiterConfig(config.rateLimiter),
+    pool,
+  );
   const usageStore = createPostgresUsageStore(pool);
   const settlementStore = createPostgresSettlementStore(pool);
   const usageEventsRepository = new PgUsageEventsRepository(pool);
@@ -226,8 +231,12 @@ if (isDirectExecution) {
   app.use("/api/developers", developerRouter);
   // Mounted before the generic admin router so it is not shadowed by
   // adminRouter's `/usage/:developerId` route.
-  app.use("/api/admin/usage/anomalies", createUsageAnomaliesRouter({ pool }));
-  app.use("/api/admin", adminRouter);
+  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
+
+  // Webhook management routes
+  app.use('/api/webhooks', createWebhooksRouter());
+
+  app.use('/api/admin', adminRouter);
 
   // Legacy gateway route (existing)
   const gatewayRouter = createGatewayRouter({
@@ -252,8 +261,14 @@ if (isDirectExecution) {
     },
   });
   const proxyDrainTracker = createInFlightDrainTracker("gateway-proxy");
+  const keysDrainTracker = createInFlightDrainTracker("api-keys");
+  const apiKeyRouter = createApiKeyRouter({
+    apiRepository: defaultApiRepository,
+    developerRepository: defaultDeveloperRepository,
+  });
   const shutdownSubsystems: DrainableSubsystem[] = [
     proxyDrainTracker.subsystem,
+    keysDrainTracker.subsystem,
     {
       name: "revenue-ledger-indexer",
       beginShutdown: () => revenueLedgerIndexerJob.beginShutdown(),
@@ -312,6 +327,9 @@ if (isDirectExecution) {
   );
   app.use("/v1/call", proxyRouter);
 
+  app.use("/api", keysDrainTracker.middleware);
+  app.use("/api", apiKeyRouter);
+
   app.use(express.json());
 
   // Global error handler (must be after all routes)
@@ -357,6 +375,10 @@ if (isDirectExecution) {
           }),
         { timeoutMs: config.listingsCache.warmupTimeoutMs },
       );
+
+      // Warm the refunds cache before accepting traffic to avoid cold-cache spikes on startup.
+      const { warmupRefundsCache } = await import("./services/refundsCacheWarm.js");
+      await warmupRefundsCache({ timeoutMs: config.refundsCache.warmupTimeoutMs });
 
       revenueLedgerIndexerJob.start();
       settlementStatusSyncJob.start();

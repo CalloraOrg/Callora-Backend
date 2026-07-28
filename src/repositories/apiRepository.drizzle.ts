@@ -251,6 +251,15 @@ export class DrizzleApiRepository implements ApiRepository {
     }));
   }
 
+  async findRawById(id: number): Promise<Api | null> {
+    const rows = await db
+      .select()
+      .from(schema.apis)
+      .where(eq(schema.apis.id, id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
   async bulkCreateEndpoints(
     apiId: number,
     endpoints: CreateEndpointInput[],

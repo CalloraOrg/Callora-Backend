@@ -1,6 +1,6 @@
 # GET /api/usage/by-endpoint — Top-N Endpoints per Developer
 
-Returns the authenticated developer's most-called API endpoints ranked by call volume within a requested time window. Useful for identifying hot endpoints, spotting usage spikes, and optimising spend.
+Returns the authenticated developer's most-called API endpoints ranked by call volume within a requested time window. Useful for identifying hot endpoints, spotting usage spikes, and optimizing spend.
 
 ## Request
 
@@ -13,7 +13,7 @@ Authorization: Bearer <token>
 
 | Parameter | Type    | Required | Default        | Description                                              |
 |-----------|---------|----------|----------------|----------------------------------------------------------|
-| `from`    | string  | No       | 30 days ago    | Start of period (ISO-8601, e.g. `2026-06-01T00:00:00Z`) |
+| `from`    | string  | No       | 30 days ago    | Start of period (ISO-8601, e.g. `2026-06-25T00:00:00Z`) |
 | `to`      | string  | No       | Now            | End of period (ISO-8601)                                 |
 | `limit`   | integer | No       | `5`            | Maximum number of endpoints to return (≥ 1)              |
 | `apiId`   | string  | No       | all APIs       | Filter results to a specific registered API              |
@@ -33,8 +33,8 @@ HTTP `200`:
     { "endpoint": "/v1/weather/forecast", "calls":  87, "revenue":  "87000" }
   ],
   "period": {
-    "from": "2026-06-01T00:00:00.000Z",
-    "to":   "2026-07-01T00:00:00.000Z"
+    "from": "2026-06-25T00:00:00.000Z",
+    "to":   "2026-07-25T00:00:00.000Z"
   }
 }
 ```
@@ -73,18 +73,51 @@ Requires a valid developer bearer token (`Authorization: Bearer <token>`) or `x-
 
 ## Examples
 
-### Top 3 endpoints over the last 7 days
+### TypeScript (Fetch API)
+
+```typescript
+async function getTopEndpoints(token: string, limit: number = 3): Promise<void> {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(to.getDate() - 7); // Last 7 days
+
+  const url = new URL('https://api.callora.io/api/usage/by-endpoint');
+  url.searchParams.append('limit', limit.toString());
+  url.searchParams.append('from', from.toISOString());
+  url.searchParams.append('to', to.toISOString());
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const data = await response.json();
+  console.log(JSON.stringify(data, null, 2));
+}
+```
+
+### PowerShell (Windows)
+
+```powershell
+$Token = "YOUR_BEARER_TOKEN"
+$To = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$From = (Get-Date).AddDays(-7).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$Url = "https://api.callora.io/api/usage/by-endpoint?limit=3&from=$From&to=$To"
+
+Invoke-RestMethod -Uri $Url -Method Get -Headers @{ Authorization = "Bearer $Token" }
+```
+
+### cURL (Linux/macOS)
 
 ```bash
 curl -s \
   -H "Authorization: Bearer $TOKEN" \
   "https://api.callora.io/api/usage/by-endpoint?limit=3&from=$(date -u -d '-7 days' +%Y-%m-%dT%H:%M:%SZ)"
-```
-
-### Top endpoints for a specific API
-
-```bash
-curl -s \
-  -H "Authorization: Bearer $TOKEN" \
-  "https://api.callora.io/api/usage/by-endpoint?apiId=api_abc123&limit=10"
 ```

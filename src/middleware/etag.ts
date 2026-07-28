@@ -2,60 +2,121 @@ import type { Request, Response, NextFunction } from 'express';
 import { createHash } from 'crypto';
 
 /**
- * Generates a weak ETag based on the content string or buffer.
+ * Generates a strong ETag for the given content.
+ *
+ * Strong ETags are byte-for-byte identical comparisons (RFC 7232 §2.1).
+ * We use SHA-256 over the serialised response body so any change in content —
+ * including pagination metadata or a single field value — produces a different tag.
+ *
+ * Format: `"<hex-digest>"`
  */
 export function generateETag(content: string | Buffer): string {
-  const hash = createHash('sha1').update(content).digest('base64');
-  return `W/"${hash.substring(0, 27)}"`;
+  const hash = createHash('sha256').update(content).digest('hex');
+  return `"${hash}"`;
 }
 
 /**
- * ETag middleware for conditional GETs.
- * Checks If-None-Match header and returns 304 if matches.
+ * Compares a client-supplied `If-None-Match` header value against a candidate
+ * ETag using **strong comparison** (RFC 7232 §3.2):
+ *   - A wildcard `*` always matches.
+ *   - Weak ETags (`W/"..."`) on the client side never match a strong server ETag.
+ *   - Multiple comma-separated ETags are evaluated left-to-right; the first
+ *     strong match short-circuits.
+ *
+ * Returns `true` when the resource has not changed and a 304 is appropriate.
  */
-export function etagMiddleware(req: Request, res: Response, next: NextFunction) {
-  // Only process GET and HEAD requests
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return next();
+export function etagMatches(ifNoneMatch: string, etag: string): boolean {
+  const trimmed = ifNoneMatch.trim();
+
+  // Wildcard – matches everything (RFC 7232 §3.2)
+  if (trimmed === '*') return true;
+
+  // Split on commas, strip surrounding whitespace from each token
+  const clientTags = trimmed.split(',').map((t) => t.trim());
+
+  for (const tag of clientTags) {
+    // Only strong tags can match under strong comparison.
+    // Weak tags start with W/ and are excluded.
+    if (!tag.startsWith('W/') && tag === etag) return true;
   }
 
-  const originalSend = res.send;
+  return false;
+}
 
-  res.send = function (body?: unknown): Response {
-    // Only generate ETag for 200 OK responses where ETag is not already set
+/**
+ * Express middleware that adds strong ETag / 304 Not Modified support to GET
+ * and HEAD endpoints.
+ *
+ * ## How it works
+ *
+ * 1. Intercepts `res.json()` before the response body is written.
+ * 2. For 200 OK responses that do not already carry an ETag, computes a
+ *    SHA-256 digest of the serialised JSON body and sets it as a strong
+ *    `ETag` response header.
+ * 3. Evaluates the `If-None-Match` request header using **strong comparison**
+ *    (RFC 7232 §3.2).  If the tags match, the response status is set to 304
+ *    and `res.end()` is called directly so the body is omitted.
+ * 4. When our strong comparison determines there is **no match**, the
+ *    `If-None-Match` header is cleared from the request before delegating to
+ *    the original `res.json()`.  This prevents Express's built-in `fresh`
+ *    module — which uses **weak** comparison and would incorrectly return 304
+ *    when a client sends `W/"<hash>"` against our strong `"<hash>"` — from
+ *    overriding our decision.
+ *
+ * ## Security note
+ *
+ * Only GET / HEAD requests are intercepted.  POST / PATCH / DELETE requests
+ * pass through unchanged so the middleware cannot suppress mutation responses.
+ *
+ * Mount as a route-level middleware (e.g. on `GET /api/apis`) to avoid adding
+ * hashing overhead to every endpoint in the application.
+ */
+export function etagMiddleware(req: Request, res: Response, next: NextFunction): void {
+  // Only intercept safe, idempotent methods
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    next();
+    return;
+  }
+
+  const originalJson = res.json.bind(res);
+
+  res.json = function (body?: unknown): Response {
+    // Only attach ETags to successful 200 responses that don't already have one
     if (res.statusCode !== 200 || res.get('ETag')) {
-      return originalSend.call(this, body);
+      return originalJson(body);
     }
 
-    let entityTag: string | undefined;
-    if (body !== undefined && body !== null) {
-      let content: string | Buffer;
-      if (typeof body === 'string') {
-        content = body;
-      } else if (Buffer.isBuffer(body)) {
-        content = body;
-      } else {
-        content = JSON.stringify(body);
+    // Serialise to the exact bytes that will form the response body
+    const serialised = JSON.stringify(body);
+    const etag = generateETag(serialised);
+
+    // Set our strong ETag before calling originalJson so Express won't
+    // overwrite it with its own weak variant (Express skips auto-ETag when one
+    // is already present on the response).
+    res.setHeader('ETag', etag);
+
+    const ifNoneMatch = req.header('if-none-match');
+
+    if (ifNoneMatch) {
+      if (etagMatches(ifNoneMatch, etag)) {
+        // Strong-comparison match — return 304 via res.end() to bypass
+        // Express's own freshness pipeline entirely.
+        res.status(304);
+        res.removeHeader('Content-Type');
+        res.removeHeader('Content-Length');
+        res.end();
+        return res;
       }
-      entityTag = generateETag(content);
+
+      // Strong-comparison says no match, but Express's built-in `fresh` module
+      // uses WEAK comparison, which would incorrectly return 304 for a client
+      // sending a weak tag against our strong tag. Clear the header so Express
+      // never sees it and cannot override our 200 decision.
+      delete req.headers['if-none-match'];
     }
 
-    if (entityTag) {
-      res.setHeader('ETag', entityTag);
-
-      const ifNoneMatch = req.header('if-none-match');
-      if (ifNoneMatch) {
-        // Handle client sending multiple ETags or wrapped in quotes
-        const clientTags = ifNoneMatch.split(',').map(t => t.trim());
-        if (clientTags.includes(entityTag) || clientTags.includes(entityTag.replace('W/', ''))) {
-          res.status(304);
-          return originalSend.call(this, '');
-        }
-      }
-    }
-
-    return originalSend.call(this, body);
-  };
+    return originalJson(body);
+  } as typeof res.json;
 
   next();
 }

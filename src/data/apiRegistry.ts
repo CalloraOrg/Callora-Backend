@@ -1,5 +1,6 @@
-import { ApiRegistry, ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';
+import { ApiRegistry, ApiRegistryEntry, EndpointPricing, PaginatedApiList } from '../types/gateway.js';
 import { validateUpstreamBaseUrl } from '../lib/upstreamTarget.js';
+import { decodeCursor, encodeCursor } from '../lib/cursorPagination.js';
 
 /**
  * In-memory API registry.
@@ -27,6 +28,45 @@ export class InMemoryApiRegistry implements ApiRegistry {
 
   resolve(slugOrId: string): ApiRegistryEntry | undefined {
     return this.byId.get(slugOrId) ?? this.bySlug.get(slugOrId);
+  }
+
+  list(cursor?: string | null, limit = 20): PaginatedApiList {
+    // Collect all entries sorted by created_at (desc), then id for stability
+    const sorted = [...this.byId.values()].sort((a, b) => {
+      const aTime = a.created_at?.getTime() ?? 0;
+      const bTime = b.created_at?.getTime() ?? 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return b.id.localeCompare(a.id);
+    });
+
+    // If cursor is provided, skip entries until we find the cursor position
+    let startIndex = 0;
+    if (cursor) {
+      const decoded = decodeCursor(cursor);
+      if (decoded) {
+        startIndex = sorted.findIndex(
+          (e) =>
+            (e.created_at?.getTime() ?? 0) === decoded.timestamp.getTime() &&
+            e.id === decoded.id,
+        );
+        if (startIndex === -1) startIndex = 0;
+        else startIndex += 1; // skip past the cursor entry
+      }
+    }
+
+    const page = sorted.slice(startIndex, startIndex + limit);
+
+    // Compute next cursor from the last entry in the page
+    let nextCursor: string | null = null;
+    if (page.length === limit && startIndex + limit < sorted.length) {
+      const lastEntry = page[page.length - 1];
+      nextCursor = encodeCursor(
+        lastEntry.created_at ?? new Date(0),
+        lastEntry.id,
+      );
+    }
+
+    return { entries: page, nextCursor };
   }
 }
 

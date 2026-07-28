@@ -1,5 +1,7 @@
 /**
  * Tests for GET /api/admin/audit — cursor-paginated audit log listing.
+ *
+ * Includes focused tests for ETag / 304 Not Modified caching behaviour.
  */
 
 jest.mock('better-sqlite3', () => {
@@ -99,6 +101,9 @@ class MockAuditLogRepository implements AuditLogRepository {
 
 function buildApp(repository: AuditLogRepository) {
   const app = express();
+  // Disable Express's built-in weak-ETag so assertions only target our strong
+  // ETag middleware — prevents false positives from Express's auto-ETag.
+  app.disable('etag');
   app.use(requestIdMiddleware);
   app.use((req, res, next) => {
     if (req.headers['x-admin-api-key'] !== ADMIN_KEY) {
@@ -113,6 +118,9 @@ function buildApp(repository: AuditLogRepository) {
   return app;
 }
 
+// ---------------------------------------------------------------------------
+// Pagination behaviour
+// ---------------------------------------------------------------------------
 describe('GET /api/admin/audit', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -199,8 +207,8 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details).toEqual(
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'query.cursor' }),
       ]),
@@ -216,7 +224,7 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.details).toEqual(
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'query.limit' }),
       ]),
@@ -232,7 +240,11 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('from');
+    expect(res.body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'query.from' }),
+      ]),
+    );
   });
 
   it('rejects when from is after to', async () => {
@@ -248,7 +260,11 @@ describe('GET /api/admin/audit', () => {
       .set('x-admin-api-key', ADMIN_KEY);
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('from');
+    expect(res.body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'query.from' }),
+      ]),
+    );
   });
 
   it('requires admin authentication', async () => {
@@ -258,5 +274,221 @@ describe('GET /api/admin/audit', () => {
     const res = await request(app).get('/api/admin/audit');
 
     expect(res.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ETag / 304 caching behaviour
+// ---------------------------------------------------------------------------
+describe('GET /api/admin/audit — ETag / 304 caching', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('emits a strong ETag header on a 200 response', async () => {
+    const entries = [baseEntry()];
+    const repo = new MockAuditLogRepository(() => ({ entries, hasMore: false }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    // Strong ETag: surrounded by double-quotes, no W/ prefix, 64 hex chars (SHA-256)
+    expect(res.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+  });
+
+  it('returns 304 Not Modified when If-None-Match matches the current ETag', async () => {
+    const entries = [baseEntry()];
+    const repo = new MockAuditLogRepository(() => ({ entries, hasMore: false }));
+    const app = buildApp(repo);
+
+    // First request — get the ETag
+    const first = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+    expect(first.status).toBe(200);
+    const etag = first.headers.etag as string;
+    expect(etag).toBeDefined();
+
+    // Second request — conditional GET using the ETag
+    const second = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY)
+      .set('If-None-Match', etag);
+
+    expect(second.status).toBe(304);
+    expect(second.text).toBe('');
+  });
+
+  it('returns 304 when If-None-Match is a wildcard *', async () => {
+    const repo = new MockAuditLogRepository(() => ({ entries: [baseEntry()], hasMore: false }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY)
+      .set('If-None-Match', '*');
+
+    expect(res.status).toBe(304);
+  });
+
+  it('returns 200 when If-None-Match does not match (data has changed)', async () => {
+    const repo = new MockAuditLogRepository(() => ({ entries: [baseEntry()], hasMore: false }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY)
+      .set('If-None-Match', '"stale-etag-value"');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('returns a different ETag when the response content changes', async () => {
+    const entries1 = [baseEntry({ id: 'audit-1' })];
+    const entries2 = [baseEntry({ id: 'audit-2', event: 'DELETE_USER' })];
+
+    let callCount = 0;
+    const repo = new MockAuditLogRepository(() => {
+      callCount++;
+      return { entries: callCount === 1 ? entries1 : entries2, hasMore: false };
+    });
+    const app = buildApp(repo);
+
+    const first = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+    const second = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(first.headers.etag).toBeDefined();
+    expect(second.headers.etag).toBeDefined();
+    expect(first.headers.etag).not.toBe(second.headers.etag);
+  });
+
+  it('does NOT return 304 when client sends a weak ETag (strong comparison only)', async () => {
+    const entries = [baseEntry()];
+    const repo = new MockAuditLogRepository(() => ({ entries, hasMore: false }));
+    const app = buildApp(repo);
+
+    const first = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    const etag = first.headers.etag as string;
+    // Build a weak ETag: W/"<hex>" — prepend W/ to the quoted digest
+    const weakTag = `W/${etag}`;
+
+    const second = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY)
+      .set('If-None-Match', weakTag);
+
+    // Strong comparison — weak client ETags must NOT match
+    expect(second.status).toBe(200);
+  });
+
+  it('does not return an ETag for non-200 error responses', async () => {
+    const repo = new MockAuditLogRepository(() => ({ entries: [], hasMore: false }));
+    const app = buildApp(repo);
+
+    // Hit the unauthenticated path — 401 should not carry our strong ETag
+    // (Express's built-in ETag is disabled in buildApp)
+    const res = await request(app).get('/api/admin/audit');
+
+    expect(res.status).toBe(401);
+    expect(res.headers.etag).toBeUndefined();
+  });
+});
+
+describe('GET /api/admin/audit — security headers', () => {
+  it('sets Content-Security-Policy on audit responses', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-security-policy']).toBeDefined();
+    expect(res.headers['content-security-policy']).toContain("default-src 'self'");
+    expect(res.headers['content-security-policy']).toContain("script-src 'self'");
+    expect(res.headers['content-security-policy']).toContain("object-src 'none'");
+    expect(res.headers['content-security-policy']).toContain("frame-src 'none'");
+  });
+
+  it('sets X-Content-Type-Options: nosniff on audit responses', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('sets Referrer-Policy on audit responses', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  });
+
+  it('applies security headers even on error responses from the audit route', async () => {
+    const repo = new MockAuditLogRepository(() => {
+      throw new Error('unexpected');
+    });
+    const app = buildApp(repo);
+
+    const res = await request(app)
+      .get('/api/admin/audit')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    // Should return a 500 but still have security headers
+    expect(res.status).toBe(500);
+    expect(res.headers['content-security-policy']).toBeDefined();
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  });
+
+  it('applies security headers on the replay sub-route', async () => {
+    const repo = new MockAuditLogRepository(() => ({
+      entries: [baseEntry()],
+      hasMore: false,
+    }));
+    const app = buildApp(repo);
+
+    // Authenticated request to replay with an empty body — should reach the
+    // router and get a 400 validation error, but security headers are set
+    const res = await request(app)
+      .post('/api/admin/audit/replay')
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.headers['content-security-policy']).toBeDefined();
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
   });
 });

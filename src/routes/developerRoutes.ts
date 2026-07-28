@@ -10,9 +10,9 @@ import {
 import { UsageStore } from '../types/gateway.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
-import type { ReportExporterService } from '../services/reportExporter.js';
 import type { UsageEventsRepository } from '../repositories/usageEventsRepository.js';
 import { InMemoryUsageEventsRepository } from '../repositories/usageEventsRepository.js';
+import type { ReportExporterService } from '../services/reportExporter.js';
 import { createDeveloperMeUsageRouter } from './developers/me/usage.js';
 
 /**
@@ -32,8 +32,8 @@ export interface DeveloperRoutesDeps {
   settlementStore: SettlementStore;
   usageStore: UsageStore;
   developerRepository: DeveloperRepository;
-  reportExporterService?: ReportExporterService;
   usageEventsRepository?: UsageEventsRepository;
+  reportExporterService?: ReportExporterService;
 }
 
 export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {

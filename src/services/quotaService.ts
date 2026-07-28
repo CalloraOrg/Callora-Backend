@@ -1,6 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../logger.js';
-import { NotFoundError, ConflictError } from '../errors/index.js';
+import { NotFoundError, ConflictError, BadRequestError } from '../errors/index.js';
+import { BadRequestError, NotFoundError, ConflictError } from '../errors/index.js';
+import { quotasCache } from './quotasCacheWarm.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,6 +106,7 @@ export function getQuotaRequestStore(): QuotaRequestStore {
 
 export function setQuotaRequestStore(store: QuotaRequestStore): void {
   storeInstance = store;
+  quotasCache.invalidateAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +129,7 @@ export async function createQuotaRequest(input: CreateQuotaRequestInput): Promis
     requestedTier: input.requestedTier,
   });
 
+  quotasCache.invalidateAll();
   return request;
 }
 
@@ -141,8 +145,16 @@ export async function getQuotaRequest(requestId: string): Promise<QuotaRequest> 
 export async function listQuotaRequests(filter?: {
   status?: QuotaRequestStatus;
 }): Promise<QuotaRequest[]> {
+  const cacheKey = filter?.status ?? 'all';
+  const cached = quotasCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const store = getQuotaRequestStore();
-  return store.list(filter);
+  const result = await store.list(filter);
+  quotasCache.set(cacheKey, result);
+  return result;
 }
 
 export async function approveQuotaRequest(
@@ -188,6 +200,7 @@ export async function approveQuotaRequest(
     adminNotes,
   });
 
+  quotasCache.invalidateAll();
   return updated!;
 }
 
@@ -222,7 +235,159 @@ export async function rejectQuotaRequest(
     adminNotes,
   });
 
+  quotasCache.invalidateAll();
   return updated!;
+}
+
+// ---------------------------------------------------------------------------
+// Bulk update types
+// ---------------------------------------------------------------------------
+
+export interface BulkOperation {
+  requestId: string;
+  action: 'approve' | 'reject';
+  adminNotes?: string;
+}
+
+export interface BulkOperationResult {
+  requestId: string;
+  developerId: string;
+  requestedTier: string;
+  status: QuotaRequestStatus;
+  success: true;
+}
+
+export interface BulkOperationError {
+  requestId: string;
+  error: string;
+  code: string;
+}
+
+export interface BulkUpdateResult {
+  results: (BulkOperationResult | BulkOperationError)[];
+  summary: {
+    total: number;
+    succeeded: number;
+    failed: number;
+  };
+}
+
+export class BulkQuotaUpdateError extends BadRequestError {
+  public readonly details: BulkOperationError[];
+
+  constructor(details: BulkOperationError[]) {
+    super(
+      `${details.length} operation(s) failed validation`,
+      'BULK_QUOTA_UPDATE_FAILED',
+    );
+    this.name = 'BulkQuotaUpdateError';
+    Object.setPrototypeOf(this, BulkQuotaUpdateError.prototype);
+    this.details = details;
+  }
+}
+
+export async function bulkUpdateQuotaRequests(
+  operations: BulkOperation[],
+  adminActor: string,
+  updateOverrides?: (developerUserId: string, overrides: Record<string, unknown>) => Promise<void>,
+): Promise<BulkUpdateResult> {
+  const store = getQuotaRequestStore();
+
+  // Phase 1: pre-check all operations
+  const errors: BulkOperationError[] = [];
+  const resolvedOps: { operation: BulkOperation; request: QuotaRequest }[] = [];
+
+  for (const op of operations) {
+    const request = await store.findById(op.requestId);
+    if (!request) {
+      errors.push({
+        requestId: op.requestId,
+        error: 'Quota request not found',
+        code: 'QUOTA_REQUEST_NOT_FOUND',
+      });
+      continue;
+    }
+    if (request.status !== 'pending') {
+      errors.push({
+        requestId: op.requestId,
+        error: `Quota request is already ${request.status}`,
+        code: 'QUOTA_REQUEST_ALREADY_RESOLVED',
+      });
+      continue;
+    }
+    resolvedOps.push({ operation: op, request });
+  }
+
+  // Atomic gate: if any operation fails, none are applied
+  if (errors.length > 0) {
+    throw new BulkQuotaUpdateError(errors);
+  }
+
+  // Phase 2: apply all operations
+  const persist = updateOverrides ?? updateDeveloperPlanOverrides;
+  const results: BulkOperationResult[] = [];
+
+  for (const { operation, request } of resolvedOps) {
+    const now = new Date();
+
+    if (operation.action === 'approve') {
+      await store.update(operation.requestId, {
+        status: 'approved',
+        adminNotes: operation.adminNotes,
+        resolvedAt: now,
+        resolvedBy: adminActor,
+      });
+
+      await persist(request.developerId, {
+        plan_tier: request.requestedTier,
+        ...(request.requestedOverrides?.monthlyCallLimit
+          ? { monthly_call_limit: request.requestedOverrides.monthlyCallLimit }
+          : {}),
+        ...(request.requestedOverrides?.rateLimitMaxRequests
+          ? { rate_limit_max_requests: request.requestedOverrides.rateLimitMaxRequests }
+          : {}),
+      });
+
+      logger.audit('QUOTA_REQUEST_APPROVED', adminActor, {
+        requestId: operation.requestId,
+        developerId: request.developerId,
+        tier: request.requestedTier,
+        adminNotes: operation.adminNotes,
+      });
+    } else {
+      await store.update(operation.requestId, {
+        status: 'rejected',
+        adminNotes: operation.adminNotes,
+        resolvedAt: now,
+        resolvedBy: adminActor,
+      });
+
+      logger.audit('QUOTA_REQUEST_REJECTED', adminActor, {
+        requestId: operation.requestId,
+        developerId: request.developerId,
+        reason: request.reason,
+        adminNotes: operation.adminNotes,
+      });
+    }
+
+    const updated = await store.findById(operation.requestId);
+    results.push({
+      requestId: operation.requestId,
+      developerId: request.developerId,
+      requestedTier: request.requestedTier,
+      status: updated!.status,
+      success: true,
+    });
+  }
+
+  return {
+    results,
+    summary: {
+      total: operations.length,
+      succeeded: results.length,
+      failed: 0,
+    },
+  };
 }
 
 async function updateDeveloperPlanOverrides(

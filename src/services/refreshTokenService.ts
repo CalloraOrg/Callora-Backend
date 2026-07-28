@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import type { StringValue } from 'ms';
 import { logger } from '../logger.js';
 import type { 
   RefreshTokenPayload, 
@@ -11,14 +12,14 @@ import type { RefreshTokenRepository } from '../repositories/refreshTokenReposit
 
 export interface RefreshTokenServiceOptions {
   jwtSecret: string;
-  accessTokenExpiry: string;
-  refreshTokenExpiry: string;
+  accessTokenExpiry: StringValue | number;
+  refreshTokenExpiry: StringValue | number;
 }
 
 export class RefreshTokenService {
   private readonly jwtSecret: string;
-  private readonly accessTokenExpiry: string;
-  private readonly refreshTokenExpiry: string;
+  private readonly accessTokenExpiry: StringValue | number;
+  private readonly refreshTokenExpiry: StringValue | number;
 
   constructor(options: RefreshTokenServiceOptions) {
     this.jwtSecret = options.jwtSecret;
@@ -140,7 +141,8 @@ export class RefreshTokenService {
   /**
    * Parse expiry string to seconds
    */
-  private parseExpiry(expiry: string): number {
+  private parseExpiry(expiry: StringValue | number): number {
+    if (typeof expiry === 'number') return expiry;
     const match = expiry.match(/^(\d+)(ms|[smhd])$/);
     if (!match) {
       throw new Error(`Invalid expiry format: ${expiry}`);
@@ -236,7 +238,7 @@ export class RefreshTokenService {
    *      leaving the victim holding a now-revoked token.
    *   b) The attacker's rotated token was stolen back by the legitimate user.
    *
-   * In this case, we revoke the specific token family to invalidate the lineage.
+   * In this case, we revoke all user refresh tokens to contain the theft signal.
    *
    * @param storedToken - The revoked token record that was presented again
    * @param repository  - Token repository for persistence
@@ -251,7 +253,6 @@ export class RefreshTokenService {
       }
     );
 
-    // Revoke the specific token family to terminate the stolen token lineage.
-    await repository.revokeFamily(storedToken.familyId, storedToken.userId);
+    await repository.revokeAllUserTokens(storedToken.userId);
   }
 }

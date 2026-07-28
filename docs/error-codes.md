@@ -97,6 +97,9 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `USAGE_AGGREGATE_NOT_FOUND` | Admin usage management |
 | `INVALID_EXPORT_SCHEDULE` | Export schedules |
 | `EXPORT_SCHEDULE_NOT_FOUND` | Export schedules |
+| `MISSING_AUTH_FIELDS` | Auth |
+| `AUTH_NOT_IMPLEMENTED` | Auth |
+| `COMPONENT_NOT_CONFIGURED` | Health / dependency probes |
 <!-- END GENERATED ERROR CODES -->
 
 ## Scope and important caveats

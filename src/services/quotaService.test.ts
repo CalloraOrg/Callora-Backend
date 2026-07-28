@@ -1,4 +1,4 @@
-import { InMemoryQuotaRequestStore, setQuotaRequestStore, getQuotaRequestStore, createQuotaRequest, getQuotaRequest, listQuotaRequests, approveQuotaRequest, rejectQuotaRequest, type QuotaRequestStore } from './quotaService.js';
+import { InMemoryQuotaRequestStore, setQuotaRequestStore, getQuotaRequestStore, createQuotaRequest, getQuotaRequest, listQuotaRequests, approveQuotaRequest, rejectQuotaRequest, bulkUpdateQuotaRequests, BulkQuotaUpdateError, type QuotaRequestStore } from './quotaService.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -247,6 +247,170 @@ describe('quotaService', () => {
       await rejectQuotaRequest(created.id, 'admin-1');
 
       await expect(rejectQuotaRequest(created.id, 'admin-2')).rejects.toThrow('already rejected');
+    });
+  });
+
+  describe('bulkUpdateQuotaRequests', () => {
+    const noopUpdateOverrides = async () => {};
+
+    it('approves multiple pending requests atomically', async () => {
+      const r1 = await createQuotaRequest({ developerId: 'dev-1', requestedTier: 'pro', reason: 'Bulk approve test 1' });
+      const r2 = await createQuotaRequest({ developerId: 'dev-2', requestedTier: 'enterprise', reason: 'Bulk approve test 2' });
+
+      const result = await bulkUpdateQuotaRequests(
+        [
+          { requestId: r1.id, action: 'approve', adminNotes: 'Approved' },
+          { requestId: r2.id, action: 'approve', adminNotes: 'Also approved' },
+        ],
+        'admin-1',
+        noopUpdateOverrides,
+      );
+
+      expect(result.summary).toEqual({ total: 2, succeeded: 2, failed: 0 });
+      expect(result.results).toHaveLength(2);
+      expect(result.results[0]).toMatchObject({ requestId: r1.id, status: 'approved', success: true });
+      expect(result.results[1]).toMatchObject({ requestId: r2.id, status: 'approved', success: true });
+    });
+
+    it('rejects multiple pending requests atomically', async () => {
+      const r1 = await createQuotaRequest({ developerId: 'dev-1', requestedTier: 'pro', reason: 'Bulk reject test 1' });
+      const r2 = await createQuotaRequest({ developerId: 'dev-2', requestedTier: 'free', reason: 'Bulk reject test 2' });
+
+      const result = await bulkUpdateQuotaRequests(
+        [
+          { requestId: r1.id, action: 'reject', adminNotes: 'Rejected' },
+          { requestId: r2.id, action: 'reject', adminNotes: 'Also rejected' },
+        ],
+        'admin-1',
+        noopUpdateOverrides,
+      );
+
+      expect(result.summary).toEqual({ total: 2, succeeded: 2, failed: 0 });
+      expect(result.results[0]).toMatchObject({ requestId: r1.id, status: 'rejected', success: true });
+      expect(result.results[1]).toMatchObject({ requestId: r2.id, status: 'rejected', success: true });
+    });
+
+    it('mixed approve/reject operations', async () => {
+      const r1 = await createQuotaRequest({ developerId: 'dev-1', requestedTier: 'pro', reason: 'Mix approve' });
+      const r2 = await createQuotaRequest({ developerId: 'dev-2', requestedTier: 'enterprise', reason: 'Mix reject' });
+
+      const result = await bulkUpdateQuotaRequests(
+        [
+          { requestId: r1.id, action: 'approve' },
+          { requestId: r2.id, action: 'reject' },
+        ],
+        'admin-1',
+        noopUpdateOverrides,
+      );
+
+      expect(result.summary).toEqual({ total: 2, succeeded: 2, failed: 0 });
+      expect(result.results[0].status).toBe('approved');
+      expect(result.results[1].status).toBe('rejected');
+    });
+
+    it('throws BulkQuotaUpdateError when any request is not found (atomic - none applied)', async () => {
+      const r1 = await createQuotaRequest({ developerId: 'dev-1', requestedTier: 'pro', reason: 'Atomic fail test' });
+
+      await expect(
+        bulkUpdateQuotaRequests(
+          [
+            { requestId: r1.id, action: 'approve' },
+            { requestId: 'nonexistent', action: 'approve' },
+          ],
+          'admin-1',
+          noopUpdateOverrides,
+        ),
+      ).rejects.toThrow(BulkQuotaUpdateError);
+
+      // Verify the valid request was NOT modified
+      const store = getQuotaRequestStore();
+      const unchanged = await store.findById(r1.id);
+      expect(unchanged!.status).toBe('pending');
+    });
+
+    it('throws BulkQuotaUpdateError when any request is already resolved', async () => {
+      const r1 = await createQuotaRequest({ developerId: 'dev-1', requestedTier: 'pro', reason: 'Already resolved' });
+      const r2 = await createQuotaRequest({ developerId: 'dev-2', requestedTier: 'free', reason: 'Will be fine' });
+      await approveQuotaRequest(r1.id, 'admin-1', undefined, noopUpdateOverrides);
+
+      let error: BulkQuotaUpdateError | undefined;
+      try {
+        await bulkUpdateQuotaRequests(
+          [
+            { requestId: r1.id, action: 'approve' },
+            { requestId: r2.id, action: 'approve' },
+          ],
+          'admin-1',
+          noopUpdateOverrides,
+        );
+      } catch (e) {
+        error = e as BulkQuotaUpdateError;
+      }
+
+      expect(error).toBeDefined();
+      expect(error!.details).toHaveLength(1);
+      expect(error!.details[0].requestId).toBe(r1.id);
+      expect(error!.details[0].code).toBe('QUOTA_REQUEST_ALREADY_RESOLVED');
+
+      // Verify r2 was NOT modified
+      const store = getQuotaRequestStore();
+      const unchanged = await store.findById(r2.id);
+      expect(unchanged!.status).toBe('pending');
+    });
+
+    it('throws BulkQuotaUpdateError with all errors when mixed failures', async () => {
+      const r1 = await createQuotaRequest({ developerId: 'dev-1', requestedTier: 'pro', reason: 'Will be approved first' });
+      await approveQuotaRequest(r1.id, 'admin-1', undefined, noopUpdateOverrides);
+
+      let error: BulkQuotaUpdateError | undefined;
+      try {
+        await bulkUpdateQuotaRequests(
+          [
+            { requestId: r1.id, action: 'approve' },
+            { requestId: 'nonexistent-1', action: 'reject' },
+            { requestId: 'nonexistent-2', action: 'approve' },
+          ],
+          'admin-1',
+          noopUpdateOverrides,
+        );
+      } catch (e) {
+        error = e as BulkQuotaUpdateError;
+      }
+
+      expect(error).toBeDefined();
+      expect(error!.details).toHaveLength(3);
+    });
+
+    it('throws BulkQuotaUpdateError with all errors when all operations are invalid', async () => {
+      let error: BulkQuotaUpdateError | undefined;
+      try {
+        await bulkUpdateQuotaRequests(
+          [
+            { requestId: 'nonexistent-1', action: 'approve' },
+            { requestId: 'nonexistent-2', action: 'reject' },
+          ],
+          'admin-1',
+          noopUpdateOverrides,
+        );
+      } catch (e) {
+        error = e as BulkQuotaUpdateError;
+      }
+
+      expect(error).toBeDefined();
+      expect(error!.details).toHaveLength(2);
+    });
+
+    it('handles single operation', async () => {
+      const r1 = await createQuotaRequest({ developerId: 'dev-1', requestedTier: 'enterprise', reason: 'Single bulk approve' });
+
+      const result = await bulkUpdateQuotaRequests(
+        [{ requestId: r1.id, action: 'approve' }],
+        'admin-1',
+        noopUpdateOverrides,
+      );
+
+      expect(result.summary).toEqual({ total: 1, succeeded: 1, failed: 0 });
+      expect(result.results[0].status).toBe('approved');
     });
   });
 });

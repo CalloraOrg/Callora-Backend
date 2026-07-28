@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
+import { encodeCursor, parseCursor } from "../lib/cursorPagination.js";
 
 import {
   BadGatewayError,
@@ -28,25 +29,23 @@ import {
 import { redactSimulationDetails } from "../lib/simulationDiagnostics.js";
 import { billingAccessLogMiddleware } from "../middleware/billingAccessLog.js";
 import creditsRouter from "./billing/credits.js";
+import deductRouter from "./billing/deduct.js";
 import disputesRouter from "./billing/disputes.js";
-import bulkDeductRouter from "./billing/deduct/bulk.js";
+import refundRouter from "./billing/refund.js";
 import { createFeeAbstractionRouter } from "./billing/feeAbstraction.js";
-import bulkDeductRouter from "./billing/deduct/bulk.js";
+import { createBillingForecastRouter } from "./billing/forecast.js";
+import { etagMiddleware } from "../middleware/etag.js";
 
 const router = Router();
 
 router.use(billingAccessLogMiddleware);
 
-// Mount credits sub-router
 router.use("/credits", creditsRouter);
-// Mount disputes sub-router
 router.use("/disputes", disputesRouter);
-
-// Mount bulk-deduct sub-router
-router.use('/deduct/bulk', bulkDeductRouter);
-
-// Mount fee-abstraction sub-router
+router.use("/deduct", deductRouter);
+router.use("/refund", refundRouter);
 router.use("/fee-abstraction", createFeeAbstractionRouter());
+router.use("/forecast", createBillingForecastRouter());
 
 interface BillingDeductBody {
   requestId?: unknown;
@@ -113,6 +112,90 @@ function sendSimulationFailure(
     simulationDetails: redactSimulationDetails(result.simulationDetails),
   });
 }
+
+router.get(
+  "/",
+  requireAuth,
+  etagMiddleware,
+  async (
+    req: Request,
+    res: Response<unknown, AuthenticatedLocals>,
+    next: NextFunction,
+  ) => {
+    try {
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        next(new UnauthorizedError());
+        return;
+      }
+
+      const pool = getPool(req);
+      const limit = Number(req.query.limit ?? 20);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        next(new BadRequestError("limit must be an integer between 1 and 100"));
+        return;
+      }
+
+      const cursor = parseCursor(req.query.cursor);
+      if (req.query.cursor !== undefined && !cursor) {
+        next(new BadRequestError("Invalid cursor"));
+        return;
+      }
+
+      const query = {
+        text: `
+          SELECT id, request_id, developer_id, api_id, endpoint_id, api_key_id, amount_usdc, created_at
+          FROM billing_requests
+          WHERE developer_id = $1
+          ${cursor ? "AND (created_at < $2 OR (created_at = $2 AND id < $3))" : ""}
+          ORDER BY created_at DESC, id DESC
+          LIMIT $4
+        `,
+        values: cursor
+          ? [user.id, cursor.timestamp, cursor.id, limit + 1]
+          : [user.id, limit + 1],
+      };
+
+      const result = await pool.query(query);
+      const rows = result.rows as Array<{
+        id: string;
+        request_id: string;
+        developer_id: string;
+        api_id: string;
+        endpoint_id: string;
+        api_key_id: string;
+        amount_usdc: string;
+        created_at: Date;
+      }>;
+
+      const hasMore = rows.length > limit;
+      const data = hasMore ? rows.slice(0, limit) : rows;
+      const nextCursor = hasMore && data.length > 0
+        ? encodeCursor(data[data.length - 1].created_at, data[data.length - 1].id)
+        : null;
+
+      res.status(200).json({
+        data: data.map((row) => ({
+          id: row.id,
+          requestId: row.request_id,
+          developerId: row.developer_id,
+          apiId: row.api_id,
+          endpointId: row.endpoint_id,
+          apiKeyId: row.api_key_id,
+          amountUsdc: row.amount_usdc,
+          createdAt: row.created_at.toISOString(),
+        })),
+        meta: {
+          limit,
+          nextCursor,
+          hasMore,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 router.post(
   "/deduct",
@@ -219,6 +302,7 @@ router.post(
 router.get(
   "/request/:requestId",
   requireAuth,
+  etagMiddleware,
   async (
     req: Request,
     res: Response<unknown, AuthenticatedLocals>,

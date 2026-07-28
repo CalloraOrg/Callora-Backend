@@ -15,6 +15,8 @@ import { InMemoryApiRepository } from '../repositories/apiRepository.js';
 import type { Api, Developer } from '../db/schema.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import { createApisRouter } from './apis.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { ListingsCache } from '../lib/listingsCache.js';
 
 const developerProfile: Developer = {
   id: 11,
@@ -170,6 +172,198 @@ describe('createApisRouter', () => {
     expect(res.status).toBe(200);
     expect(res.body.meta).toEqual({ total: 1, limit: 1, offset: 0 });
     expect(res.body.data).toHaveLength(1);
+  });
+
+  it('sets an ETag header on GET /:id response', async () => {
+    const app = buildApp();
+
+    const res = await request(app).get('/api/apis/1');
+
+    expect(res.status).toBe(200);
+    expect(res.headers.etag).toBeDefined();
+    expect(res.headers.etag).toMatch(/^W\/"/);
+  });
+
+  it('returns 304 Not Modified for GET /:id when If-None-Match matches', async () => {
+    const app = buildApp();
+
+    const res1 = await request(app).get('/api/apis/1');
+    const etag = res1.headers.etag;
+    expect(etag).toBeDefined();
+
+    const res2 = await request(app)
+      .get('/api/apis/1')
+      .set('If-None-Match', etag);
+
+    expect(res2.status).toBe(304);
+    expect(res2.text).toBe('');
+  });
+
+  it('returns 200 for GET /:id when If-None-Match does not match', async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .get('/api/apis/1')
+      .set('If-None-Match', 'W/"stale"');
+
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe('Weather API');
+  });
+
+  it('returns 429 once the per-user limit for the API router is exceeded', async () => {
+    const repo = new InMemoryApiRepository(
+      [
+        {
+          id: 1,
+          name: 'Weather API',
+          description: 'Provides weather data',
+          base_url: 'https://api.weather.test',
+          logo_url: null,
+          category: 'weather',
+          status: 'active',
+          developer: {
+            name: 'Acme Corp',
+            website: 'https://acme.test',
+            description: 'Leading data provider',
+          },
+        },
+      ],
+      new Map(),
+    );
+
+    const app = express();
+    app.use('/api/apis', createApisRouter({
+      apiRepository: repo,
+      developerRepository,
+      rateLimitMiddleware: createRateLimitMiddleware({ windowMs: 60_000, maxRequests: 1 }),
+    }));
+    app.use(errorHandler);
+
+    await request(app).get('/api/apis').set('x-user-id', 'user-1').expect(200);
+    const res = await request(app).get('/api/apis').set('x-user-id', 'user-1');
+
+    expect(res.status).toBe(429);
+    expect(res.body.code).toBe('TOO_MANY_REQUESTS');
+    expect(res.headers['retry-after']).toBe('60');
+  });
+
+  describe('ETag / 304 conditional GET', () => {
+    function buildEtagApp() {
+      const repo = new InMemoryApiRepository(
+        [
+          {
+            id: 1,
+            name: 'Weather API',
+            description: 'Provides weather data',
+            base_url: 'https://api.weather.test',
+            logo_url: null,
+            category: 'weather',
+            status: 'active',
+            developer: {
+              name: 'Acme Corp',
+              website: 'https://acme.test',
+              description: 'Leading data provider',
+            },
+          },
+        ],
+        new Map([
+          [
+            1,
+            [
+              {
+                path: '/current',
+                method: 'GET',
+                price_per_call_usdc: '0.01',
+                description: 'Current weather',
+              },
+            ],
+          ],
+        ]),
+      );
+
+      const app = express();
+      // Disable Express's built-in weak ETag so assertions cover our middleware only.
+      app.disable('etag');
+      app.use(
+        '/api/apis',
+        createApisRouter({
+          apiRepository: repo,
+          developerRepository,
+          // Fresh per-suite cache avoids cross-test pollution from the singleton.
+          cache: new ListingsCache(),
+          rateLimitMiddleware: (_req, _res, next) => next(),
+        }),
+      );
+      app.use(errorHandler);
+      return app;
+    }
+
+    it('returns a strong ETag on a successful listings response', async () => {
+      const app = buildEtagApp();
+
+      const res = await request(app).get('/api/apis');
+
+      expect(res.status).toBe(200);
+      expect(res.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+      expect(res.body.data).toHaveLength(1);
+    });
+
+    it('returns 304 Not Modified when If-None-Match matches the listings ETag', async () => {
+      const app = buildEtagApp();
+
+      const first = await request(app).get('/api/apis');
+      expect(first.status).toBe(200);
+      const etag = first.headers.etag as string;
+      expect(etag).toBeDefined();
+
+      const second = await request(app).get('/api/apis').set('If-None-Match', etag);
+
+      expect(second.status).toBe(304);
+      expect(second.text).toBe('');
+      expect(second.headers.etag).toBe(etag);
+    });
+
+    it('returns 200 with a body when If-None-Match does not match', async () => {
+      const app = buildEtagApp();
+
+      const res = await request(app)
+        .get('/api/apis')
+        .set('If-None-Match', '"0000000000000000000000000000000000000000000000000000000000000000"');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+    });
+
+    it('returns a different ETag when query filters change the response body', async () => {
+      const app = buildEtagApp();
+
+      const all = await request(app).get('/api/apis');
+      const weather = await request(app).get('/api/apis?category=weather');
+      const missing = await request(app).get('/api/apis?category=payments');
+
+      expect(all.status).toBe(200);
+      expect(weather.status).toBe(200);
+      expect(missing.status).toBe(200);
+      // Same active weather listing → same body → same ETag
+      expect(weather.headers.etag).toBe(all.headers.etag);
+      // Empty filtered result → different body → different ETag
+      expect(missing.headers.etag).not.toBe(all.headers.etag);
+      expect(missing.body.data).toHaveLength(0);
+    });
+
+    it('does not return 304 when the client sends only a weak ETag', async () => {
+      const app = buildEtagApp();
+
+      const first = await request(app).get('/api/apis');
+      const etag = first.headers.etag as string;
+      const weakTag = `W/${etag}`;
+
+      const second = await request(app).get('/api/apis').set('If-None-Match', weakTag);
+
+      expect(second.status).toBe(200);
+      expect(second.body.data).toHaveLength(1);
+    });
   });
 });
 

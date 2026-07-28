@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
-import { getRequestId } from '../utils/asyncContext.js';
+import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
 import { getEffectiveRetryPolicy } from '../services/webhookRetry.js';
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
@@ -63,6 +63,7 @@ export async function dispatchWebhook(
         const body = JSON.stringify(payload);
         const deliveryId = crypto.randomUUID();
         const requestId = getRequestId();
+        const correlationId = getCorrelationId();
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             'User-Agent': 'Callora-Webhook/1.0',
@@ -72,6 +73,9 @@ export async function dispatchWebhook(
         };
         if (requestId) {
             headers['X-Request-Id'] = requestId;
+        }
+        if (correlationId) {
+            headers['X-Correlation-Id'] = correlationId;
         }
 
         if (config.secret) {

@@ -1,3 +1,4 @@
+import assert from 'assert';
 import Database from 'better-sqlite3';
 
 describe('Migration Runner Logic', () => {

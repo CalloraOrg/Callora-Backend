@@ -39,7 +39,7 @@ export function createMonthlyInvoiceJob(
         const now = new Date();
 
         if (now.getDate() !== 1) {
-          log.debug(
+          log.info(
             "[monthlyInvoice] Not the first day of the month, skipping",
           );
           return;
