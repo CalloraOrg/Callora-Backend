@@ -1,0 +1,182 @@
+# OpenAPI fragment: /api/rate-limit examples
+#
+# Canonical full contract lives in docs/openapi.json (served at GET /api/openapi.json).
+# This YAML file documents request/response examples for the rate-limit surface
+# (GrantFox FWC26 #931). Keep examples in sync with docs/openapi.json — the
+# companion test src/routes/rate-limit/health.openapi.test.ts asserts both.
+openapi: 3.1.0
+info:
+  title: Callora rate-limit examples
+  version: "1.0.0"
+  description: >
+    Example request/response bodies for the rate-limit health probe and the
+    authenticated budget peek. No request body is required for either GET.
+paths:
+  /api/rate-limit/health:
+    get:
+      summary: Check rate-limit subsystem health
+      description: >
+        Public probe. Does not consume rate-limit budget and does not require
+        a request body.
+      parameters: []
+      responses:
+        "200":
+          description: Rate-limit subsystem is operational
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitHealthResponse"
+              examples:
+                operational:
+                  summary: In-memory limiter is operational
+                  value:
+                    status: ok
+                    timestamp: "2026-07-28T10:00:00.000Z"
+                    dependencies:
+                      in_memory_store:
+                        status: ok
+                        responseTime: 0.123
+                        details:
+                          windowMs: 60000
+                          maxRequests: 100
+                notConfigured:
+                  summary: No limiter configured
+                  value:
+                    status: ok
+                    timestamp: "2026-07-28T10:00:00.000Z"
+                    dependencies:
+                      in_memory_store:
+                        status: ok
+                        details:
+                          note: No rate limiter configured for probing
+        "503":
+          description: Rate-limit subsystem is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitHealthResponse"
+              examples:
+                unavailable:
+                  summary: Rate-limit store probe failed
+                  value:
+                    status: down
+                    timestamp: "2026-07-28T10:00:00.000Z"
+                    dependencies:
+                      in_memory_store:
+                        status: down
+                        responseTime: 0.456
+                        error: unavailable
+  /api/limits/check:
+    get:
+      summary: Check the authenticated user's rate-limit budget
+      description: >
+        Peeks at the authenticated user's REST rate-limit bucket without
+        consuming a token. No request body is required.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: Bearer JWT for the authenticated user
+          schema:
+            type: string
+          examples:
+            developerBearer:
+              summary: Authenticated developer JWT
+              value: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example"
+      responses:
+        "200":
+          description: Rate-limit budget status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitCheckResponse"
+              examples:
+                allowed:
+                  summary: Requests are currently allowed
+                  value:
+                    status: ok
+                denied:
+                  summary: Rate-limit budget is exhausted
+                  value:
+                    status: deny
+                    reason: rate_limit_exceeded
+                    retryAfterMs: 42300
+        "401":
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    code: UNAUTHORIZED
+                    message: Authentication required
+                    requestId: req-rate-limit-check
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RateLimitDependencyStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        responseTime:
+          type: number
+        error:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    RateLimitHealthResponse:
+      type: object
+      required: [status, timestamp, dependencies]
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/RateLimitDependencyStatus"
+    RateLimitCheckResponse:
+      oneOf:
+        - type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [ok]
+        - type: object
+          required: [status, reason, retryAfterMs]
+          properties:
+            status:
+              type: string
+              enum: [deny]
+            reason:
+              type: string
+              enum: [rate_limit_exceeded]
+            retryAfterMs:
+              type: integer
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string

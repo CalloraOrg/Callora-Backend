@@ -467,6 +467,63 @@ describe('GET /api/refresh-token', () => {
     );
   });
 
+  describe('X-Correlation-Id propagation (issue #957)', () => {
+    it('always sets X-Correlation-Id response header', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+
+      const res = await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['x-correlation-id']).toBeDefined();
+      expect(typeof res.headers['x-correlation-id']).toBe('string');
+      expect(res.headers['x-correlation-id'].length).toBeGreaterThan(0);
+    });
+
+    it('propagates client-supplied x-correlation-id in response header', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+      const clientCorrelationId = 'client-corr-test-abc-123';
+
+      const res = await request(app)
+        .get('/api/refresh-token')
+        .set(authHeader)
+        .set('x-correlation-id', clientCorrelationId);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
+    });
+
+    it('includes correlation ID in structured log output', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+
+      await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'LIST_REFRESH_TOKENS',
+        expect.objectContaining({
+          correlationId: expect.any(String),
+        }),
+      );
+    });
+
+    it('includes correlation ID in error log when repository fails', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      jest.spyOn(repo, 'listRefreshTokens').mockRejectedValue(new Error('DB error'));
+      const app = buildApp(repo);
+
+      await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to list refresh tokens',
+        expect.objectContaining({
+          correlationId: expect.any(String),
+        }),
+      );
+    });
+  });
+
   describe('Token-Bucket Rate Limiting (issue #930)', () => {
     it('allows requests within capacity and rejects with HTTP 429 when capacity is exceeded', async () => {
       const repo = new MockRefreshTokenRepository([makeToken()]);
