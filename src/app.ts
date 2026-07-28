@@ -56,7 +56,7 @@ import {
   type HealthCheckConfig,
 } from "./services/healthCheck.js";
 import { createDependenciesRouter } from "./routes/health/dependencies.js";
-import { createRateLimitHealthRouter } from "./routes/rate-limit/health.js";
+import { createRateLimitRouter } from "./routes/rate-limit.js";
 import quotaRequestsRouter from "./routes/quota/requests.js";
 import quotaCountsRouter from "./routes/quotas/counts.js";
 import { parsePagination, paginatedResponse } from "./lib/pagination.js";
@@ -353,10 +353,12 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     createDependenciesRouter(dependencies?.healthCheckConfig),
   );
 
-  // Rate-limit health dependency probe - operational status of the rate-limit subsystem
+  // Rate-limit routes with X-Correlation-Id propagation — every sub-route
+  // inherits correlation-id middleware for structured logging and outbound
+  // call correlation.
   app.use(
-    "/api/rate-limit/health",
-    createRateLimitHealthRouter({
+    "/api/rate-limit",
+    createRateLimitRouter({
       limiter: restRateLimiter,
       windowMs: restRateLimitOptions.windowMs,
       maxRequests: restRateLimitOptions.maxRequests,
