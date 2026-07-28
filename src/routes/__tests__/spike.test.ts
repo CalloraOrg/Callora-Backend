@@ -564,3 +564,4 @@ describe('Spike Router — Mutation Audit Logging with Circuit Breaker', () => {
       expect(res2.body.severity).toBe('high');
     });
   });
+});
