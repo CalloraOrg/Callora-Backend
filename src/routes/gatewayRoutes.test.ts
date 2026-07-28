@@ -435,3 +435,306 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
     expect(mismatchRes.body.message).toBe(unknownRes.body.message);
   });
 });
+
+// ---------------------------------------------------------------------------
+// X-Correlation-Id generation and propagation (GrantFox FWC26)
+// ---------------------------------------------------------------------------
+
+describe('gateway route - X-Correlation-Id propagation', () => {
+  /**
+   * Build a minimal app with a fetch mock that records outbound request headers.
+   * Billing can be set to succeed (to hit the upstream fetch) or fail (to stop
+   * before the fetch — useful for non-upstream tests).
+   */
+  function buildCorrelationApp(
+    options: {
+      billingSuccess?: boolean;
+      fetchMock?: jest.Mock;
+    } = {},
+  ) {
+    const apiKey = 'corr-test-key-x';
+    const apiId = 'my-api';
+    const apiKeys = new Map<string, ApiKey>();
+    apiKeys.set(apiKey, { key: 'k1', apiId, developerId: 'dev1' });
+
+    const fetchMock =
+      options.fetchMock ??
+      jest.fn().mockResolvedValue({
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        text: async () => JSON.stringify({ ok: true }),
+      } as Response);
+
+    const billingSuccess = options.billingSuccess ?? true;
+
+    const deps = {
+      billing: {
+        deductCredit: async () =>
+          billingSuccess
+            ? { success: true, balance: 100 }
+            : { success: false, balance: 0 },
+      },
+      rateLimiter: { check: async () => ({ allowed: true }) },
+      usageStore: { record: jest.fn().mockResolvedValue(true) },
+      upstreamUrl: 'http://example.internal',
+      apiKeys,
+    } as unknown as GatewayDeps;
+
+    const app = express();
+    app.use(requestIdMiddleware);
+    app.use('/gateway', createGatewayRouter(deps));
+    app.use(errorHandler);
+
+    return { app, apiKey, apiId, fetchMock };
+  }
+
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  // ── Response header presence ──────────────────────────────────────────────
+
+  test('response always contains X-Correlation-Id header', async () => {
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey);
+
+    // Even when billing fails (402), the correlation header must be set
+    expect(res.status).toBe(402);
+    expect(res.headers).toHaveProperty('x-correlation-id');
+    expect(typeof res.headers['x-correlation-id']).toBe('string');
+    expect(res.headers['x-correlation-id'].length).toBeGreaterThan(0);
+  });
+
+  test('echoes client-supplied X-Correlation-Id in response header', async () => {
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
+    const clientCorrelationId = 'client-corr-fwc26-001';
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-correlation-id', clientCorrelationId);
+
+    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
+  });
+
+  test('falls back to X-Request-Id when no X-Correlation-Id header is provided', async () => {
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
+    const edgeRequestId = 'edge-req-fallback-42';
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-request-id', edgeRequestId);
+
+    // No x-correlation-id supplied — should fall back to the request-id
+    expect(res.headers['x-correlation-id']).toBe(edgeRequestId);
+  });
+
+  test('generates a UUID correlation-id when neither header is provided', async () => {
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey);
+    // Don't set any x-correlation-id or x-request-id
+
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(res.headers['x-correlation-id']).toMatch(uuidRegex);
+  });
+
+  // ── Outbound propagation ──────────────────────────────────────────────────
+
+  test('forwards x-correlation-id to upstream service when billing succeeds', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => JSON.stringify({ proxied: true }),
+    } as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
+    const clientCorrelationId = 'client-corr-outbound-99';
+
+    const res = await request(app)
+      .post(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-correlation-id', clientCorrelationId)
+      .send({ data: 'test' });
+
+    expect(res.status).toBe(200);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sentHeaders = init.headers as Record<string, string>;
+    expect(sentHeaders['x-correlation-id']).toBe(clientCorrelationId);
+  });
+
+  test('forwards x-request-id AND x-correlation-id independently to upstream', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => JSON.stringify({ ok: true }),
+    } as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
+    const edgeRequestId = 'edge-req-id-123';
+    const clientCorrelationId = 'client-corr-456';
+
+    await request(app)
+      .post(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-request-id', edgeRequestId)
+      .set('x-correlation-id', clientCorrelationId)
+      .send({ hello: 'world' });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sentHeaders = init.headers as Record<string, string>;
+    expect(sentHeaders['x-request-id']).toBe(edgeRequestId);
+    expect(sentHeaders['x-correlation-id']).toBe(clientCorrelationId);
+  });
+
+  test('uses request-id as correlation-id fallback in outbound headers', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => JSON.stringify({ ok: true }),
+    } as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
+    const edgeRequestId = 'edge-req-fallback-corr-789';
+
+    await request(app)
+      .post(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-request-id', edgeRequestId)
+      // no x-correlation-id — should fall back to x-request-id
+      .send({});
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sentHeaders = init.headers as Record<string, string>;
+    expect(sentHeaders['x-correlation-id']).toBe(edgeRequestId);
+  });
+
+  // ── Sanitisation ──────────────────────────────────────────────────────────
+
+  test('strips oversized correlation-id and falls back to request-id', async () => {
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
+    const oversized = 'x'.repeat(129); // exceeds 128-char limit
+    const edgeRequestId = 'safe-fallback-req-id';
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-correlation-id', oversized)
+      .set('x-request-id', edgeRequestId);
+
+    // Oversized header discarded; falls back to request-id
+    expect(res.headers['x-correlation-id']).toBe(edgeRequestId);
+  });
+
+  test('strips control characters from incoming x-correlation-id', async () => {
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
+    // CR/LF stripped — result is "injected-corrX-Evil: foo" → well within max length
+    const raw = 'injected-corr\r\nX-Evil: foo';
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-correlation-id', raw);
+
+    // The sanitised value should NOT contain control characters
+    expect(res.headers['x-correlation-id']).not.toMatch(/[\r\n]/);
+  });
+
+  // ── Response consistency ──────────────────────────────────────────────────
+
+  test('X-Correlation-Id is consistent across request and response headers', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => JSON.stringify({ ok: true }),
+    } as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
+    const clientCorrelationId = 'consistent-corr-abc';
+
+    const res = await request(app)
+      .post(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-correlation-id', clientCorrelationId)
+      .send({});
+
+    expect(res.status).toBe(200);
+
+    // Response header echoes the client value
+    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
+
+    // Outbound header also carries the same value
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sentHeaders = init.headers as Record<string, string>;
+    expect(sentHeaders['x-correlation-id']).toBe(clientCorrelationId);
+  });
+
+  // ── Edge-auth short-circuits ──────────────────────────────────────────────
+
+  test('X-Correlation-Id is set even when request is rejected at auth (missing key)', async () => {
+    const { app, apiId } = buildCorrelationApp();
+    const clientCorrelationId = 'corr-no-key-scenario';
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      // no x-api-key
+      .set('x-correlation-id', clientCorrelationId);
+
+    expect(res.status).toBe(401);
+    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
+  });
+
+  test('X-Correlation-Id is set even when rate limited (429)', async () => {
+    const apiKey = 'corr-rate-limit-key';
+    const apiId = 'my-api';
+    const apiKeys = new Map<string, ApiKey>();
+    apiKeys.set(apiKey, { key: 'k1', apiId, developerId: 'dev1' });
+
+    const windowMs = 60_000;
+    const { createRateLimiter } = await import('../services/rateLimiter.js');
+    const rateLimiter = createRateLimiter(1, windowMs);
+    rateLimiter.exhaust(apiKey);
+
+    const deps = {
+      billing: { deductCredit: async () => ({ success: true, balance: 100 }) },
+      rateLimiter,
+      usageStore: { record: jest.fn() },
+      upstreamUrl: 'http://example.invalid',
+      apiKeys,
+    } as unknown as GatewayDeps;
+
+    const app = express();
+    app.use(requestIdMiddleware);
+    app.use('/gateway', createGatewayRouter(deps));
+    app.use(errorHandler);
+
+    const clientCorrelationId = 'corr-rate-limited-scenario';
+
+    const res = await request(app)
+      .get(`/gateway/${apiId}`)
+      .set('x-api-key', apiKey)
+      .set('x-correlation-id', clientCorrelationId);
+
+    expect(res.status).toBe(429);
+    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
+  });
+});

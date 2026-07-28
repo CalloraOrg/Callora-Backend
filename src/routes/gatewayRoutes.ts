@@ -3,11 +3,13 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import { z } from 'zod';
 import { startUpstreamTimer, getUpstreamHealth, type UpstreamOutcome } from '../metrics.js';
 import { validate } from '../middleware/validate.js';
+import { correlationMiddleware } from '../middleware/correlation.js';
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { GatewayDeps, ApiKey } from '../types/gateway.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
+import { logger } from '../logger.js';
 
 import {
   BadGatewayError,
@@ -133,6 +135,12 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
   router.use(express.json({ limit: maxBodySize }));
   router.use(express.urlencoded({ extended: false, limit: maxBodySize }));
 
+  // Resolve and propagate X-Correlation-Id for the full request lifecycle.
+  // Mounted after body parsers so req.id (set by requestIdMiddleware) is already
+  // available as a fallback. Sets req.correlationId and the X-Correlation-Id
+  // response header before any route handler runs.
+  router.use(correlationMiddleware);
+
   // ── Gateway cursor-paginated listing endpoint ─────────────────────────────
   //
   // GET /
@@ -232,6 +240,10 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
       try {
         const apiKeyHeader = req.headers['x-api-key'] as string | undefined;
         const requestId = req.id || getOrCreateRequestId(randomUUID);
+        // Resolve correlation id — already computed and attached by correlationMiddleware.
+        const correlationId = req.correlationId ?? requestId;
+
+        logger.info({ requestId, correlationId, apiId: req.params.apiId, method: req.method }, 'Gateway proxy request received');
 
         if (!apiKeyHeader) {
           next(new UnauthorizedError('Unauthorized: missing x-api-key header'));
@@ -301,7 +313,13 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         try {
           const upstreamRes = await fetch(`${upstreamUrl}${req.path}`, {
             method: req.method,
-            headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+            headers: {
+              'Content-Type': 'application/json',
+              'x-request-id': requestId,
+              // Propagate correlation id so multi-hop request chains are traceable
+              // in upstream service logs.
+              'x-correlation-id': correlationId,
+            },
             body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
             signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
           });
@@ -331,9 +349,17 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           ) {
             outcome = 'timeout';
             timer.stop(504, outcome);
+            logger.warn(
+              { requestId, correlationId, apiId: req.params.apiId, outcome: 'timeout' },
+              'Gateway proxy request timed out',
+            );
             throw new GatewayTimeoutError('Upstream service timed out');
           }
 
+          logger.warn(
+            { requestId, correlationId, apiId: req.params.apiId, outcome: 'error' },
+            'Gateway proxy upstream unreachable',
+          );
           throw new BadGatewayError('Bad Gateway: upstream unreachable');
         } finally {
           if (outcome !== 'timeout') {
@@ -375,6 +401,11 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           res.set(key, value);
         }
         res.status(upstreamStatus);
+
+        logger.info(
+          { requestId, correlationId, apiId: req.params.apiId, method: req.method, upstreamStatus },
+          'Gateway proxy request completed',
+        );
 
         if (upstreamContentType.toLowerCase().includes('application/json')) {
           try {
