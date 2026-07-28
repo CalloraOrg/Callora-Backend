@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
+import { buildErrorEnvelope } from './envelope.js';
 
 export interface TimeoutMiddlewareOptions {
   timeoutMs?: number;
@@ -37,11 +38,13 @@ export function createTimeoutMiddleware(
           timeoutMs,
         });
 
-        res.status(504).json({
-          code: 'GATEWAY_TIMEOUT',
-          message: `Request timed out after ${timeoutMs}ms`,
-          requestId,
-        });
+        res.status(504).json(
+          buildErrorEnvelope(
+            'GATEWAY_TIMEOUT',
+            `Request timed out after ${timeoutMs}ms`,
+            requestId
+          )
+        );
       }
     }, timeoutMs);
 
