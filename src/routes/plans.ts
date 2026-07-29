@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { GatewayTimeoutError, NotFoundError } from '../errors/index.js';
 import { successEnvelope } from '../lib/envelope.js';
-import { getRequestId } from '../logger.js';
+import { getRequestId } from '../lib/envelope.js';
 
 export interface Plan {
   id: string;

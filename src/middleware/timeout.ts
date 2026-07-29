@@ -16,32 +16,36 @@
  *
  * Usage:
  *   ```ts
- *   router.get('/api/health',
- *     createTimeoutMiddleware({ timeoutMs: 5_000 }),
- *     healthHandler,
+ *   router.get('/api/plans',
+ *     createTimeoutMiddleware({ timeoutMs: 10_000 }),
+ *     plansHandler,
  *   );
  *   ```
  *
  * Options:
  *   - `timeoutMs`  — deadline in milliseconds (preferred).
- *   - `durationMs` — alias for `timeoutMs` (backwards-compat).
- *   - `message`    — custom timeout message (defaults to "Request timed out").
+ *   - `durationMs` — alias for `timeoutMs` for backwards compatibility.
+ *   - `message`    — custom timeout message (defaults to "Request timed out after {timeoutMs}ms").
  *
  * Special behaviour:
  *   - If both `timeoutMs` and `durationMs` are omitted the default is **5 000 ms**.
  *   - A value ≤ 0 for `durationMs`/`timeoutMs` disables the timeout entirely
  *     (useful in tests that want to skip it without changing app wiring).
+ *   - `requestId` is resolved from `req.id` (set by requestIdMiddleware) or
+ *     the `x-request-id` header, falling back to a generated UUID.
  */
 
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
 import { buildErrorEnvelope } from './envelope.js';
+import { getRequestId } from '../lib/envelope.js';
 
 export interface TimeoutMiddlewareOptions {
   /** Deadline in milliseconds. Takes precedence over `durationMs`. */
   timeoutMs?: number;
   /** Alias for `timeoutMs` for backwards compatibility. */
   durationMs?: number;
+  /** Custom message included in the 504 response body. */
   message?: string;
 }
 
@@ -56,9 +60,20 @@ export interface TimeoutMiddlewareOptions {
 export function createTimeoutMiddleware(
   options: TimeoutMiddlewareOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
-  const rawTimeout = options.timeoutMs ?? options.durationMs ?? 5000;
-  const timeoutMs = rawTimeout > 0 ? rawTimeout : 5000;
-  const message = options.message ?? `Request timed out after ${timeoutMs}ms`;
+  // Resolve timeout value: prefer timeoutMs, fall back to durationMs, then default.
+  const rawMs =
+    options.timeoutMs !== undefined
+      ? options.timeoutMs
+      : options.durationMs !== undefined
+        ? options.durationMs
+        : 5_000;
+
+  // A value ≤ 0 is treated as "disabled" — the middleware becomes a pass-through
+  // that still attaches an AbortController (never aborted) for API consistency.
+  const disabled = rawMs <= 0;
+  const timeoutMs = disabled ? 0 : rawMs;
+
+  const timeoutMessage = options.message ?? `Request timed out after ${timeoutMs}ms`;
 
   return (req: Request, res: Response, next: NextFunction): void => {
     // Create an AbortController for this request. Even when the timeout is
@@ -90,29 +105,18 @@ export function createTimeoutMiddleware(
       controller.abort();
 
       if (!res.headersSent) {
-        const requestId = (req as Request & { id?: string }).id ?? 'unknown';
+        const requestId = getRequestId(req);
 
-        logger.warn('[timeout] request timed out', {
+        logger.warn('[timeout] request exceeded deadline', {
           requestId,
           method: req.method,
           path: req.path,
           timeoutMs,
         });
 
-        const body = buildErrorEnvelope('GATEWAY_TIMEOUT', message, requestId);
+        const body = buildErrorEnvelope('GATEWAY_TIMEOUT', timeoutMessage, requestId);
         res.status(504).json(body);
       }
-
-      const requestId = getRequestId(req);
-
-      logger.warn('[timeout] request exceeded deadline', {
-        requestId,
-        method: req.method,
-        path: req.path,
-        timeoutMs,
-      });
-
-      res.status(504).json(errorEnvelope('GATEWAY_TIMEOUT', timeoutMessage, requestId));
     }, timeoutMs);
 
     // ── Cleanup timer on normal response ─────────────────────────────────────
