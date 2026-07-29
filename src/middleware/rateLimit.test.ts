@@ -6,6 +6,7 @@ import {
   TokenBucketRateLimiter,
   createTokenBucketRateLimitMiddleware,
   InMemoryRateLimiter, // <-- Added missing import
+  createProxyRateLimitMiddleware,
 } from "./rateLimit.js";
 import { requireAuth, type AuthenticatedLocals } from "./requireAuth.js";
 import { TEST_JWT_SECRET, signTestToken } from "../../tests/helpers/jwt.js";
@@ -321,5 +322,96 @@ describe("token bucket rate limit middleware", () => {
     const message = response.body.message ?? response.body.error?.message;
     expect(code).toBe("TOO_MANY_REQUESTS");
     expect(message).toBe("Too Many Requests");
+  });
+});
+
+describe("proxy rate limit middleware", () => {
+  const originalSecret = process.env.JWT_SECRET;
+
+  function buildProxyApp(capacity = 3, refillRate = 1) {
+    const app = express();
+    const rateLimit = createProxyRateLimitMiddleware({
+      capacity,
+      refillRate,
+    });
+
+    app.get(
+      "/proxy",
+      // Fake auth middleware that simulates gateway proxy auth
+      (req, res, next) => {
+        const apiKey = req.headers["x-api-key"];
+        if (apiKey === "key-1") {
+          (req as any).apiKeyRecord = { userId: "dev-1" };
+        } else if (apiKey === "key-2") {
+          (req as any).apiKeyRecord = { userId: "dev-2" };
+        }
+        next();
+      },
+      rateLimit,
+      (_req, res) => {
+        res.json({ ok: true });
+      },
+    );
+
+    app.use(errorHandler);
+    return app;
+  }
+
+  beforeEach(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+    jest.spyOn(logger, "warn").mockImplementation(() => {});
+    jest.spyOn(logger, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (originalSecret !== undefined) {
+      process.env.JWT_SECRET = originalSecret;
+    } else {
+      delete process.env.JWT_SECRET;
+    }
+  });
+
+  test("uses apiKeyRecord.userId for rate limiting when available", async () => {
+    const app = buildProxyApp(2, 1);
+
+    await request(app).get("/proxy").set("x-api-key", "key-1").expect(200);
+    await request(app).get("/proxy").set("x-api-key", "key-1").expect(200);
+    const response = await request(app).get("/proxy").set("x-api-key", "key-1");
+
+    expect(response.status).toBe(429);
+    expect(response.headers["retry-after"]).toBe("1");
+    
+    // key-2 should still be allowed
+    await request(app).get("/proxy").set("x-api-key", "key-2").expect(200);
+  });
+
+  test("falls back to bearer token if apiKeyRecord is missing", async () => {
+    const app = buildProxyApp(1, 1);
+    const token = signTestToken({
+      userId: "user-fallback",
+      walletAddress: "GDTEST123STELLAR",
+    });
+
+    await request(app)
+      .get("/proxy")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+
+    const response = await request(app)
+      .get("/proxy")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(response.status).toBe(429);
+  });
+
+  test("falls back to IP if no auth is present", async () => {
+    const app = buildProxyApp(1, 1);
+
+    await request(app).get("/proxy").expect(200);
+    const response = await request(app).get("/proxy");
+
+    expect(response.status).toBe(429);
+    expect(response.body.error.code).toBe("TOO_MANY_REQUESTS");
   });
 });
