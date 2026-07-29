@@ -81,19 +81,26 @@ export function etagMiddleware(req: Request, res: Response, next: NextFunction):
   const originalJson = res.json.bind(res);
 
   res.json = function (body?: unknown): Response {
-    // Only attach ETags to successful 200 responses that don't already have one
-    if (res.statusCode !== 200 || res.get('ETag')) {
+    // Only process successful 200 responses
+    if (res.statusCode !== 200) {
       return originalJson(body);
     }
 
-    // Serialise to the exact bytes that will form the response body
-    const serialised = JSON.stringify(body);
-    const etag = generateETag(serialised);
-
-    // Set our strong ETag before calling originalJson so Express won't
-    // overwrite it with its own weak variant (Express skips auto-ETag when one
-    // is already present on the response).
-    res.setHeader('ETag', etag);
+    // Determine the ETag to use.  A route may pre-set a strong ETag on the
+    // response (e.g. computed from stable payload fields to avoid hashing
+    // volatile envelope metadata like `timestamp`).  When one is already
+    // present we skip recomputing but still evaluate If-None-Match ourselves
+    // so that Express's built-in weak-comparison freshness logic never fires.
+    let etag = res.get('ETag') as string | undefined;
+    if (!etag) {
+      // No pre-set ETag — compute one from the full serialised body.
+      const serialised = JSON.stringify(body);
+      etag = generateETag(serialised);
+      // Set our strong ETag before calling originalJson so Express won't
+      // overwrite it with its own weak variant (Express skips auto-ETag when
+      // one is already present on the response).
+      res.setHeader('ETag', etag);
+    }
 
     const ifNoneMatch = req.header('if-none-match');
 

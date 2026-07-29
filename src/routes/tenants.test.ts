@@ -11,6 +11,27 @@ import {
 import type { CreateTenantInput, UpdateTenantInput } from '../validators/tenants.js';
 
 class MockTenantRepository implements TenantRepository {
+  list = jest.fn(async (): Promise<TenantRecord[]> => ([
+    {
+      id: 'ten_test_123',
+      name: 'GrantFox Ops',
+      slug: 'grantfox-ops',
+      plan: 'growth',
+      createdBy: 'dev-1',
+      createdAt: '2026-07-28T00:00:00.000Z',
+      updatedAt: '2026-07-28T00:00:00.000Z',
+    },
+    {
+      id: 'ten_test_456',
+      name: 'GrantFox Stadium',
+      slug: 'grantfox-stadium',
+      plan: 'enterprise',
+      createdBy: 'dev-1',
+      createdAt: '2026-07-28T00:00:00.000Z',
+      updatedAt: '2026-07-28T00:00:00.000Z',
+    },
+  ]));
+
   create = jest.fn(async (input: CreateTenantInput, actorId: string): Promise<TenantRecord> => ({
     id: 'ten_test_123',
     name: input.name,
@@ -260,6 +281,111 @@ describe('createTenantsRouter', () => {
       .patch('/api/tenants/tenant_123')
       .set('x-user-id', 'dev-1')
       .send({ name: 'GrantFox Ops' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET / — list tenants with ETag / 304
+  // ---------------------------------------------------------------------------
+
+  it('returns 401 for GET when unauthenticated', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app).get('/api/tenants');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('returns 200 with list of tenants in envelope', async () => {
+    const { app, repository } = buildApp();
+
+    const res = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data[0]).toMatchObject({ id: 'ten_test_123', name: 'GrantFox Ops' });
+    expect(res.body.data[1]).toMatchObject({ id: 'ten_test_456', name: 'GrantFox Stadium' });
+    expect(repository.list).toHaveBeenCalled();
+  });
+
+  it('sets a strong ETag header on GET response', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1');
+
+    expect(res.status).toBe(200);
+    expect(res.headers.etag).toBeDefined();
+    expect(res.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+  });
+
+  it('returns 304 Not Modified when If-None-Match matches the ETag', async () => {
+    const { app } = buildApp();
+
+    const first = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1');
+
+    expect(first.status).toBe(200);
+    const etag = first.headers.etag as string;
+    expect(etag).toBeDefined();
+
+    const second = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1')
+      .set('If-None-Match', etag);
+
+    expect(second.status).toBe(304);
+    expect(second.text).toBe('');
+  });
+
+  it('returns 200 when If-None-Match does not match the ETag', async () => {
+    const { app } = buildApp();
+
+    const res = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1')
+      .set('If-None-Match', '"different-hash-value"');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('does not return 304 for a weak ETag (strong comparison)', async () => {
+    const { app } = buildApp();
+
+    const first = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1');
+
+    expect(first.status).toBe(200);
+    const etag = first.headers.etag as string;
+    const weakTag = `W/${etag}`;
+
+    const second = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1')
+      .set('If-None-Match', weakTag);
+
+    expect(second.status).toBe(200);
+  });
+
+  it('routes list repository errors through the error handler', async () => {
+    const repository = new MockTenantRepository();
+    repository.list.mockRejectedValueOnce(new Error('tenant store unavailable'));
+    const { app } = buildApp(repository);
+
+    const res = await request(app)
+      .get('/api/tenants')
+      .set('x-user-id', 'dev-1');
 
     expect(res.status).toBe(500);
     expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');

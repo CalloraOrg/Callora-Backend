@@ -59,6 +59,70 @@ Request body accepts at least one of:
 
 Success response: `200` with `{ success: true, data, requestId, timestamp }`.
 
+## GET /api/tenants
+
+Returns the list of tenants for the authenticated actor. Supports **conditional
+GET** via strong ETags so dashboard clients can poll without re-downloading an
+unchanged payload.
+
+Required header:
+
+```http
+x-user-id: dev-1
+```
+
+### Caching behaviour (ETag / 304)
+
+Every successful `200` response includes a strong `ETag` header:
+
+```http
+ETag: "a1b2c3…64-char-sha256-hex…"
+```
+
+The digest is computed over the raw tenant list data only (not the volatile
+`timestamp` or `requestId` fields in the envelope), so the tag is stable
+across consecutive fetches that return the same tenant state.
+
+On a later request, send the ETag back in `If-None-Match`:
+
+```http
+GET /api/tenants
+If-None-Match: "a1b2c3…"
+```
+
+| Scenario | Response |
+|---|---|
+| Tenant list unchanged | `304 Not Modified` (empty body, `ETag` retained) |
+| Tenant list changed | `200 OK` with new body and updated `ETag` |
+| Mismatched / unrelated tag | `200 OK` with full body |
+| Weak tag (`W/"…"`) | `200 OK` — strong comparison; weak tags never match |
+| Wildcard (`*`) | `304 Not Modified` |
+
+Comparison follows **RFC 7232 §3.2 strong comparison**: weak client tags
+(`W/"…"`) never match the server's strong tag.
+
+### Example
+
+```bash
+# Initial fetch
+curl -i http://localhost:3000/api/tenants \
+  -H 'x-user-id: dev-1'
+# ← 200 OK
+# ← ETag: "e3b0c4…"
+# ← {"success":true,"data":[…],"requestId":"…","timestamp":"…"}
+
+# Conditional revalidation (unchanged list)
+curl -i http://localhost:3000/api/tenants \
+  -H 'x-user-id: dev-1' \
+  -H 'If-None-Match: "e3b0c4…"'
+# ← 304 Not Modified  (empty body)
+```
+
+### Related code
+
+- Middleware: `src/middleware/etag.ts` — `etagMiddleware` + `generateETag` + `etagMatches`
+- Route wiring: `src/routes/tenants.ts` (`GET /` handler)
+
 ## Validation Errors
 
 Invalid requests return `400` before route logic runs:
