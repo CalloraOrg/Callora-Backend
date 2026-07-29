@@ -76,6 +76,10 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use("/audit", createAuditRouter({ auditService: deps.auditService }));
   router.use("/invoices", createInvoicesRouter());
 
+  // Logs — per-user structured log ingestion and retrieval, rate-limited via
+  // a token-bucket limiter (see src/routes/logs.ts and LOGS_RATE_LIMIT_* env vars).
+  router.use("/logs", createLogsRouter());
+
   router.use(
     "/apis",
     createApisRouter({

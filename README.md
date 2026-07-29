@@ -2,6 +2,44 @@
 
 API gateway, usage metering, and billing services for the Callora API marketplace. Talks to Soroban contracts and Horizon for on-chain settlement.
 
+## Logs Endpoint
+
+Authenticated users can submit and retrieve structured log entries via `/api/logs`.
+
+- `GET /api/logs` — Retrieve all log entries for the authenticated user, sorted newest-first.
+  Returns `{ data: { logs: [...], meta: { total } } }` in the canonical success envelope.
+- `POST /api/logs` — Submit a new log entry.
+  Body: `{ "message": string, "level"?: "debug"|"info"|"warn"|"error", "meta"?: object }`.
+  Returns `201` with the created entry.
+
+### Rate Limiting
+
+Both endpoints are protected by a **per-user token-bucket** rate limiter.
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOGS_RATE_LIMIT_CAPACITY` | `60` | Burst ceiling (tokens per user) |
+| `LOGS_RATE_LIMIT_REFILL_RATE` | `1` | Tokens refilled per second |
+
+When the bucket empties the server immediately responds with:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: <seconds>
+
+{
+  "code": "TOO_MANY_REQUESTS",
+  "message": "Too Many Requests",
+  "requestId": "...",
+  "retryAfterMs": 750
+}
+```
+
+Key resolution (priority order):
+1. Authenticated user ID from the JWT `Authorization: Bearer` header.
+2. `x-user-id` header (trusted internal/test header).
+3. Client IP address (unauthenticated fallback).
+
 ## API Catalog Pagination (`GET /api/apis`)
 
 The public API catalog endpoint uses **keyset cursor pagination** over `(created_at DESC, id DESC)` for stable, gap-free traversal under concurrent writes. Offset-based pagination has been removed; all requests now return cursor-based responses.
