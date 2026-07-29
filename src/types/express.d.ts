@@ -1,0 +1,41 @@
+import type { AuthenticatedUser } from "./auth";
+import type { AuditContext } from "../middleware/auditEnrich.js";
+
+declare global {
+  namespace Express {
+    /**
+     * Locals available on Response.locals throughout the app.
+     * Add other commonly used locals here to avoid per-file casts.
+     */
+    interface Locals {
+      authenticatedUser?: AuthenticatedUser;
+      // dbPool is set in `app.ts` during initialization and is useful in handlers
+      dbPool?: unknown;
+    }
+
+    interface Request {
+      id: string;
+      developerId?: string;
+      user?: Record<string, unknown>;
+      vault?: Record<string, unknown> | null;
+      api?: Record<string, unknown>;
+      endpoint?: Record<string, unknown>;
+      apiKeyRecord?: Record<string, unknown>;
+      apiKeyValue?: string;
+      /** Enriched forensic context attached by auditEnrichMiddleware. */
+      auditContext: AuditContext;
+      /** AbortSignal provided by the timeout middleware for cooperative cancellation. */
+      abortSignal?: AbortSignal;
+      signal?: AbortSignal;
+      /**
+       * Resolved correlation ID attached by correlationMiddleware.
+       * Priority: incoming X-Correlation-Id header → req.id → generated UUID v4.
+       * Available on any route that mounts correlationMiddleware (e.g. gateway,
+       * quota/requests, quotas/counts).
+       */
+      correlationId?: string;
+    }
+  }
+}
+
+export {};

@@ -1,0 +1,83 @@
+﻿node : FAIL 
+src/app.test.ts
+At line:1 char:1
++ node node_modules/j
+est/bin/jest.js 
+src/app.test.ts > 
+jest_app_out.txt ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (FAIL sr   
+ c/app.test.ts:St    
+ring) [], Remote    
+Exception
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+  ΓùÅ Test suite 
+failed to run
+
+    Cannot find 
+module '@stellar/stel
+lar-sdk' from 'src/se
+rvices/transactionBui
+lder.ts'
+
+    Require stack:
+      src/services/tr
+ansactionBuilder.ts
+      src/controllers
+/depositController.ts
+      src/app.ts
+      src/app.test.ts
+
+    [0m[31m[1m>[2
+2m[39m[90m 1 
+|[39m 
+[36mimport[39m {
+     [90m   |[39m 
+[31m[1m^[22m[39m
+     [90m 2 |[39m  
+ [33mHorizon[39m[3
+3m,[39m
+     [90m 3 |[39m  
+ [33mNetworks[39m[
+33m,[39m
+     [90m 4 |[39m  
+ [33mTransactionBuil
+der[39m[33m,[39m[
+0m
+
+      at Resolver._th
+rowModNotFoundError (
+node_modules/jest-res
+olve/build/index.js:8
+63:11)
+      at 
+Object.<anonymous> (s
+rc/services/transacti
+onBuilder.ts:1:1)
+      at 
+Object.<anonymous> (s
+rc/controllers/deposi
+tController.ts:4:1)
+      at 
+Object.<anonymous> 
+(src/app.ts:29:1)
+      at 
+Object.<anonymous> 
+(src/app.test.ts:2:1)
+
+Test Suites: 1 
+failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        26.237 s
+Ran all test suites 
+matching 
+src/app.test.ts.

@@ -1,0 +1,972 @@
+import { eq, and, like, isNull, isNotNull, lt, or, desc, type SQL, count } from "drizzle-orm";
+import { db, schema } from "../db/index.js";
+import type {
+  Api,
+  ApiEndpoint,
+  NewApi,
+  NewApiEndpoint,
+  ApiStatus,
+  HttpMethod,
+} from "../db/schema.js";
+import { listingsCache } from "../lib/listingsCache.js";
+
+export interface ApiListFilters {
+  status?: ApiStatus;
+  category?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  /**
+   * Opaque cursor for keyset pagination over (created_at DESC, id DESC).
+   * When supplied, offset is ignored and results are fetched starting
+   * immediately after the row identified by the cursor.
+   * The cursor is the raw decoded pair — callers obtain it from
+   * `decodeCursor()` in pagination.ts.
+   */
+  cursor?: { after_created_at: Date; after_id: number };
+}
+
+export interface ApiCreateInput {
+  developer_id: number;
+  name: string;
+  description?: string | null;
+  base_url: string;
+  logo_url?: string | null;
+  category?: string | null;
+  status?: ApiStatus;
+}
+
+export interface ApiUpdateInput {
+  name?: string;
+  description?: string | null;
+  base_url?: string;
+  logo_url?: string | null;
+  category?: string | null;
+  status?: ApiStatus;
+}
+
+export interface ApiDeveloperInfo {
+  name: string | null;
+  website: string | null;
+  description: string | null;
+}
+
+export interface ApiDetails {
+  id: number;
+  name: string;
+  description: string | null;
+  base_url: string;
+  logo_url: string | null;
+  category: string | null;
+  status: string;
+  developer: ApiDeveloperInfo;
+}
+
+export interface ApiEndpointInfo {
+  path: string;
+  method: string;
+  price_per_call_usdc: string;
+  description: string | null;
+}
+
+export interface ApiListItem extends ApiDetails {
+  endpoints: ApiEndpointInfo[];
+}
+
+export interface PaginatedApiListResult {
+  items: ApiListItem[];
+  total: number;
+}
+
+export interface BulkCreateEndpointResult {
+  id: number;
+  api_id: number;
+  path: string;
+  method: string;
+  price_per_call_usdc: string;
+  description: string | null;
+}
+
+export interface ApiRepository {
+  create(api: ApiCreateInput): Promise<Api>;
+  createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints>;
+  update(id: number, data: ApiUpdateInput): Promise<Api | null>;
+  /**
+   * Soft-deletes the API by setting `deleted_at` to the current timestamp.
+   * Returns true if the row existed and was not already deleted, false otherwise.
+   */
+  delete(id: number): Promise<boolean>;
+  /**
+   * Restores a soft-deleted API by clearing its `deleted_at` field.
+   * Returns the restored Api row, or null if the row was not found / not deleted.
+   */
+  restore(id: number): Promise<Api | null>;
+  listByDeveloper(
+    developerId: number,
+    filters?: ApiListFilters,
+  ): Promise<Api[]>;
+  listPublic(filters?: ApiListFilters): Promise<Api[]>;
+  findById(id: number): Promise<ApiDetails | null>;
+  /**
+   * Returns the raw API row without filtering by status or deleted_at.
+   * Used by subscription routes that need to inspect soft-deleted records.
+   */
+  findRawById(id: number): Promise<Api | null>;
+  getEndpoints(apiId: number): Promise<ApiEndpointInfo[]>;
+  bulkCreateEndpoints(
+    apiId: number,
+    endpoints: CreateEndpointInput[],
+  ): Promise<BulkCreateEndpointResult[]>;
+}
+
+// ---------------------------------------------------------------------------
+// Default (Drizzle / SQLite) implementation
+// ---------------------------------------------------------------------------
+
+/** Condition shared by every "live record" query — excludes soft-deleted rows. */
+const notDeleted = isNull(schema.apis.deleted_at);
+
+export const defaultApiRepository: ApiRepository = {
+  async create(api) {
+    const [created] = await db
+      .insert(schema.apis)
+      .values({
+        developer_id: api.developer_id,
+        name: api.name,
+        description: api.description ?? null,
+        base_url: api.base_url,
+        logo_url: api.logo_url ?? null,
+        category: api.category ?? null,
+        status: api.status ?? "draft",
+      } as NewApi)
+      .returning();
+
+    if (!created) throw new Error("API insert failed");
+
+    // A new API may appear in any listing filter combination — flush the cache.
+    listingsCache.invalidateAll();
+
+    return created;
+  },
+
+  async createWithEndpoints(input) {
+    const result = await createApi(input);
+    // Invalidate after the transactional insert so stale listings are not served.
+    listingsCache.invalidateAll();
+    return result;
+  },
+
+  async update(id, data) {
+    const payload: Partial<NewApi> = {};
+    if (typeof data.name === "string") payload.name = data.name;
+    if (typeof data.description === "string" || data.description === null)
+      payload.description = data.description;
+    if (typeof data.base_url === "string") payload.base_url = data.base_url;
+    if (typeof data.logo_url === "string" || data.logo_url === null)
+      payload.logo_url = data.logo_url;
+    if (typeof data.category === "string" || data.category === null)
+      payload.category = data.category;
+    if (data.status) payload.status = data.status;
+
+    if (Object.keys(payload).length === 0) {
+      // No-op update: return existing live record (or null if deleted/missing).
+      const existing = await db
+        .select()
+        .from(schema.apis)
+        .where(and(eq(schema.apis.id, id), notDeleted))
+        .limit(1);
+      return existing[0] ?? null;
+    }
+
+    payload.updated_at = new Date();
+
+    // Only update live (non-deleted) rows.
+    const [updated] = await db
+      .update(schema.apis)
+      .set(payload)
+      .where(and(eq(schema.apis.id, id), notDeleted))
+      .returning();
+
+    // An updated API (e.g. status change, name change) may affect any listing.
+    listingsCache.invalidateAll();
+
+    return updated ?? null;
+  },
+
+  /**
+   * Soft-delete: stamp `deleted_at` on the row instead of issuing a hard DELETE.
+   * All normal query paths filter on `deleted_at IS NULL`, so the row immediately
+   * disappears from every public and developer listing without losing audit data.
+   */
+  async delete(id) {
+    const now = new Date();
+    const [updated] = await db
+      .update(schema.apis)
+      .set({ deleted_at: now, updated_at: now })
+      // Guard: only soft-delete live records (idempotent-safe, avoids resetting
+      // the tombstone timestamp on a record that was already deleted).
+      .where(and(eq(schema.apis.id, id), notDeleted))
+      .returning();
+
+    if (updated) {
+      // Deletion removes the API from every listing — flush the cache.
+      listingsCache.invalidateAll();
+      return true;
+    }
+    return false;
+  },
+
+  /**
+   * Restore a previously soft-deleted API by clearing `deleted_at`.
+   * Only admin-guarded call sites should invoke this.
+   */
+  async restore(id) {
+    const now = new Date();
+    const [restored] = await db
+      .update(schema.apis)
+      .set({ deleted_at: null, updated_at: now })
+      // Guard: only restore rows that are actually deleted.
+      .where(and(eq(schema.apis.id, id), isNotNull(schema.apis.deleted_at)))
+      .returning();
+
+    if (restored) {
+      // Restored API may appear in listings — flush cache.
+      listingsCache.invalidateAll();
+      return restored;
+    }
+    return null;
+  },
+
+  async listByDeveloper(developerId, filters = {}) {
+    // Always exclude soft-deleted rows from developer-facing listings.
+    const conditions: SQL[] = [
+      eq(schema.apis.developer_id, developerId),
+      notDeleted,
+    ];
+    if (filters.status) {
+      conditions.push(eq(schema.apis.status, filters.status));
+    }
+    if (filters.category) {
+      conditions.push(eq(schema.apis.category, filters.category));
+    }
+    if (filters.search) {
+      conditions.push(like(schema.apis.name, `%${filters.search}%`));
+    }
+
+    let query = db
+      .select()
+      .from(schema.apis)
+      .where(and(...conditions));
+
+    if (typeof filters.limit === "number") {
+      query = query.limit(filters.limit) as typeof query;
+    }
+
+    if (typeof filters.offset === "number") {
+      query = query.offset(filters.offset) as typeof query;
+    }
+
+    return query;
+  },
+
+  async listPublic(filters = {}) {
+    // Public catalog: only live, active APIs.
+    const conditions: SQL[] = [
+      eq(schema.apis.status, "active"),
+      notDeleted,
+    ];
+    if (filters.category) {
+      conditions.push(eq(schema.apis.category, filters.category));
+    }
+    if (filters.search) {
+      conditions.push(like(schema.apis.name, `%${filters.search}%`));
+    }
+
+    if (filters.status && filters.status !== "active") {
+      return [];
+    }
+
+    // Keyset condition: (created_at, id) < (cursor_created_at, cursor_id)
+    // ORDER: newest-first (created_at DESC, id DESC)
+    // Composite row: a < b iff (a.created_at < b.created_at) OR
+    //                           (a.created_at = b.created_at AND a.id < b.id)
+    if (filters.cursor) {
+      const { after_created_at, after_id } = filters.cursor;
+      // SQLite stores timestamps as unix epoch integers.
+      const cursorTs = Math.floor(after_created_at.getTime() / 1000);
+      conditions.push(
+        or(
+          lt(schema.apis.created_at, new Date(cursorTs * 1000)),
+          and(
+            eq(schema.apis.created_at, new Date(cursorTs * 1000)),
+            lt(schema.apis.id, after_id),
+          ),
+        ) as SQL,
+      );
+    }
+
+    let query = db
+      .select()
+      .from(schema.apis)
+      .where(and(...conditions))
+      // Stable newest-first ordering ensures consistent cursor traversal.
+      .orderBy(desc(schema.apis.created_at), desc(schema.apis.id));
+
+    if (typeof filters.limit === "number") {
+      // Fetch limit+1 when using cursor pagination so the route layer can detect
+      // whether there is a next page without an extra COUNT query.
+      // In the offset path a plain limit is sufficient because the route
+      // calls paginatedResponse which does its own truncation.
+      const fetchLimit = filters.cursor ? filters.limit + 1 : filters.limit;
+      query = query.limit(fetchLimit) as typeof query;
+    }
+
+    // Offset is only relevant in the non-cursor (legacy) path.
+    if (!filters.cursor && typeof filters.offset === "number") {
+      query = query.offset(filters.offset) as typeof query;
+    }
+
+    return query;
+  },
+
+  async findById(id) {
+    const rows = await db
+      .select({
+        id: schema.apis.id,
+        name: schema.apis.name,
+        description: schema.apis.description,
+        base_url: schema.apis.base_url,
+        logo_url: schema.apis.logo_url,
+        category: schema.apis.category,
+        status: schema.apis.status,
+        developer_name: schema.developers.name,
+        developer_website: schema.developers.website,
+        developer_description: schema.developers.description,
+      })
+      .from(schema.apis)
+      .leftJoin(
+        schema.developers,
+        eq(schema.apis.developer_id, schema.developers.id),
+      )
+      // Exclude soft-deleted rows and restrict to active status for public view.
+      .where(
+        and(
+          eq(schema.apis.id, id),
+          eq(schema.apis.status, "active"),
+          notDeleted,
+        ),
+      )
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      base_url: row.base_url,
+      logo_url: row.logo_url,
+      category: row.category,
+      status: row.status,
+      developer: {
+        name: row.developer_name ?? null,
+        website: row.developer_website ?? null,
+        description: row.developer_description ?? null,
+      },
+    };
+  },
+
+  async findRawById(id) {
+    const rows = await db
+      .select()
+      .from(schema.apis)
+      .where(eq(schema.apis.id, id))
+      .limit(1);
+
+    return rows[0] ?? null;
+  },
+
+  async getEndpoints(apiId) {
+    const rows = await db
+      .select({
+        path: schema.apiEndpoints.path,
+        method: schema.apiEndpoints.method,
+        price_per_call_usdc: schema.apiEndpoints.price_per_call_usdc,
+        description: schema.apiEndpoints.description,
+      })
+      .from(schema.apiEndpoints)
+      .where(eq(schema.apiEndpoints.api_id, apiId));
+
+    return rows.map((r) => ({
+      path: r.path,
+      method: r.method,
+      price_per_call_usdc: r.price_per_call_usdc,
+      description: r.description,
+    }));
+  },
+
+  async bulkCreateEndpoints(apiId, endpoints) {
+    return db.transaction(async (tx) => {
+      const rows = await tx
+        .insert(schema.apiEndpoints)
+        .values(
+          endpoints.map(
+            (e) =>
+              ({
+                api_id: apiId,
+                path: e.path,
+                method: e.method,
+                price_per_call_usdc: e.price_per_call_usdc,
+                description: e.description ?? null,
+              }) as NewApiEndpoint,
+          ),
+        )
+        .returning();
+
+      listingsCache.invalidateAll();
+      return rows.map((r) => ({
+        id: r.id,
+        api_id: r.api_id,
+        path: r.path,
+        method: r.method,
+        price_per_call_usdc: r.price_per_call_usdc,
+        description: r.description,
+      }));
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// In-Memory implementation (for testing)
+// ---------------------------------------------------------------------------
+
+export class InMemoryApiRepository implements ApiRepository {
+  private readonly apis: Api[];
+  private readonly detailsById: Map<number, ApiDetails>;
+  private readonly endpointsByApiId: Map<number, ApiEndpointInfo[]>;
+  private nextId: number;
+
+  constructor(
+    apis: Array<ApiDetails | Api> = [],
+    endpointsByApiId: Map<number, ApiEndpointInfo[]> = new Map(),
+  ) {
+    this.apis = apis.map((api) => this.toApi(api));
+    this.detailsById = new Map(
+      apis.map((api) => {
+        if ("developer" in api) return [api.id, api];
+        return [
+          api.id,
+          {
+            id: api.id,
+            name: api.name,
+            description: api.description,
+            base_url: api.base_url,
+            logo_url: api.logo_url,
+            category: api.category,
+            status: api.status,
+            developer: { name: null, website: null, description: null },
+          } as ApiDetails,
+        ];
+      }),
+    );
+    this.endpointsByApiId = new Map(endpointsByApiId);
+    this.nextId = Math.max(0, ...this.apis.map((a) => a.id)) + 1;
+  }
+
+  private toApi(api: ApiDetails | Api): Api {
+    if (!("developer" in api)) return api;
+    return {
+      id: api.id,
+      developer_id: 0,
+      name: api.name,
+      description: api.description,
+      base_url: api.base_url,
+      logo_url: api.logo_url,
+      category: api.category,
+      status: api.status as ApiStatus,
+      created_at: new Date(0),
+      updated_at: new Date(0),
+      deleted_at: null,
+    };
+  }
+
+  async create(api: ApiCreateInput): Promise<Api> {
+    const now = new Date();
+    const created: Api = {
+      id: this.nextId++,
+      developer_id: api.developer_id,
+      name: api.name,
+      description: api.description ?? null,
+      base_url: api.base_url,
+      logo_url: api.logo_url ?? null,
+      category: api.category ?? null,
+      status: api.status ?? "draft",
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+    };
+    this.apis.push(created);
+    this.detailsById.set(created.id, {
+      id: created.id,
+      name: created.name,
+      description: created.description,
+      base_url: created.base_url,
+      logo_url: created.logo_url,
+      category: created.category,
+      status: created.status,
+      developer: { name: null, website: null, description: null },
+    });
+    return created;
+  }
+
+  async createWithEndpoints(input: CreateApiInput): Promise<ApiWithEndpoints> {
+    const api = await this.create(input);
+    const now = new Date();
+    const endpointRows: ApiEndpoint[] = input.endpoints.map(
+      (endpoint, index) => ({
+        id: index + 1,
+        api_id: api.id,
+        path: endpoint.path,
+        method: endpoint.method,
+        price_per_call_usdc: endpoint.price_per_call_usdc,
+        description: endpoint.description ?? null,
+        created_at: now,
+        updated_at: now,
+      }),
+    );
+
+    this.endpointsByApiId.set(
+      api.id,
+      endpointRows.map((endpoint) => ({
+        path: endpoint.path,
+        method: endpoint.method,
+        price_per_call_usdc: endpoint.price_per_call_usdc,
+        description: endpoint.description,
+      })),
+    );
+
+    return {
+      ...api,
+      endpoints: endpointRows,
+    };
+  }
+
+  async update(id: number, data: ApiUpdateInput): Promise<Api | null> {
+    const index = this.apis.findIndex((a) => a.id === id && !a.deleted_at);
+    if (index === -1) return null;
+    const current = this.apis[index];
+    const updated: Api = {
+      ...current,
+      ...(typeof data.name === "string" ? { name: data.name } : {}),
+      ...(typeof data.description === "string" || data.description === null
+        ? { description: data.description }
+        : {}),
+      ...(typeof data.base_url === "string" ? { base_url: data.base_url } : {}),
+      ...(typeof data.logo_url === "string" || data.logo_url === null
+        ? { logo_url: data.logo_url }
+        : {}),
+      ...(typeof data.category === "string" || data.category === null
+        ? { category: data.category }
+        : {}),
+      ...(data.status ? { status: data.status } : {}),
+      updated_at: new Date(),
+    };
+    this.apis[index] = updated;
+
+    const details = this.detailsById.get(id);
+    if (details) {
+      this.detailsById.set(id, {
+        ...details,
+        name: updated.name,
+        description: updated.description,
+        base_url: updated.base_url,
+        logo_url: updated.logo_url,
+        category: updated.category,
+        status: updated.status,
+      });
+    }
+    return updated;
+  }
+
+  /** Soft-delete: stamp deleted_at rather than removing the record. */
+  async delete(id: number): Promise<boolean> {
+    const index = this.apis.findIndex((a) => a.id === id && !a.deleted_at);
+    if (index === -1) return false;
+    const now = new Date();
+    this.apis[index] = { ...this.apis[index], deleted_at: now, updated_at: now };
+    return true;
+  }
+
+  /** Restore a soft-deleted record by clearing deleted_at. */
+  async restore(id: number): Promise<Api | null> {
+    const index = this.apis.findIndex((a) => a.id === id && a.deleted_at !== null);
+    if (index === -1) return null;
+    const now = new Date();
+    const restored = { ...this.apis[index], deleted_at: null, updated_at: now };
+    this.apis[index] = restored;
+    return restored;
+  }
+
+  async listByDeveloper(
+    developerId: number,
+    filters: ApiListFilters = {},
+  ): Promise<Api[]> {
+    // Exclude soft-deleted rows.
+    let results = this.apis.filter(
+      (api) => api.developer_id === developerId && !api.deleted_at,
+    );
+    if (filters.status) {
+      results = results.filter((api) => api.status === filters.status);
+    }
+    if (filters.category) {
+      results = results.filter((api) => api.category === filters.category);
+    }
+    if (filters.search) {
+      const needle = filters.search.toLowerCase();
+      results = results.filter((api) =>
+        api.name.toLowerCase().includes(needle),
+      );
+    }
+    if (typeof filters.offset === "number") {
+      results = results.slice(filters.offset);
+    }
+    if (typeof filters.limit === "number") {
+      results = results.slice(0, filters.limit);
+    }
+    return results;
+  }
+
+  async listPublic(filters: ApiListFilters = {}): Promise<Api[]> {
+    if (filters.status && filters.status !== "active") return [];
+    // Only live, active APIs are visible in the public catalog.
+    let results = this.apis.filter(
+      (api) => api.status === "active" && !api.deleted_at,
+    );
+    if (filters.category) {
+      results = results.filter((api) => api.category === filters.category);
+    }
+    if (filters.search) {
+      const needle = filters.search.toLowerCase();
+      results = results.filter((api) =>
+        api.name.toLowerCase().includes(needle),
+      );
+    }
+
+    // Sort newest-first (created_at DESC, id DESC) to match the DB ordering.
+    results = results.slice().sort((a, b) => {
+      const tsDiff = b.created_at.getTime() - a.created_at.getTime();
+      if (tsDiff !== 0) return tsDiff;
+      return b.id - a.id;
+    });
+
+    // Keyset cursor filter: keep only rows that come *after* the cursor row
+    // in the (created_at DESC, id DESC) ordering.
+    if (filters.cursor) {
+      const { after_created_at, after_id } = filters.cursor;
+      const cursorTs = after_created_at.getTime();
+      results = results.filter((api) => {
+        const apiTs = api.created_at.getTime();
+        if (apiTs < cursorTs) return true;
+        if (apiTs === cursorTs && api.id < after_id) return true;
+        return false;
+      });
+    }
+
+    // In the non-cursor path only, apply offset (legacy compatibility).
+    if (!filters.cursor && typeof filters.offset === "number") {
+      results = results.slice(filters.offset);
+    }
+
+    // Fetch limit+1 in the cursor path so the route layer can detect hasMore
+    // without an extra query. In the offset path, use plain limit.
+    if (typeof filters.limit === "number") {
+      const fetchLimit = filters.cursor ? filters.limit + 1 : filters.limit;
+      results = results.slice(0, fetchLimit);
+    }
+
+    return results;
+  }
+
+  async listPublicDetailed(
+    filters: ApiListFilters = {},
+  ): Promise<PaginatedApiListResult> {
+    let results = this.apis.filter((api) => !api.deleted_at);
+    if (filters.status) {
+      results = results.filter((api) => api.status === filters.status);
+    } else {
+      results = results.filter((api) => api.status === "active");
+    }
+    if (filters.category) {
+      results = results.filter((api) => api.category === filters.category);
+    }
+    if (filters.search) {
+      const needle = filters.search.toLowerCase();
+      results = results.filter((api) =>
+        api.name.toLowerCase().includes(needle),
+      );
+    }
+
+    const total = results.length;
+    if (typeof filters.offset === "number") {
+      results = results.slice(filters.offset);
+    }
+    if (typeof filters.limit === "number") {
+      results = results.slice(0, filters.limit);
+    }
+
+    const items = results.map((api) => {
+      const details = this.detailsById.get(api.id);
+      return {
+        id: api.id,
+        name: api.name,
+        description: api.description,
+        base_url: api.base_url,
+        logo_url: api.logo_url,
+        category: api.category,
+        status: api.status,
+        developer: details?.developer ?? {
+          name: null,
+          website: null,
+          description: null,
+        },
+        endpoints: this.endpointsByApiId.get(api.id) ?? [],
+      };
+    });
+
+    return { items, total };
+  }
+
+  async findById(id: number): Promise<ApiDetails | null> {
+    // findById is a public endpoint — exclude deleted records.
+    const api = this.apis.find((a) => a.id === id && !a.deleted_at);
+    if (!api) return null;
+    return this.detailsById.get(id) ?? null;
+  }
+
+  async findRawById(id: number): Promise<Api | null> {
+    return this.apis.find((a) => a.id === id) ?? null;
+  }
+
+  async getEndpoints(apiId: number): Promise<ApiEndpointInfo[]> {
+    return this.endpointsByApiId.get(apiId) ?? [];
+  }
+
+  async bulkCreateEndpoints(
+    apiId: number,
+    endpoints: CreateEndpointInput[],
+  ): Promise<BulkCreateEndpointResult[]> {
+    const existing = this.endpointsByApiId.get(apiId) ?? [];
+    const now = new Date();
+    const nextIds = existing.length + 1;
+
+    const created = endpoints.map((e, i) => ({
+      id: nextIds + i,
+      api_id: apiId,
+      path: e.path,
+      method: e.method,
+      price_per_call_usdc: e.price_per_call_usdc,
+      description: e.description ?? null,
+      created_at: now,
+      updated_at: now,
+    }));
+
+    this.endpointsByApiId.set(apiId, [
+      ...existing,
+      ...created.map((c) => ({
+        path: c.path,
+        method: c.method,
+        price_per_call_usdc: c.price_per_call_usdc,
+        description: c.description,
+      })),
+    ]);
+
+    return created.map((c) => ({
+      id: c.id,
+      api_id: c.api_id,
+      path: c.path,
+      method: c.method,
+      price_per_call_usdc: c.price_per_call_usdc,
+      description: c.description,
+    }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// listPublicDetailed — works with any ApiRepository implementation
+// ---------------------------------------------------------------------------
+
+export async function listPublicDetailed(
+  repository: ApiRepository,
+  filters: ApiListFilters = {},
+): Promise<PaginatedApiListResult> {
+  const detailedRepository = repository as ApiRepository & {
+    listPublicDetailed?: (
+      filters?: ApiListFilters,
+    ) => Promise<PaginatedApiListResult>;
+  };
+
+  if (typeof detailedRepository.listPublicDetailed === "function") {
+    return detailedRepository.listPublicDetailed(filters);
+  }
+
+  if (repository === defaultApiRepository) {
+    const conditions: SQL[] = [notDeleted];
+    if (filters.status) {
+      conditions.push(eq(schema.apis.status, filters.status));
+    } else {
+      conditions.push(eq(schema.apis.status, "active"));
+    }
+    if (filters.category) {
+      conditions.push(eq(schema.apis.category, filters.category));
+    }
+    if (filters.search) {
+      conditions.push(like(schema.apis.name, `%${filters.search}%`));
+    }
+
+    const whereClause = and(...conditions);
+    const [{ total }] = await db
+      .select({ total: count() })
+      .from(schema.apis)
+      .where(whereClause);
+
+    let query = db
+      .select({
+        id: schema.apis.id,
+        name: schema.apis.name,
+        description: schema.apis.description,
+        base_url: schema.apis.base_url,
+        logo_url: schema.apis.logo_url,
+        category: schema.apis.category,
+        status: schema.apis.status,
+        developer_name: schema.developers.name,
+        developer_website: schema.developers.website,
+        developer_description: schema.developers.description,
+      })
+      .from(schema.apis)
+      .leftJoin(
+        schema.developers,
+        eq(schema.apis.developer_id, schema.developers.id),
+      )
+      .where(whereClause);
+
+    if (typeof filters.limit === "number") {
+      query = query.limit(filters.limit) as typeof query;
+    }
+    if (typeof filters.offset === "number") {
+      query = query.offset(filters.offset) as typeof query;
+    }
+
+    const rows = await query;
+    const items = await Promise.all(
+      rows.map(async (row) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        base_url: row.base_url,
+        logo_url: row.logo_url,
+        category: row.category,
+        status: row.status,
+        developer: {
+          name: row.developer_name ?? null,
+          website: row.developer_website ?? null,
+          description: row.developer_description ?? null,
+        },
+        endpoints: await repository.getEndpoints(row.id),
+      })),
+    );
+
+    return { items, total };
+  }
+
+  const apis = await repository.listPublic(filters);
+  const items = await Promise.all(
+    apis.map(async (api) => {
+      const details = await repository.findById(api.id);
+      return {
+        id: api.id,
+        name: api.name,
+        description: api.description,
+        base_url: api.base_url,
+        logo_url: api.logo_url,
+        category: api.category,
+        status: api.status,
+        developer: details?.developer ?? {
+          name: null,
+          website: null,
+          description: null,
+        },
+        endpoints: await repository.getEndpoints(api.id),
+      };
+    }),
+  );
+
+  return { items, total: items.length };
+}
+
+// ---------------------------------------------------------------------------
+// createApi — transactional helper (production path)
+// ---------------------------------------------------------------------------
+
+export interface CreateEndpointInput {
+  path: string;
+  method: HttpMethod;
+  price_per_call_usdc: string;
+  description?: string | null;
+}
+
+export interface CreateApiInput {
+  developer_id: number;
+  name: string;
+  description?: string | null;
+  base_url: string;
+  category?: string | null;
+  status?: ApiStatus;
+  endpoints: CreateEndpointInput[];
+}
+
+export interface ApiWithEndpoints extends Api {
+  endpoints: ApiEndpoint[];
+}
+
+export async function createApi(
+  input: CreateApiInput,
+): Promise<ApiWithEndpoints> {
+  const { endpoints, ...apiData } = input;
+  return db.transaction(async (tx) => {
+    const [api] = await tx
+      .insert(schema.apis)
+      .values({
+        developer_id: apiData.developer_id,
+        name: apiData.name,
+        description: apiData.description ?? null,
+        base_url: apiData.base_url,
+        category: apiData.category ?? null,
+        status: apiData.status ?? "draft",
+      } as NewApi)
+      .returning();
+
+    if (!api) throw new Error("API insert failed");
+
+    let endpointRows: ApiEndpoint[] = [];
+    if (endpoints.length > 0) {
+      endpointRows = await tx
+        .insert(schema.apiEndpoints)
+        .values(
+          endpoints.map(
+            (e) =>
+              ({
+                api_id: api.id,
+                path: e.path,
+                method: e.method,
+                price_per_call_usdc: e.price_per_call_usdc,
+                description: e.description ?? null,
+              }) as NewApiEndpoint,
+          ),
+        )
+        .returning();
+    }
+
+    return { ...api, endpoints: endpointRows };
+  });
+}

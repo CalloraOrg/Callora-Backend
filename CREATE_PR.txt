@@ -1,0 +1,11 @@
+Go to this URL to create the Pull Request:
+
+https://github.com/shakourllahfashola-dev/Callora-Backend/pull/new/feature/me-usage
+
+Steps:
+1. Click the link above
+2. Title: "feat: developer usage summary (#616)"
+3. Copy description from PR-DESCRIPTION.md
+4. Click "Create pull request"
+
+Branch pushed: feature/me-usage

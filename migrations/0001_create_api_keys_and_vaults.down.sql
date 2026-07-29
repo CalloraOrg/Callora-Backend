@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS vaults;
+DROP TABLE IF EXISTS api_keys;

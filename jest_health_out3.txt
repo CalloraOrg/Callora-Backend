@@ -1,0 +1,38 @@
+FAIL tests/integration/health.test.ts
+  ● Test suite failed to run
+
+    Could not locate the bindings file. Tried:
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\build\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\build\Debug\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\build\Release\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\out\Debug\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\Debug\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\out\Release\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\Release\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\build\default\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\compiled\22.20.0\win32\x64\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\addon-build\release\install-root\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\addon-build\debug\install-root\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\addon-build\default\install-root\better_sqlite3.node
+     → C:\Users\EMMA\Desktop\callora\node_modules\better-sqlite3\lib\binding\node-v127-win32-x64\better_sqlite3.node
+
+    [0m [90m  8 |[39m
+     [90m  9 |[39m [90m// Create SQLite database instance[39m
+    [31m[1m>[22m[39m[90m 10 |[39m [36mconst[39m sqlite [33m=[39m [36mnew[39m [33mDatabase[39m([32m'./database.db'[39m)[33m;[39m
+     [90m    |[39m                [31m[1m^[22m[39m
+     [90m 11 |[39m
+     [90m 12 |[39m [90m// Create Drizzle instance with schema[39m
+     [90m 13 |[39m [36mexport[39m [36mconst[39m db [33m=[39m drizzle(sqlite[33m,[39m { schema })[33m;[39m[0m
+
+      at bindings (node_modules/bindings/bindings.js:126:9)
+      at new Database (node_modules/better-sqlite3/lib/database.js:48:64)
+      at Object.<anonymous> (src/db/index.ts:10:16)
+      at Object.<anonymous> (src/repositories/apiRepository.ts:2:1)
+      at Object.<anonymous> (src/app.ts:9:1)
+      at Object.<anonymous> (tests/integration/health.test.ts:12:1)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        2.443 s
+Ran all test suites matching tests/integration/health.test.ts.

@@ -1,0 +1,16 @@
+C:\Users\DELL\Callora-Backend\node_modules\import-local\index.js:9
+	const globalDir = pkgDir.sync(path.dirname(normalizedFilename));
+	                         ^
+
+TypeError: pkgDir.sync is not a function
+    at module.exports (C:\Users\DELL\Callora-Backend\node_modules\import-local\index.js:9:27)
+    at Object.<anonymous> (C:\Users\DELL\Callora-Backend\node_modules\jest\bin\jest.js:11:6)
+    at Module._compile (node:internal/modules/cjs/loader:1873:14)
+    at Object..js (node:internal/modules/cjs/loader:2013:10)
+    at Module.load (node:internal/modules/cjs/loader:1596:32)
+    at Module._load (node:internal/modules/cjs/loader:1398:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v26.3.1

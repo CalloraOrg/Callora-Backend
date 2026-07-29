@@ -1,0 +1,25 @@
+﻿npm.cmd : npm warn deprecated prebuild-install@7.1.3: No longer maintained. 
+Please contact the author of the relevant native addon; alternatives are 
+available.
+At line:1 char:53
++ ... sers\Shepherd\projects\Callora-Backend ; npm.cmd install 2>&1 | Out-F ...
++                                              ~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn deprec... are available. 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+changed 51 packages, and audited 1053 packages in 3m
+
+135 packages are looking for funding
+  run `npm fund` for details
+
+32 vulnerabilities (1 low, 14 moderate, 16 high, 1 critical)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.

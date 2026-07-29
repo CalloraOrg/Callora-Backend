@@ -1,0 +1,1433 @@
+# OpenAPI fragment: example request/response bodies
+#
+# Canonical full contract lives in docs/openapi.json (served at GET /api/openapi.json).
+# This YAML file documents request/response examples for individual API surfaces.
+# Keep examples in sync with docs/openapi.json — companion tests assert both:
+#   - rate-limit surface (GrantFox FWC26 #931): src/routes/rate-limit/health.openapi.test.ts
+#   - error-definitions surface (GrantFox FWC26 #891): src/routes/errors.openapi.test.ts
+openapi: 3.1.0
+info:
+  title: Callora API examples
+  version: "1.0.0"
+  description: >
+    Example request/response bodies for select Callora API surfaces: the
+    spike probe / record API, the rate-limit health probe / budget peek, and
+    the error-definitions CRUD API.
+paths:
+  /api/spike:
+    get:
+      summary: Run the spike timeout probe
+      description: >
+        Exercises timeout handling by delaying for the requested duration. No
+        request body is required.
+      parameters:
+        - name: delay
+          in: query
+          required: false
+          description: Delay in milliseconds before responding.
+          schema:
+            type: integer
+            minimum: 1
+            default: 2000
+          examples:
+            completesBeforeTimeout:
+              summary: Complete before the default timeout
+              value: 100
+            exceedsDefaultTimeout:
+              summary: Trigger the default timeout
+              value: 1200
+        - name: timeout
+          in: query
+          required: false
+          description: Optional request timeout override in milliseconds.
+          schema:
+            type: integer
+            minimum: 1
+          examples:
+            shortTimeout:
+              summary: Custom timeout shorter than the delay
+              value: 200
+        - name: x-timeout-ms
+          in: header
+          required: false
+          description: Optional request timeout override in milliseconds.
+          schema:
+            type: integer
+            minimum: 1
+          examples:
+            headerTimeout:
+              summary: Header-based timeout override
+              value: 200
+      responses:
+        "200":
+          description: Spike probe completed before the timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRunResponse"
+              examples:
+                completed:
+                  summary: Delay completed successfully
+                  value:
+                    success: true
+                    message: Spike completed successfully
+                    delay: 100
+                    elapsed: 100
+        "504":
+          description: Spike probe exceeded the configured timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                timedOut:
+                  summary: Request timed out
+                  value:
+                    success: false
+                    error:
+                      code: GATEWAY_TIMEOUT
+                      message: Request timeout exceeded
+                    requestId: req-spike-timeout-1
+                    timestamp: "2026-07-29T10:00:00.000Z"
+    post:
+      summary: Create a spike record
+      description: >
+        Creates an in-memory spike record and records the mutation in the audit
+        trail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpikeCreateRequest"
+            examples:
+              createHighSeverityRecord:
+                summary: Create a high severity spike record
+                value:
+                  label: Checkout latency spike
+                  severity: high
+      responses:
+        "201":
+          description: Spike record created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRecord"
+              examples:
+                created:
+                  summary: Newly created spike record
+                  value:
+                    id: "1"
+                    label: Checkout latency spike
+                    severity: high
+                    createdAt: "2026-07-29T10:00:00.000Z"
+                    updatedAt: "2026-07-29T10:00:00.000Z"
+        "400":
+          description: Request body failed validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                missingLabel:
+                  summary: Missing required label
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: label is required and must be a non-empty string
+                    requestId: req-spike-create-400
+                    timestamp: "2026-07-29T10:01:00.000Z"
+        "503":
+          description: Audit service is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                auditUnavailable:
+                  summary: Audit circuit breaker is open
+                  value:
+                    success: false
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: Audit service temporarily unavailable
+                    requestId: req-spike-create-503
+                    timestamp: "2026-07-29T10:02:00.000Z"
+  /api/spike/records:
+    get:
+      summary: List spike records
+      description: Returns the current in-memory spike records.
+      parameters: []
+      responses:
+        "200":
+          description: Spike records retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRecordsResponse"
+              examples:
+                withRecords:
+                  summary: Store contains spike records
+                  value:
+                    records:
+                      - id: "1"
+                        label: Checkout latency spike
+                        severity: high
+                        createdAt: "2026-07-29T10:00:00.000Z"
+                        updatedAt: "2026-07-29T10:00:00.000Z"
+                empty:
+                  summary: No spike records exist yet
+                  value:
+                    records: []
+  /api/spike/{id}:
+    put:
+      summary: Update a spike record
+      description: >
+        Updates the label and/or severity for an existing spike record and
+        records the mutation in the audit trail.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Spike record identifier.
+          schema:
+            type: string
+          examples:
+            existingRecord:
+              summary: Existing spike record
+              value: "1"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpikeUpdateRequest"
+            examples:
+              updateSeverity:
+                summary: Escalate the spike severity
+                value:
+                  label: Checkout latency spike escalated
+                  severity: critical
+      responses:
+        "200":
+          description: Spike record updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRecord"
+              examples:
+                updated:
+                  summary: Updated spike record
+                  value:
+                    id: "1"
+                    label: Checkout latency spike escalated
+                    severity: critical
+                    createdAt: "2026-07-29T10:00:00.000Z"
+                    updatedAt: "2026-07-29T10:05:00.000Z"
+        "400":
+          description: Request body failed validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                invalidSeverity:
+                  summary: Severity is outside the allowed set
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: Invalid option
+                    requestId: req-spike-update-400
+                    timestamp: "2026-07-29T10:06:00.000Z"
+        "404":
+          description: Spike record was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No record exists for the supplied ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Spike record 999 not found
+                    requestId: req-spike-update-404
+                    timestamp: "2026-07-29T10:07:00.000Z"
+        "503":
+          description: Audit service is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                auditUnavailable:
+                  summary: Audit circuit breaker is open
+                  value:
+                    success: false
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: Audit service temporarily unavailable
+                    requestId: req-spike-update-503
+                    timestamp: "2026-07-29T10:08:00.000Z"
+    delete:
+      summary: Delete a spike record
+      description: >
+        Deletes an existing spike record and records the mutation in the audit
+        trail. Returns no content on success.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Spike record identifier.
+          schema:
+            type: string
+          examples:
+            existingRecord:
+              summary: Existing spike record
+              value: "1"
+      responses:
+        "204":
+          description: Spike record deleted.
+        "404":
+          description: Spike record was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No record exists for the supplied ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Spike record 999 not found
+                    requestId: req-spike-delete-404
+                    timestamp: "2026-07-29T10:09:00.000Z"
+        "503":
+          description: Audit service is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                auditUnavailable:
+                  summary: Audit circuit breaker is open
+                  value:
+                    success: false
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: Audit service temporarily unavailable
+                    requestId: req-spike-delete-503
+                    timestamp: "2026-07-29T10:10:00.000Z"
+  /api/rate-limit/health:
+    get:
+      summary: Check rate-limit subsystem health
+      description: >
+        Public probe. Does not consume rate-limit budget and does not require
+        a request body.
+      parameters: []
+      responses:
+        "200":
+          description: Rate-limit subsystem is operational
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitHealthResponse"
+              examples:
+                operational:
+                  summary: In-memory limiter is operational
+                  value:
+                    status: ok
+                    timestamp: "2026-07-28T10:00:00.000Z"
+                    dependencies:
+                      in_memory_store:
+                        status: ok
+                        responseTime: 0.123
+                        details:
+                          windowMs: 60000
+                          maxRequests: 100
+                notConfigured:
+                  summary: No limiter configured
+                  value:
+                    status: ok
+                    timestamp: "2026-07-28T10:00:00.000Z"
+                    dependencies:
+                      in_memory_store:
+                        status: ok
+                        details:
+                          note: No rate limiter configured for probing
+        "503":
+          description: Rate-limit subsystem is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitHealthResponse"
+              examples:
+                unavailable:
+                  summary: Rate-limit store probe failed
+                  value:
+                    status: down
+                    timestamp: "2026-07-28T10:00:00.000Z"
+                    dependencies:
+                      in_memory_store:
+                        status: down
+                        responseTime: 0.456
+                        error: unavailable
+  /api/limits/check:
+    get:
+      summary: Check the authenticated user's rate-limit budget
+      description: >
+        Peeks at the authenticated user's REST rate-limit bucket without
+        consuming a token. No request body is required.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: Bearer JWT for the authenticated user
+          schema:
+            type: string
+          examples:
+            developerBearer:
+              summary: Authenticated developer JWT
+              value: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example"
+      responses:
+        "200":
+          description: Rate-limit budget status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitCheckResponse"
+              examples:
+                allowed:
+                  summary: Requests are currently allowed
+                  value:
+                    status: ok
+                denied:
+                  summary: Rate-limit budget is exhausted
+                  value:
+                    status: deny
+                    reason: rate_limit_exceeded
+                    retryAfterMs: 42300
+        "401":
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    code: UNAUTHORIZED
+                    message: Authentication required
+                    requestId: req-rate-limit-check
+  /api/errors:
+    get:
+      summary: List error definitions
+      description: >
+        Returns all registered error definitions. Read-only; does not require
+        authentication and is not audited.
+      parameters: []
+      responses:
+        "200":
+          description: Error definitions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorsListResponse"
+              examples:
+                withRecords:
+                  summary: Store contains registered error definitions
+                  value:
+                    success: true
+                    data:
+                      errors:
+                        - id: "1"
+                          code: ERR_INSUFFICIENT_CREDITS
+                          message: Developer account has insufficient credits
+                          statusCode: 402
+                          description: >-
+                            Returned when a billing deduction would take the
+                            balance below zero.
+                          createdAt: "2026-07-27T09:00:00.000Z"
+                          updatedAt: "2026-07-27T09:00:00.000Z"
+                    requestId: req-errors-list-1
+                    timestamp: "2026-07-27T09:00:00.000Z"
+                empty:
+                  summary: No error definitions registered yet
+                  value:
+                    success: true
+                    data:
+                      errors: []
+                    requestId: req-errors-list-2
+                    timestamp: "2026-07-27T09:05:00.000Z"
+    post:
+      summary: Create an error definition
+      description: >
+        Registers a new error definition. Requires authentication; the
+        mutation is recorded in the audit log.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorCreateRequest"
+            examples:
+              createErrorDefinition:
+                summary: Register a new billing error code
+                value:
+                  code: ERR_INSUFFICIENT_CREDITS
+                  message: Developer account has insufficient credits
+                  statusCode: 402
+                  description: >-
+                    Returned when a billing deduction would take the balance
+                    below zero.
+      responses:
+        "201":
+          description: Error definition created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRecordResponse"
+              examples:
+                created:
+                  summary: Newly created error definition
+                  value:
+                    success: true
+                    data:
+                      id: "1"
+                      code: ERR_INSUFFICIENT_CREDITS
+                      message: Developer account has insufficient credits
+                      statusCode: 402
+                      description: >-
+                        Returned when a billing deduction would take the
+                        balance below zero.
+                      createdAt: "2026-07-27T09:00:00.000Z"
+                      updatedAt: "2026-07-27T09:00:00.000Z"
+                    requestId: req-errors-create-1
+                    timestamp: "2026-07-27T09:00:00.000Z"
+        "400":
+          description: Request body failed validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                validationFailed:
+                  summary: Missing required field
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: Validation failed
+                      details:
+                        - field: code
+                          message: Required
+                          code: invalid_type
+                    requestId: req-errors-create-400
+                    timestamp: "2026-07-27T09:01:00.000Z"
+        "401":
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Unauthorized
+                    requestId: req-errors-create-401
+                    timestamp: "2026-07-27T09:02:00.000Z"
+  /api/errors/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Error definition ID
+        schema:
+          type: string
+    get:
+      summary: Get an error definition by ID
+      description: >
+        Read-only; does not require authentication and is not audited.
+      responses:
+        "200":
+          description: Error definition retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRecordResponse"
+              examples:
+                found:
+                  summary: Existing error definition
+                  value:
+                    success: true
+                    data:
+                      id: "1"
+                      code: ERR_INSUFFICIENT_CREDITS
+                      message: Developer account has insufficient credits
+                      statusCode: 402
+                      description: >-
+                        Returned when a billing deduction would take the
+                        balance below zero.
+                      createdAt: "2026-07-27T09:00:00.000Z"
+                      updatedAt: "2026-07-27T09:00:00.000Z"
+                    requestId: req-errors-get-1
+                    timestamp: "2026-07-27T09:03:00.000Z"
+        "404":
+          description: Error definition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No error definition with the given ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Error definition 999 not found
+                    requestId: req-errors-get-404
+                    timestamp: "2026-07-27T09:04:00.000Z"
+    put:
+      summary: Replace an error definition
+      description: >
+        Full update of an existing error definition. Requires authentication;
+        the mutation is recorded in the audit log.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorUpdateRequest"
+            examples:
+              replaceErrorDefinition:
+                summary: Update the message and status code
+                value:
+                  code: ERR_INSUFFICIENT_CREDITS
+                  message: Account balance is below the required minimum
+                  statusCode: 402
+                  description: >-
+                    Returned when a billing deduction would take the balance
+                    below zero.
+      responses:
+        "200":
+          description: Error definition updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRecordResponse"
+              examples:
+                updated:
+                  summary: Updated error definition
+                  value:
+                    success: true
+                    data:
+                      id: "1"
+                      code: ERR_INSUFFICIENT_CREDITS
+                      message: Account balance is below the required minimum
+                      statusCode: 402
+                      description: >-
+                        Returned when a billing deduction would take the
+                        balance below zero.
+                      createdAt: "2026-07-27T09:00:00.000Z"
+                      updatedAt: "2026-07-27T09:06:00.000Z"
+                    requestId: req-errors-put-1
+                    timestamp: "2026-07-27T09:06:00.000Z"
+        "400":
+          description: Request body failed validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                emptyUpdate:
+                  summary: No fields provided
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: At least one field must be provided for update
+                    requestId: req-errors-put-400
+                    timestamp: "2026-07-27T09:07:00.000Z"
+        "401":
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Unauthorized
+                    requestId: req-errors-put-401
+                    timestamp: "2026-07-27T09:08:00.000Z"
+        "404":
+          description: Error definition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No error definition with the given ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Error definition 999 not found
+                    requestId: req-errors-put-404
+                    timestamp: "2026-07-27T09:09:00.000Z"
+    patch:
+      summary: Partially update an error definition
+      description: >
+        Partial update of an existing error definition. Requires
+        authentication; the mutation is recorded in the audit log.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorUpdateRequest"
+            examples:
+              patchMessage:
+                summary: Update just the message
+                value:
+                  message: Account balance is below the required minimum
+      responses:
+        "200":
+          description: Error definition updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorRecordResponse"
+              examples:
+                updated:
+                  summary: Updated error definition
+                  value:
+                    success: true
+                    data:
+                      id: "1"
+                      code: ERR_INSUFFICIENT_CREDITS
+                      message: Account balance is below the required minimum
+                      statusCode: 402
+                      description: >-
+                        Returned when a billing deduction would take the
+                        balance below zero.
+                      createdAt: "2026-07-27T09:00:00.000Z"
+                      updatedAt: "2026-07-27T09:10:00.000Z"
+                    requestId: req-errors-patch-1
+                    timestamp: "2026-07-27T09:10:00.000Z"
+        "400":
+          description: Request body failed validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                emptyUpdate:
+                  summary: No fields provided
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: At least one field must be provided for update
+                    requestId: req-errors-patch-400
+                    timestamp: "2026-07-27T09:11:00.000Z"
+        "401":
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Unauthorized
+                    requestId: req-errors-patch-401
+                    timestamp: "2026-07-27T09:12:00.000Z"
+        "404":
+          description: Error definition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No error definition with the given ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Error definition 999 not found
+                    requestId: req-errors-patch-404
+                    timestamp: "2026-07-27T09:13:00.000Z"
+    delete:
+      summary: Delete an error definition
+      description: >
+        Requires authentication; the mutation is recorded in the audit log.
+        Returns no content on success.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Error definition deleted
+        "401":
+          description: Authentication is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Unauthorized
+                    requestId: req-errors-delete-401
+                    timestamp: "2026-07-27T09:14:00.000Z"
+        "404":
+          description: Error definition not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No error definition with the given ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Error definition 999 not found
+                    requestId: req-errors-delete-404
+                    timestamp: "2026-07-27T09:15:00.000Z"
+  /api/webhooks:
+    post:
+      summary: Register a webhook
+      description: Registers a new webhook for the authenticated developer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            examples:
+              registerWebhook:
+                summary: Register a webhook for API and balance events
+                value:
+                  developerId: "dev-123"
+                  url: "https://example.com/webhook"
+                  events:
+                    - "new_api_call"
+                    - "low_balance_alert"
+                  secret: "my_super_secret"
+                  retryPolicy:
+                    maxRetries: 3
+                    initialIntervalMs: 1000
+                    backoffFactor: 2.0
+      responses:
+        "201":
+          description: Webhook registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                registered:
+                  summary: Successfully registered
+                  value:
+                    message: Webhook registered successfully.
+                    developerId: "dev-123"
+                    url: "https://example.com/webhook"
+                    events:
+                      - "new_api_call"
+                      - "low_balance_alert"
+        "400":
+          description: Bad request — invalid webhook registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                missingFields:
+                  summary: Missing required fields
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: developerId, url, and a non-empty events array are required.
+                    requestId: req-webhook-post-400-missing
+                    timestamp: "2026-07-27T09:15:00.000Z"
+                invalidEventTypes:
+                  summary: Invalid event types
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: Invalid event types: invalid_event. Valid: new_api_call, settlement_completed, low_balance_alert
+                    requestId: req-webhook-post-400-events
+                    timestamp: "2026-07-27T09:16:00.000Z"
+                invalidUrl:
+                  summary: Invalid webhook URL
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: URL is not reachable or does not return 2xx
+                    requestId: req-webhook-post-400-url
+                    timestamp: "2026-07-27T09:17:00.000Z"
+                invalidRetryPolicy:
+                  summary: Invalid retry policy
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: retryPolicy.maxRetries must be between 0 and 10
+                    requestId: req-webhook-post-400-retry
+                    timestamp: "2026-07-27T09:18:00.000Z"
+  /api/webhooks/{developerId}:
+    get:
+      summary: Get webhook config
+      description: Returns the webhook configuration for the given developer.
+      responses:
+        "200":
+          description: Webhook configuration
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                found:
+                  summary: Webhook config
+                  value:
+                    developerId: "dev-123"
+                    url: "https://example.com/webhook"
+                    events:
+                      - "new_api_call"
+                      - "low_balance_alert"
+                    retryPolicy:
+                      maxRetries: 3
+                      initialIntervalMs: 1000
+                      backoffFactor: 2.0
+        "404":
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                notFound:
+                  summary: No webhook registered
+                  value:
+                    message: "No webhook registered for this developer."
+  /api/webhooks/{developerId}:
+    delete:
+      summary: Remove webhook
+      description: >
+        Removes the webhook configuration for the given developer. The webhook
+        will no longer receive events. This action is idempotent — calling
+        delete on a non-existent webhook still returns success.
+      responses:
+        "200":
+          description: Webhook removed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                removed:
+                  summary: Successfully removed
+                  value:
+                    message: Webhook removed.
+  /api/webhooks/{developerId}/rotate-secret:
+    post:
+      summary: Rotate webhook signing secret
+      description: >
+        Rotates the HMAC signing secret for the given developer's webhook. The
+        previous secret remains valid for a grace period (configurable via
+        WEBHOOK_SECRET_ROTATION_GRACE_MS) so consumers can transition without
+        delivery gaps.
+      responses:
+        "200":
+          description: Secret rotated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                rotated:
+                  summary: Successfully rotated
+                  value:
+                    message: Webhook secret rotated successfully.
+                    developerId: "dev-123"
+                    secret: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
+                    previous_expires_at: "2026-07-27T10:15:00.000Z"
+        "404":
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No webhook registered
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: No webhook registered for this developer.
+                    requestId: req-webhook-rotate-404
+                    timestamp: "2026-07-27T09:20:00.000Z"
+  /api/webhooks/{developerId}/retry-policy:
+    patch:
+      summary: Update webhook retry policy
+      description: >
+        Updates the per-subscription retry policy for the given developer's
+        webhook. Only the retryPolicy field is replaced; all other settings
+        remain unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            examples:
+              updateRetryPolicy:
+                summary: Set custom retry policy
+                value:
+                  retryPolicy:
+                    maxRetries: 5
+                    baseDelayMs: 2000
+      responses:
+        "200":
+          description: Retry policy updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                updated:
+                  summary: Successfully updated
+                  value:
+                    message: Webhook retry policy updated successfully.
+                    developerId: "dev-123"
+                    url: "https://example.com/webhook"
+                    events:
+                      - "new_api_call"
+                      - "low_balance_alert"
+                    retryPolicy:
+                      maxRetries: 5
+                      baseDelayMs: 2000
+                    createdAt: "2026-07-27T09:00:00.000Z"
+        "400":
+          description: Bad request — invalid retry policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                invalidRetryPolicy:
+                  summary: Invalid retry policy
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: retryPolicy.maxRetries must be between 0 and 10
+                    requestId: req-webhook-retry-patch-400
+                    timestamp: "2026-07-27T09:21:00.000Z"
+        "404":
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No webhook registered
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: No webhook registered for this developer.
+                    requestId: req-webhook-retry-patch-404
+                    timestamp: "2026-07-27T09:22:00.000Z"
+  /api/webhooks/deliver/{developerId}:
+    post:
+      summary: Deliver a webhook event
+      description: >
+        Receives a signed webhook event from an external system. The request
+        body must include an HMAC-SHA256 signature in the
+        X-Callora-Signature-256 header and a timestamp in the
+        X-Callora-Timestamp header. The signature is verified before the
+        payload is processed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            examples:
+              deliverEvent:
+                summary: Deliver a new_api_call event
+                value:
+                  event: new_api_call
+                  timestamp: "2026-07-27T09:30:00.000Z"
+                  developerId: "dev-123"
+                  data:
+                    apiId: "api-456"
+                    endpoint: /v1/checkout
+                    method: POST
+                    statusCode: 200
+                    latencyMs: 145
+                    creditsUsed: 10
+      responses:
+        "200":
+          description: Webhook delivery accepted
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                accepted:
+                  summary: Delivery accepted
+                  value:
+                    message: Webhook delivery accepted.
+                    body:
+                      event: new_api_call
+                      timestamp: "2026-07-27T09:30:00.000Z"
+                      developerId: "dev-123"
+                      data:
+                        apiId: "api-456"
+                        endpoint: /v1/checkout
+                        method: POST
+                        statusCode: 200
+                        latencyMs: 145
+                        creditsUsed: 10
+        "400":
+          description: Bad request — invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                missingSignature:
+                  summary: Missing signature headers
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: Missing required webhook signature headers
+                    requestId: req-webhook-deliver-400-sig
+                    timestamp: "2026-07-27T09:31:00.000Z"
+        "401":
+          description: Invalid webhook signature
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                invalidSignature:
+                  summary: Signature verification failed
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Webhook signature verification failed
+                    requestId: req-webhook-deliver-401-invalid
+                    timestamp: "2026-07-27T09:32:00.000Z"
+        "404":
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No webhook registered
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: No webhook registered for this developer.
+                    requestId: req-webhook-deliver-404
+                    timestamp: "2026-07-27T09:33:00.000Z"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SpikeSeverity:
+      type: string
+      enum: [low, medium, high, critical]
+    SpikeRunResponse:
+      type: object
+      required: [success, message, delay, elapsed]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        message:
+          type: string
+        delay:
+          type: integer
+        elapsed:
+          type: integer
+    SpikeRecord:
+      type: object
+      required: [id, label, severity, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          minLength: 1
+        severity:
+          $ref: "#/components/schemas/SpikeSeverity"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    SpikeRecordsResponse:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/SpikeRecord"
+    SpikeCreateRequest:
+      type: object
+      required: [label, severity]
+      properties:
+        label:
+          type: string
+          minLength: 1
+        severity:
+          $ref: "#/components/schemas/SpikeSeverity"
+    SpikeUpdateRequest:
+      type: object
+      description: At least one field should be provided.
+      minProperties: 1
+      properties:
+        label:
+          type: string
+          minLength: 1
+        severity:
+          $ref: "#/components/schemas/SpikeSeverity"
+    RateLimitDependencyStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        responseTime:
+          type: number
+        error:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    RateLimitHealthResponse:
+      type: object
+      required: [status, timestamp, dependencies]
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/RateLimitDependencyStatus"
+    RateLimitCheckResponse:
+      oneOf:
+        - type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [ok]
+        - type: object
+          required: [status, reason, retryAfterMs]
+          properties:
+            status:
+              type: string
+              enum: [deny]
+            reason:
+              type: string
+              enum: [rate_limit_exceeded]
+            retryAfterMs:
+              type: integer
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+    ErrorRecord:
+      type: object
+      required: [id, code, message, statusCode, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+        statusCode:
+          type: integer
+        description:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ErrorRecordResponse:
+      type: object
+      required: [success, data, requestId, timestamp]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          $ref: "#/components/schemas/ErrorRecord"
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    ErrorsListResponse:
+      type: object
+      required: [success, data, requestId, timestamp]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [errors]
+          properties:
+            errors:
+              type: array
+              items:
+                $ref: "#/components/schemas/ErrorRecord"
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    ErrorCreateRequest:
+      type: object
+      required: [code, message, statusCode]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 100
+        message:
+          type: string
+          minLength: 1
+          maxLength: 500
+        statusCode:
+          type: integer
+          minimum: 100
+          maximum: 599
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+    ErrorUpdateRequest:
+      type: object
+      description: At least one field must be provided.
+      minProperties: 1
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 100
+        message:
+          type: string
+          minLength: 1
+          maxLength: 500
+        statusCode:
+          type: integer
+          minimum: 100
+          maximum: 599
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+    # Distinct from the pre-existing flat ErrorResponse — this matches the
+    # actual envelope produced by errorHandler.ts / buildErrorEnvelope():
+    # { success: false, error: { code, message, details? }, requestId, timestamp }
+    StandardErrorEnvelope:
+      type: object
+      required: [success, error, requestId, timestamp]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+                  code:
+                    type: string
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time

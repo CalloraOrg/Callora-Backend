@@ -1,0 +1,41 @@
+FAIL tests/integration/billing.test.ts
+  BillingService - Integration Tests
+    √ successfully processes new billing request (194 ms)
+    √ prevents double charge on duplicate request_id (52 ms)
+    × rolls back transaction when Soroban fails (47 ms)
+    √ handles concurrent requests with same request_id (94 ms)
+    √ getByRequestId returns existing usage event (40 ms)
+    √ getByRequestId returns null for non-existent request (11 ms)
+
+  ● BillingService - Integration Tests › rolls back transaction when Soroban fails
+
+    assert.strictEqual(received, expected)
+
+    Expected value to strictly be equal to:
+      "0"
+    Received:
+      "1"
+
+    Difference:
+
+    - Expected
+    + Received
+
+    - 0
+    + 1
+
+    [0m [90m 189 |[39m         [request[33m.[39mrequestId]
+     [90m 190 |[39m       )[33m;[39m
+    [31m[1m>[22m[39m[90m 191 |[39m       assert[33m.[39mequal([33mString[39m(dbResult[33m.[39mrows[[35m0[39m][33m.[39mcount)[33m,[39m [32m'0'[39m)[33m;[39m
+     [90m     |[39m              [31m[1m^[22m[39m
+     [90m 192 |[39m     } [36mfinally[39m {
+     [90m 193 |[39m       [36mawait[39m testDb[33m.[39mend()[33m;[39m
+     [90m 194 |[39m     }[0m
+
+      at Object.<anonymous> (tests/integration/billing.test.ts:191:14)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 5 passed, 6 total
+Snapshots:   0 total
+Time:        1.959 s, estimated 2 s
+Ran all test suites matching tests/integration/billing.test.ts.

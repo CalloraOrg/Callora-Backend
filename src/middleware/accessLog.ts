@@ -1,0 +1,391 @@
+import type { NextFunction, Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
+import { getClientIp } from '../lib/clientIp.js';
+import { getRequestId } from '../utils/asyncContext.js';
+import { logger } from './logging.js';
+import { sanitizeRequestId } from './requestId.js';
+
+export const ACCESS_LOG_REDACTED_VALUE = '[REDACTED]';
+export const DEFAULT_ACCESS_LOG_SAMPLE_RATE = 1;
+
+export type AccessLogField =
+  | 'method'
+  | 'path'
+  | 'status'
+  | 'statusCode'
+  | 'ms'
+  | 'durationMs'
+  | 'requestBytes'
+  | 'responseBytes'
+  | 'correlationId'
+  | 'requestId'
+  | 'clientIp';
+
+export interface AccessLogOptions {
+  sampleRate?: number;
+  redactFields?: readonly string[];
+  random?: () => number;
+  logger?: Pick<typeof logger, 'info' | 'warn' | 'error'>;
+}
+
+type AccessLogPayload = {
+  correlationId: string;
+  requestId: string;
+  method: string;
+  path: string;
+  status: number;
+  statusCode: number;
+  ms: number;
+  durationMs: number;
+  requestBytes: number;
+  responseBytes: number;
+  clientIp?: string;
+};
+
+const REDACTABLE_FIELD_LOOKUP = new Map<string, AccessLogField>(
+  [
+    'method',
+    'path',
+    'status',
+    'statusCode',
+    'ms',
+    'durationMs',
+    'requestBytes',
+    'responseBytes',
+    'correlationId',
+    'requestId',
+    'clientIp',
+  ].map((field) => [field.toLowerCase(), field as AccessLogField]),
+);
+
+const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
+
+const getHeaderValue = (headers: Request['headers'], headerName: string): string | undefined => {
+  const value = headers[headerName];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return typeof value === 'string' ? value : undefined;
+};
+
+const byteLength = (chunk: unknown, encoding?: BufferEncoding): number => {
+  if (chunk === null || chunk === undefined) {
+    return 0;
+  }
+  if (Buffer.isBuffer(chunk)) {
+    return chunk.length;
+  }
+  if (typeof chunk === 'string') {
+    return Buffer.byteLength(chunk, encoding);
+  }
+  return Buffer.byteLength(String(chunk));
+};
+
+const normalizeField = (field: string): AccessLogField | undefined => {
+  const candidate = field.trim();
+  if (!candidate) return undefined;
+  const lower = candidate.toLowerCase();
+  return REDACTABLE_FIELD_LOOKUP.get(lower);
+};
+
+const redactPayload = (
+  payload: AccessLogPayload,
+  redactFields: readonly AccessLogField[] | undefined,
+): AccessLogPayload => {
+  if (!redactFields?.length) {
+    return payload;
+  }
+
+  const redacted = { ...payload };
+  for (const field of redactFields) {
+    if (field in redacted) {
+      (redacted as Record<string, unknown>)[field] = ACCESS_LOG_REDACTED_VALUE;
+    }
+  }
+  return redacted;
+};
+
+const shouldSample = (sampleRate: number, random: () => number): boolean => {
+  if (sampleRate <= 0) return false;
+  if (sampleRate >= 1) return true;
+  return random() < sampleRate;
+};
+
+/**
+ * Structured HTTP access logging middleware.
+ *
+ * Mount this before request body parsing so request byte counts can be
+ * observed without buffering or re-reading the stream.
+ */
+export function createAccessLogMiddleware(options: AccessLogOptions = {}) {
+  const sampleRate = options.sampleRate ?? DEFAULT_ACCESS_LOG_SAMPLE_RATE;
+  const redactFields = options.redactFields?.map((field) => normalizeField(field)).filter(
+    (field): field is AccessLogField => Boolean(field),
+  );
+  const random = options.random ?? Math.random;
+  const accessLogger = options.logger ?? logger;
+
+  return function accessLogMiddleware(req: Request, res: Response, next: NextFunction): void {
+    const startAt = process.hrtime.bigint();
+    const requestHeaders = req.headers ?? {};
+    const requestId =
+      sanitizeRequestId(req.id) ??
+      sanitizeRequestId(getRequestId()) ??
+      sanitizeRequestId(getHeaderValue(requestHeaders, 'x-request-id')) ??
+      sanitizeRequestId(getHeaderValue(requestHeaders, 'x-correlation-id')) ??
+      uuidv4();
+    const correlationId =
+      sanitizeRequestId(getHeaderValue(requestHeaders, 'x-correlation-id')) ??
+      sanitizeRequestId(getHeaderValue(requestHeaders, 'x-request-id')) ??
+      requestId;
+
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('x-request-id', requestId);
+    }
+
+    const clientIp = getClientIp(req, TRUST_PROXY);
+    const requestHeaderLengthRaw =
+      typeof req.header === 'function'
+        ? req.header('content-length')
+        : Array.isArray(requestHeaders['content-length'])
+          ? requestHeaders['content-length'][0]
+          : requestHeaders['content-length'];
+    const requestHeaderLength = Number(requestHeaderLengthRaw);
+    let requestBytes = 0;
+    let sawRequestData = false;
+    let responseBytes = 0;
+    let emitted = false;
+
+    const onData = (chunk: Buffer | string): void => {
+      sawRequestData = true;
+      requestBytes += byteLength(chunk);
+    };
+
+    if (typeof req.on === 'function') {
+      req.on('data', onData);
+    }
+
+    const originalWrite = typeof res.write === 'function' ? res.write.bind(res) : undefined;
+    const originalEnd = typeof res.end === 'function' ? res.end.bind(res) : undefined;
+
+    if (originalWrite) {
+      res.write = ((chunk: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalWrite(chunk as never, encoding as never, callback as never);
+      }) as typeof res.write;
+    }
+
+    if (originalEnd) {
+      res.end = ((chunk?: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalEnd(chunk as never, encoding as never, callback as never);
+      }) as typeof res.end;
+    }
+
+    const emitLog = (): void => {
+      if (emitted) {
+        return;
+      }
+      emitted = true;
+      if (typeof req.off === 'function') {
+        req.off('data', onData);
+      } else if (typeof req.removeListener === 'function') {
+        req.removeListener('data', onData);
+      }
+
+      if (!sawRequestData && Number.isFinite(requestHeaderLength) && requestHeaderLength >= 0) {
+        requestBytes = requestHeaderLength;
+      }
+
+      if (!shouldSample(sampleRate, random)) {
+        return;
+      }
+
+      const elapsedMs = Number(process.hrtime.bigint() - startAt) / 1_000_000;
+      const status = res.statusCode;
+      const payload: AccessLogPayload = {
+        correlationId,
+        requestId,
+        method: req.method,
+        path: req.path,
+        status,
+        statusCode: status,
+        ms: Number(elapsedMs.toFixed(3)),
+        durationMs: Number(elapsedMs.toFixed(3)),
+        requestBytes,
+        responseBytes,
+        ...(clientIp ? { clientIp } : {}),
+      };
+
+      const logPayload = redactPayload(payload, redactFields);
+      if (status >= 500 && typeof accessLogger.error === 'function') {
+        accessLogger.error(logPayload, 'request completed');
+      } else if (status >= 400 && typeof accessLogger.warn === 'function') {
+        accessLogger.warn(logPayload, 'request completed');
+      } else {
+        accessLogger.info(logPayload, 'request completed');
+      }
+    };
+
+    res.once('finish', emitLog);
+    res.once('close', () => {
+      if (!res.writableEnded) {
+        emitLog();
+      }
+    });
+
+    next();
+  };
+}
+
+export const requestLogger = createAccessLogMiddleware();
+
+export interface HealthAccessLogPayload {
+  requestId: string;
+  latencyMs: number;
+  status: number;
+  responseBytes: number;
+  actor?: string;
+}
+
+export function createHealthAccessLogMiddleware(): (
+  req: import('express').Request,
+  res: import('express').Response,
+  next: import('express').NextFunction,
+) => void {
+  return function healthAccessLogMiddleware(
+    req: import('express').Request,
+    res: import('express').Response,
+    next: import('express').NextFunction,
+  ): void {
+    const startAt = process.hrtime.bigint();
+    const requestId =
+      sanitizeRequestId(req.id) ??
+      sanitizeRequestId(getRequestId()) ??
+      sanitizeRequestId(getHeaderValue(req.headers, 'x-request-id')) ??
+      uuidv4();
+
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('x-request-id', requestId);
+    }
+
+    let responseBytes = 0;
+    const originalWrite = typeof res.write === 'function' ? res.write.bind(res) : undefined;
+    const originalEnd = typeof res.end === 'function' ? res.end.bind(res) : undefined;
+
+    if (originalWrite) {
+      res.write = ((chunk: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalWrite(chunk as never, encoding as never, callback as never);
+      }) as typeof res.write;
+    }
+
+    if (originalEnd) {
+      res.end = ((chunk?: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalEnd(chunk as never, encoding as never, callback as never);
+      }) as typeof res.end;
+    }
+
+    res.once('finish', () => {
+      const elapsedMs = Number(process.hrtime.bigint() - startAt) / 1_000_000;
+      const status = res.statusCode;
+      const payload: HealthAccessLogPayload = {
+        requestId,
+        latencyMs: Number(elapsedMs.toFixed(3)),
+        status,
+        responseBytes,
+      };
+
+      if (status >= 500 && typeof logger.error === 'function') {
+        logger.error(payload, 'health check completed');
+      } else if (status >= 400 && typeof logger.warn === 'function') {
+        logger.warn(payload, 'health check completed');
+      } else {
+        logger.info(payload, 'health check completed');
+      }
+    });
+
+    next();
+  };
+}
+
+export const healthAccessLog = createHealthAccessLogMiddleware();
+
+export interface PlansAccessLogPayload {
+  requestId: string;
+  latencyMs: number;
+  status: number;
+  responseBytes: number;
+  actor?: string;
+}
+
+export function createPlansAccessLogMiddleware(): (
+  req: import('express').Request,
+  res: import('express').Response,
+  next: import('express').NextFunction,
+) => void {
+  return function plansAccessLogMiddleware(
+    req: import('express').Request,
+    res: import('express').Response,
+    next: import('express').NextFunction,
+  ): void {
+    const startAt = process.hrtime.bigint();
+    const requestId =
+      sanitizeRequestId(req.id) ??
+      sanitizeRequestId(getRequestId()) ??
+      sanitizeRequestId(getHeaderValue(req.headers, 'x-request-id')) ??
+      uuidv4();
+
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('x-request-id', requestId);
+    }
+
+    let responseBytes = 0;
+    const originalWrite = typeof res.write === 'function' ? res.write.bind(res) : undefined;
+    const originalEnd = typeof res.end === 'function' ? res.end.bind(res) : undefined;
+
+    if (originalWrite) {
+      res.write = ((chunk: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalWrite(chunk as never, encoding as never, callback as never);
+      }) as typeof res.write;
+    }
+
+    if (originalEnd) {
+      res.end = ((chunk?: unknown, encoding?: unknown, callback?: unknown) => {
+        responseBytes += byteLength(chunk, typeof encoding === 'string' ? encoding as BufferEncoding : undefined);
+        return originalEnd(chunk as never, encoding as never, callback as never);
+      }) as typeof res.end;
+    }
+
+    res.once('finish', () => {
+      const elapsedMs = Number(process.hrtime.bigint() - startAt) / 1_000_000;
+      const status = res.statusCode;
+      
+      const locals = res.locals as Record<string, unknown>;
+      const user = locals.authenticatedUser as { id?: string } | undefined;
+      const actor = user?.id;
+
+      const payload: PlansAccessLogPayload = {
+        requestId,
+        latencyMs: Number(elapsedMs.toFixed(3)),
+        status,
+        responseBytes,
+        ...(actor ? { actor } : {}),
+      };
+
+      if (status >= 500 && typeof logger.error === 'function') {
+        logger.error(payload, 'plans access completed');
+      } else if (status >= 400 && typeof logger.warn === 'function') {
+        logger.warn(payload, 'plans access completed');
+      } else {
+        logger.info(payload, 'plans access completed');
+      }
+    });
+
+    next();
+  };
+}
+
+export const plansAccessLog = createPlansAccessLogMiddleware();

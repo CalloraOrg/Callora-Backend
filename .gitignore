@@ -4,4 +4,17 @@ dist
 .DS_Store
 .env
 .env.*
+!.env.example
 *.log
+package-lock.json
+
+/src/generated/prisma
+/.idea
+
+# Database
+database.db
+database.db-*
+coverage/
+
+!.env.example
+.aider*

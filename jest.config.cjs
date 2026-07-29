@@ -1,21 +1,35 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
-  testEnvironment: 'node',
-  testMatch: ['**/?(*.)+(spec|test).ts'],
+  preset: "ts-jest",
+  testEnvironment: "node",
+  testMatch: ["**/?(*.)+(spec|test).ts"],
+  testPathIgnorePatterns: ["/node_modules/"],
+  transformIgnorePatterns: ["/node_modules/(?!.*uuid)"],
   transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
+    "^.+\\.ts$": [
+      "ts-jest",
       {
-        // Use a separate tsconfig for tests that targets CommonJS so Jest's
-        // CJS runtime can execute the compiled output. The production tsconfig
-        // keeps "module": "NodeNext" for the actual build.
-        tsconfig: './tsconfig.test.json',
+        tsconfig: {
+          module: "commonjs",
+          moduleResolution: "node16",
+          isolatedModules: true,
+        },
+      },
+    ],
+    "^.+\\.js$": [
+      "ts-jest",
+      {
+        tsconfig: {
+          module: "commonjs",
+          moduleResolution: "node16",
+          isolatedModules: true,
+          allowJs: true,
+        },
       },
     ],
   },
-  // Strip .js extensions from imports so Jest resolves TypeScript source files.
-  // Required because the source uses NodeNext-style explicit extensions.
+  setupFiles: ["<rootDir>/jest.env-setup.cjs"],
   moduleNameMapper: {
-    '^(\\.{1,2}/.*)\\.js$': '$1',
+    "^(\\.{1,2}/.*)\\.js$": "$1",
   },
 };

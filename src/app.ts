@@ -1,0 +1,815 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import adminRouter from './routes/admin.js';
+import { createExplainRouter } from './routes/admin/explain.js';
+import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
+import { createAdminUsageByEndpointRouter } from './routes/admin/usage/by-endpoint.js';
+import { createSpikeRouter } from './routes/admin/usage/spike.js';
+import publicMaintenanceRouter from './routes/maintenance.js';
+import { createApiRouter } from './routes/index.js';
+import { createApisRouter } from './routes/apis.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
+import { createPluginsRouter } from './routes/marketplace/plugins.js';
+import { createLogsRouter } from './routes/logs.js';
+import { pool } from './db.js';
+import {
+  InMemoryUsageEventsRepository,
+  type GroupBy,
+  type UsageEventsRepository,
+} from "./repositories/usageEventsRepository.js";
+import {
+  defaultApiRepository,
+  type ApiRepository,
+  type CreateApiInput,
+  type ApiWithEndpoints,
+  createApi,
+} from "./repositories/apiRepository.js";
+import {
+  defaultDeveloperRepository,
+  type DeveloperRepository,
+  findByUserId,
+} from "./repositories/developerRepository.js";
+import { defaultSubscriptionRepository } from "./repositories/subscriptionRepository.js";
+import { apiStatusEnum, type ApiStatus } from "./db/schema.js";
+import type { Developer } from "./db/schema.js";
+import {
+  requireAuth,
+  type AuthenticatedLocals,
+} from "./middleware/requireAuth.js";
+import { bodyValidator } from "./middleware/validate.js";
+import { buildDeveloperAnalytics } from "./services/developerAnalytics.js";
+import { errorHandler } from "./middleware/errorHandler.js";
+import { envelopeValidator } from "./middleware/envelopeValidator.js";
+import {
+  performHealthCheck,
+  type HealthCheckConfig,
+} from "./services/healthCheck.js";
+import { createDependenciesRouter } from "./routes/health/dependencies.js";
+import { createRateLimitRouter } from "./routes/rate-limit.js";
+import quotaRequestsRouter from "./routes/quota/requests.js";
+import quotaCountsRouter from "./routes/quotas/counts.js";
+import { createQuotasRouter } from "./routes/quotas.js";
+import { parsePagination, paginatedResponse } from "./lib/pagination.js";
+import {
+  InMemoryVaultRepository,
+  type VaultRepository,
+} from "./repositories/vaultRepository.js";
+import { DepositController } from "./controllers/depositController.js";
+import { VaultController } from "./controllers/vaultController.js";
+import { TransactionBuilderService } from "./services/transactionBuilder.js";
+import {
+  requestIdMiddleware,
+  responseEnrichMiddleware,
+} from "./middleware/requestId.js";
+import { createTimeoutMiddleware } from "./middleware/timeout.js";
+//import { envelopeValidator } from './middleware/envelopeValidator.js';
+import {
+  successEnvelope,
+  errorEnvelope,
+  getRequestId,
+} from "./lib/envelope.js";
+import { createMemoryAccountingMiddleware } from "./middleware/memoryAccounting.js";
+import { validate } from "./middleware/validate.js";
+import { createAccessLogMiddleware } from "./middleware/accessLog.js";
+import {
+  InMemoryRestRateLimiter,
+  createRestRateLimitMiddleware,
+} from "./middleware/restRateLimit.js";
+import type { RestRateLimitOptions } from "./middleware/restRateLimit.js";
+import { createPerDevConcurrencyMiddleware } from "./middleware/perDevConcurrency.js";
+import { auditEnrichMiddleware } from "./middleware/auditEnrich.js";
+import { createRouteBodyLimitMiddleware } from "./middleware/routeBodyLimit.js";
+import { metricsMiddleware, metricsEndpoint } from "./metrics.js";
+import { config } from "./config/index.js";
+import {
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+} from "./errors/index.js";
+import { apiRegistrationSchema } from "./validators/apiRegistration.js";
+import { stellarNetworkQuerySchema } from "./validators/networkSchema.js";
+import path from "path";
+import OpenApiValidator from "express-openapi-validator";
+import {
+  envelopeMiddleware,
+  createResponseValidatorMiddleware,
+  buildErrorEnvelope,
+} from "./middleware/envelope.js";
+//import * as OpenApiValidator from 'express-openapi-validator';
+
+interface AppDependencies {
+  usageEventsRepository?: UsageEventsRepository;
+  healthCheckConfig?: HealthCheckConfig;
+  vaultRepository?: VaultRepository;
+  apiRepository?: ApiRepository;
+  developerRepository?: DeveloperRepository;
+  findDeveloperByUserId?: (userId: string) => Promise<Developer | undefined>;
+  createApiWithEndpoints?: (input: CreateApiInput) => Promise<ApiWithEndpoints>;
+}
+
+/**
+ * Re-export the quotas drain tracker so application entry-points (e.g.
+ * `src/index.ts`) can register it with {@link createGracefulShutdownHandler}
+ * without importing directly from the route module.
+ *
+ * @example Wire into shutdown handler
+ * ```ts
+ * import { quotasDrainTracker } from './app.js';
+ *
+ * const shutdown = createGracefulShutdownHandler({
+ *   server,
+ *   activeConnections,
+ *   closeDatabase,
+ *   subsystems: [quotasDrainTracker.subsystem],
+ * });
+ * ```
+ */
+export { quotasDrainTracker } from './routes/quotas/counts.js';
+
+const isValidGroupBy = (value: string): value is GroupBy =>
+  value === "day" || value === "week" || value === "month";
+
+const parseDate = (value: unknown): Date | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date;
+};
+
+export const createApp = (dependencies?: Partial<AppDependencies>) => {
+  const app = express();
+  const restRateLimitOptions: RestRateLimitOptions = {
+    windowMs: config.restRateLimit.windowMs,
+    maxRequests: config.restRateLimit.maxRequests,
+  };
+  const restRateLimiter = new InMemoryRestRateLimiter(
+    restRateLimitOptions.windowMs,
+    restRateLimitOptions.maxRequests,
+  );
+  const restRateLimit = createRestRateLimitMiddleware(
+    restRateLimitOptions,
+    restRateLimiter,
+  );
+  const perDevConcurrency = createPerDevConcurrencyMiddleware({
+    maxConcurrent: config.billingConcurrency.maxPerDeveloper,
+    ttlMs: config.billingConcurrency.semaphoreTtlMs,
+  });
+  // Set database pool in locals for billing routes
+  app.locals.dbPool = pool;
+  const usageEventsRepository =
+    dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
+  const vaultRepository =
+    dependencies?.vaultRepository ?? new InMemoryVaultRepository();
+  const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
+  const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
+
+  // Initialize deposit and vault controllers
+  const transactionBuilder = new TransactionBuilderService();
+  const depositController = new DepositController(
+    vaultRepository,
+    transactionBuilder,
+  );
+  const vaultController = new VaultController(vaultRepository);
+  const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
+  const developerRepository =
+    dependencies?.developerRepository ?? defaultDeveloperRepository;
+
+  // Production-safe security headers with environment-based configuration
+  const isProduction = process.env.NODE_ENV === "production";
+  const isDevelopment = process.env.NODE_ENV === "development";
+
+  // Apply Helmet with production-safe defaults
+  app.use(
+    helmet({
+      // Content Security Policy - stricter in production
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for development
+          scriptSrc: ["'self'"],
+          imgSrc: ["'self'", "data:", "https:"],
+          connectSrc: ["'self'", ...(isDevelopment ? ["ws:", "wss:"] : [])],
+          fontSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          mediaSrc: ["'self'"],
+          frameSrc: ["'none'"],
+        },
+      },
+      // Cross-Origin Embedder Policy
+      crossOriginEmbedderPolicy: isProduction
+        ? { policy: "require-corp" }
+        : false,
+      // HSTS - only in production with HTTPS
+      hsts: isProduction
+        ? {
+            maxAge: 31536000, // 1 year
+            includeSubDomains: true,
+            preload: true,
+          }
+        : false,
+      // Other security headers
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+      permittedCrossDomainPolicies: false,
+      // Allow dev tools in development
+      hidePoweredBy: !isDevelopment,
+    }),
+  );
+
+  app.use(requestIdMiddleware);
+  app.use(createResponseValidatorMiddleware());
+  app.use(envelopeMiddleware);
+  app.use(responseEnrichMiddleware);
+  const memoryAccountingMiddleware = createMemoryAccountingMiddleware(
+    config.memoryAccounting,
+  );
+  app.use(memoryAccountingMiddleware);
+  app.use(metricsMiddleware);
+
+  app.use(
+    createAccessLogMiddleware({
+      sampleRate: config.accessLog.sampleRate,
+      redactFields: config.accessLog.redactFields,
+    }),
+  );
+
+  // Parse allowed origins with validation
+  const allowedOrigins = (
+    process.env.CORS_ALLOWED_ORIGINS ?? "http://localhost:5173"
+  )
+    .split(",")
+    .map((o: string) => o.trim())
+    .filter((o: string) => o.length > 0);
+
+  // Validate origins in production
+  if (isProduction && allowedOrigins.length === 0) {
+    console.warn("WARNING: No CORS_ALLOWED_ORIGINS configured in production");
+  }
+
+  // Regex for localhost with optional port (e.g., http://localhost:5173)
+  const localhostRegex = /^http:\/\/localhost(:\d+)?$/;
+
+  app.use(
+    cors({
+      origin: (
+        origin: string | undefined,
+        callback: (err: Error | null, allow?: boolean) => void,
+      ) => {
+        // Allow requests with no origin (mobile apps, curl, etc.)
+        if (!origin) {
+          return callback(null, true);
+        }
+
+        // Check if origin is in allowlist
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+
+        // In development, allow localhost with any port using strict regex
+        if (isDevelopment && localhostRegex.test(origin)) {
+          return callback(null, true);
+        }
+
+        // Log blocked attempts in production
+        if (isProduction) {
+          console.warn(`CORS blocked origin: ${origin}`);
+        }
+
+        // Pass false instead of Error to prevent Express from returning 500
+        callback(null, false);
+      },
+      methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "x-admin-api-key",
+        "x-user-id", // Added for authentication
+        "x-request-id", // Added for tracing
+      ],
+      credentials: true,
+      exposedHeaders: ["X-Request-Id"],
+      // Reduce preflight cache time in production for security
+      maxAge: isProduction ? 600 : 86400, // 10 minutes vs 24 hours
+      optionsSuccessStatus: 204, // No content for preflight
+    }),
+  );
+  const requestBodyLimit = process.env.REQUEST_BODY_LIMIT ?? "100kb";
+  app.use(createRouteBodyLimitMiddleware(config.routeBodyLimits));
+  app.use(express.json({ limit: requestBodyLimit }));
+  app.use(express.urlencoded({ extended: false, limit: requestBodyLimit }));
+  // Attach req.auditContext (IP, UA, tenantId, correlationId, bodyHash) for all routes.
+  app.use(auditEnrichMiddleware);
+
+  // OpenAPI contract validation — only validates paths defined in the spec.
+  // Security is handled by custom middleware, not the validator.
+  // Skip in test environment to avoid interfering with integration tests.
+  if (process.env.NODE_ENV !== "test") {
+    app.use(
+      OpenApiValidator.middleware({
+        apiSpec: path.resolve(process.cwd(), "docs/openapi.json"),
+        validateRequests: true,
+        validateResponses: true,
+        validateSecurity: false,
+        ignoreUndocumented: true,
+      }),
+    );
+  }
+
+  // Register envelope validator after body parser but before routes
+  app.use(envelopeValidator);
+
+  /**
+   * GET /api/health
+   *
+   * Provides health status of the application and its dependencies.
+   * If health check config is minimally configured, returns a basic status.
+   *
+   * @schema HealthCheckResult | BasicHealthResult
+   * @example Basic
+   * {
+   *   "success": true,
+   *   "data": {
+   *     "status": "ok",
+   *     "service": "callora-backend"
+   *   },
+   *   "requestId": "...",
+   *   "timestamp": "..."
+   * }
+   * @example Full
+   * {
+   *   "success": true,
+   *   "data": {
+   *     "status": "ok",
+   *     "version": "1.0.0",
+   *     "timestamp": "2026-03-27T10:00:00.000Z",
+   *     "checks": {
+   *       "api": "ok",
+   *       "database": "ok",
+   *       "soroban_rpc": "ok"
+   *     }
+   *   },
+   *   "requestId": "...",
+   *   "timestamp": "..."
+   * }
+   */
+  // Per-dependency health probe — detailed status for each configured dependency
+  app.use(
+    "/api/health/dependencies",
+    createDependenciesRouter(dependencies?.healthCheckConfig),
+  );
+
+  // Rate-limit routes with X-Correlation-Id propagation — every sub-route
+  // inherits correlation-id middleware for structured logging and outbound
+  // call correlation.
+  app.use(
+    "/api/rate-limit",
+    createRateLimitRouter({
+      limiter: restRateLimiter,
+      windowMs: restRateLimitOptions.windowMs,
+      maxRequests: restRateLimitOptions.maxRequests,
+    }),
+  );
+
+  app.get("/api/health", createTimeoutMiddleware({ timeoutMs: config.healthRequestTimeoutMs }), async (req, res) => {
+    const requestId = getRequestId(req);
+    // If no health check config provided, return simple health check
+    if (!dependencies?.healthCheckConfig) {
+      const data = { status: "ok", service: "callora-backend" };
+      res.json(successEnvelope(data, requestId));
+      return;
+    }
+
+    try {
+      // Cooperative abort: if the per-request timeout fires while performHealthCheck
+      // is awaiting a dependency probe, the aborted signal propagates to any
+      // in-flight fetch calls inside the service layer, allowing them to cancel
+      // quickly rather than burning the full per-component timeout.
+      const healthStatus = await performHealthCheck(
+        dependencies.healthCheckConfig,
+        req.abortSignal,
+      );
+
+      // Guard: if the timeout middleware already sent a 504 (res.headersSent)
+      // we must not attempt to write a second response.
+      if (res.headersSent) {
+        return;
+      }
+
+      const statusCode = healthStatus.status === "down" ? 503 : 200;
+      res.status(statusCode).json(successEnvelope(healthStatus, requestId));
+    } catch {
+      if (res.headersSent) {
+        return;
+      }
+      // Never expose internal errors in health check
+      res.status(503).json(
+        errorEnvelope("SERVICE_UNAVAILABLE", "Health check failed", requestId, {
+          status: "down",
+          timestamp: new Date().toISOString(),
+          checks: {
+            api: "ok",
+            database: "down",
+          },
+        }),
+      );
+    }
+  });
+
+  // Public maintenance status — readable by external monitoring without admin auth.
+  // Mounted in front of the admin routers so it cannot be shadowed by their catch-alls.
+  app.use("/api/maintenance", publicMaintenanceRouter);
+
+  // Mounted before the generic admin router so the specific path is not
+  // shadowed by adminRouter's `/usage/:developerId` route.
+  app.use("/api/admin/usage/anomalies", createUsageAnomaliesRouter({ pool }));
+  app.use(
+    "/api/admin/usage/by-endpoint",
+    createAdminUsageByEndpointRouter({ pool }),
+  );
+  app.use("/api/admin", adminRouter);
+  app.use("/api/admin/db/explain", createExplainRouter({ pool }));
+  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
+  app.use('/api/admin/usage/by-endpoint', createAdminUsageByEndpointRouter({ pool }));
+  app.use('/api/admin/usage/spike', createSpikeRouter({ pool }));
+  app.use('/api/admin', adminRouter);
+  app.use('/api/admin/db/explain', createExplainRouter({ pool }));
+
+  // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
+  app.use("/api/quota/requests", quotaRequestsRouter);
+  // /api/quotas — quota status endpoints with per-user token-bucket rate limiting
+  // (capacity and refill rate controlled by QUOTA_RATE_LIMIT_CAPACITY / QUOTA_RATE_LIMIT_REFILL_RATE)
+  app.use("/api/quotas", createQuotasRouter());
+
+  // Developer-facing logs — X-Correlation-Id is propagated through every
+  // handler in this router via the correlationMiddleware so that callers
+  // can correlate multi-hop request chains.
+  app.use("/api/logs", createLogsRouter());
+
+  // Prometheus metrics endpoint — auth-gated in production
+  app.get("/api/metrics", metricsEndpoint);
+
+  app.use(
+    "/api/apis",
+    createApisRouter({
+      apiRepository,
+      developerRepository,
+    }),
+  );
+
+  app.use("/api/marketplace/plugins", createPluginsRouter());
+
+
+
+  // Webhook management routes
+  app.use('/api/webhooks', createWebhooksRouter());
+
+  // Mount all routes including billing and limits
+  app.use(
+    "/api",
+    createApiRouter({
+      restRateLimit,
+      restRateLimiter,
+      perDevConcurrency,
+      usageEventsRepository,
+      apiRepository,
+      developerRepository,
+      subscriptionRepository: defaultSubscriptionRepository,
+    }),
+  );
+
+  app.get(
+    "/api/developers/apis",
+    requireAuth,
+    async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+      const requestId = getRequestId(req);
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        next(new UnauthorizedError());
+        return;
+      }
+
+      const developer = await developerRepository.findByUserId(user.id);
+      if (!developer) {
+        next(new NotFoundError("Developer profile not found"));
+        return;
+      }
+
+      const statusParam =
+        typeof req.query.status === "string" ? req.query.status : undefined;
+      let statusFilter: ApiStatus | undefined;
+      if (statusParam) {
+        if (!apiStatusEnum.includes(statusParam as ApiStatus)) {
+          next(
+            new BadRequestError(
+              `status must be one of: ${apiStatusEnum.join(", ")}`,
+            ),
+          );
+          return;
+        }
+        statusFilter = statusParam as ApiStatus;
+      }
+
+      const { limit, offset } = parsePagination(
+        req.query as Record<string, string>,
+      );
+
+      const apis = await apiRepository.listByDeveloper(developer.id, {
+        status: statusFilter,
+        limit,
+        offset,
+      });
+
+      const usageStats = await usageEventsRepository.aggregateByDeveloper(
+        user.id,
+      );
+      const statsByApi = new Map(usageStats.map((stat) => [stat.apiId, stat]));
+
+      const payload = apis.map((api) => {
+        const stats = statsByApi.get(String(api.id));
+        const entry: {
+          id: number;
+          name: string;
+          status: ApiStatus;
+          callCount: number;
+          revenue?: string;
+        } = {
+          id: api.id,
+          name: api.name,
+          status: api.status,
+          callCount: stats?.calls ?? 0,
+        };
+        if (stats) {
+          entry.revenue = stats.revenue.toString();
+        }
+        return entry;
+      });
+
+      res.json(
+        successEnvelope(
+          paginatedResponse(payload, { limit, offset }),
+          requestId,
+        ),
+      );
+    },
+  );
+
+  /**
+   * GET /api/developers/analytics
+   *
+   * Retrieves usage and revenue analytics for the authenticated developer.
+   *
+   * Query params:
+   *   from       - Start date (ISO-8601 string) (required)
+   *   to         - End date (ISO-8601 string) (required)
+   *   groupBy    - Aggregation period: 'day', 'week', 'month' (default 'day')
+   *   apiId      - Filter by specific API ID (optional)
+   *   includeTop - Include top endpoints and users (optional, default false)
+   *
+   * @schema DeveloperAnalyticsResponse
+   * @example
+   * {
+   *   "data": [
+   *     {
+   *       "period": "2026-02-01",
+   *       "calls": 2,
+   *       "revenue": "240"
+   *     }
+   *   ],
+   *   "topEndpoints": [
+   *     { "endpoint": "/v1/search", "calls": 2 }
+   *   ],
+   *   "topUsers": [
+   *     { "userId": "user-a", "calls": 2 }
+   *   ]
+   * }
+   */
+  app.get(
+    "/api/developers/analytics",
+    requireAuth,
+    async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+      const requestId = getRequestId(req);
+      const user = res.locals.authenticatedUser;
+      if (!user) {
+        next(new UnauthorizedError());
+        return;
+      }
+
+      const groupBy = req.query.groupBy ?? "day";
+      if (typeof groupBy !== "string" || !isValidGroupBy(groupBy)) {
+        next(new BadRequestError("groupBy must be one of: day, week, month"));
+        return;
+      }
+
+      const from = parseDate(req.query.from);
+      const to = parseDate(req.query.to);
+      if (!from || !to) {
+        next(new BadRequestError("from and to are required ISO date values"));
+        return;
+      }
+      if (from > to) {
+        next(new BadRequestError("from must be before or equal to to"));
+        return;
+      }
+
+      const apiId =
+        typeof req.query.apiId === "string" ? req.query.apiId : undefined;
+      if (apiId) {
+        const ownsApi = await usageEventsRepository.developerOwnsApi(
+          user.id,
+          apiId,
+        );
+        if (!ownsApi) {
+          next(
+            new ForbiddenError(
+              "Forbidden: API does not belong to authenticated developer",
+            ),
+          );
+          return;
+        }
+      }
+
+      const includeTop = req.query.includeTop === "true";
+      const events = await usageEventsRepository.findByDeveloper({
+        developerId: user.id,
+        from,
+        to,
+        apiId,
+      });
+
+      const analytics = buildDeveloperAnalytics(events, groupBy, includeTop);
+      res.json(successEnvelope(analytics, requestId));
+    },
+  );
+
+  // Deposit transaction preparation endpoint
+  app.post(
+    "/api/vault/deposit/prepare",
+    requireAuth,
+    (req, res: express.Response<unknown, AuthenticatedLocals>) => {
+      depositController.prepareDeposit(req, res);
+    },
+  );
+
+  /**
+   * GET /api/vault/balance
+   *
+   * Returns the authenticated user's vault balance for the requested Stellar network.
+   *
+   * Query params:
+   *   network - optional Stellar network identifier (`testnet` or `mainnet`)
+   *             default: `testnet`
+   */
+  // Vault balance endpoint
+  app.get(
+    "/api/vault/balance",
+    requireAuth,
+    validate({ query: stellarNetworkQuerySchema }),
+    (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+      vaultController.getBalance(req, res, next);
+    },
+  );
+
+  /**
+   * POST /api/developers/apis
+   *
+   * Publishes a new API for the authenticated developer.
+   *
+   * @schema CreateApiInput -> ApiWithEndpoints
+   * @example Request
+   * {
+   *   "name": "My Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "category": "weather",
+   *   "status": "draft",
+   *   "endpoints": [
+   *     {
+   *       "path": "/forecast",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.01",
+   *       "description": "Get forecast"
+   *     }
+   *   ]
+   * }
+   * @example Response (201 Created)
+   * {
+   *   "id": 1,
+   *   "developer_id": 42,
+   *   "name": "My Weather API",
+   *   "description": "Real-time weather data",
+   *   "base_url": "https://api.weather.example.com",
+   *   "logo_url": null,
+   *   "category": "weather",
+   *   "status": "draft",
+   *   "created_at": "2026-03-27T10:00:00.000Z",
+   *   "updated_at": "2026-03-27T10:00:00.000Z",
+   *   "endpoints": [
+   *     {
+   *       "id": 1,
+   *       "api_id": 1,
+   *       "path": "/forecast",
+   *       "method": "GET",
+   *       "price_per_call_usdc": "0.01",
+   *       "description": "Get forecast",
+   *       "created_at": "2026-03-27T10:00:00.000Z",
+   *       "updated_at": "2026-03-27T10:00:00.000Z"
+   *     }
+   *   ]
+   * }
+   */
+  app.post(
+    "/api/developers/apis",
+    requireAuth,
+    bodyValidator(apiRegistrationSchema),
+    async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+      try {
+        const requestId = getRequestId(req);
+        const user = res.locals.authenticatedUser;
+        if (!user) {
+          next(new UnauthorizedError());
+          return;
+        }
+
+        const payload = apiRegistrationSchema.parse(req.body);
+
+        // Ensure the caller has a developer profile
+        const developer = await lookupDeveloper(user.id);
+        if (!developer) {
+          next(
+            new BadRequestError(
+              "Developer profile not found. Create a developer profile first.",
+              "DEVELOPER_NOT_FOUND",
+            ),
+          );
+          return;
+        }
+
+        const api = await persistApi({
+          developer_id: developer.id,
+          name: payload.name,
+          description: payload.description ?? null,
+          base_url: payload.base_url,
+          category: payload.category,
+          status: "active",
+          endpoints: payload.endpoints.map((ep) => ({
+            path: ep.path,
+            method: ep.method,
+            price_per_call_usdc: ep.price_per_call_usdc,
+            description: ep.description ?? null,
+          })),
+        });
+
+        res.status(201).json(successEnvelope(api, requestId));
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // OpenAPI validation errors
+  app.use(
+    (
+      err: Error & {
+        status?: number;
+        errors?: unknown[];
+      },
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      if (!err.status) {
+        return next(err);
+      }
+
+      const requestId = req.id || "unknown";
+      const details = Array.isArray(err.errors)
+        ? err.errors.map((e, i) => ({
+            field: `body.${i}`,
+            message:
+              typeof e === "object" && e !== null && "message" in e
+                ? String((e as { message: unknown }).message)
+                : String(e),
+            code: "INVALID_BODY",
+          }))
+        : undefined;
+
+      const envelope = buildErrorEnvelope(
+        "BAD_REQUEST",
+        err.message,
+        requestId,
+        details,
+      );
+      res.status(err.status).json(envelope);
+    },
+  );
+
+  app.use(errorHandler);
+
+  return app;
+};

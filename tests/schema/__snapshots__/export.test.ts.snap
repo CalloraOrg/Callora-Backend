@@ -1,0 +1,107 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`GET /api/developers/exports — response schema stability matches the known shape when limit/offset are supplied 1`] = `
+{
+  "data": [
+    {
+      "downloadUrl": "https://s3.example.test/signed-url?expires=fixture",
+      "expiresAt": "2026-06-08T12:00:00.000Z",
+      "exportedAt": "2026-06-01T12:00:00.000Z",
+      "format": "csv",
+      "id": "export-fixture-1",
+    },
+    {
+      "downloadUrl": "https://s3.example.test/signed-url?expires=fixture",
+      "expiresAt": "2026-06-09T12:00:00.000Z",
+      "exportedAt": "2026-06-02T12:00:00.000Z",
+      "format": "json",
+      "id": "export-fixture-2",
+    },
+  ],
+  "pagination": {
+    "limit": 1,
+    "offset": 1,
+    "total": 2,
+  },
+}
+`;
+
+exports[`GET /api/developers/exports — response schema stability matches the known shape when the developer has no exports 1`] = `
+{
+  "data": [],
+  "pagination": {
+    "limit": 20,
+    "offset": 0,
+    "total": 0,
+  },
+}
+`;
+
+exports[`GET /api/developers/exports — response schema stability matches the known success response shape 1`] = `
+{
+  "data": [
+    {
+      "downloadUrl": "https://s3.example.test/signed-url?expires=fixture",
+      "expiresAt": "2026-06-08T12:00:00.000Z",
+      "exportedAt": "2026-06-01T12:00:00.000Z",
+      "format": "csv",
+      "id": "export-fixture-1",
+    },
+    {
+      "downloadUrl": "https://s3.example.test/signed-url?expires=fixture",
+      "expiresAt": "2026-06-09T12:00:00.000Z",
+      "exportedAt": "2026-06-02T12:00:00.000Z",
+      "format": "json",
+      "id": "export-fixture-2",
+    },
+  ],
+  "pagination": {
+    "limit": 20,
+    "offset": 0,
+    "total": 2,
+  },
+}
+`;
+
+exports[`GET /api/developers/exports — response schema stability matches the standardized error envelope shape for an invalid query param 1`] = `
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "details": [
+      {
+        "code": "INVALID_TYPE",
+        "field": "query.limit",
+        "message": "Invalid input: expected number, received NaN",
+      },
+    ],
+    "message": "Request validation failed",
+  },
+  "requestId": "unknown",
+  "success": false,
+  "timestamp": Any<String>,
+}
+`;
+
+exports[`GET /api/developers/exports — response schema stability matches the standardized error envelope shape when no developer profile exists 1`] = `
+{
+  "error": {
+    "code": "DEVELOPER_NOT_FOUND",
+    "message": "No developer profile found for this account",
+  },
+  "requestId": "unknown",
+  "success": false,
+  "timestamp": Any<String>,
+}
+`;
+
+exports[`GET /api/developers/exports — response schema stability matches the standardized error envelope shape when unauthenticated 1`] = `
+{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Unauthorized",
+  },
+  "requestId": "unknown",
+  "success": false,
+  "timestamp": Any<String>,
+}
+`;

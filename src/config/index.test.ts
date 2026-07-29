@@ -1,0 +1,161 @@
+describe('config validation', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    jest.resetModules();
+    process.env = { ...originalEnv };
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  it('should load config with defaults when required vars are set', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+
+    let cfg:
+      | {
+          config: {
+            port: unknown;
+            databaseUrl: string;
+            restRateLimit: { windowMs: number; maxRequests: number };
+          };
+        }
+      | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.port).toBeDefined();
+    expect(cfg!.config.databaseUrl).toContain('postgresql://');
+    expect(cfg!.config.restRateLimit.windowMs).toBe(60_000);
+    expect(cfg!.config.restRateLimit.maxRequests).toBe(100);
+  });
+
+  it('should expose billing concurrency values from environment variables', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+    process.env.BILLING_MAX_CONCURRENCY_PER_DEV = '3';
+    process.env.BILLING_SEMAPHORE_TTL_MS = '15000';
+
+    let cfg: { config: { billingConcurrency: { maxPerDeveloper: number; semaphoreTtlMs: number } } } | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.billingConcurrency.maxPerDeveloper).toBe(3);
+    expect(cfg!.config.billingConcurrency.semaphoreTtlMs).toBe(15000);
+  });
+
+  it('should expose configured REST rate limit values', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+    process.env.REST_RATE_LIMIT_WINDOW_MS = '30000';
+    process.env.REST_RATE_LIMIT_MAX_REQUESTS = '25';
+
+    let cfg:
+      | {
+          config: {
+            restRateLimit: { windowMs: number; maxRequests: number };
+          };
+        }
+      | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.restRateLimit).toEqual({
+      windowMs: 30_000,
+      maxRequests: 25,
+    });
+  });
+
+  it('should expose gateway rate limiter defaults matching the current hardcoded behavior', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+
+    let cfg:
+      | {
+          config: {
+            rateLimiter: {
+              maxRequests: number;
+              windowMs: number;
+              store: 'memory' | 'postgres';
+              postgresTable: string;
+            };
+          };
+        }
+      | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.rateLimiter).toEqual({
+      maxRequests: 5,
+      windowMs: 60_000,
+      store: 'memory',
+      postgresTable: 'gateway_rate_limit_buckets',
+    });
+  });
+
+  it('should expose configured postgres-backed gateway rate limiter values', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+    process.env.RATE_LIMIT_MAX_REQUESTS = '50';
+    process.env.RATE_LIMIT_WINDOW_MS = '10000';
+    process.env.RATE_LIMIT_STORE = 'postgres';
+    process.env.RATE_LIMIT_PG_TABLE = 'custom_rate_limit_buckets';
+
+    let cfg:
+      | {
+          config: {
+            rateLimiter: {
+              maxRequests: number;
+              windowMs: number;
+              store: 'memory' | 'postgres';
+              postgresTable: string;
+            };
+          };
+        }
+      | undefined;
+    await jest.isolateModulesAsync(async () => {
+      cfg = await import('./index.js');
+    });
+
+    expect(cfg!.config.rateLimiter).toEqual({
+      maxRequests: 50,
+      windowMs: 10_000,
+      store: 'postgres',
+      postgresTable: 'custom_rate_limit_buckets',
+    });
+  });
+
+  it('should call process.exit(1) when required env vars are missing', async () => {
+    // Remove fields that have no defaults — env.ts will fail to parse and call process.exit(1)
+    delete process.env.JWT_SECRET;
+    delete process.env.ADMIN_API_KEY;
+    delete process.env.METRICS_API_KEY;
+
+    const exitMock = jest
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    await jest.isolateModulesAsync(async () => {
+      await import('./env.js');
+    });
+
+    expect(exitMock).toHaveBeenCalledWith(1);
+    exitMock.mockRestore();
+  });
+});

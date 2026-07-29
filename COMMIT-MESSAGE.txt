@@ -1,0 +1,30 @@
+chore(security): audit ip allowlist usage
+
+Implement comprehensive IP allowlist security for admin and gateway endpoints.
+
+- Add IP allowlist middleware with IPv4/IPv6 CIDR support
+- Implement spoofing-resistant proxy header handling  
+- Protect admin (/api/admin/*) and gateway (/api/gateway/*) endpoints
+- Add comprehensive unit and integration tests (70 test cases)
+- Document trusted proxy headers configuration
+- Maintain full backward compatibility
+- Add security logging and audit trail
+
+Addresses issue #152: Security: IP allowlist checks review
+
+Security improvements:
+- Network-level access control for sensitive endpoints
+- Robust proxy header validation with priority ordering
+- IPv6 deployment support with boundary testing
+- Comprehensive security event logging
+- Environment-based configuration management
+
+Files added:
+- src/middleware/ipAllowlist.ts - Core IP allowlist middleware
+- src/__tests__/ipAllowlist.test.ts - Unit tests (45 cases)
+- tests/integration/ipAllowlist.integration.test.ts - Integration tests (25 cases)
+- docs/IP-ALLOWLIST-SECURITY.md - Security documentation
+
+Files modified:
+- src/routes/admin.ts - Added IP allowlist protection
+- src/index.ts - Added gateway IP allowlist protection
