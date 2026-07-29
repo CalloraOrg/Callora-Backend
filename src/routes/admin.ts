@@ -17,6 +17,7 @@ import {
 import { validate } from '../middleware/validate.js';
 import {
   developerIdParamsSchema,
+  usersQuerySchema,
   quotaRequestsQuerySchema,
   quotaRequestIdParamsSchema,
   quotaRequestActionBodySchema,
@@ -41,8 +42,10 @@ const router = Router();
 router.use(createAdminIpAllowlist());
 router.use(adminAuth);
 router.use(adminLogMiddleware);
-router.use(adminHistogramMiddleware);
-router.get('/users', async (req, res, next) => {
+router.get(
+  '/users',
+  validate({ query: usersQuerySchema }),
+  async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);
     const { users, total } = await findUsers({ limit, offset });
