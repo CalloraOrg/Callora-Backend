@@ -11,8 +11,319 @@ info:
   version: "1.0.0"
   description: >
     Example request/response bodies for select Callora API surfaces: the
-    rate-limit health probe / budget peek, and the error-definitions CRUD API.
+    spike probe / record API, the rate-limit health probe / budget peek, and
+    the error-definitions CRUD API.
 paths:
+  /api/spike:
+    get:
+      summary: Run the spike timeout probe
+      description: >
+        Exercises timeout handling by delaying for the requested duration. No
+        request body is required.
+      parameters:
+        - name: delay
+          in: query
+          required: false
+          description: Delay in milliseconds before responding.
+          schema:
+            type: integer
+            minimum: 1
+            default: 2000
+          examples:
+            completesBeforeTimeout:
+              summary: Complete before the default timeout
+              value: 100
+            exceedsDefaultTimeout:
+              summary: Trigger the default timeout
+              value: 1200
+        - name: timeout
+          in: query
+          required: false
+          description: Optional request timeout override in milliseconds.
+          schema:
+            type: integer
+            minimum: 1
+          examples:
+            shortTimeout:
+              summary: Custom timeout shorter than the delay
+              value: 200
+        - name: x-timeout-ms
+          in: header
+          required: false
+          description: Optional request timeout override in milliseconds.
+          schema:
+            type: integer
+            minimum: 1
+          examples:
+            headerTimeout:
+              summary: Header-based timeout override
+              value: 200
+      responses:
+        "200":
+          description: Spike probe completed before the timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRunResponse"
+              examples:
+                completed:
+                  summary: Delay completed successfully
+                  value:
+                    success: true
+                    message: Spike completed successfully
+                    delay: 100
+                    elapsed: 100
+        "504":
+          description: Spike probe exceeded the configured timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                timedOut:
+                  summary: Request timed out
+                  value:
+                    success: false
+                    error:
+                      code: GATEWAY_TIMEOUT
+                      message: Request timeout exceeded
+                    requestId: req-spike-timeout-1
+                    timestamp: "2026-07-29T10:00:00.000Z"
+    post:
+      summary: Create a spike record
+      description: >
+        Creates an in-memory spike record and records the mutation in the audit
+        trail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpikeCreateRequest"
+            examples:
+              createHighSeverityRecord:
+                summary: Create a high severity spike record
+                value:
+                  label: Checkout latency spike
+                  severity: high
+      responses:
+        "201":
+          description: Spike record created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRecord"
+              examples:
+                created:
+                  summary: Newly created spike record
+                  value:
+                    id: "1"
+                    label: Checkout latency spike
+                    severity: high
+                    createdAt: "2026-07-29T10:00:00.000Z"
+                    updatedAt: "2026-07-29T10:00:00.000Z"
+        "400":
+          description: Request body failed validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                missingLabel:
+                  summary: Missing required label
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: label is required and must be a non-empty string
+                    requestId: req-spike-create-400
+                    timestamp: "2026-07-29T10:01:00.000Z"
+        "503":
+          description: Audit service is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                auditUnavailable:
+                  summary: Audit circuit breaker is open
+                  value:
+                    success: false
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: Audit service temporarily unavailable
+                    requestId: req-spike-create-503
+                    timestamp: "2026-07-29T10:02:00.000Z"
+  /api/spike/records:
+    get:
+      summary: List spike records
+      description: Returns the current in-memory spike records.
+      parameters: []
+      responses:
+        "200":
+          description: Spike records retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRecordsResponse"
+              examples:
+                withRecords:
+                  summary: Store contains spike records
+                  value:
+                    records:
+                      - id: "1"
+                        label: Checkout latency spike
+                        severity: high
+                        createdAt: "2026-07-29T10:00:00.000Z"
+                        updatedAt: "2026-07-29T10:00:00.000Z"
+                empty:
+                  summary: No spike records exist yet
+                  value:
+                    records: []
+  /api/spike/{id}:
+    put:
+      summary: Update a spike record
+      description: >
+        Updates the label and/or severity for an existing spike record and
+        records the mutation in the audit trail.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Spike record identifier.
+          schema:
+            type: string
+          examples:
+            existingRecord:
+              summary: Existing spike record
+              value: "1"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpikeUpdateRequest"
+            examples:
+              updateSeverity:
+                summary: Escalate the spike severity
+                value:
+                  label: Checkout latency spike escalated
+                  severity: critical
+      responses:
+        "200":
+          description: Spike record updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpikeRecord"
+              examples:
+                updated:
+                  summary: Updated spike record
+                  value:
+                    id: "1"
+                    label: Checkout latency spike escalated
+                    severity: critical
+                    createdAt: "2026-07-29T10:00:00.000Z"
+                    updatedAt: "2026-07-29T10:05:00.000Z"
+        "400":
+          description: Request body failed validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                invalidSeverity:
+                  summary: Severity is outside the allowed set
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: Invalid option
+                    requestId: req-spike-update-400
+                    timestamp: "2026-07-29T10:06:00.000Z"
+        "404":
+          description: Spike record was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No record exists for the supplied ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Spike record 999 not found
+                    requestId: req-spike-update-404
+                    timestamp: "2026-07-29T10:07:00.000Z"
+        "503":
+          description: Audit service is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                auditUnavailable:
+                  summary: Audit circuit breaker is open
+                  value:
+                    success: false
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: Audit service temporarily unavailable
+                    requestId: req-spike-update-503
+                    timestamp: "2026-07-29T10:08:00.000Z"
+    delete:
+      summary: Delete a spike record
+      description: >
+        Deletes an existing spike record and records the mutation in the audit
+        trail. Returns no content on success.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Spike record identifier.
+          schema:
+            type: string
+          examples:
+            existingRecord:
+              summary: Existing spike record
+              value: "1"
+      responses:
+        "204":
+          description: Spike record deleted.
+        "404":
+          description: Spike record was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: No record exists for the supplied ID
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: Spike record 999 not found
+                    requestId: req-spike-delete-404
+                    timestamp: "2026-07-29T10:09:00.000Z"
+        "503":
+          description: Audit service is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                auditUnavailable:
+                  summary: Audit circuit breaker is open
+                  value:
+                    success: false
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: Audit service temporarily unavailable
+                    requestId: req-spike-delete-503
+                    timestamp: "2026-07-29T10:10:00.000Z"
   /api/rate-limit/health:
     get:
       summary: Check rate-limit subsystem health
@@ -526,6 +837,66 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    SpikeSeverity:
+      type: string
+      enum: [low, medium, high, critical]
+    SpikeRunResponse:
+      type: object
+      required: [success, message, delay, elapsed]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        message:
+          type: string
+        delay:
+          type: integer
+        elapsed:
+          type: integer
+    SpikeRecord:
+      type: object
+      required: [id, label, severity, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          minLength: 1
+        severity:
+          $ref: "#/components/schemas/SpikeSeverity"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    SpikeRecordsResponse:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/SpikeRecord"
+    SpikeCreateRequest:
+      type: object
+      required: [label, severity]
+      properties:
+        label:
+          type: string
+          minLength: 1
+        severity:
+          $ref: "#/components/schemas/SpikeSeverity"
+    SpikeUpdateRequest:
+      type: object
+      description: At least one field should be provided.
+      minProperties: 1
+      properties:
+        label:
+          type: string
+          minLength: 1
+        severity:
+          $ref: "#/components/schemas/SpikeSeverity"
     RateLimitDependencyStatus:
       type: object
       required: [status]
