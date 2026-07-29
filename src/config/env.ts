@@ -151,6 +151,12 @@ export const envSchema = z
     CREDITS_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(10),
     CREDITS_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
 
+    // Logs endpoint per-user token-bucket rate limiting.
+    // LOGS_RATE_LIMIT_CAPACITY:    maximum burst size (tokens) per user.
+    // LOGS_RATE_LIMIT_REFILL_RATE: tokens added per second (continuous refill).
+    LOGS_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(60),
+    LOGS_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
+
     // Billing endpoint per-user rate limiting (fixed-window)
     BILLING_RATE_LIMIT_WINDOW_MS: z.coerce
       .number()

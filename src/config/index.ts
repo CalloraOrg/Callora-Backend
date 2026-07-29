@@ -175,6 +175,11 @@ export const config = {
     },
   },
 
+  logsRateLimit: {
+    capacity: env.LOGS_RATE_LIMIT_CAPACITY,
+    refillRate: env.LOGS_RATE_LIMIT_REFILL_RATE,
+  },
+
   rateLimiter: {
     maxRequests: env.RATE_LIMIT_MAX_REQUESTS,
     windowMs: env.RATE_LIMIT_WINDOW_MS,

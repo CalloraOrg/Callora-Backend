@@ -29,6 +29,7 @@ import { createForecastRouter } from "./forecast.js";
 import { createErrorsRouter } from "./errors.js";
 import { config } from "../config/index.js";
 import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
+import { createLogsRouter } from "./logs.js";
 import type { AuditService } from "../services/auditService.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
@@ -54,6 +55,10 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use("/health", healthRouter);
   router.use("/spike", createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
+
+  // Logs — per-user structured log ingestion and retrieval, rate-limited via
+  // a token-bucket limiter (see src/routes/logs.ts and LOGS_RATE_LIMIT_* env vars).
+  router.use("/logs", createLogsRouter());
 
   router.use(
     "/apis",
