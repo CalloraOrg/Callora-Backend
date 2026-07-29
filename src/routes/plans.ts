@@ -3,46 +3,14 @@ import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { GatewayTimeoutError, NotFoundError } from '../errors/index.js';
 import { successEnvelope } from '../lib/envelope.js';
 import { getRequestId } from '../lib/envelope.js';
+import {
+  defaultPlansRepository,
+  type PlansRepository,
+  type PlanListFilters,
+} from '../repositories/plansRepository.js';
 
-export interface Plan {
-  id: string;
-  name: string;
-  description: string;
-  priceUsdc: string;
-  requestsPerMonth: number;
-  createdAt: string;
-}
-
-const defaultPlans: Plan[] = [
-  {
-    id: 'plan_starter',
-    name: 'Starter',
-    description: 'For individuals and small projects',
-    priceUsdc: '0',
-    requestsPerMonth: 1000,
-    createdAt: '2024-01-01T00:00:00.000Z',
-  },
-  {
-    id: 'plan_growth',
-    name: 'Growth',
-    description: 'For growing teams and businesses',
-    priceUsdc: '29.99',
-    requestsPerMonth: 10000,
-    createdAt: '2024-01-01T00:00:00.000Z',
-  },
-  {
-    id: 'plan_enterprise',
-    name: 'Enterprise',
-    description: 'For large-scale applications',
-    priceUsdc: '99.99',
-    requestsPerMonth: 100000,
-    createdAt: '2024-01-01T00:00:00.000Z',
-  },
-];
-
-const planStore = new Map<string, Plan>();
-for (const plan of defaultPlans) {
-  planStore.set(plan.id, plan);
+export interface PlansRouterDeps {
+  plansRepository?: PlansRepository;
 }
 
 /**
@@ -75,32 +43,58 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export function createPlansRouter(timeoutMs = 10_000): Router {
+const VALID_SORT = new Set(['price_asc', 'price_desc', 'name_asc', 'name_desc']);
+
+export function createPlansRouter(
+  timeoutMs = 10_000,
+  deps: PlansRouterDeps = {},
+): Router {
   const router = Router();
+  const plansRepository = deps.plansRepository ?? defaultPlansRepository;
 
   router.use(createTimeoutMiddleware({ durationMs: timeoutMs }));
 
-  router.get('/', (req: Request, res: Response) => {
+  router.get('/', asyncHandler(async (req: Request, res: Response) => {
     const requestId = getRequestId(req) ?? 'unknown';
-    const plans = Array.from(planStore.values());
+
+    const filters: PlanListFilters = {};
+
+    if (typeof req.query.priceMin === 'string' && req.query.priceMin.length > 0) {
+      filters.priceMin = req.query.priceMin;
+    }
+    if (typeof req.query.priceMax === 'string' && req.query.priceMax.length > 0) {
+      filters.priceMax = req.query.priceMax;
+    }
+    if (typeof req.query.minRequests === 'string' && req.query.minRequests.length > 0) {
+      const parsed = parseInt(req.query.minRequests, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new NotFoundError('Invalid minRequests: must be a non-negative integer');
+      }
+      filters.minRequests = parsed;
+    }
+    if (typeof req.query.sort === 'string' && VALID_SORT.has(req.query.sort)) {
+      filters.sort = req.query.sort as PlanListFilters['sort'];
+    }
+
+    const plans = await plansRepository.list(filters);
     res.json(successEnvelope(plans, requestId));
-  });
+  }));
 
   router.get('/slow', asyncHandler(async (req: Request, res: Response) => {
     await sleepWithAbort(3000, req.signal ?? req.abortSignal);
     const requestId = getRequestId(req) ?? 'unknown';
-    const plans = Array.from(planStore.values());
+    const plans = await plansRepository.list();
     res.json(successEnvelope(plans, requestId));
   }));
 
-  router.get('/:id', (req: Request, res: Response) => {
-    const plan = planStore.get(req.params.id);
+  router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
+    const requestId = getRequestId(req) ?? 'unknown';
+    const plan = await plansRepository.findById(req.params.id);
     if (!plan) {
       throw new NotFoundError(`Plan ${req.params.id} not found`);
     }
-    const requestId = getRequestId(req) ?? 'unknown';
     res.json(successEnvelope(plan, requestId));
-  });
+  }));
 
   return router;
 }
