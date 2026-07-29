@@ -1,15 +1,19 @@
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
+import { buildErrorEnvelope } from './envelope.js';
 
 export interface TimeoutMiddlewareOptions {
   timeoutMs?: number;
   durationMs?: number;
+  message?: string;
 }
 
 export function createTimeoutMiddleware(
   options: TimeoutMiddlewareOptions
 ): (req: Request, res: Response, next: NextFunction) => void {
-  const timeoutMs = options.timeoutMs ?? options.durationMs ?? 5000;
+  const rawTimeout = options.timeoutMs ?? options.durationMs ?? 5000;
+  const timeoutMs = rawTimeout > 0 ? rawTimeout : 5000;
+  const message = options.message ?? `Request timed out after ${timeoutMs}ms`;
 
   return (req: Request, res: Response, next: NextFunction): void => {
     const controller = new AbortController();
@@ -37,11 +41,8 @@ export function createTimeoutMiddleware(
           timeoutMs,
         });
 
-        res.status(504).json({
-          code: 'GATEWAY_TIMEOUT',
-          message: `Request timed out after ${timeoutMs}ms`,
-          requestId,
-        });
+        const body = buildErrorEnvelope('GATEWAY_TIMEOUT', message, requestId);
+        res.status(504).json(body);
       }
     }, timeoutMs);
 

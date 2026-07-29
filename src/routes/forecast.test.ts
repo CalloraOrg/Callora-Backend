@@ -576,8 +576,8 @@ describe('Forecast Routes with Audit Logging', () => {
       const res = await request(timeoutApp).get('/api/forecast/test-timeout');
 
       expect(res.status).toBe(504);
-      expect(res.body.code).toBe('GATEWAY_TIMEOUT');
-      expect(res.body.message).toMatch(/timed out after 50ms/i);
+      expect(res.body.error.code).toBe('GATEWAY_TIMEOUT');
+      expect(res.body.error.message).toMatch(/timed out after 50ms/i);
     });
   });
 });

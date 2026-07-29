@@ -21,7 +21,7 @@ describe('createTimeoutMiddleware', () => {
       success: false,
       error: {
         code: 'GATEWAY_TIMEOUT',
-        message: 'Request timed out',
+        message: 'Request timed out after 10ms',
       },
     });
     expect(res.body.requestId).toBeDefined();

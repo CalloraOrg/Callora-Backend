@@ -25,8 +25,8 @@ describe('createTimeoutMiddleware', () => {
 
     const res = await request(app).get('/slow');
     expect(res.status).toBe(504);
-    expect(res.body.code).toBe('GATEWAY_TIMEOUT');
-    expect(res.body.message).toMatch(/timed out after 50ms/i);
+    expect(res.body.error.code).toBe('GATEWAY_TIMEOUT');
+    expect(res.body.error.message).toMatch(/timed out after 50ms/i);
   });
 
   it('includes requestId in the 504 response when available', async () => {
