@@ -23,6 +23,7 @@ import {
   GatewayTimeoutError,
   InternalServerError,
   PaymentRequiredError,
+  ServiceUnavailableError,
   TooManyRequestsError,
 } from '../errors/index.js';
 import { CircuitBreakerOpenError } from '../lib/errors.js';
@@ -30,6 +31,7 @@ import { CircuitBreaker } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
+import { logger } from '../logger.js';
 
 /**
  * Headers that must never be forwarded to the upstream server.
@@ -76,17 +78,21 @@ function resolveConfig(partial?: Partial<ProxyConfig>): ProxyConfig {
  * Route: ALL /v1/call/:apiSlugOrId/*
  *
  * Flow:
- *   1. Resolve API from registry by slug or ID → 404 if unknown
- *   2. Validate x-api-key header → 401
- *   3. Rate-limit check → 429
- *   4. Pre-proxy balance check → 402 if depleted
- *   5. Build upstream URL, find price, forward safe headers, add X-Request-Id
- *   6. Proxy request with configurable timeout → 504 on timeout
- *   7. Stream upstream response back to caller
- *   8. [Non-blocking] Record usage and deduct billing if status is recordable
+ *   1. Drain guard — during graceful shutdown, new requests are rejected
+ *      immediately with `503 Service Unavailable` so load balancers can route
+ *      traffic elsewhere.  In-flight requests that arrived before shutdown
+ *      was signalled are allowed to complete normally.
+ *   2. Resolve API from registry by slug or ID → 404 if unknown
+ *   3. Validate x-api-key header → 401
+ *   4. Rate-limit check → 429
+ *   5. Pre-proxy balance check → 402 if depleted
+ *   6. Build upstream URL, find price, forward safe headers, add X-Request-Id
+ *   7. Proxy request with configurable timeout → 504 on timeout
+ *   8. Stream upstream response back to caller
+ *   9. [Non-blocking] Record usage and deduct billing if status is recordable
  */
 export function createProxyRouter(deps: ProxyDeps): Router {
-  const { billing, rateLimiter, usageStore, registry, circuitBreakerStore } = deps;
+  const { billing, rateLimiter, usageStore, registry, circuitBreakerStore, drainState } = deps;
   const config = resolveConfig(deps.proxyConfig);
   const router = Router();
   const circuitBreaker = new CircuitBreaker({
@@ -127,25 +133,60 @@ export function createProxyRouter(deps: ProxyDeps): Router {
     });
   };
 
+  /**
+   * Drain guard middleware.
+   *
+   * Runs before all other route handlers.  If the server has entered its
+   * graceful-shutdown drain phase, new proxy requests are rejected immediately
+   * with `503 Service Unavailable` so upstream load balancers can route
+   * traffic to healthy instances.  The response includes:
+   *
+   *   - `Connection: close`  — instructs the load balancer not to reuse
+   *                            this socket for future requests.
+   *   - `Retry-After: 0`     — advises the client to retry immediately
+   *                            (the new instance should be ready).
+   *
+   * Requests that are already in flight when the drain begins are unaffected
+   * and are tracked by the in-flight counter in the drain tracker
+   * (see `src/lifecycle/shutdown.ts`).
+   */
+  const drainGuard = (req: Request, res: Response, next: NextFunction): void => {
+    if (drainState?.isDraining()) {
+      const requestId = req.id ?? getOrCreateRequestId(randomUUID);
+      logger.info(
+        { requestId, path: req.path, method: req.method },
+        '[proxy:drain] Rejecting new proxy request during graceful shutdown',
+      );
+      res.set('Connection', 'close');
+      res.set('Retry-After', '0');
+      next(new ServiceUnavailableError(
+        'Server is shutting down. Please retry your request on another instance.',
+        'SERVICE_UNAVAILABLE',
+      ));
+      return;
+    }
+    next();
+  };
+
   // Use a param of 0 to capture the wildcard path (everything after the slug)
   // POST and PATCH routes get idempotency protection; GET/DELETE are naturally safe.
-  router.post('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
-  router.patch('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
-  router.post('/:apiSlugOrId', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
-  router.patch('/:apiSlugOrId', authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.post('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.post('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
 
   // GET, DELETE, and other methods pass through without idempotency caching
-  router.get('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
-  router.delete('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
-  router.put('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
-  router.options('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
-  router.head('/:apiSlugOrId/*', authMiddleware, perKeyConcurrency, handleProxy);
+  router.get('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.delete('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.put('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.options('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.head('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
 
-  router.get('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
-  router.delete('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
-  router.put('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
-  router.options('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
-  router.head('/:apiSlugOrId', authMiddleware, perKeyConcurrency, handleProxy);
+  router.get('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.delete('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.put('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.options('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.head('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

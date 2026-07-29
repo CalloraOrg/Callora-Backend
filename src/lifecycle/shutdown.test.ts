@@ -567,4 +567,42 @@ describe('shutdown module', () => {
      expect(res.setHeader).toHaveBeenCalledWith('Connection', 'close');
    });
  });
+
+ describe('isDraining flag', () => {
+   it('returns false before beginShutdown is called', () => {
+     const tracker = createInFlightDrainTracker('drain-test');
+     expect(tracker.isDraining()).toBe(false);
+   });
+
+   it('returns true after beginShutdown is called', () => {
+     const tracker = createInFlightDrainTracker('drain-test');
+     tracker.subsystem.beginShutdown();
+     expect(tracker.isDraining()).toBe(true);
+   });
+
+   it('remains true while requests are still in flight after beginShutdown', async () => {
+     const tracker = createInFlightDrainTracker('drain-test');
+     const listeners = new Map<string, () => void>();
+     const res = {
+       setHeader: jest.fn(),
+       once: jest.fn((event: string, handler: () => void) => {
+         listeners.set(event, handler);
+         return res;
+       }),
+     } as unknown as Response;
+
+     // Start a request, then begin shutdown
+     tracker.middleware({} as unknown as Request, res, jest.fn());
+     tracker.subsystem.beginShutdown();
+
+     // isDraining should be true even while requests are in flight
+     expect(tracker.isDraining()).toBe(true);
+
+     // Even after the request finishes isDraining should still be true
+     // (the tracker is permanently in drain mode once beginShutdown is called)
+     listeners.get('finish')?.();
+     await tracker.subsystem.awaitIdle();
+     expect(tracker.isDraining()).toBe(true);
+   });
+ });
 });
