@@ -550,7 +550,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
 
     // When paging backward we reverse the ORDER BY, collect the results, then
     // flip them so the caller always receives items in ascending order.
-    const isBackward = beforeCursor !== undefined && afterCursor === undefined;
+    const isBackward = beforeCursor !== undefined && !afterCursor;
     const order = isBackward ? 'DESC' : 'ASC';
 
     const sqlParams: unknown[] = [assertNonEmpty(userId, 'userId')];
@@ -618,9 +618,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const pageRows = hasMore ? rows.slice(0, normalizedLimit) : rows;
 
     // When fetching backward the DB returns items in reverse order — flip them.
-    if (isBackward) {
-      pageRows.reverse();
-    }
+    const orderedRows = isBackward ? [...pageRows].reverse() : pageRows;
 
     // Build cursors from the boundary items of this page.
     const firstItem = pageRows[0];
