@@ -13,7 +13,28 @@ import http from 'node:http';
 import express from 'express';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
+import { GenericContainer, Wait } from 'testcontainers';
+import { Pool } from 'pg';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+async function runMigration(pool: Pool, migrationPath: string): Promise<void> {
+  const sql = fs.readFileSync(migrationPath, 'utf-8');
+  const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
+  for (const statement of statements) {
+    try { await pool.query(statement); } catch (e) { /* ignore */ }
+  }
+}
+
+async function runAllMigrations(pool: Pool): Promise<void> {
+  const migrationsDir = path.join(__dirname, '../../migrations');
+  const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql') && !f.endsWith('.down.sql')).sort();
+  for (const file of files) { await runMigration(pool, path.join(migrationsDir, file)); }
+}
 // ── Mock dependencies ─────────────────────────────────────────────────────────
 
 import { createProxyRouter } from '../../src/routes/proxyRoutes.js';
@@ -195,9 +216,14 @@ function buildProxyApp(overrides?: {
   upstreamBaseUrl?: string;
   registry?: InMemoryApiRegistry;
   apiKeys?: Map<string, ApiKey>;
+  pool?: Pool;
 }): express.Express {
   const app = express();
   app.use(express.json());
+  
+  if (overrides?.pool) {
+    app.locals.dbPool = overrides.pool;
+  }
 
   const billing = overrides?.billing ?? new MockBillingService(10);
   const rateLimiter = overrides?.rateLimiter ?? new MockRateLimiter(1000);
@@ -262,17 +288,49 @@ describe('/v1/call/:apiSlugOrId integration tests', () => {
   let billing: MockBillingService;
   let rateLimiter: MockRateLimiter;
   let usageStore: MockUsageStore;
+  let testContext: any = null;
 
   // ── Start upstream server once per suite ────────────────────────────────
   beforeAll(async () => {
+    const container = new GenericContainer('postgres:16-alpine')
+      .withEnvironment({
+        POSTGRES_DB: 'callora_test',
+        POSTGRES_USER: 'testuser',
+        POSTGRES_PASSWORD: 'testpassword',
+      })
+      .withExposedPorts(5432)
+      .waitingFor(Wait.forLogMessage(/database system is ready to accept connections/));
+
+    const startedContainer = await container.start();
+    const host = startedContainer.getHost();
+    const port = startedContainer.getMappedPort(5432);
+    
+    testContext = {
+      container: startedContainer,
+      pool: new Pool({
+        host,
+        port,
+        database: 'callora_test',
+        user: 'testuser',
+        password: 'testpassword',
+      }),
+    };
+
+    await runAllMigrations(testContext.pool);
+    process.env.DATABASE_URL = `postgresql://testuser:testpassword@${host}:${port}/callora_test`;
+
     const result = await startUpstreamServer();
     upstreamServer = result.server;
     upstreamUrl = result.url;
-  });
+  }, 60000);
 
   afterAll(async () => {
     if (upstreamServer) {
       await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+    if (testContext) {
+      await testContext.pool.end();
+      await testContext.container.stop();
     }
   });
 
@@ -280,7 +338,13 @@ describe('/v1/call/:apiSlugOrId integration tests', () => {
     billing = new MockBillingService(10);
     rateLimiter = new MockRateLimiter(1000);
     usageStore = new MockUsageStore();
-    app = buildProxyApp({ billing, rateLimiter, usageStore, upstreamBaseUrl: upstreamUrl });
+    app = buildProxyApp({ 
+      billing, 
+      rateLimiter, 
+      usageStore, 
+      upstreamBaseUrl: upstreamUrl,
+      pool: testContext?.pool
+    });
   });
 
   afterEach(() => {
@@ -429,24 +493,17 @@ describe('/v1/call/:apiSlugOrId integration tests', () => {
       .set('Idempotency-Key', idempotencyKey)
       .send({ data: 'hello' });
 
-    // The idempotency middleware requires a Postgres pool — if PG is not
-    // running it will fail with a 500. For now we check that at least the
-    // auth and routing layers passed (no 401/404).
-    if (firstRes.status === 200) {
-      expect(firstRes.body.body.data).toBe('hello');
+    expect(firstRes.status).toBe(200);
+    expect(firstRes.body.body.data).toBe('hello');
 
-      const secondRes = await request(app)
-        .post(`/v1/call/${TEST_API_SLUG}/echo`)
-        .set('x-api-key', TEST_API_KEY_VALUE)
-        .set('Idempotency-Key', idempotencyKey)
-        .send({ data: 'hello' });
+    const secondRes = await request(app)
+      .post(`/v1/call/${TEST_API_SLUG}/echo`)
+      .set('x-api-key', TEST_API_KEY_VALUE)
+      .set('Idempotency-Key', idempotencyKey)
+      .send({ data: 'hello' });
 
-      expect(secondRes.status).toBe(firstRes.status);
-      expect(secondRes.body.body.data).toBe('hello');
-    } else {
-      // PG not available — skip assertion; log the status for debugging
-      console.warn(`Idempotency test skipped: POST returned ${firstRes.status} (PG may be unavailable)`);
-    }
+    expect(secondRes.status).toBe(firstRes.status);
+    expect(secondRes.body.body.data).toBe('hello');
   });
 
   it('does not apply idempotency to GET requests', async () => {
