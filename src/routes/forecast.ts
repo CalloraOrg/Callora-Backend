@@ -19,10 +19,94 @@ export interface ForecastPoint {
   value: number;
 }
 
+/**
+ * @deprecated Use PaginatedForecastResponse instead.
+ * Kept for backward-compat with internal uses of the old single-shot response shape.
+ */
 export interface ForecastResponse {
   forecast: ForecastPoint[];
   generatedAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// Pagination types for GET /api/forecast
+// ---------------------------------------------------------------------------
+
+/** Maximum number of forecast points that can be returned in a single page. */
+export const FORECAST_MAX_LIMIT = 100;
+
+/** Default page size when no `limit` query param is provided. */
+export const FORECAST_DEFAULT_LIMIT = 20;
+
+/**
+ * Paginated envelope returned by GET /api/forecast.
+ *
+ * - `items`       – the current page of ForecastPoint objects.
+ * - `next_cursor` – opaque base-64 cursor; present only when a subsequent
+ *                   page exists.  Absent (not `null`) when this is the last page.
+ * - `total`       – total number of points in the underlying data set.
+ *                   Allows clients to show "page X of Y" UI without a second
+ *                   round-trip.
+ */
+export interface PaginatedForecastResponse {
+  items: ForecastPoint[];
+  next_cursor?: string;
+  total: number;
+}
+
+// ---------------------------------------------------------------------------
+// Cursor helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode an integer index into an opaque base-64 cursor.
+ * Format (before encoding): `fc:<index>`
+ */
+function encodeCursor(index: number): string {
+  return Buffer.from(`fc:${index}`, 'utf-8').toString('base64url');
+}
+
+/**
+ * Decode a cursor back to a numeric index.
+ * Returns `null` when the cursor is missing or malformed so callers can
+ * surface a structured 400 error.
+ */
+function decodeCursor(cursor: string): number | null {
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf-8');
+    const match = /^fc:(\d+)$/.exec(decoded);
+    if (!match) return null;
+    const idx = parseInt(match[1], 10);
+    return Number.isFinite(idx) && idx >= 0 ? idx : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Validation schema for list query params
+// ---------------------------------------------------------------------------
+
+/**
+ * Zod schema for GET /api/forecast query parameters.
+ *
+ * - `limit`  – page size, 1–100, default 20
+ * - `cursor` – opaque pagination cursor from a previous response
+ */
+const listForecastQuerySchema = z.object({
+  limit: z
+    .string()
+    .optional()
+    .transform((val) => {
+      if (val === undefined || val.trim() === '') return FORECAST_DEFAULT_LIMIT;
+      const n = Number(val);
+      if (!Number.isInteger(n) || n < 1) {
+        throw new BadRequestError('limit must be a positive integer');
+      }
+      return Math.min(n, FORECAST_MAX_LIMIT);
+    }),
+  cursor: z.string().optional(),
+});
 
 export interface Forecast {
   id: string;
@@ -274,18 +358,83 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
 
   // -----------------------------------------------------------------------
   // GET /api/forecast
-  // Retrieve a generated forecast (read-only, not audited).
+  // List forecast points with cursor-based pagination.
+  //
+  // Query params:
+  //   limit  – integer 1-100, default 20
+  //   cursor – opaque cursor returned by a previous response (base64url)
+  //
+  // Response shape (inside successEnvelope.data):
+  //   {
+  //     items:       ForecastPoint[],   // current page of points
+  //     next_cursor: string | undefined, // present only when more pages exist
+  //     total:       number,             // total points in the data set
+  //   }
+  //
+  // Not audited (read-only).
   // -----------------------------------------------------------------------
-  router.get('/', (req: Request, res: Response) => {
-    const requestId = getRequestId(req) ?? 'unknown';
-    const forecast = simulateForecastCalculation(req.signal ?? req.abortSignal);
+  router.get('/', (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const requestId = getRequestId(req) ?? 'unknown';
 
-    const data: ForecastResponse = {
-      forecast,
-      generatedAt: new Date().toISOString(),
-    };
+      // ---- Parse & validate query parameters --------------------------------
+      const parseResult = listForecastQuerySchema.safeParse(req.query);
+      if (!parseResult.success) {
+        // Surface Zod validation failures as a structured 400 error.
+        throw new BadRequestError(
+          parseResult.error.issues.map((i) => i.message).join('; '),
+        );
+      }
 
-    res.json(successEnvelope(data, requestId));
+      const { limit, cursor: rawCursor } = parseResult.data;
+
+      // ---- Resolve start index from cursor -----------------------------------
+      let startIndex = 0;
+      if (rawCursor !== undefined && rawCursor.trim() !== '') {
+        const decoded = decodeCursor(rawCursor.trim());
+        if (decoded === null) {
+          // Malformed or tampered cursor – return 400.
+          throw new BadRequestError(
+            'Invalid or malformed cursor. Obtain a fresh cursor from the next_cursor field of a previous response.',
+          );
+        }
+        startIndex = decoded;
+      }
+
+      // ---- Generate the full forecast data set (deterministic per request) --
+      // All 24 hourly points for the current UTC day are computed on-the-fly.
+      // This avoids any persistent state while still offering a realistic data
+      // set that clients can page through.
+      const allPoints = simulateForecastCalculation(req.signal ?? req.abortSignal);
+      const total = allPoints.length;
+
+      // ---- Slice the requested page ------------------------------------------
+      // Guard: if startIndex >= total, return an empty last page (no next_cursor).
+      const pagePoints = allPoints.slice(startIndex, startIndex + limit);
+      const nextIndex = startIndex + limit;
+      const hasMore = nextIndex < total;
+
+      // ---- Build paginated response envelope --------------------------------
+      const data: PaginatedForecastResponse = {
+        items: pagePoints,
+        total,
+        ...(hasMore ? { next_cursor: encodeCursor(nextIndex) } : {}),
+      };
+
+      // ---- Structured logging with correlation ID ---------------------------
+      logger.info('forecast.list', {
+        requestId,
+        limit,
+        startIndex,
+        returnedCount: pagePoints.length,
+        total,
+        hasMore,
+      });
+
+      res.json(successEnvelope(data, requestId));
+    } catch (err) {
+      next(err);
+    }
   });
 
   // -----------------------------------------------------------------------
