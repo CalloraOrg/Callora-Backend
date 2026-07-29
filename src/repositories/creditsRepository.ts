@@ -51,15 +51,34 @@ function mapRawCredit(credit: RawCredit): Credit {
 }
 
 /**
- * Find credits record by user ID
+ * Find credits record by user ID.
+ *
+ * Prefers the EXPLAIN-verified covering index `idx_credits_lookup_hot`
+ * (migrations/credits_index.sql) via INDEXED BY so the hot /api/credits
+ * filter on user_id is served as a covering index scan even when a UNIQUE
+ * autoindex on user_id also exists. Falls back to the Drizzle path when the
+ * index has not been applied yet.
  */
 export async function findByUserId(userId: string): Promise<Credit | undefined> {
-  const rows = await db
-    .select()
-    .from(schema.credits)
-    .where(eq(schema.credits.user_id, userId))
-    .limit(1);
-  return rows[0];
+  try {
+    const raw = sqlite
+      .prepare(
+        `SELECT id, user_id, balance_usdc, created_at, updated_at
+         FROM credits INDEXED BY idx_credits_lookup_hot
+         WHERE user_id = ?
+         LIMIT 1`,
+      )
+      .get(userId) as RawCredit | undefined;
+
+    return raw ? mapRawCredit(raw) : undefined;
+  } catch {
+    const rows = await db
+      .select()
+      .from(schema.credits)
+      .where(eq(schema.credits.user_id, userId))
+      .limit(1);
+    return rows[0];
+  }
 }
 
 /**

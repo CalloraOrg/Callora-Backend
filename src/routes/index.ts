@@ -32,7 +32,8 @@ import type { DeveloperRepository } from "../repositories/developerRepository.js
 import type { ApiRepository } from "../repositories/apiRepository.js";
 import { createForecastRouter } from "./forecast.js";
 import { createPlansRouter } from "./plans.js";
-import type { PlansRepository } from "../repositories/plansRepository.js";
+import { createCreditsRouter } from "./credits.js";
+import type { CreditsRepository } from "../repositories/creditsRepository.js";
 import { createErrorsRouter } from "./errors.js";
 import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
 import { createAuditRouter } from "./audit.js";
@@ -56,17 +57,19 @@ export interface ApiRouterDeps
   auditService?: AuditService;
   /** Health-check configuration forwarded to GET /api/usage/health. */
   healthCheckConfig?: HealthCheckConfig;
-  /** Plans repository for the /api/plans hot path. */
-  plansRepository?: PlansRepository;
+  /** Credits repository for the /api/credits hot-path lookup. */
+  creditsRepository?: CreditsRepository;
 }
 
 export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   const router = Router();
 
   router.use("/health", healthRouter);
+  router.use("/plans", createPlansRouter());
+  // Hot-path credits lookup (idx_credits_lookup_hot) — see migrations/credits_index.sql
   router.use(
-    "/plans",
-    createPlansRouter(10_000, { plansRepository: deps.plansRepository }),
+    "/credits",
+    createCreditsRouter({ creditsRepository: deps.creditsRepository }),
   );
   router.use("/spike", createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
