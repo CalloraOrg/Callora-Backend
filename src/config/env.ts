@@ -168,8 +168,11 @@ export const envSchema = z
     CREDITS_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(10),
     CREDITS_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
 
-    // Billing per-request graceful timeout
-    BILLING_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+    // /api/quotas per-user token-bucket rate limiting.
+    // capacity:    maximum burst of requests before the bucket empties (default 60).
+    // refillRate:  tokens added per second (default 1 → steady-state of 1 req/s).
+    QUOTA_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(60),
+    QUOTA_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
 
     // Billing endpoint per-user rate limiting (fixed-window)
     BILLING_RATE_LIMIT_WINDOW_MS: z.coerce

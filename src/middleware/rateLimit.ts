@@ -152,6 +152,62 @@ export function createCreditsRateLimitMiddleware(
   return createTokenBucketRateLimitMiddleware(opts);
 }
 
+/**
+ * Creates a per-user token-bucket rate limit middleware for the /api/quotas routes.
+ *
+ * Uses a token-bucket algorithm so users benefit from burst capacity while still
+ * being bounded by a steady-state refill rate.  When the bucket is empty the
+ * middleware sets a `Retry-After` response header (seconds until the next token
+ * is available) and delegates to the global error handler via
+ * `next(new TooManyRequestsError())` so the 429 response uses the canonical
+ * standardised error envelope:
+ *
+ *   { success: false, error: { code: "TOO_MANY_REQUESTS", message: "...", retryAfterMs }, requestId, timestamp }
+ *
+ * Unauthenticated requests fall back to IP-based keying so the quota routes
+ * are always protected even before authentication runs.
+ *
+ * @param options  Token-bucket configuration (`capacity` and `refillRate`).
+ *                 Defaults: capacity=60, refillRate=1 (1 token/s, burst of 60).
+ * @param limiter  Optional pre-constructed limiter (primarily for unit tests).
+ * @returns Express `RequestHandler` suitable for use with `router.use()`.
+ */
+export function createQuotaRateLimitMiddleware(
+  options?: TokenBucketOptions,
+  limiter?: TokenBucketRateLimiter,
+): RequestHandler {
+  const opts: TokenBucketOptions = options ?? { capacity: 60, refillRate: 1 };
+  const bucket = limiter ?? new TokenBucketRateLimiter(opts.capacity, opts.refillRate);
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    // Identify the caller: prefer authenticated user id, fall back to client IP.
+    const key = getRateLimitKey(req);
+    const result = bucket.check(key);
+
+    if (!result.allowed) {
+      const retryAfterMs = result.retryAfterMs ?? 1000;
+      const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+      const requestId = getRequestId(req);
+
+      logger.warn("[quotaRateLimit] request limit exceeded", {
+        requestId,
+        key,
+        retryAfterMs,
+      });
+
+      // Set the standard Retry-After header so HTTP clients can back off.
+      res.set("Retry-After", String(retryAfterSeconds));
+
+      // Delegate to the global error handler so the response uses the project's
+      // standardised error envelope (success:false, error.code, error.message).
+      next(new TooManyRequestsError("Too Many Requests"));
+      return;
+    }
+
+    next();
+  };
+}
+
 // ─── Fixed-Window Rate Limiter ───────────────────────────────────────────────
 
 /**
