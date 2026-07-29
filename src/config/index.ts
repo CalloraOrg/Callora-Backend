@@ -109,6 +109,12 @@ export const config = {
       .map((field) => field.trim())
       .filter((field) => field.length > 0),
   },
+  usageAccessLog: {
+    redactFields: (env.USAGE_ACCESS_LOG_REDACT_FIELDS ?? "")
+      .split(",")
+      .map((field) => field.trim())
+      .filter((field) => field.length > 0),
+  },
 
   databaseUrl: env.DATABASE_URL,
   replicaUrls: env.REPLICA_URLS,

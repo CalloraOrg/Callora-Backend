@@ -19,6 +19,8 @@ import { createUsageByEndpointRouter } from "./usage/byEndpoint.js";
 import { createUsageAggregateRouter } from "./usage/aggregate.js";
 import { createExportSchedulesRouter } from "./exports/schedules.js";
 import { createExportsRouter } from "./exports.js";
+import { createUsageAccessLogMiddleware } from "../middleware/usageAccessLog.js";
+import { config } from "../config/index.js";
 import type { ScheduledExportsService } from "../services/scheduledExports.js";
 import type { ReportExporterService } from "../services/reportExporter.js";
 import { createSubscriptionRouter } from "./subscriptionRoutes.js";
@@ -28,7 +30,6 @@ import type { DeveloperRepository } from "../repositories/developerRepository.js
 import type { ApiRepository } from "../repositories/apiRepository.js";
 import { createForecastRouter } from "./forecast.js";
 import { createErrorsRouter } from "./errors.js";
-import { config } from "../config/index.js";
 import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
 import { createAuditRouter } from "./audit.js";
 import { createInvoicesRouter } from "./invoices.js";
@@ -69,9 +70,17 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     }),
   );
 
+  // Structured JSON access log for all /api/usage/* routes.
+  // Applied at the parent level so sub-routers (csv, by-endpoint, aggregate, sse)
+  // are automatically covered without needing per-route middleware.
+  const usageAccessLogMiddleware = createUsageAccessLogMiddleware({
+    redactFields: config.usageAccessLog.redactFields,
+  });
+
   // Mounted before '/usage' so the more specific CSV export path matches first.
   router.use(
     "/usage/csv",
+    usageAccessLogMiddleware,
     createUsageCsvRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
@@ -79,6 +88,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use(
     "/usage/by-endpoint",
+    usageAccessLogMiddleware,
     createUsageByEndpointRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
@@ -86,6 +96,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use(
     "/usage/aggregate",
+    usageAccessLogMiddleware,
     createUsageAggregateRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
@@ -93,6 +104,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use(
     "/usage/sse",
+    usageAccessLogMiddleware,
     createUsageSseRouter({
       broadcaster: deps.usageSseBroadcaster,
     }),
@@ -100,6 +112,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use(
     "/usage",
+    usageAccessLogMiddleware,
     createUsageRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
