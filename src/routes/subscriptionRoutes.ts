@@ -16,6 +16,7 @@ import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import { validateRetryPolicy } from '../services/webhookRetry.js';
 import { logger } from '../logger.js';
+import { recordSubscriptionsLatency } from '../metrics/registry.js';
 
 // ---------------------------------------------------------------------------
 // Async handler helper
@@ -123,6 +124,22 @@ export function createSubscriptionRouter(deps: SubscriptionRoutesDeps): Router {
 
   // Apply rate limiting to all subscription routes
   router.use(subscriptionRateLimit);
+
+  // ── Request timing middleware ───────────────────────────────────────────
+  // Records latency histogram observations for all /api/subscriptions routes
+  // with method and status code labels.
+  const recordTimingMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+    const startTime = Date.now();
+
+    res.on('finish', () => {
+      const duration = Date.now() - startTime;
+      recordSubscriptionsLatency(req.method, res.statusCode, duration);
+    });
+
+    next();
+  };
+
+  router.use(recordTimingMiddleware);
 
   // -------------------------------------------------------------------------
   // POST /api/subscriptions
