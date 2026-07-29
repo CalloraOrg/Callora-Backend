@@ -20,6 +20,7 @@ import { createUsageHealthRouter } from "./usage/health.js";
 import type { HealthCheckConfig } from "../services/healthCheck.js";
 import { createExportSchedulesRouter } from "./exports/schedules.js";
 import { createExportsRouter } from "./exports.js";
+import { createExportsHealthRouter } from "./exports/health.js";
 import { createUsageAccessLogMiddleware } from "../middleware/usageAccessLog.js";
 import { config } from "../config/index.js";
 import type { ScheduledExportsService } from "../services/scheduledExports.js";
@@ -137,6 +138,13 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   );
 
 
+
+  // Exports subsystem external-dependency health probe (GrantFox FWC26 b#069).
+  // Mounted before the generic /exports handler to avoid path shadowing.
+  router.use(
+    "/exports/health",
+    createExportsHealthRouter(),
+  );
 
   if (deps.scheduledExportsService) {
     router.use(
