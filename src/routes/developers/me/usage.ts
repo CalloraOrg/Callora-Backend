@@ -1,147 +1,242 @@
-import { Router, type Request, type Response, type NextFunction } from 'express';
-import { z } from 'zod';
+import { Router, type Request, type Response } from 'express';
 import { requireAuth, type AuthenticatedLocals } from '../../../middleware/requireAuth.js';
-import { validate } from '../../../middleware/validate.js';
-import {
-  BadRequestError,
-  ForbiddenError,
-  InternalServerError,
-  UnauthorizedError,
-} from '../../../errors/index.js';
-import type { UsageEventsRepository } from '../../../repositories/usageEventsRepository.js';
+import type { UsageEventsRepository, GroupBy } from '../../../repositories/usageEventsRepository.js';
 import type { DeveloperRepository } from '../../../repositories/developerRepository.js';
+import { BadRequestError, ForbiddenError, UnauthorizedError, InternalServerError } from '../../../errors/index.js';
 import { logger } from '../../../logger.js';
 
-function asyncHandler(
-  fn: (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction) => Promise<void>,
-) {
-  return (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction): void => {
-    fn(req, res, next).catch(next);
-  };
-}
-
-const usageSummaryQuerySchema = z.object({
-  from: z.string().optional(),
-  to: z.string().optional(),
-  apiId: z.string().optional(),
-});
-
-export interface DeveloperUsageSummaryDeps {
+export interface DeveloperMeUsageRouterDeps {
   usageEventsRepository: UsageEventsRepository;
   developerRepository: DeveloperRepository;
 }
 
-export function createDeveloperUsageSummaryRouter(deps: DeveloperUsageSummaryDeps): Router {
+export type DeveloperUsageSummaryDeps = DeveloperMeUsageRouterDeps;
+
+const isValidGroupBy = (value: string): value is GroupBy =>
+  value === 'day' || value === 'week' || value === 'month';
+
+const parseDate = (value: unknown): Date | null | undefined => {
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const isoDate = (date: Date): string => date.toISOString().slice(0, 10);
+
+const startOfUtcDay = (date: Date): Date =>
+  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+
+const startOfUtcWeek = (date: Date): Date => {
+  const dayStart = startOfUtcDay(date);
+  const weekday = dayStart.getUTCDay();
+  const mondayOffset = (weekday + 6) % 7;
+  return new Date(dayStart.getTime() - mondayOffset * DAY_MS);
+};
+
+const startOfUtcMonth = (date: Date): Date =>
+  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+
+const getBucketPeriod = (date: Date, groupBy: GroupBy): string => {
+  if (groupBy === 'day') {
+    return isoDate(startOfUtcDay(date));
+  }
+  if (groupBy === 'week') {
+    return isoDate(startOfUtcWeek(date));
+  }
+  return isoDate(startOfUtcMonth(date));
+};
+
+export interface DeveloperUsageSummaryResponse {
+  summary: {
+    totalCalls: number;
+    totalRevenue: string;
+    activeApis: number;
+  };
+  breakdownByApi: Array<{
+    apiId: string;
+    calls: number;
+    revenue: string;
+  }>;
+  buckets: Array<{
+    period: string;
+    calls: number;
+    revenue: string;
+  }>;
+  period: {
+    from: string;
+    to: string;
+  };
+}
+
+export function createDeveloperMeUsageRouter(deps: DeveloperMeUsageRouterDeps): Router {
   const router = Router();
   const { usageEventsRepository, developerRepository } = deps;
 
-  /**
-   * GET /api/developers/me/usage/summary
-   *
-   * Returns a summary of the authenticated developer's API usage
-   * including total calls, total cost, and per-API breakdown.
-   *
-   * Query params:
-   *   from   – start of period (ISO 8601, default: 30 days ago)
-   *   to     – end of period (ISO 8601, default: now)
-   *   apiId  – filter to a specific API
-   *
-   * @example
-   * {
-   *   "total_calls": 150,
-   *   "total_cost_usdc": "12.50",
-   *   "breakdown_by_api": [
-   *     { "api_id": "api-1", "calls": 100, "cost_usdc": "8.00" },
-   *     { "api_id": "api-2", "calls": 50, "cost_usdc": "4.50" }
-   *   ],
-   *   "period": {
-   *     "from": "2026-06-26T00:00:00.000Z",
-   *     "to": "2026-07-26T00:00:00.000Z"
-   *   }
-   * }
-   */
-  router.get(
-    '/summary',
-    requireAuth,
-    validate({ query: usageSummaryQuerySchema }),
-    asyncHandler(async (req, res) => {
-      const user = res.locals.authenticatedUser;
-      if (!user) {
-        throw new UnauthorizedError();
-      }
+  router.get('/summary', requireAuth, async (req: Request, res: Response<unknown, AuthenticatedLocals>, next) => {
+    const user = res.locals.authenticatedUser;
+    if (!user) {
+      next(new UnauthorizedError());
+      return;
+    }
 
+    try {
+      // Resolve developer profile for authenticated user
       const developer = await developerRepository.findByUserId(user.id);
       if (!developer) {
-        throw new ForbiddenError(
-          'No developer profile found for this account',
-          'DEVELOPER_NOT_FOUND',
+        next(
+          new ForbiddenError(
+            'No developer profile found for this account',
+            'DEVELOPER_NOT_FOUND',
+          ),
         );
+        return;
+      }
+
+      // Input validation for date filters
+      const parsedFrom = parseDate(req.query.from);
+      if (parsedFrom === null) {
+        next(new BadRequestError('from and to must be valid ISO date values'));
+        return;
+      }
+
+      const parsedTo = parseDate(req.query.to);
+      if (parsedTo === null) {
+        next(new BadRequestError('from and to must be valid ISO date values'));
+        return;
       }
 
       const now = new Date();
-      const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const queryFrom = parsedFrom ?? new Date(now.getTime() - 30 * DAY_MS);
+      const queryTo = parsedTo ?? now;
 
-      let from: Date;
-      let to: Date;
-
-      try {
-        from = req.query.from ? new Date(req.query.from as string) : defaultFrom;
-        to = req.query.to ? new Date(req.query.to as string) : now;
-      } catch {
-        throw new BadRequestError('Invalid date format');
+      if (queryFrom > queryTo) {
+        next(new BadRequestError('from must be before or equal to to'));
+        return;
       }
 
-      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-        throw new BadRequestError('Invalid date format');
+      // GroupBy validation
+      const rawGroupBy = req.query.groupBy;
+      let queryGroupBy: GroupBy = 'day';
+      if (rawGroupBy !== undefined) {
+        if (typeof rawGroupBy !== 'string' || !isValidGroupBy(rawGroupBy)) {
+          next(new BadRequestError('groupBy must be one of: day, week, month'));
+          return;
+        }
+        queryGroupBy = rawGroupBy;
       }
 
-      if (from > to) {
-        throw new BadRequestError('from must be before or equal to to');
+      // Optional apiId validation
+      const apiIdParam = req.query.apiId;
+      let apiId: string | undefined;
+      if (apiIdParam !== undefined) {
+        if (typeof apiIdParam !== 'string' || apiIdParam.trim().length === 0) {
+          next(new BadRequestError('apiId must be a non-empty string'));
+          return;
+        }
+        apiId = apiIdParam.trim();
+
+        // Check if developer owns the API
+        const ownsApi = await usageEventsRepository.developerOwnsApi(user.id, apiId);
+        if (!ownsApi) {
+          next(new ForbiddenError('Forbidden: API does not belong to authenticated developer'));
+          return;
+        }
       }
 
-      const apiId = typeof req.query.apiId === 'string' && req.query.apiId.length > 0
-        ? req.query.apiId
-        : undefined;
-
-      logger.info('[developer-usage-summary] Fetching usage summary', {
+      // Fetch usage events for developer
+      const events = await usageEventsRepository.findByDeveloper({
         developerId: user.id,
-        from: from.toISOString(),
-        to: to.toISOString(),
+        from: queryFrom,
+        to: queryTo,
         apiId,
       });
 
-      try {
-        const stats = await usageEventsRepository.aggregateByUser({
-          userId: user.id,
-          from,
-          to,
-          apiId,
+      // Calculate aggregations
+      let totalCalls = 0;
+      let totalRevenueBigInt = 0n;
+      const apiStats = new Map<string, { calls: number; revenue: bigint }>();
+      const bucketStats = new Map<string, { calls: number; revenue: bigint }>();
+
+      for (const event of events) {
+        totalCalls += 1;
+        totalRevenueBigInt += event.revenue;
+
+        // Breakdown by API
+        const currentApi = apiStats.get(event.apiId) ?? { calls: 0, revenue: 0n };
+        apiStats.set(event.apiId, {
+          calls: currentApi.calls + 1,
+          revenue: currentApi.revenue + event.revenue,
         });
 
-        const summary = {
-          total_calls: stats.totalCalls,
-          total_cost_usdc: stats.totalRevenue.toString(),
-          breakdown_by_api: stats.breakdownByApi.map((stat) => ({
-            api_id: stat.apiId,
-            calls: stat.calls,
-            cost_usdc: stat.revenue.toString(),
-          })),
-          period: {
-            from: from.toISOString(),
-            to: to.toISOString(),
-          },
-        };
-
-        res.json(summary);
-      } catch (error) {
-        logger.error('[developer-usage-summary] Failed to fetch usage summary', {
-          developerId: user.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
+        // Time buckets
+        const period = getBucketPeriod(event.occurredAt, queryGroupBy);
+        const currentBucket = bucketStats.get(period) ?? { calls: 0, revenue: 0n };
+        bucketStats.set(period, {
+          calls: currentBucket.calls + 1,
+          revenue: currentBucket.revenue + event.revenue,
         });
-        throw new InternalServerError('Failed to fetch usage summary');
       }
-    }),
-  );
+
+      const breakdownByApi = [...apiStats.entries()]
+        .sort((a, b) => b[1].calls - a[1].calls || a[0].localeCompare(b[0]))
+        .map(([id, stat]) => ({
+          apiId: id,
+          calls: stat.calls,
+          revenue: stat.revenue.toString(),
+        }));
+
+      const buckets = [...bucketStats.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([period, stat]) => ({
+          period,
+          calls: stat.calls,
+          revenue: stat.revenue.toString(),
+        }));
+
+      const response: DeveloperUsageSummaryResponse = {
+        summary: {
+          totalCalls,
+          totalRevenue: totalRevenueBigInt.toString(),
+          activeApis: breakdownByApi.length,
+        },
+        breakdownByApi,
+        buckets,
+        period: {
+          from: queryFrom.toISOString(),
+          to: queryTo.toISOString(),
+        },
+      };
+
+      const correlationId = (req.id as string) ?? (req.headers['x-request-id'] as string) ?? '';
+      logger.info('[developers.me.usage.summary] retrieved developer usage summary', {
+        correlationId,
+        userId: user.id,
+        apiId,
+        groupBy: queryGroupBy,
+        totalCalls,
+        totalRevenue: totalRevenueBigInt.toString(),
+        activeApis: breakdownByApi.length,
+      });
+
+      res.json(response);
+    } catch (error) {
+      logger.error('[developers.me.usage.summary] failed to retrieve developer usage summary', {
+        userId: user?.id,
+        error,
+      });
+      next(new InternalServerError());
+    }
+  });
 
   return router;
 }
+
+export const createDeveloperUsageSummaryRouter = createDeveloperMeUsageRouter;
+export default createDeveloperMeUsageRouter;
