@@ -194,6 +194,37 @@
         }
       }
     },
+    "/api/health/health": {
+      "get": {
+        "summary": "Health Dependency Probe",
+        "description": "A dependency-level health probe that enumerates configured external dependencies (database, Soroban RPC, Horizon) with individual status, response time, and sanitized error information.",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Dependencies are healthy or partially degraded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependencies are down or probe failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/rate-limit/health": {
       "get": {
         "summary": "Check rate-limit subsystem health",
@@ -6253,5 +6284,4 @@
       }
     }
   }
-}
 }
