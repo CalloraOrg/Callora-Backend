@@ -39,11 +39,11 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'ok');
-      assert.equal(response.body.version, '1.0.0');
-      assert.equal(response.body.checks.api, 'ok');
-      assert.equal(response.body.checks.database, 'ok');
-      assert.ok(response.body.timestamp);
+      assert.equal(response.body.items[0].status, 'ok');
+      assert.equal(response.body.items[0].version, '1.0.0');
+      assert.equal(response.body.items[0].checks.api, 'ok');
+      assert.equal(response.body.items[0].checks.database, 'ok');
+      assert.ok(response.body.items[0].timestamp);
     } finally {
       await testDb.end();
     }
@@ -67,8 +67,8 @@ describe('GET /api/health - Integration Tests', () => {
     const response = await request(app).get('/api/health');
 
     assert.equal(response.status, 503);
-    assert.equal(response.body.status, 'down');
-    assert.equal(response.body.checks.database, 'down');
+    assert.equal(response.body.items[0].status, 'down');
+    assert.equal(response.body.items[0].checks.database, 'down');
   });
 
   test('returns 200 with degraded status when soroban rpc is unreachable', async () => {
@@ -88,9 +88,9 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'degraded');
-      assert.equal(response.body.checks.database, 'ok');
-      assert.equal(response.body.checks.soroban_rpc, 'down');
+      assert.equal(response.body.items[0].status, 'degraded');
+      assert.equal(response.body.items[0].checks.database, 'ok');
+      assert.equal(response.body.items[0].checks.soroban_rpc, 'down');
     } finally {
       await testDb.end();
     }
@@ -113,9 +113,9 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'degraded');
-      assert.equal(response.body.checks.database, 'ok');
-      assert.equal(response.body.checks.horizon, 'down');
+      assert.equal(response.body.items[0].status, 'degraded');
+      assert.equal(response.body.items[0].checks.database, 'ok');
+      assert.equal(response.body.items[0].checks.horizon, 'down');
     } finally {
       await testDb.end();
     }
@@ -136,10 +136,10 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'degraded');
-      assert.equal(response.body.checks.database, 'ok');
-      assert.equal(response.body.checks.soroban_rpc, 'down');
-      assert.equal(response.body.checks.horizon, 'down');
+      assert.equal(response.body.items[0].status, 'degraded');
+      assert.equal(response.body.items[0].checks.database, 'ok');
+      assert.equal(response.body.items[0].checks.soroban_rpc, 'down');
+      assert.equal(response.body.items[0].checks.horizon, 'down');
     } finally {
       await testDb.end();
     }
@@ -150,8 +150,8 @@ describe('GET /api/health - Integration Tests', () => {
     const response = await request(app).get('/api/health');
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.status, 'ok');
-    assert.equal(response.body.service, 'callora-backend');
+    assert.equal(response.body.items[0].status, 'ok');
+    assert.equal(response.body.items[0].service, 'callora-backend');
   });
 
   test('does not expose sensitive error details in response body', async () => {
@@ -169,7 +169,7 @@ describe('GET /api/health - Integration Tests', () => {
     const response = await request(app).get('/api/health');
 
     assert.equal(response.status, 503);
-    assert.equal(response.body.status, 'down');
+    assert.equal(response.body.items[0].status, 'down');
     assert.ok(!JSON.stringify(response.body).includes('sensitive info'));
   });
 
@@ -193,9 +193,9 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'degraded');
-      assert.equal(response.body.checks.database, 'degraded');
-      assert.equal(response.body.checks.api, 'ok');
+      assert.equal(response.body.items[0].status, 'degraded');
+      assert.equal(response.body.items[0].checks.database, 'degraded');
+      assert.equal(response.body.items[0].checks.api, 'ok');
     } finally {
       await testDb.end();
     }
@@ -230,8 +230,8 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'ok');
-      assert.equal(response.body.checks.soroban_rpc, 'ok');
+      assert.equal(response.body.items[0].status, 'ok');
+      assert.equal(response.body.items[0].checks.soroban_rpc, 'ok');
 
       global.fetch = originalFetch;
     } finally {
@@ -269,8 +269,8 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'degraded');
-      assert.equal(response.body.checks.soroban_rpc, 'degraded');
+      assert.equal(response.body.items[0].status, 'degraded');
+      assert.equal(response.body.items[0].checks.soroban_rpc, 'degraded');
 
       global.fetch = originalFetch;
     } finally {
@@ -304,8 +304,8 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'ok');
-      assert.equal(response.body.checks.horizon, 'ok');
+      assert.equal(response.body.items[0].status, 'ok');
+      assert.equal(response.body.items[0].checks.horizon, 'ok');
 
       global.fetch = originalFetch;
     } finally {
@@ -340,8 +340,8 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'degraded');
-      assert.equal(response.body.checks.horizon, 'degraded');
+      assert.equal(response.body.items[0].status, 'degraded');
+      assert.equal(response.body.items[0].checks.horizon, 'degraded');
 
       global.fetch = originalFetch;
     } finally {
@@ -386,9 +386,9 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'degraded');
-      assert.equal(response.body.checks.database, 'degraded');
-      assert.equal(response.body.checks.soroban_rpc, 'degraded');
+      assert.equal(response.body.items[0].status, 'degraded');
+      assert.equal(response.body.items[0].checks.database, 'degraded');
+      assert.equal(response.body.items[0].checks.soroban_rpc, 'degraded');
 
       global.fetch = originalFetch;
     } finally {
@@ -410,11 +410,11 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.status, 'ok');
-      assert.equal(response.body.checks.api, 'ok');
-      assert.equal(response.body.checks.database, 'ok');
-      assert.ok(!('soroban_rpc' in response.body.checks));
-      assert.ok(!('horizon' in response.body.checks));
+      assert.equal(response.body.items[0].status, 'ok');
+      assert.equal(response.body.items[0].checks.api, 'ok');
+      assert.equal(response.body.items[0].checks.database, 'ok');
+      assert.ok(!('soroban_rpc' in response.body.items[0].checks));
+      assert.ok(!('horizon' in response.body.items[0].checks));
     } finally {
       await testDb.end();
     }
@@ -433,9 +433,9 @@ describe('GET /api/health - Integration Tests', () => {
       const response = await request(app).get('/api/health');
 
       assert.equal(response.status, 200);
-      assert.equal(response.body.version, '2.1.3');
-      assert.ok(response.body.timestamp);
-      assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(response.body.timestamp));
+      assert.equal(response.body.items[0].version, '2.1.3');
+      assert.ok(response.body.items[0].timestamp);
+      assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(response.body.items[0].timestamp));
     } finally {
       await testDb.end();
     }
@@ -456,10 +456,10 @@ describe('GET /api/health - Integration Tests', () => {
     const response = await request(app).get('/api/health');
 
     assert.equal(response.status, 503);
-    assert.equal(response.body.status, 'down');
-    assert.ok(response.body.timestamp);
-    assert.equal(response.body.checks.api, 'ok');
-    assert.equal(response.body.checks.database, 'down');
+    assert.equal(response.body.items[0].status, 'down');
+    assert.ok(response.body.items[0].timestamp);
+    assert.equal(response.body.items[0].checks.api, 'ok');
+    assert.equal(response.body.items[0].checks.database, 'down');
   });
 
   test('completes health check within performance threshold', async () => {
@@ -513,7 +513,7 @@ describe('GET /api/health - Integration Tests', () => {
         const app = createApp();
         const response = await request(app).get('/api/health');
         expect(response.status).toBe(200); // Still 200 degraded
-        expect(response.body.status).toBe('degraded');
+        expect(response.body.items[0].status).toBe('degraded');
         expect(response.body).toMatchSnapshot('health-degraded-schema');
       } finally {
         await testDb.end();
