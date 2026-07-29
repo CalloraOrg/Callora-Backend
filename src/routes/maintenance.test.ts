@@ -204,4 +204,47 @@ describe('public /api/maintenance — CORS allowlist enforcement (issue #940)', 
       });
     });
   });
+
+  describe('ETag / 304 caching (issue #021)', () => {
+    it('returns a strong ETag on first request', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .get('/api/maintenance')
+        .set('Origin', 'http://localhost:5173');
+      
+      expect(res.status).toBe(200);
+      expect(res.headers.etag).toBeDefined();
+      expect(res.headers.etag).toMatch(/^"[a-f0-9]{64}"$/);
+    });
+
+    it('returns 304 Not Modified when If-None-Match matches', async () => {
+      const app = buildApp();
+      const firstRes = await request(app)
+        .get('/api/maintenance')
+        .set('Origin', 'http://localhost:5173');
+      
+      const etag = firstRes.headers.etag;
+      
+      const secondRes = await request(app)
+        .get('/api/maintenance')
+        .set('Origin', 'http://localhost:5173')
+        .set('If-None-Match', etag);
+      
+      expect(secondRes.status).toBe(304);
+      expect(secondRes.body).toEqual({});
+      expect(secondRes.headers['content-type']).toBeUndefined();
+      expect(secondRes.headers['content-length']).toBeUndefined();
+    });
+
+    it('returns 200 OK when If-None-Match does not match', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .get('/api/maintenance')
+        .set('Origin', 'http://localhost:5173')
+        .set('If-None-Match', '"invalidetag"');
+      
+      expect(res.status).toBe(200);
+      expect(res.headers.etag).toBeDefined();
+    });
+  });
 });
