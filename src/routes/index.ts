@@ -103,8 +103,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     }),
   );
 
-  router.use("/forecast", createForecastRouter());
-  router.use("/tenants", createTenantsRouter());
+
 
   if (deps.scheduledExportsService) {
     router.use(
@@ -151,7 +150,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   // Per-user billing rate limiter (100 requests per 60 seconds by default).
   const billingRateLimiter = createBillingRateLimitMiddleware(
-    config.billingRateLimit,
+    config.creditsRateLimit.billingRateLimit,
   );
   billingMiddlewares.push(billingRateLimiter);
   if (billingConcurrency) {
@@ -173,7 +172,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     router.use("/billing/portal", createBillingPortalRouter());
   }
 
-  router.use("/refunds", createRefundsCountsRouter());
+
 
   if (deps.restRateLimiter) {
     router.use("/limits", createLimitsRouter(deps.restRateLimiter).router);
