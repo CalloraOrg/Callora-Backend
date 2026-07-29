@@ -189,6 +189,18 @@ export const envSchema = z
     // truth will silently diverge.
     MAINTENANCE_CORS_ALLOWED_ORIGINS: z.string().default(""),
 
+    // Apis CORS allowlist (comma-separated origins; deny by default when empty).
+    //
+    // This entry is intentionally left as a raw string — it exists in the
+    // schema for documentation and `.env.example` cross-referencing purposes
+    // only. The runtime parser lives in
+    // {@link createApisCorsMiddleware} (src/middleware/cors.ts), which
+    // reads `process.env` lazily so tests that mutate the env after module
+    // load still work. If this entry is transformed into an array here, the
+    // middleware will continue to read the raw string and the two sources of
+    // truth will silently diverge.
+    APIS_CORS_ALLOWED_ORIGINS: z.string().default(""),
+
     // Soroban RPC (optional)
     SOROBAN_RPC_ENABLED: z
       .string()

@@ -302,3 +302,52 @@ export function createMaintenanceCorsMiddleware(): (
     middleware(req, res, next);
   };
 }
+
+/**
+ * Apis-route CORS middleware factory.
+ *
+ * Reads the `APIS_CORS_ALLOWED_ORIGINS` environment variable on first
+ * use (lazy) so unit tests that mutate `process.env` after module load
+ * continue to work. The factory returns the same middleware instance on
+ * every subsequent request to avoid re-parsing the allowlist per request;
+ * to pick up runtime changes the operator must restart the process.
+ *
+ * NOTE: the matching schema entry in `src/config/env.ts` is intentionally
+ * left as a `z.string()` (no transform) — it is documentation-only. If a
+ * future maintainer attempts to transform it to `z.array(z.string())` in
+ * the schema, the runtime env read below will silently use the raw string
+ * and callers will see the old un-parsed value. Coordinate any schema
+ * changes with this middleware.
+ *
+ * Defaults to:
+ *  - `allowCredentials: true` — the apis route has authenticated endpoints.
+ *  - `maxAgeSeconds: 600`      — 10 minute preflight cache.
+ *
+ * If `APIS_CORS_ALLOWED_ORIGINS` is unset/empty every cross-origin
+ * request to the apis route is denied (deny by default).
+ */
+export function createApisCorsMiddleware(): (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => void {
+  let middleware: ReturnType<typeof createCorsAllowlistMiddleware> | null =
+    null;
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!middleware) {
+      const allowedOrigins = parseAllowedOrigins(
+        process.env.APIS_CORS_ALLOWED_ORIGINS,
+      );
+      logger.info('[cors] apis allowlist loaded', {
+        originCount: allowedOrigins.length,
+      });
+      middleware = createCorsAllowlistMiddleware({
+        allowedOrigins,
+        allowCredentials: true,
+        maxAgeSeconds: DEFAULT_MAX_AGE_SECONDS,
+      });
+    }
+    middleware(req, res, next);
+  };
+}
