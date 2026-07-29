@@ -30,6 +30,7 @@ import { createErrorsRouter } from "./errors.js";
 import { config } from "../config/index.js";
 import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
 import { createAuditRouter } from "./audit.js";
+import { createInvoicesRouter } from "./invoices.js";
 import type { AuditService } from "../services/auditService.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
@@ -56,6 +57,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use("/spike", createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
   router.use("/audit", createAuditRouter({ auditService: deps.auditService }));
+  router.use("/invoices", createInvoicesRouter());
 
   router.use(
     "/apis",
