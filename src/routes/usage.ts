@@ -7,6 +7,9 @@ import { InternalServerError, UnauthorizedError } from '../errors/index.js';
 import { parsePagination, parseCursorPagination, decodeCursor } from '../lib/pagination.js';
 import { parseCursor } from '../lib/cursorPagination.js';
 import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { createUsageAccessLogMiddleware } from '../middleware/usageAccessLog.js';
+import { etagMiddleware } from '../middleware/etag.js';
+import { logger } from '../logger.js';
 
 export interface UsageRouterDeps {
   usageEventsRepository: UsageEventsRepository & Partial<UsageEventsPgRepository>;
@@ -81,6 +84,7 @@ export function createUsageRouter(deps: UsageRouterDeps): Router {
 
   router.get('/', requireAuth, usageAccessLog, etagMiddleware, async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
     const user = res.locals.authenticatedUser;
+    const correlationId = req.headers['x-correlation-id'] as string | undefined;
 
     if (!user) {
       logger.warn('Unauthorized access attempt to usage API', { correlationId });

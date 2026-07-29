@@ -1,3 +1,5 @@
+import { config } from '../config/index.js';
+
 type QueueEntry = (release: () => void) => void;
 
 /**
@@ -46,6 +48,21 @@ export class DeveloperSemaphore {
       total += state.activeCount;
     }
     return total;
+  }
+
+  /** Returns the active slot count for a specific developer, or 0 if not tracked. */
+  getActiveSlotCount(developerId: string): number {
+    return this.developers.get(developerId)?.activeCount ?? 0;
+  }
+
+  /** Returns whether the developer has reached their concurrency limit. */
+  isAtLimit(developerId: string): boolean {
+    return this.getActiveSlotCount(developerId) >= this.maxConcurrencyPerDeveloper;
+  }
+
+  /** The configured maximum number of concurrent slots per developer. */
+  get maxConcurrency(): number {
+    return this.maxConcurrencyPerDeveloper;
   }
 
   private acquireSlot(developerId: string): Promise<() => void> {
@@ -120,3 +137,18 @@ export class DeveloperSemaphore {
     }
   }
 }
+
+/**
+ * Shared singleton DeveloperSemaphore instance used across the billing
+ * concurrency middleware and the admin concurrency stats route.  Tests should
+ * create isolated instances via the class constructor directly.
+ *
+ * Both sides must use this same instance: the billing middleware acquires slots
+ * on it (see `createPerDevConcurrencyMiddleware`) and the admin stats route
+ * reads from it.  A separate instance on either side would report counts of
+ * zero.
+ */
+export const sharedDeveloperSemaphore = new DeveloperSemaphore(
+  config.billingConcurrency.maxPerDeveloper,
+  config.billingConcurrency.semaphoreTtlMs,
+);
