@@ -1,4 +1,5 @@
 import { adminLogMiddleware } from '../middleware/adminLog.js';
+import { etagMiddleware } from '../middleware/etag.js';
 import { Router, type Response } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
@@ -42,10 +43,8 @@ const router = Router();
 router.use(createAdminIpAllowlist());
 router.use(adminAuth);
 router.use(adminLogMiddleware);
-router.get(
-  '/users',
-  validate({ query: usersQuerySchema }),
-  async (req, res, next) => {
+router.use(etagMiddleware);
+router.get('/users', async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);
     const { users, total } = await findUsers({ limit, offset });

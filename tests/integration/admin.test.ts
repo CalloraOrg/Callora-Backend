@@ -92,8 +92,8 @@ describe('GET /api/admin/users — Integration', () => {
     process.env.JWT_SECRET = TEST_JWT_SECRET;
     mockFindUsers.mockResolvedValue({
       users: [
-        { id: 'user-1', email: 'admin@callora.com', role: 'admin' },
-        { id: 'user-2', email: 'dev@callora.com', role: 'developer' },
+        { id: 'user-1', stellar_address: 'admin@callora.com', created_at: new Date('2024-01-01') },
+        { id: 'user-2', stellar_address: 'dev@callora.com', created_at: new Date('2024-01-01') },
       ],
       total: 2,
     });
@@ -422,6 +422,95 @@ describe('GET /api/admin/quota/requests — Integration', () => {
       .set('x-admin-api-key', TEST_ADMIN_API_KEY);
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe('ETag / 304 caching on GET /api/admin routes', () => {
+  beforeEach(() => {
+    process.env.ADMIN_API_KEY = TEST_ADMIN_API_KEY;
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+    mockFindUsers.mockResolvedValue({
+      users: [
+        { id: 'user-1', stellar_address: 'admin@callora.com', created_at: new Date('2024-01-01') },
+        { id: 'user-2', stellar_address: 'dev@callora.com', created_at: new Date('2024-01-01') },
+      ],
+      total: 2,
+    });
+  });
+
+  afterEach(() => {
+    if (originalAdminApiKey !== undefined) {
+      process.env.ADMIN_API_KEY = originalAdminApiKey;
+    } else {
+      delete process.env.ADMIN_API_KEY;
+    }
+
+    if (originalJwtSecret !== undefined) {
+      process.env.JWT_SECRET = originalJwtSecret;
+    } else {
+      delete process.env.JWT_SECRET;
+    }
+
+    jest.clearAllMocks();
+  });
+
+  it('sets a strong ETag header on GET /api/admin/users response', async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .get('/api/admin/users')
+      .set('x-admin-api-key', TEST_ADMIN_API_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.etag).toBeDefined();
+    expect(res.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+  });
+
+  it('returns 304 Not Modified when If-None-Match matches the ETag', async () => {
+    const app = createApp();
+
+    const first = await request(app)
+      .get('/api/admin/users')
+      .set('x-admin-api-key', TEST_ADMIN_API_KEY);
+
+    expect(first.status).toBe(200);
+    const etag = first.headers.etag as string;
+    expect(etag).toBeDefined();
+
+    const second = await request(app)
+      .get('/api/admin/users')
+      .set('x-admin-api-key', TEST_ADMIN_API_KEY)
+      .set('If-None-Match', etag);
+
+    expect(second.status).toBe(304);
+    expect(second.text).toBe('');
+  });
+
+  it('returns 200 when If-None-Match does not match the ETag', async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .get('/api/admin/users')
+      .set('x-admin-api-key', TEST_ADMIN_API_KEY)
+      .set('If-None-Match', '"different-hash"');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('data');
+  });
+
+  it('does not set a strong ETag (SHA-256 hash) on POST /api/admin/usage/:developerId/reset', async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .post('/api/admin/usage/dev_test/reset')
+      .set('x-admin-api-key', TEST_ADMIN_API_KEY);
+
+    expect(res.status).toBe(404);
+    // Express may set a weak ETag (W/"...") based on content-length, but
+    // our etagMiddleware should not attach a strong SHA-256 ETag to non-GET/HEAD.
+    if (res.headers.etag) {
+      expect(res.headers.etag).not.toMatch(/^"[0-9a-f]{64}"$/);
+    }
   });
 });
 
