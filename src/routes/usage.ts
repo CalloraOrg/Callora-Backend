@@ -1,5 +1,4 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { type UsageEventsRepository, type GroupBy, type UsageEvent, type UsageStats, type UsageBucket } from '../repositories/usageEventsRepository.js';
 import { type UsageEventsPgRepository } from '../repositories/usageEventsRepository.pg.js';
@@ -9,6 +8,7 @@ import { parseCursor } from '../lib/cursorPagination.js';
 import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 import { etagMiddleware } from '../middleware/etag.js';
 import { logger } from '../logger.js';
+import { UsageQuerySchema } from '../validators/usage.js';
 
 export interface UsageRouterDeps {
   usageEventsRepository: UsageEventsRepository & Partial<UsageEventsPgRepository>;
@@ -46,29 +46,7 @@ interface UsageResponse {
   pagination?: Record<string, unknown>;
 }
 
-// ============================================================================
-// Boundary Validation Schema (Zod)
-// ============================================================================
-const UsageQuerySchema = z.object({
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-  apiId: z.string().optional(),
-  groupBy: z.enum(['day', 'week', 'month']).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  cursor: z.string().optional(),
-  after: z.string().optional(),
-  before: z.string().optional(),
-  offset: z.coerce.number().int().min(0).optional(),
-}).refine(data => {
-  if (data.from && data.to) {
-    return new Date(data.from) <= new Date(data.to);
-  }
-  return true;
-}, { message: "'from' date must be before or equal to 'to' date", path: ["from"] });
 
-// ============================================================================
-// Router Implementation
-// ============================================================================
 export function createUsageRouter(deps: UsageRouterDeps): Router {
   const router = Router();
   const { usageEventsRepository } = deps;
