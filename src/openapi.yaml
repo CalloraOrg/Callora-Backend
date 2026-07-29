@@ -830,6 +830,82 @@ paths:
                       message: Error definition 999 not found
                     requestId: req-errors-delete-404
                     timestamp: "2026-07-27T09:15:00.000Z"
+  /api/webhooks:
+    post:
+      summary: Register a webhook
+      description: Registers a new webhook for the authenticated developer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            examples:
+              registerWebhook:
+                summary: Register a webhook for API and balance events
+                value:
+                  developerId: "dev-123"
+                  url: "https://example.com/webhook"
+                  events:
+                    - "new_api_call"
+                    - "low_balance_alert"
+                  secret: "my_super_secret"
+                  retryPolicy:
+                    maxRetries: 3
+                    initialIntervalMs: 1000
+                    backoffFactor: 2.0
+      responses:
+        "201":
+          description: Webhook registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                registered:
+                  summary: Successfully registered
+                  value:
+                    message: Webhook registered successfully.
+                    developerId: "dev-123"
+                    url: "https://example.com/webhook"
+                    events:
+                      - "new_api_call"
+                      - "low_balance_alert"
+  /api/webhooks/{developerId}:
+    get:
+      summary: Get webhook config
+      description: Returns the webhook configuration for the given developer.
+      responses:
+        "200":
+          description: Webhook configuration
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                found:
+                  summary: Webhook config
+                  value:
+                    developerId: "dev-123"
+                    url: "https://example.com/webhook"
+                    events:
+                      - "new_api_call"
+                      - "low_balance_alert"
+                    retryPolicy:
+                      maxRetries: 3
+                      initialIntervalMs: 1000
+                      backoffFactor: 2.0
+        "404":
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                notFound:
+                  summary: No webhook registered
+                  value:
+                    message: "No webhook registered for this developer."
 components:
   securitySchemes:
     bearerAuth:
