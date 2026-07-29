@@ -5,6 +5,7 @@ import { ValidationError } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
 import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
+import { createExportsCorsMiddleware } from '../middleware/cors.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import { encodeCursor, parseCursor } from '../lib/cursorPagination.js';
 import { logger } from '../logger.js';
@@ -66,6 +67,9 @@ export function createExportsRouter(deps: ExportsRouterDeps): Router {
   // Apply CSP, X-Content-Type-Options, and Referrer-Policy on every /api/exports response
   // (success and error paths) — GrantFox FWC26 security header sweep.
   router.use(securityHeadersMiddleware);
+
+  // Enforce CORS allowlist from env on /api/exports (deny by default; preflight cached)
+  router.use(createExportsCorsMiddleware());
 
   /**
    * GET /api/exports
