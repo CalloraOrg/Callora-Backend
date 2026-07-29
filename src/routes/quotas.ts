@@ -29,6 +29,7 @@ import { config } from "../config/index.js";
 
 // Sub-route handlers
 import quotaCountsRouter from "./quotas/counts.js";
+import { createQuotaHealthRouter } from "./quotas/health.js";
 
 export interface QuotasRouterDeps {
   /** Inject a custom rate-limit middleware, primarily for testing. */
@@ -66,6 +67,11 @@ export function createQuotasRouter(deps: QuotasRouterDeps = {}): Router {
   // GET /api/quotas/counts  — returns per-status counts for the authenticated
   //                           developer's quota requests.
   router.use("/counts", quotaCountsRouter);
+
+  // GET /api/quotas/health  — dependency probe (database) for ops/monitoring.
+  // Mounted after the rate limiter above, so it shares the same per-user
+  // token bucket as every other /api/quotas route.
+  router.use("/health", createQuotaHealthRouter());
 
   return router;
 }
