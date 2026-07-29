@@ -1,14 +1,3 @@
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import adminRouter from "./routes/admin.js";
-import { createExplainRouter } from "./routes/admin/explain.js";
-import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
-import { createAdminUsageByEndpointRouter } from "./routes/admin/usage/by-endpoint.js";
-import { createApiRouter } from "./routes/index.js";
-import { createApisRouter } from "./routes/apis.js";
-import { createPluginsRouter } from "./routes/marketplace/plugins.js";
-import { pool } from "./db.js";
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -22,6 +11,7 @@ import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createPluginsRouter } from './routes/marketplace/plugins.js';
+import { createLogsRouter } from './routes/logs.js';
 import { pool } from './db.js';
 import {
   InMemoryUsageEventsRepository,
@@ -56,9 +46,10 @@ import {
   type HealthCheckConfig,
 } from "./services/healthCheck.js";
 import { createDependenciesRouter } from "./routes/health/dependencies.js";
-import { createRateLimitHealthRouter } from "./routes/rate-limit/health.js";
+import { createRateLimitRouter } from "./routes/rate-limit.js";
 import quotaRequestsRouter from "./routes/quota/requests.js";
 import quotaCountsRouter from "./routes/quotas/counts.js";
+import { createQuotasRouter } from "./routes/quotas.js";
 import { parsePagination, paginatedResponse } from "./lib/pagination.js";
 import {
   InMemoryVaultRepository,
@@ -71,6 +62,7 @@ import {
   requestIdMiddleware,
   responseEnrichMiddleware,
 } from "./middleware/requestId.js";
+import { createTimeoutMiddleware } from "./middleware/timeout.js";
 //import { envelopeValidator } from './middleware/envelopeValidator.js';
 import {
   successEnvelope,
@@ -372,17 +364,19 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     createDependenciesRouter(dependencies?.healthCheckConfig),
   );
 
-  // Rate-limit health dependency probe - operational status of the rate-limit subsystem
+  // Rate-limit routes with X-Correlation-Id propagation — every sub-route
+  // inherits correlation-id middleware for structured logging and outbound
+  // call correlation.
   app.use(
-    "/api/rate-limit/health",
-    createRateLimitHealthRouter({
+    "/api/rate-limit",
+    createRateLimitRouter({
       limiter: restRateLimiter,
       windowMs: restRateLimitOptions.windowMs,
       maxRequests: restRateLimitOptions.maxRequests,
     }),
   );
 
-  app.get("/api/health", async (req, res) => {
+  app.get("/api/health", createTimeoutMiddleware({ timeoutMs: config.healthRequestTimeoutMs }), async (req, res) => {
     const requestId = getRequestId(req);
     // If no health check config provided, return simple health check
     if (!dependencies?.healthCheckConfig) {
@@ -392,12 +386,27 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }
 
     try {
+      // Cooperative abort: if the per-request timeout fires while performHealthCheck
+      // is awaiting a dependency probe, the aborted signal propagates to any
+      // in-flight fetch calls inside the service layer, allowing them to cancel
+      // quickly rather than burning the full per-component timeout.
       const healthStatus = await performHealthCheck(
         dependencies.healthCheckConfig,
+        req.abortSignal,
       );
+
+      // Guard: if the timeout middleware already sent a 504 (res.headersSent)
+      // we must not attempt to write a second response.
+      if (res.headersSent) {
+        return;
+      }
+
       const statusCode = healthStatus.status === "down" ? 503 : 200;
       res.status(statusCode).json(successEnvelope(healthStatus, requestId));
     } catch {
+      if (res.headersSent) {
+        return;
+      }
       // Never expose internal errors in health check
       res.status(503).json(
         errorEnvelope("SERVICE_UNAVAILABLE", "Health check failed", requestId, {
@@ -433,8 +442,14 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
   app.use("/api/quota/requests", quotaRequestsRouter);
-  app.use("/api/quotas/counts", quotaCountsRouter);
+  // /api/quotas — quota status endpoints with per-user token-bucket rate limiting
+  // (capacity and refill rate controlled by QUOTA_RATE_LIMIT_CAPACITY / QUOTA_RATE_LIMIT_REFILL_RATE)
+  app.use("/api/quotas", createQuotasRouter());
 
+  // Developer-facing logs — X-Correlation-Id is propagated through every
+  // handler in this router via the correlationMiddleware so that callers
+  // can correlate multi-hop request chains.
+  app.use("/api/logs", createLogsRouter());
 
   // Prometheus metrics endpoint — auth-gated in production
   app.get("/api/metrics", metricsEndpoint);

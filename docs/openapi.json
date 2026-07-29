@@ -194,6 +194,37 @@
         }
       }
     },
+    "/api/health/health": {
+      "get": {
+        "summary": "Health Dependency Probe",
+        "description": "A dependency-level health probe that enumerates configured external dependencies (database, Soroban RPC, Horizon) with individual status, response time, and sanitized error information.",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Dependencies are healthy or partially degraded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependencies are down or probe failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/rate-limit/health": {
       "get": {
         "summary": "Check rate-limit subsystem health",
@@ -1731,10 +1762,9 @@
                           ]
                         }
                       ],
-                      "pagination": {
+                      "meta": {
                         "limit": 20,
-                        "offset": 0,
-                        "total": 2
+                        "hasMore": false
                       }
                     }
                   }
@@ -2423,6 +2453,116 @@
           },
           "403": {
             "description": "Forbidden (no developer profile)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/developers/me/usage/summary": {
+      "get": {
+        "summary": "Retrieve developer usage summary",
+        "description": "Returns aggregate usage metrics, per-API breakdown, and time-series buckets for the authenticated developer.",
+        "tags": [
+          "Developers"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start date for summary window (ISO 8601 string)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End date for summary window (ISO 8601 string)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupBy",
+            "in": "query",
+            "description": "Aggregation bucket period ('day', 'week', 'month')",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "default": "day"
+            }
+          },
+          {
+            "name": "apiId",
+            "in": "query",
+            "description": "Filter by specific API ID belonging to the developer",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Developer usage summary retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeveloperUsageSummaryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or date range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden (no developer profile or API not owned by developer)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3569,6 +3709,572 @@
           }
         }
       }
+    },
+    "/api/errors": {
+      "get": {
+        "summary": "List error definitions",
+        "description": "Returns all registered error definitions. Read-only; does not require authentication and is not audited.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Error definitions retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsListResponse"
+                },
+                "examples": {
+                  "withRecords": {
+                    "summary": "Store contains registered error definitions",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "errors": [
+                          {
+                            "id": "1",
+                            "code": "ERR_INSUFFICIENT_CREDITS",
+                            "message": "Developer account has insufficient credits",
+                            "statusCode": 402,
+                            "description": "Returned when a billing deduction would take the balance below zero.",
+                            "createdAt": "2026-07-27T09:00:00.000Z",
+                            "updatedAt": "2026-07-27T09:00:00.000Z"
+                          }
+                        ]
+                      },
+                      "requestId": "req-errors-list-1",
+                      "timestamp": "2026-07-27T09:00:00.000Z"
+                    }
+                  },
+                  "empty": {
+                    "summary": "No error definitions registered yet",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "errors": []
+                      },
+                      "requestId": "req-errors-list-2",
+                      "timestamp": "2026-07-27T09:05:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create an error definition",
+        "description": "Registers a new error definition. Requires authentication; the mutation is recorded in the audit log.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorCreateRequest"
+              },
+              "examples": {
+                "createErrorDefinition": {
+                  "summary": "Register a new billing error code",
+                  "value": {
+                    "code": "ERR_INSUFFICIENT_CREDITS",
+                    "message": "Developer account has insufficient credits",
+                    "statusCode": 402,
+                    "description": "Returned when a billing deduction would take the balance below zero."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Error definition created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRecordResponse"
+                },
+                "examples": {
+                  "created": {
+                    "summary": "Newly created error definition",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "id": "1",
+                        "code": "ERR_INSUFFICIENT_CREDITS",
+                        "message": "Developer account has insufficient credits",
+                        "statusCode": 402,
+                        "description": "Returned when a billing deduction would take the balance below zero.",
+                        "createdAt": "2026-07-27T09:00:00.000Z",
+                        "updatedAt": "2026-07-27T09:00:00.000Z"
+                      },
+                      "requestId": "req-errors-create-1",
+                      "timestamp": "2026-07-27T09:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body failed validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "validationFailed": {
+                    "summary": "Missing required field",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BAD_REQUEST",
+                        "message": "Validation failed",
+                        "details": [
+                          {
+                            "field": "code",
+                            "message": "Required",
+                            "code": "invalid_type"
+                          }
+                        ]
+                      },
+                      "requestId": "req-errors-create-400",
+                      "timestamp": "2026-07-27T09:01:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Unauthorized"
+                      },
+                      "requestId": "req-errors-create-401",
+                      "timestamp": "2026-07-27T09:02:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/errors/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Error definition ID",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Get an error definition by ID",
+        "description": "Read-only; does not require authentication and is not audited.",
+        "responses": {
+          "200": {
+            "description": "Error definition retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRecordResponse"
+                },
+                "examples": {
+                  "found": {
+                    "summary": "Existing error definition",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "id": "1",
+                        "code": "ERR_INSUFFICIENT_CREDITS",
+                        "message": "Developer account has insufficient credits",
+                        "statusCode": 402,
+                        "description": "Returned when a billing deduction would take the balance below zero.",
+                        "createdAt": "2026-07-27T09:00:00.000Z",
+                        "updatedAt": "2026-07-27T09:00:00.000Z"
+                      },
+                      "requestId": "req-errors-get-1",
+                      "timestamp": "2026-07-27T09:03:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error definition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "notFound": {
+                    "summary": "No error definition with the given ID",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Error definition 999 not found"
+                      },
+                      "requestId": "req-errors-get-404",
+                      "timestamp": "2026-07-27T09:04:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace an error definition",
+        "description": "Full update of an existing error definition. Requires authentication; the mutation is recorded in the audit log.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorUpdateRequest"
+              },
+              "examples": {
+                "replaceErrorDefinition": {
+                  "summary": "Update the message and status code",
+                  "value": {
+                    "code": "ERR_INSUFFICIENT_CREDITS",
+                    "message": "Account balance is below the required minimum",
+                    "statusCode": 402,
+                    "description": "Returned when a billing deduction would take the balance below zero."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Error definition updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRecordResponse"
+                },
+                "examples": {
+                  "updated": {
+                    "summary": "Updated error definition",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "id": "1",
+                        "code": "ERR_INSUFFICIENT_CREDITS",
+                        "message": "Account balance is below the required minimum",
+                        "statusCode": 402,
+                        "description": "Returned when a billing deduction would take the balance below zero.",
+                        "createdAt": "2026-07-27T09:00:00.000Z",
+                        "updatedAt": "2026-07-27T09:06:00.000Z"
+                      },
+                      "requestId": "req-errors-put-1",
+                      "timestamp": "2026-07-27T09:06:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body failed validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "emptyUpdate": {
+                    "summary": "No fields provided",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BAD_REQUEST",
+                        "message": "At least one field must be provided for update"
+                      },
+                      "requestId": "req-errors-put-400",
+                      "timestamp": "2026-07-27T09:07:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Unauthorized"
+                      },
+                      "requestId": "req-errors-put-401",
+                      "timestamp": "2026-07-27T09:08:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error definition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "notFound": {
+                    "summary": "No error definition with the given ID",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Error definition 999 not found"
+                      },
+                      "requestId": "req-errors-put-404",
+                      "timestamp": "2026-07-27T09:09:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Partially update an error definition",
+        "description": "Partial update of an existing error definition. Requires authentication; the mutation is recorded in the audit log.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErrorUpdateRequest"
+              },
+              "examples": {
+                "patchMessage": {
+                  "summary": "Update just the message",
+                  "value": {
+                    "message": "Account balance is below the required minimum"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Error definition updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorRecordResponse"
+                },
+                "examples": {
+                  "updated": {
+                    "summary": "Updated error definition",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "id": "1",
+                        "code": "ERR_INSUFFICIENT_CREDITS",
+                        "message": "Account balance is below the required minimum",
+                        "statusCode": 402,
+                        "description": "Returned when a billing deduction would take the balance below zero.",
+                        "createdAt": "2026-07-27T09:00:00.000Z",
+                        "updatedAt": "2026-07-27T09:10:00.000Z"
+                      },
+                      "requestId": "req-errors-patch-1",
+                      "timestamp": "2026-07-27T09:10:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body failed validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "emptyUpdate": {
+                    "summary": "No fields provided",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BAD_REQUEST",
+                        "message": "At least one field must be provided for update"
+                      },
+                      "requestId": "req-errors-patch-400",
+                      "timestamp": "2026-07-27T09:11:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Unauthorized"
+                      },
+                      "requestId": "req-errors-patch-401",
+                      "timestamp": "2026-07-27T09:12:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error definition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "notFound": {
+                    "summary": "No error definition with the given ID",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Error definition 999 not found"
+                      },
+                      "requestId": "req-errors-patch-404",
+                      "timestamp": "2026-07-27T09:13:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an error definition",
+        "description": "Requires authentication; the mutation is recorded in the audit log. Returns no content on success.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Error definition deleted"
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "unauthorized": {
+                    "summary": "Missing or invalid authentication",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Unauthorized"
+                      },
+                      "requestId": "req-errors-delete-401",
+                      "timestamp": "2026-07-27T09:14:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error definition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardErrorEnvelope"
+                },
+                "examples": {
+                  "notFound": {
+                    "summary": "No error definition with the given ID",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Error definition 999 not found"
+                      },
+                      "requestId": "req-errors-delete-404",
+                      "timestamp": "2026-07-27T09:15:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4270,7 +4976,7 @@
         "type": "object",
         "required": [
           "data",
-          "pagination"
+          "meta"
         ],
         "properties": {
           "data": {
@@ -4279,22 +4985,22 @@
               "$ref": "#/components/schemas/ApiDetailsResponse"
             }
           },
-          "pagination": {
+          "meta": {
             "type": "object",
             "required": [
               "limit",
-              "offset",
-              "total"
+              "hasMore"
             ],
             "properties": {
               "limit": {
                 "type": "integer"
               },
-              "offset": {
-                "type": "integer"
+              "hasMore": {
+                "type": "boolean"
               },
-              "total": {
-                "type": "integer"
+              "nextCursor": {
+                "type": "string",
+                "description": "Opaque base64 cursor for the next page. Absent when hasMore is false."
               }
             }
           }
@@ -4756,6 +5462,135 @@
               },
               "hasMore": {
                 "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "DeveloperUsageSummaryResponse": {
+        "type": "object",
+        "required": [
+          "summary",
+          "breakdownByApi",
+          "buckets",
+          "period"
+        ],
+        "properties": {
+          "summary": {
+            "type": "object",
+            "required": [
+              "totalCalls",
+              "totalRevenue",
+              "activeApis"
+            ],
+            "properties": {
+              "totalCalls": {
+                "type": "integer"
+              },
+              "totalRevenue": {
+                "type": "string"
+              },
+              "activeApis": {
+                "type": "integer"
+              }
+            }
+          },
+          "breakdownByApi": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "apiId",
+                "calls",
+                "revenue"
+              ],
+              "properties": {
+                "apiId": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "revenue": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "period",
+                "calls",
+                "revenue"
+              ],
+              "properties": {
+                "period": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "revenue": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "period": {
+            "type": "object",
+            "required": [
+              "from",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "HealthDependenciesResponse": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "dependencies"
+        ],
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ok",
+                    "degraded",
+                    "down"
+                  ]
+                },
+                "responseTime": {
+                  "type": "number",
+                  "description": "Response time in milliseconds"
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Sanitized error message"
+                }
               }
             }
           }
@@ -5223,6 +6058,227 @@
           "notes": {
             "type": "string",
             "maxLength": 1000
+          }
+        }
+      },
+      "ErrorRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "message",
+          "statusCode",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "statusCode": {
+            "type": "integer"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ErrorRecordResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/ErrorRecord"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ErrorsListResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "errors"
+            ],
+            "properties": {
+              "errors": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ErrorRecord"
+                }
+              }
+            }
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ErrorCreateRequest": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "statusCode"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "statusCode": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          }
+        }
+      },
+      "ErrorUpdateRequest": {
+        "type": "object",
+        "description": "At least one field must be provided.",
+        "minProperties": 1,
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "statusCode": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          }
+        }
+      },
+      "StandardErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "error",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

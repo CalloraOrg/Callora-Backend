@@ -1,7 +1,9 @@
 import { adminLogMiddleware } from '../middleware/adminLog.js';
+import { etagMiddleware } from '../middleware/etag.js';
 import { Router, type Response } from 'express';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
+import { adminHistogramMiddleware } from '../middleware/metricsHistogram.js';
 import { findUsers } from '../repositories/userRepository.js';
 import { parsePagination, paginatedResponse } from '../lib/pagination.js';
 import { getClientIp } from '../lib/clientIp.js';
@@ -16,6 +18,7 @@ import {
 import { validate } from '../middleware/validate.js';
 import {
   developerIdParamsSchema,
+  usersQuerySchema,
   quotaRequestsQuerySchema,
   quotaRequestIdParamsSchema,
   quotaRequestActionBodySchema,
@@ -40,6 +43,7 @@ const router = Router();
 router.use(createAdminIpAllowlist());
 router.use(adminAuth);
 router.use(adminLogMiddleware);
+router.use(etagMiddleware);
 router.get('/users', async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);

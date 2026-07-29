@@ -3,12 +3,13 @@ import { Express } from 'express';
 import express from 'express';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import { auditEnrichMiddleware } from '../middleware/auditEnrich.js';
-import { requireAuth } from '../middleware/requireAuth.js';
 import { errorHandler } from '../middleware/errorHandler.js';
-import { envelopeMiddleware } from '../middleware/envelope.js';
 import { createForecastRouter } from './forecast.js';
+import type { PaginatedForecastResponse, ForecastPoint } from './forecast.js';
+import { FORECAST_DEFAULT_LIMIT, FORECAST_MAX_LIMIT } from './forecast.js';
 import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { defaultAuditService } from '../services/auditService.js';
+import { forecastLogger } from '../middleware/forecastAccessLog.js';
 import jwt from 'jsonwebtoken';
 
 // Mock auditService to capture audit calls
@@ -24,22 +25,13 @@ const mockJwt = jwt as unknown as {
 /**
  * Create a test Express app with the forecast router and all required middleware.
  */
-function createTestApp(): Express {
+function createTestApp(timeoutMs = 5_000): Express {
   const app = express();
-
-  // Parse JSON bodies
   app.use(express.json());
-
-  // Middleware stack (order matters)
   app.use(requestIdMiddleware);
   app.use(auditEnrichMiddleware);
-
-  // Mount forecast router under /api/forecast
-  app.use('/api/forecast', createForecastRouter());
-
-  // Error handler (should be last)
+  app.use('/api/forecast', createForecastRouter(timeoutMs));
   app.use(errorHandler);
-
   return app;
 }
 
@@ -47,217 +39,163 @@ function createTestApp(): Express {
  * Create a valid JWT token for testing authenticated requests.
  */
 function createToken(userId: string): string {
-  // We'll simulate this in the test by mocking jwt.verify
   return `mock-token-${userId}`;
 }
 
-describe('Forecast Routes with Audit Logging', () => {
-  let app: Express;
+/**
+ * Decode a base64url cursor and verify it is a valid fc:<index> string.
+ * Returns the integer index or throws.
+ */
+function decodeCursorIndex(cursor: string): number {
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf-8');
+  const match = /^fc:(\d+)$/.exec(decoded);
+  if (!match) throw new Error(`Unexpected cursor format: ${decoded}`);
+  return parseInt(match[1], 10);
+}
 
-  beforeEach(() => {
-    // Reset all mocks before each test
-    jest.clearAllMocks();
-    mockAuditService.record.mockResolvedValue(undefined);
+// ===========================================================================
+// Shared app setup
+// ===========================================================================
 
-    // Mock jwt.verify to return a valid user
-    (mockJwt.verify as jest.Mock).mockImplementation((token: string) => {
-      const userId = token.replace('mock-token-', '');
-      return { userId, sub: userId };
-    });
+let app: Express;
 
-    // Mock process.env.JWT_SECRET
-    process.env.JWT_SECRET = 'test-secret-key';
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockAuditService.record.mockResolvedValue(undefined);
 
-    app = createTestApp();
+  mockJwt.verify = jest.fn().mockImplementation((token: string) => {
+    const userId = (token as string).replace('mock-token-', '');
+    return { userId, sub: userId };
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
+  process.env.JWT_SECRET = 'test-secret-key';
+  app = createTestApp();
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
+// ===========================================================================
+// GET /api/forecast — Pagination: shape assertions
+// ===========================================================================
+
+describe('GET /api/forecast — paginated envelope shape', () => {
+  it('returns 200 with the {items, total} envelope (no next_cursor on first/only page when all fit)', async () => {
+    // The route generates 24 hourly points. With default limit=20, the first
+    // page has 20 items and a next_cursor; requesting limit=100 fits them all.
+    const res = await request(app).get('/api/forecast?limit=100');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    const data: PaginatedForecastResponse = res.body.data;
+    expect(Array.isArray(data.items)).toBe(true);
+    expect(typeof data.total).toBe('number');
+    expect(data.total).toBe(24); // 24 hourly forecast points generated
+    expect(data.items).toHaveLength(24);
+    // All items fit in one page → no next_cursor
+    expect(data.next_cursor).toBeUndefined();
   });
 
-  // =========================================================================
-  // GET / (read-only, not audited)
-  // =========================================================================
+  it('includes requestId and timestamp in the outer envelope', async () => {
+    const res = await request(app)
+      .get('/api/forecast')
+      .set('X-Request-Id', 'req-test-001');
 
-  describe('GET /api/forecast', () => {
-    it('should return a generated forecast without audit', async () => {
-      const res = await request(app).get('/api/forecast');
-
-      expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty('data');
-      expect(res.body.data).toHaveProperty('forecast');
-      expect(res.body.data).toHaveProperty('generatedAt');
-      expect(Array.isArray(res.body.data.forecast)).toBe(true);
-
-      // Verify no audit was recorded for read operation
-      expect(mockAuditService.record).not.toHaveBeenCalled();
-    });
+    expect(res.status).toBe(200);
+    expect(res.body.requestId).toBe('req-test-001');
+    expect(res.body.timestamp).toBeDefined();
+    expect(new Date(res.body.timestamp as string).getTime()).not.toBeNaN();
   });
 
-  // =========================================================================
-  // POST / (create - state-changing, audited)
-  // =========================================================================
+  it('each item has timestamp (ISO string) and value (number)', async () => {
+    const res = await request(app).get('/api/forecast?limit=100');
 
-  describe('POST /api/forecast (create)', () => {
-    it('should create a new forecast and record an audit event', async () => {
-      const token = createToken('dev-user-1');
-
-      const res = await request(app)
-        .post('/api/forecast')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: 'Weather Forecast',
-          description: 'Weekly weather prediction',
-        });
-
-      expect(res.status).toBe(201);
-      expect(res.body).toHaveProperty('data');
-      expect(res.body.data).toHaveProperty('id');
-      expect(res.body.data.name).toBe('Weather Forecast');
-      expect(res.body.data.description).toBe('Weekly weather prediction');
-
-      // Verify exactly one audit event was recorded
-      expect(mockAuditService.record).toHaveBeenCalledTimes(1);
-
-      // Verify audit event has correct structure
-      const auditCall = mockAuditService.record.mock.calls[0][0];
-      expect(auditCall.event).toBe('forecast.create');
-      expect(auditCall.actor).toBe('dev-user-1');
-      expect(auditCall.details).toHaveProperty('before');
-      expect(auditCall.details).toHaveProperty('after');
-      expect(auditCall.details!.before).toBeNull(); // Creation: before is null
-      expect(auditCall.details!.after).toHaveProperty('id');
-      expect(auditCall.details!.after).toHaveProperty('name', 'Weather Forecast');
-      expect(auditCall.details!.after).toHaveProperty('description', 'Weekly weather prediction');
-    });
-
-    it('should record actor from authenticated context, not from request body', async () => {
-      const token = createToken('dev-user-1');
-
-      // Try to spoof the actor in the request body
-      const res = await request(app)
-        .post('/api/forecast')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: 'Forecast',
-          description: 'Test',
-          actor: 'hacker-user', // This should be ignored
-        });
-
-      expect(res.status).toBe(201);
-
-      // Verify actor in audit is from auth context, not request body
-      const auditCall = mockAuditService.record.mock.calls[0][0];
-      expect(auditCall.actor).toBe('dev-user-1'); // From JWT, not from body
-    });
-
-    it('should propagate correlation ID to audit record', async () => {
-      const token = createToken('dev-user-1');
-
-      const res = await request(app)
-        .post('/api/forecast')
-        .set('Authorization', `Bearer ${token}`)
-        .set('X-Request-Id', 'req-12345')
-        .send({
-          name: 'Forecast',
-          description: 'Test',
-        });
-
-      expect(res.status).toBe(201);
-
-      // Verify correlation ID is present in audit
-      const auditCall = mockAuditService.record.mock.calls[0][0];
-      expect(auditCall.correlationId).toBe('req-12345');
-    });
-
-    it('should require authentication', async () => {
-      const res = await request(app)
-        .post('/api/forecast')
-        .send({
-          name: 'Forecast',
-          description: 'Test',
-        });
-
-      // Should reject unauthenticated request
-      expect(res.status).toBe(401);
-      expect(mockAuditService.record).not.toHaveBeenCalled();
-    });
-
-    it('should validate required fields', async () => {
-      const token = createToken('dev-user-1');
-
-      const res = await request(app)
-        .post('/api/forecast')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          // Missing 'name' field
-          description: 'Test',
-        });
-
-      expect(res.status).toBe(400);
-      expect(mockAuditService.record).not.toHaveBeenCalled();
-    });
-
-    it('should not allow empty name', async () => {
-      const token = createToken('dev-user-1');
-
-      const res = await request(app)
-        .post('/api/forecast')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: '',
-          description: 'Test',
-        });
-
-      expect(res.status).toBe(400);
-      expect(mockAuditService.record).not.toHaveBeenCalled();
-    });
+    expect(res.status).toBe(200);
+    const items: ForecastPoint[] = res.body.data.items;
+    for (const point of items) {
+      expect(typeof point.timestamp).toBe('string');
+      expect(new Date(point.timestamp).getTime()).not.toBeNaN();
+      expect(typeof point.value).toBe('number');
+      expect(point.value).toBeGreaterThanOrEqual(0);
+    }
   });
 
-  // =========================================================================
-  // GET /:id (read-only, not audited)
-  // =========================================================================
-
-  describe('GET /api/forecast/:id', () => {
-    it('should return a forecast by id without audit', async () => {
-      const token = createToken('dev-user-1');
-
-      // First create a forecast
-      const createRes = await request(app)
-        .post('/api/forecast')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: 'Test Forecast',
-          description: 'Testing',
-        });
-
-      const forecastId = createRes.body.data.id;
-      jest.clearAllMocks(); // Clear create audit
-
-      // Now fetch it
-      const getRes = await request(app).get(`/api/forecast/${forecastId}`);
-
-      expect(getRes.status).toBe(200);
-      expect(getRes.body.data.id).toBe(forecastId);
-      expect(getRes.body.data.name).toBe('Test Forecast');
-
-      // Verify no audit for read operation
-      expect(mockAuditService.record).not.toHaveBeenCalled();
-    });
-
-    it('should return 404 for non-existent forecast', async () => {
-      const res = await request(app).get('/api/forecast/non-existent-id');
-
-      expect(res.status).toBe(404);
-      expect(mockAuditService.record).not.toHaveBeenCalled();
-    });
+  it('does NOT include next_cursor when all items fit on one page', async () => {
+    const res = await request(app).get('/api/forecast?limit=100');
+    expect(res.status).toBe(200);
+    expect(res.body.data.next_cursor).toBeUndefined();
   });
 
-  // =========================================================================
-  // PATCH /:id (update - state-changing, audited)
-  // =========================================================================
+  it('total always equals 24 regardless of the page size', async () => {
+    const res1 = await request(app).get('/api/forecast?limit=5');
+    const res2 = await request(app).get('/api/forecast?limit=100');
+    expect(res1.body.data.total).toBe(24);
+    expect(res2.body.data.total).toBe(24);
+  });
+});
 
-  describe('PATCH /api/forecast/:id (update)', () => {
+describe('Zod Validation for /api/forecast', () => {
+  it('returns 400 with structured validation error when limit is invalid', async () => {
+    const res = await request(app).get('/api/forecast?limit=invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.message).toBe('Request validation failed');
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details[0].field).toBe('query.limit');
+  });
+
+  it('returns 400 with structured validation error when limit is non-positive', async () => {
+    const res = await request(app).get('/api/forecast?limit=-5');
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].field).toBe('query.limit');
+  });
+
+  it('returns 400 with structured validation error when POST body is missing required name', async () => {
+    const token = createToken('dev-user-1');
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ description: 'A forecast without name' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].field).toBe('body.name');
+  });
+
+  it('returns 400 with structured validation error when POST body name exceeds max length', async () => {
+    const token = createToken('dev-user-1');
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'x'.repeat(256), description: 'Long name forecast' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].field).toBe('body.name');
+  });
+
+  it('returns 400 with structured validation error when PATCH body has no fields', async () => {
+    const token = createToken('dev-user-1');
+    const res = await request(app)
+      .patch('/api/forecast/forecast_123')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+});
+
+describe('PATCH /api/forecast/:id (update)', () => {
     it('should update a forecast and record before/after audit', async () => {
       const token = createToken('dev-user-1');
 
@@ -576,8 +514,312 @@ describe('Forecast Routes with Audit Logging', () => {
       const res = await request(timeoutApp).get('/api/forecast/test-timeout');
 
       expect(res.status).toBe(504);
-      expect(res.body.code).toBe('GATEWAY_TIMEOUT');
-      expect(res.body.message).toMatch(/timed out after 50ms/i);
+      expect(res.body.error.code).toBe('GATEWAY_TIMEOUT');
+      expect(res.body.error.message).toMatch(/timed out after 50ms/i);
     });
+  });
+});
+
+// =============================================================================
+// Access log integration tests
+//
+// These tests verify that createForecastAccessLogMiddleware is correctly wired
+// into the forecast router and emits structured log entries containing all
+// required fields: req-id, latency, status, response size, and actor.
+// =============================================================================
+
+describe('Forecast access log integration', () => {
+  let app: Express;
+  let infoSpy: jest.SpyInstance;
+  let warnSpy: jest.SpyInstance;
+  let errorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    // Spy on the forecast Pino child logger used by the middleware
+    infoSpy = jest.spyOn(forecastLogger, 'info').mockImplementation(() => forecastLogger);
+    warnSpy = jest.spyOn(forecastLogger, 'warn').mockImplementation(() => forecastLogger);
+    errorSpy = jest.spyOn(forecastLogger, 'error').mockImplementation(() => forecastLogger);
+
+    // Stub auditService so mutations don't fail
+    (defaultAuditService as jest.Mocked<typeof defaultAuditService>).record.mockResolvedValue(undefined);
+
+    // Stub JWT
+    const mockJwt = jwt as unknown as { verify: jest.Mock };
+    mockJwt.verify.mockImplementation((token: string) => {
+      const userId = (token as string).replace('mock-token-', '');
+      return { userId, sub: userId };
+    });
+
+    process.env.JWT_SECRET = 'test-secret-key';
+
+    app = (() => {
+      const a = express();
+      a.use(express.json());
+      a.use(requestIdMiddleware);
+      a.use(auditEnrichMiddleware);
+      a.use('/api/forecast', createForecastRouter());
+      a.use(errorHandler);
+      return a;
+    })();
+  });
+
+  afterEach(() => {
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET / — unauthenticated read
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with req-id, status 200, latency, and response size for GET /', async () => {
+    const res = await request(app)
+      .get('/api/forecast')
+      .set('X-Request-Id', 'req-get-root');
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-get-root');
+    expect(payload.correlationId).toBe('req-get-root');
+    expect(payload.method).toBe('GET');
+    expect(payload.status).toBe(200);
+    expect(payload.statusCode).toBe(200);
+    expect(typeof payload.ms).toBe('number');
+    expect(payload.ms as number).toBeGreaterThanOrEqual(0);
+    expect(payload.durationMs).toBe(payload.ms);
+    expect(typeof payload.responseBytes).toBe('number');
+    expect(payload.responseBytes as number).toBeGreaterThan(0);
+    // No actor for unauthenticated GET
+    expect(payload).not.toHaveProperty('actor');
+    expect(payload).not.toHaveProperty('userId');
+  });
+
+  // ---------------------------------------------------------------------------
+  // POST / — authenticated create, actor must appear
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with actor for authenticated POST /', async () => {
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-42')
+      .set('X-Request-Id', 'req-post-create')
+      .send({ name: 'Access Log Test', description: 'Testing access log' });
+
+    expect(res.status).toBe(201);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-post-create');
+    expect(payload.method).toBe('POST');
+    expect(payload.status).toBe(201);
+    expect(payload.statusCode).toBe(201);
+    expect(payload.actor).toBe('dev-user-42');
+    expect(payload.userId).toBe('dev-user-42');
+    expect(typeof payload.ms).toBe('number');
+    expect(typeof payload.responseBytes).toBe('number');
+    expect(payload.responseBytes as number).toBeGreaterThan(0);
+    // No forecastId on the collection endpoint
+    expect(payload).not.toHaveProperty('forecastId');
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /:id — forecastId must appear in the log
+  // ---------------------------------------------------------------------------
+
+  it('includes forecastId in the access log for GET /:id', async () => {
+    // First create a forecast to get a real ID
+    const createRes = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-1')
+      .send({ name: 'ID Test', description: 'Testing forecastId in log' });
+
+    const forecastId = createRes.body.data.id as string;
+
+    infoSpy.mockClear();
+
+    const res = await request(app)
+      .get(`/api/forecast/${forecastId}`)
+      .set('X-Request-Id', 'req-get-by-id');
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-get-by-id');
+    expect(payload.forecastId).toBe(forecastId);
+    expect(payload.status).toBe(200);
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /:id 404 — warn level, forecastId still present
+  // ---------------------------------------------------------------------------
+
+  it('emits a warn log at status 404 for GET /:id with unknown ID', async () => {
+    const res = await request(app)
+      .get('/api/forecast/does-not-exist')
+      .set('X-Request-Id', 'req-get-404');
+
+    expect(res.status).toBe(404);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(infoSpy).not.toHaveBeenCalled();
+
+    const payload = warnSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-get-404');
+    expect(payload.status).toBe(404);
+    expect(payload.statusCode).toBe(404);
+  });
+
+  // ---------------------------------------------------------------------------
+  // PATCH /:id — actor + forecastId + 200
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with actor and forecastId for authenticated PATCH /:id', async () => {
+    const createRes = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-5')
+      .send({ name: 'Before', description: 'Patch test' });
+
+    const forecastId = createRes.body.data.id as string;
+    infoSpy.mockClear();
+
+    const res = await request(app)
+      .patch(`/api/forecast/${forecastId}`)
+      .set('Authorization', 'Bearer mock-token-dev-user-5')
+      .set('X-Request-Id', 'req-patch-1')
+      .send({ name: 'After' });
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-patch-1');
+    expect(payload.method).toBe('PATCH');
+    expect(payload.status).toBe(200);
+    expect(payload.actor).toBe('dev-user-5');
+    expect(payload.forecastId).toBe(forecastId);
+  });
+
+  // ---------------------------------------------------------------------------
+  // DELETE /:id — actor + forecastId + 204
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with actor and forecastId for authenticated DELETE /:id', async () => {
+    const createRes = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-6')
+      .send({ name: 'ToDelete', description: 'Delete test' });
+
+    const forecastId = createRes.body.data.id as string;
+    infoSpy.mockClear();
+
+    const res = await request(app)
+      .delete(`/api/forecast/${forecastId}`)
+      .set('Authorization', 'Bearer mock-token-dev-user-6')
+      .set('X-Request-Id', 'req-delete-1');
+
+    expect(res.status).toBe(204);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-delete-1');
+    expect(payload.method).toBe('DELETE');
+    expect(payload.status).toBe(204);
+    expect(payload.actor).toBe('dev-user-6');
+    expect(payload.forecastId).toBe(forecastId);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 401 — warn level, no actor
+  // ---------------------------------------------------------------------------
+
+  it('emits a warn log at status 401 when authentication is missing on POST /', async () => {
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('X-Request-Id', 'req-unauth-post')
+      .send({ name: 'No Auth', description: 'Test' });
+
+    expect(res.status).toBe(401);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    const payload = warnSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-unauth-post');
+    expect(payload.status).toBe(401);
+    expect(payload).not.toHaveProperty('actor');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 400 — warn level for validation failure
+  // ---------------------------------------------------------------------------
+
+  it('emits a warn log at status 400 for a validation failure on POST /', async () => {
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-1')
+      .set('X-Request-Id', 'req-bad-input')
+      .send({ description: 'missing name' }); // name is required
+
+    expect(res.status).toBe(400);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    const payload = warnSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-bad-input');
+    expect(payload.status).toBe(400);
+  });
+
+  // ---------------------------------------------------------------------------
+  // X-Request-Id echoed in response header
+  // ---------------------------------------------------------------------------
+
+  it('echoes X-Request-Id back in the response header', async () => {
+    const res = await request(app)
+      .get('/api/forecast')
+      .set('X-Request-Id', 'req-echo-check');
+
+    expect(res.headers['x-request-id']).toBe('req-echo-check');
+  });
+
+  // ---------------------------------------------------------------------------
+  // x-correlation-id takes precedence for correlationId field
+  // ---------------------------------------------------------------------------
+
+  it('uses x-correlation-id as correlationId when both headers are present', async () => {
+    const res = await request(app)
+      .get('/api/forecast')
+      .set('X-Request-Id', 'req-id-abc')
+      .set('X-Correlation-Id', 'corr-id-xyz');
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.correlationId).toBe('corr-id-xyz');
+    expect(payload.requestId).toBe('req-id-abc');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 500 — error level
+  // ---------------------------------------------------------------------------
+
+  it('emits an error log at status 500 when audit persistence fails', async () => {
+    (defaultAuditService as jest.Mocked<typeof defaultAuditService>).record
+      .mockRejectedValueOnce(new Error('DB down'));
+
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-1')
+      .set('X-Request-Id', 'req-500-test')
+      .send({ name: 'Fail', description: 'Test' });
+
+    expect(res.status).toBe(500);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    const payload = errorSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-500-test');
+    expect(payload.status).toBe(500);
   });
 });

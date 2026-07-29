@@ -12,13 +12,18 @@ export const billingLogger = logger.child({ channel: 'billing' });
 export interface BillingAccessLogPayload {
   correlationId: string;
   requestId: string;
+  'req-id'?: string;
   method: string;
   path: string;
   status: number;
   statusCode: number;
   ms: number;
   durationMs: number;
+  latency?: number;
+  latencyMs?: number;
+  requestBytes?: number;
   responseBytes: number;
+  size?: number;
   userId?: string;
   actor?: string;
   clientIp?: string;
@@ -68,19 +73,53 @@ export function createBillingAccessLogMiddleware(options: BillingAccessLogOption
 
   return function billingAccessLogMiddleware(req: Request, res: Response, next: NextFunction): void {
     const startAt = process.hrtime.bigint();
+    const requestHeaders = req.headers ?? {};
     const requestId =
       sanitizeRequestId(req.id) ??
       getRequestId() ??
       sanitizeRequestId(
-        Array.isArray(req.headers['x-request-id'])
-          ? req.headers['x-request-id'][0]
-          : req.headers['x-request-id'],
+        Array.isArray(requestHeaders['x-request-id'])
+          ? requestHeaders['x-request-id'][0]
+          : requestHeaders['x-request-id'],
       ) ??
       uuidv4();
 
+    const correlationId =
+      sanitizeRequestId(
+        Array.isArray(requestHeaders['x-correlation-id'])
+          ? requestHeaders['x-correlation-id'][0]
+          : requestHeaders['x-correlation-id'],
+      ) ??
+      sanitizeRequestId(
+        Array.isArray(requestHeaders['x-request-id'])
+          ? requestHeaders['x-request-id'][0]
+          : requestHeaders['x-request-id'],
+      ) ??
+      requestId;
+
     const clientIp = getClientIp(req, TRUST_PROXY);
 
+    const requestHeaderLengthRaw =
+      typeof req.header === 'function'
+        ? req.header('content-length')
+        : Array.isArray(requestHeaders['content-length'])
+          ? requestHeaders['content-length'][0]
+          : requestHeaders['content-length'];
+    const requestHeaderLength = Number(requestHeaderLengthRaw);
+    let requestBytes = 0;
+    let sawRequestData = false;
     let responseBytes = 0;
+    let emitted = false;
+
+    const onData = (chunk: Buffer | string): void => {
+      sawRequestData = true;
+      requestBytes += byteLength(chunk);
+    };
+
+    if (typeof req.on === 'function') {
+      req.on('data', onData);
+    }
+
     const originalWrite = typeof res.write === 'function' ? res.write.bind(res) : undefined;
     const originalEnd = typeof res.end === 'function' ? res.end.bind(res) : undefined;
 
@@ -105,22 +144,47 @@ export function createBillingAccessLogMiddleware(options: BillingAccessLogOption
     }
 
     const emitLog = (): void => {
-      const elapsedMs = Number(process.hrtime.bigint() - startAt) / 1_000_000;
+      if (emitted) return;
+      emitted = true;
+
+      if (typeof req.off === 'function') {
+        req.off('data', onData);
+      } else if (typeof req.removeListener === 'function') {
+        req.removeListener('data', onData);
+      }
+
+      if (!sawRequestData && Number.isFinite(requestHeaderLength) && requestHeaderLength >= 0) {
+        requestBytes = requestHeaderLength;
+      }
+
+      const elapsedMs = Number((Number(process.hrtime.bigint() - startAt) / 1_000_000).toFixed(3));
       const status = res.statusCode;
       const userId = extractUser(res);
+      const bodyActor =
+        typeof req.body === 'object' && req.body !== null
+          ? (req.body as Record<string, unknown>).developerId as string | undefined
+          : undefined;
+      const paramActor = (req.params as Record<string, string | undefined>)?.developerId;
+      const actor = userId ?? paramActor ?? bodyActor;
       const billingContext = extractBillingPayload(req);
 
       const payload: BillingAccessLogPayload = {
-        correlationId: requestId,
+        correlationId,
         requestId,
+        'req-id': requestId,
         method: req.method,
         path: req.path,
         status,
         statusCode: status,
-        ms: Number(elapsedMs.toFixed(3)),
-        durationMs: Number(elapsedMs.toFixed(3)),
+        ms: elapsedMs,
+        durationMs: elapsedMs,
+        latency: elapsedMs,
+        latencyMs: elapsedMs,
+        requestBytes,
         responseBytes,
-        ...(userId ? { userId, actor: userId } : {}),
+        size: responseBytes,
+        ...(userId ? { userId } : {}),
+        ...(actor ? { actor } : {}),
         ...(clientIp ? { clientIp } : {}),
         ...billingContext,
       };

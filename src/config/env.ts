@@ -99,6 +99,23 @@ export const envSchema = z
       .int()
       .positive()
       .default(1),
+    // Per-endpoint circuit breaker config for /api/gateway downstream calls.
+    // Each API endpoint gets its own breaker keyed by apiId.
+    GATEWAY_BREAKER_FAILURE_THRESHOLD: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5),
+    GATEWAY_BREAKER_COOLDOWN_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(30_000),
+    GATEWAY_BREAKER_SUCCESS_THRESHOLD: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1),
     REST_RATE_LIMIT_WINDOW_MS: z.coerce
       .number()
       .int()
@@ -151,11 +168,11 @@ export const envSchema = z
     CREDITS_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(10),
     CREDITS_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
 
-    // Logs endpoint per-user token-bucket rate limiting.
-    // LOGS_RATE_LIMIT_CAPACITY:    maximum burst size (tokens) per user.
-    // LOGS_RATE_LIMIT_REFILL_RATE: tokens added per second (continuous refill).
-    LOGS_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(60),
-    LOGS_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
+    // /api/quotas per-user token-bucket rate limiting.
+    // capacity:    maximum burst of requests before the bucket empties (default 60).
+    // refillRate:  tokens added per second (default 1 → steady-state of 1 req/s).
+    QUOTA_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(60),
+    QUOTA_RATE_LIMIT_REFILL_RATE: z.coerce.number().positive().default(1),
 
     // Billing endpoint per-user rate limiting (fixed-window)
     BILLING_RATE_LIMIT_WINDOW_MS: z.coerce
@@ -194,6 +211,18 @@ export const envSchema = z
     // middleware will continue to read the raw string and the two sources of
     // truth will silently diverge.
     MAINTENANCE_CORS_ALLOWED_ORIGINS: z.string().default(""),
+
+    // Apis CORS allowlist (comma-separated origins; deny by default when empty).
+    //
+    // This entry is intentionally left as a raw string — it exists in the
+    // schema for documentation and `.env.example` cross-referencing purposes
+    // only. The runtime parser lives in
+    // {@link createApisCorsMiddleware} (src/middleware/cors.ts), which
+    // reads `process.env` lazily so tests that mutate the env after module
+    // load still work. If this entry is transformed into an array here, the
+    // middleware will continue to read the raw string and the two sources of
+    // truth will silently diverge.
+    APIS_CORS_ALLOWED_ORIGINS: z.string().default(""),
 
     // Soroban RPC (optional)
     SOROBAN_RPC_ENABLED: z
@@ -268,6 +297,13 @@ export const envSchema = z
 
     // Health check
     HEALTH_CHECK_DB_TIMEOUT: z.coerce.number().default(2_000),
+    /**
+     * HEALTH_REQUEST_TIMEOUT_MS — maximum wall-clock time (ms) allowed for a
+     * full GET /api/health response. When the deadline is exceeded the request
+     * is cooperatively aborted and the caller receives HTTP 504.
+     * Default: 5 000 ms.
+     */
+    HEALTH_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
     APIS_CACHE_TTL_MS: z.coerce.number().int().positive().optional(),
     LISTINGS_CACHE_WARMUP_TIMEOUT_MS: z.coerce
       .number()
@@ -288,6 +324,7 @@ export const envSchema = z
       .default("info"),
     ACCESS_LOG_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
     ACCESS_LOG_REDACT_FIELDS: z.string().optional(),
+    USAGE_ACCESS_LOG_REDACT_FIELDS: z.string().optional(),
 
     // Profiling
     GATEWAY_PROFILING_ENABLED: z

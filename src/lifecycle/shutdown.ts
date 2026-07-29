@@ -296,6 +296,9 @@ export function createGracefulShutdownHandler({
 export function createInFlightDrainTracker(name: string): {
   middleware: RequestHandler;
   subsystem: DrainableSubsystem;
+  /** Returns true once beginShutdown() has been called — i.e. the server is
+   *  winding down and no new work should be accepted. */
+  isDraining: () => boolean;
 } {
   let activeRequestCount = 0;
   let acceptingRequests = true;
@@ -344,6 +347,7 @@ export function createInFlightDrainTracker(name: string): {
 
   return {
     middleware,
+    isDraining: () => !acceptingRequests,
     subsystem: {
       name,
       beginShutdown() {

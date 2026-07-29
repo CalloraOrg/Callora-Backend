@@ -109,6 +109,12 @@ export const config = {
       .map((field) => field.trim())
       .filter((field) => field.length > 0),
   },
+  usageAccessLog: {
+    redactFields: (env.USAGE_ACCESS_LOG_REDACT_FIELDS ?? "")
+      .split(",")
+      .map((field) => field.trim())
+      .filter((field) => field.length > 0),
+  },
 
   databaseUrl: env.DATABASE_URL,
   replicaUrls: env.REPLICA_URLS,
@@ -125,6 +131,8 @@ export const config = {
     },
     timeout: env.HEALTH_CHECK_DB_TIMEOUT,
   },
+  /** Per-request timeout for GET /api/health (ms). Sends 504 on exceed. */
+  healthRequestTimeoutMs: env.HEALTH_REQUEST_TIMEOUT_MS,
   dbPool: {
     max: env.DB_POOL_MAX,
     idleTimeoutMillis: env.DB_IDLE_TIMEOUT_MS,
@@ -175,9 +183,12 @@ export const config = {
     },
   },
 
-  logsRateLimit: {
-    capacity: env.LOGS_RATE_LIMIT_CAPACITY,
-    refillRate: env.LOGS_RATE_LIMIT_REFILL_RATE,
+  quotaRateLimit: {
+    // Token-bucket parameters for the /api/quotas endpoint group.
+    // Burst: up to `capacity` requests are allowed immediately.
+    // Steady-state: `refillRate` tokens per second are added back to each bucket.
+    capacity: env.QUOTA_RATE_LIMIT_CAPACITY,
+    refillRate: env.QUOTA_RATE_LIMIT_REFILL_RATE,
   },
 
   rateLimiter: {
@@ -234,6 +245,8 @@ export const config = {
   bcrypt: {
     costFactor: env.BCRYPT_COST_FACTOR,
   },
+  billingTimeoutMs: env.BILLING_TIMEOUT_MS,
+
   billingConcurrency: {
     maxPerDeveloper: env.BILLING_MAX_CONCURRENCY_PER_DEV,
     semaphoreTtlMs: env.BILLING_SEMAPHORE_TTL_MS,

@@ -62,6 +62,13 @@ export const usersQuerySchema = z.object({
     .refine((v) => v === undefined || (/^\d+$/.test(v) && Number(v) >= 0), {
       message: 'offset must be a non-negative integer',
     }),
+  /** One-based page number (positive integer). Takes precedence over offset when present. */
+  page: z
+    .string()
+    .optional()
+    .refine((v) => v === undefined || (/^\d+$/.test(v) && Number(v) >= 1), {
+      message: 'page must be a positive integer',
+    }),
 });
 
 export type UsersQuery = z.infer<typeof usersQuerySchema>;

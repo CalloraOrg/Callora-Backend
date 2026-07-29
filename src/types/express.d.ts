@@ -27,6 +27,13 @@ declare global {
       /** AbortSignal provided by the timeout middleware for cooperative cancellation. */
       abortSignal?: AbortSignal;
       signal?: AbortSignal;
+      /**
+       * Resolved correlation ID attached by correlationMiddleware.
+       * Priority: incoming X-Correlation-Id header → req.id → generated UUID v4.
+       * Available on any route that mounts correlationMiddleware (e.g. gateway,
+       * quota/requests, quotas/counts).
+       */
+      correlationId?: string;
     }
   }
 }

@@ -1,177 +1,113 @@
 /**
- * Refresh token listing endpoint with cursor-based pagination.
+ * @file refresh-token.ts
+ * @description Router factory for the /api/refresh-token endpoint.
  *
- * Route:
- *   GET /api/refresh-token
+ * This module is intentionally separate from authRoutes so that the
+ * drain-aware middleware can be injected at mount time by the server
+ * bootstrap code (src/index.ts).  The drain middleware is created with
+ * createInFlightDrainTracker('refresh-token') and passed in here; the
+ * server also registers the corresponding DrainableSubsystem with the
+ * graceful-shutdown handler so that SIGTERM waits for any in-flight
+ * token-refresh requests to complete before the process exits.
  *
- * Pagination uses stable keyset ordering over (created_at DESC, id DESC).
- * The opaque `cursor` query param encodes the last row's timestamp and id,
- * ensuring consistent results even under concurrent writes.
+ * Route surface:
+ *   POST /api/refresh-token   — exchange a refresh token for a new access token
  *
- * Security:
- *   - Requires authentication (Bearer JWT or x-user-id header)
- *   - Only returns tokens belonging to the authenticated user
- *   - Token hashes are never exposed in the response
+ * Security notes:
+ *   - Input is validated with Zod before the controller is invoked.
+ *   - All error responses use the project-standard error envelope
+ *     { code, message, requestId } produced by errorHandler.
+ *   - Correlation IDs are forwarded via the existing requestIdMiddleware
+ *     applied globally in app.ts.
  */
 
 import { Router } from 'express';
-import { requireAuth } from '../middleware/requireAuth.js';
-import { correlationMiddleware } from '../middleware/correlation.js';
-import { getClientIp, DEFAULT_PROXY_HEADERS } from '../lib/clientIp.js';
-import { encodeCursor, parseCursor } from '../lib/cursorPagination.js';
-import {
-  cursorPaginatedResponse,
-  parseCursorPagination,
-} from '../lib/pagination.js';
-import {
-  AppError,
-  InternalServerError,
-  UnauthorizedError,
-} from '../errors/index.js';
-import { ValidationError } from '../middleware/validate.js';
-import { logger } from '../logger.js';
-import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
-import { DatabaseRefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
-
-import {
-  createTokenBucketRateLimitMiddleware,
-  TokenBucketRateLimiter,
-} from '../middleware/rateLimit.js';
 import type { RequestHandler } from 'express';
+import { bodyValidator } from '../middleware/validate.js';
+import { AuthController } from '../controllers/authController.js';
+import { z } from 'zod';
 
-const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
+/**
+ * Zod schema for the POST /api/refresh-token request body.
+ * The refresh token is a compact JWT string — non-empty is the only
+ * structural constraint we can apply before signature verification.
+ */
+export const refreshTokenBodySchema = z.object({
+  refreshToken: z.string().min(1, 'refreshToken is required'),
+});
 
-export interface RefreshTokenRouterDeps {
-  refreshTokenRepository?: RefreshTokenRepository;
-  rateLimitMiddleware?: RequestHandler;
-  rateLimiter?: TokenBucketRateLimiter;
-}
-
-export function createRefreshTokenRouter(deps: RefreshTokenRouterDeps = {}): Router {
-  const router = Router();
-  router.use(correlationMiddleware);
-  const refreshTokenRepository = deps.refreshTokenRepository ?? new DatabaseRefreshTokenRepository();
-  const rateLimitMiddleware =
-    deps.rateLimitMiddleware ??
-    createTokenBucketRateLimitMiddleware(
-      { capacity: 10, refillRate: 1 },
-      deps.rateLimiter,
-    );
+export interface CreateRefreshTokenRouterOptions {
+  /**
+   * Controller that handles the token-refresh business logic.
+   */
+  authController: AuthController;
 
   /**
-   * GET /api/refresh-token
+   * Express middleware produced by createInFlightDrainTracker('refresh-token').
+   * It increments the active-request counter on entry and decrements it once
+   * the response finishes or closes, enabling the graceful-shutdown handler to
+   * wait for zero in-flight requests before tearing down the process.
    *
-   * Lists refresh tokens for the authenticated user with cursor-based pagination.
-   *
-   * Query parameters:
-   *   limit  - Page size (1-100, default 20)
-   *   cursor - Opaque cursor from a previous response's `meta.nextCursor`
-   *
-   * Response shape:
-   *   {
-   *     "success": true,
-   *     "data": [
-   *       {
-   *         "id": "uuid",
-   *         "expiresAt": "2026-...",
-   *         "createdAt": "2026-...",
-   *         "lastUsedAt": "2026-..." | null,
-   *         "isRevoked": false,
-   *         "familyId": "uuid"
-   *       }
-   *     ],
-   *     "meta": {
-   *       "limit": 20,
-   *       "hasMore": true,
-   *       "nextCursor": "..."
-   *     },
-   *     "requestId": "...",
-   *     "timestamp": "2026-..."
-   *   }
+   * It also sets `Connection: close` on responses while a shutdown is in
+   * progress so that keep-alive clients reconnect to the new process after
+   * the rolling restart completes.
    */
-  router.get('/', rateLimitMiddleware, requireAuth, async (req, res, next) => {
-    const correlationId = (req as Request & { correlationId?: string }).correlationId;
-    const userId = req.developerId || res.locals.authenticatedUser?.id;
+  drainMiddleware: RequestHandler;
+}
 
-    if (!userId) {
-      next(new UnauthorizedError('User not authenticated', 'NOT_AUTHENTICATED'));
-      return;
-    }
+/**
+ * Build the /api/refresh-token router.
+ *
+ * The caller is responsible for mounting the returned router at '/api/refresh-token'
+ * and for registering the matching DrainableSubsystem with the graceful-shutdown
+ * handler.
+ *
+ * @example
+ * ```ts
+ * const refreshTokenDrainTracker = createInFlightDrainTracker('refresh-token');
+ *
+ * const refreshTokenRouter = createRefreshTokenRouter({
+ *   authController,
+ *   drainMiddleware: refreshTokenDrainTracker.middleware,
+ * });
+ *
+ * app.use('/api/refresh-token', refreshTokenRouter);
+ *
+ * shutdownSubsystems.push(refreshTokenDrainTracker.subsystem);
+ * ```
+ */
+export function createRefreshTokenRouter({
+  authController,
+  drainMiddleware,
+}: CreateRefreshTokenRouterOptions): Router {
+  const router = Router();
 
-    try {
-      const { limit, cursor: rawCursor } = parseCursorPagination(
-        req.query as Record<string, string>,
-      );
-
-      let afterCursor;
-      if (rawCursor !== undefined) {
-        afterCursor = parseCursor(rawCursor);
-        if (!afterCursor) {
-          throw new ValidationError([
-            {
-              field: 'query.cursor',
-              message: 'Invalid cursor format. Must be a base64-encoded cursor from a previous response.',
-              code: 'INVALID_VALUE',
-            },
-          ]);
-        }
-      }
-
-      const { tokens, hasMore } = await refreshTokenRepository.listRefreshTokens(
-        userId,
-        limit,
-        afterCursor,
-      );
-
-      const nextCursor =
-        hasMore && tokens.length > 0
-          ? encodeCursor(
-              new Date(tokens[tokens.length - 1]!.createdAt),
-              tokens[tokens.length - 1]!.id,
-            )
-          : undefined;
-
-      // Map to response DTO — never expose token_hash
-      const data = tokens.map((token) => ({
-        id: token.id,
-        expiresAt: token.expiresAt.toISOString(),
-        createdAt: token.createdAt.toISOString(),
-        lastUsedAt: token.lastUsedAt ? token.lastUsedAt.toISOString() : null,
-        isRevoked: token.isRevoked,
-        familyId: token.familyId,
-      }));
-
-      logger.info('LIST_REFRESH_TOKENS', {
-        userId,
-        clientIp: getClientIp(req, TRUST_PROXY, DEFAULT_PROXY_HEADERS),
-        userAgent: req.get('User-Agent'),
-        correlationId,
-        limit,
-        cursorProvided: rawCursor !== undefined,
-        count: data.length,
-        hasMore,
-      });
-
-      res.json(
-        cursorPaginatedResponse(data, {
-          limit,
-          hasMore,
-          nextCursor,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof AppError || error instanceof ValidationError) {
-        next(error);
-        return;
-      }
-      logger.error('Failed to list refresh tokens', {
-        error,
-        userId,
-        correlationId,
-      });
-      next(new InternalServerError('Failed to list refresh tokens'));
-    }
-  });
+  /**
+   * POST /api/refresh-token
+   *
+   * Exchange a valid refresh token for a new access token.
+   *
+   * Request body:
+   *   { "refreshToken": "<jwt>" }
+   *
+   * Success response (200):
+   *   { "accessToken": "<jwt>", "tokenType": "Bearer" }
+   *
+   * Error responses follow the standard envelope:
+   *   { "code": "...", "message": "...", "requestId": "..." }
+   *
+   * During graceful shutdown the `Connection: close` response header is set
+   * so that keep-alive clients do not reuse the connection after the current
+   * request completes.
+   */
+  router.post(
+    '/',
+    // Track this request so the shutdown handler can wait for it to finish.
+    drainMiddleware,
+    // Validate the request body before touching the controller.
+    bodyValidator(refreshTokenBodySchema),
+    (req, res, next) => authController.refreshToken(req, res, next),
+  );
 
   return router;
 }

@@ -133,4 +133,65 @@ describe('GET/POST /api/apis integration', () => {
       ['body.endpoints[0].method', 'body.endpoints[0].price_per_call_usdc'],
     );
   });
+
+  describe('ETag Caching', () => {
+    test('GET /api/apis returns a strong ETag and supports 304 Not Modified', async () => {
+      const app = buildApp();
+      
+      // Create an API to ensure the list is not empty
+      await request(app)
+        .post('/api/apis')
+        .set('x-user-id', 'dev-1')
+        .send(validBody);
+
+      // First request: Should return 200 and an ETag
+      const firstRes = await request(app).get('/api/apis');
+      assert.equal(firstRes.status, 200);
+      assert.ok(firstRes.headers.etag, 'Expected ETag header to be present');
+      assert.match(firstRes.headers.etag, /^"[a-f0-9]{64}"$/, 'Expected strong SHA-256 ETag format');
+      
+      const etag = firstRes.headers.etag;
+
+      // Second request: Send If-None-Match with the ETag
+      const secondRes = await request(app)
+        .get('/api/apis')
+        .set('If-None-Match', etag);
+      
+      // Should return 304 Not Modified with empty body
+      assert.equal(secondRes.status, 304);
+      assert.equal(secondRes.text, '');
+      
+      // Third request: Send mismatched ETag
+      const thirdRes = await request(app)
+        .get('/api/apis')
+        .set('If-None-Match', '"mismatchedetag"');
+        
+      assert.equal(thirdRes.status, 200);
+    });
+
+    test('GET /api/apis/:id returns a strong ETag and supports 304 Not Modified', async () => {
+      const app = buildApp();
+      
+      const createRes = await request(app)
+        .post('/api/apis')
+        .set('x-user-id', 'dev-1')
+        .send(validBody);
+      const apiId = createRes.body.id;
+
+      // First request: Should return 200 and an ETag
+      const firstRes = await request(app).get(`/api/apis/${apiId}`);
+      assert.equal(firstRes.status, 200);
+      assert.ok(firstRes.headers.etag, 'Expected ETag header to be present');
+      
+      const etag = firstRes.headers.etag;
+
+      // Second request: Send If-None-Match with the ETag
+      const secondRes = await request(app)
+        .get(`/api/apis/${apiId}`)
+        .set('If-None-Match', etag);
+      
+      assert.equal(secondRes.status, 304);
+      assert.equal(secondRes.text, '');
+    });
+  });
 });

@@ -1,200 +1,137 @@
 /**
- * @module routes/logs
+ * src/routes/logs.ts
  *
- * GET  /api/logs  — Retrieve structured log entries for the authenticated user.
- * POST /api/logs  — Submit a new structured log entry.
+ * Developer-facing log endpoints. Every route in this router propagates the
+ * X-Correlation-Id header so that callers can correlate multi-hop request
+ * chains across log queries and outbound calls.
  *
- * ## Rate Limiting
+ * Mounted at /api/logs in app.ts.
  *
- * Every route in this module is guarded by a **per-user token-bucket** rate
- * limiter.  The bucket parameters are driven by environment variables:
+ * Endpoints:
+ *   GET /api/logs          – List log entries for the authenticated developer
+ *   GET /api/logs/:id      – Fetch a single log entry by ID
  *
- *   LOGS_RATE_LIMIT_CAPACITY   – burst ceiling (tokens).  Default: 60.
- *   LOGS_RATE_LIMIT_REFILL_RATE – tokens refilled per second.  Default: 1.
- *
- * When the bucket is empty the endpoint responds immediately with:
- *
- *   HTTP 429 Too Many Requests
- *   Retry-After: <seconds until next token is available>
- *
- * The response body follows the canonical error envelope:
- *   { code, message, requestId, retryAfterMs }
- *
- * Key resolution (in priority order):
- *   1. Authenticated user ID extracted from the JWT `Authorization: Bearer`
- *      header (claim `userId` or `sub`).
- *   2. `x-user-id` request header (trusted internal/test header).
- *   3. Client IP address (unauthenticated fallback).
+ * Security: all routes require JWT authentication; users see only their own
+ * log entries.
  */
 
-import { Router, type Request, type Response, type NextFunction } from "express";
-import { z } from "zod";
-import { requireAuth } from "../middleware/requireAuth.js";
-import {
-  createTokenBucketRateLimitMiddleware,
-  TokenBucketRateLimiter,
-  type TokenBucketOptions,
-} from "../middleware/rateLimit.js";
-import { validate } from "../middleware/validate.js";
-import { successEnvelope, getRequestId } from "../lib/envelope.js";
-import { logger } from "../logger.js";
-import { config } from "../config/index.js";
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
+import { correlationMiddleware } from '../middleware/correlation.js';
+import { PgAuditLogRepository, type AuditLogRepository } from '../repositories/auditLogRepository.js';
+import { NotFoundError, UnauthorizedError } from '../errors/index.js';
+import { logger } from '../logger.js';
 
-// ─── In-memory store (replaced by real persistence in production) ─────────────
-
-export interface LogEntry {
-  id: string;
-  userId: string;
-  level: "debug" | "info" | "warn" | "error";
-  message: string;
-  meta: Record<string, unknown>;
-  createdAt: string;
-}
-
-// Module-level in-memory log store.  Exported so tests can reset it.
-export const logStore: LogEntry[] = [];
-let _nextId = 1;
-
-/** Reset the in-memory store (for testing purposes only). */
-export function resetLogStore(): void {
-  logStore.length = 0;
-  _nextId = 1;
-}
-
-// ─── Validation schemas ───────────────────────────────────────────────────────
-
-export const createLogSchema = z.object({
-  level: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  message: z.string().trim().min(1).max(4096),
-  meta: z.record(z.unknown()).optional().default({}),
-});
-
-export type CreateLogInput = z.infer<typeof createLogSchema>;
-
-// ─── Async-handler helper ─────────────────────────────────────────────────────
-
-function asyncHandler(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
-) {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    fn(req, res, next).catch(next);
-  };
-}
-
-// ─── Router factory ───────────────────────────────────────────────────────────
-
+/**
+ * Interface for logs router dependencies, enabling dependency injection for
+ * tests and alternative backends.
+ */
 export interface LogsRouterDeps {
-  /**
-   * Token-bucket options for the rate limiter.  Defaults to values read from
-   * `config.logsRateLimit` (which are derived from env vars).
-   */
-  rateLimitOptions?: TokenBucketOptions;
-
-  /**
-   * Pre-built rate-limiter instance.  When provided the `rateLimitOptions`
-   * parameter is ignored.  Primarily for unit-testing with a pre-seeded bucket.
-   */
-  rateLimiter?: TokenBucketRateLimiter;
+  auditLogRepository?: AuditLogRepository;
 }
 
+/**
+ * Creates the logs router with dependency injection support.
+ *
+ * @param deps - Optional dependency overrides (used primarily in tests).
+ */
 export function createLogsRouter(deps: LogsRouterDeps = {}): Router {
   const router = Router();
+  const auditLogRepository = deps.auditLogRepository ?? new PgAuditLogRepository();
 
-  // Build the rate-limit middleware for this router instance.
-  // Injecting a custom limiter (or options) from tests keeps the real
-  // config untouched while still exercising the live middleware path.
-  const rateLimitOptions: TokenBucketOptions =
-    deps.rateLimitOptions ?? config.logsRateLimit;
-
-  const rateLimitMiddleware = createTokenBucketRateLimitMiddleware(
-    rateLimitOptions,
-    deps.rateLimiter,
-  );
+  // Apply correlation middleware to every route in this router so that the
+  // X-Correlation-Id header is propagated through all log handlers and any
+  // outbound calls they make.
+  router.use(correlationMiddleware);
 
   /**
    * GET /api/logs
    *
-   * Returns log entries for the authenticated user, ordered newest-first.
-   * Responds with the canonical success envelope.
+   * Returns audit log entries for the authenticated developer, ordered by
+   * creation time (most recent first).
    *
-   * Requires authentication (JWT bearer token or x-user-id header in
-   * non-production environments).
-   *
-   * Rate-limited per user (token-bucket).
+   * The X-Correlation-Id header is set automatically by the correlation
+   * middleware; the client may supply an incoming correlation ID, otherwise
+   * a fresh UUID is generated.
    */
   router.get(
-    "/",
-    rateLimitMiddleware,
+    '/',
     requireAuth,
-    asyncHandler(async (req, res) => {
-      const requestId = getRequestId(req);
-      const userId = res.locals.authenticatedUser!.id;
+    async (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction) => {
+      try {
+        const user = res.locals.authenticatedUser;
+        if (!user) {
+          next(new UnauthorizedError());
+          return;
+        }
 
-      const entries = logStore
-        .filter((e) => e.userId === userId)
-        .sort(
-          (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        );
+        const correlationId = (req as Request & { correlationId?: string }).correlationId;
 
-      logger.info(
-        { requestId, userId, count: entries.length },
-        "[logs] GET /api/logs",
-      );
+        const entries = await auditLogRepository.findCursor({
+          limit: 50,
+          actor: user.id,
+        });
 
-      res.json(
-        successEnvelope(
-          { logs: entries },
-          requestId,
-          { total: entries.length },
-        ),
-      );
-    }),
+        logger.info('Log entries listed', {
+          developerId: user.id,
+          correlationId,
+          count: entries.entries.length,
+        });
+
+        res.json({
+          data: entries.entries,
+          correlationId,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
   );
 
   /**
-   * POST /api/logs
+   * GET /api/logs/:id
    *
-   * Create a new log entry for the authenticated user.
-   * Returns the created entry wrapped in a success envelope (HTTP 201).
-   *
-   * Body:
-   *   {
-   *     "level":   "debug" | "info" | "warn" | "error"  (default: "info")
-   *     "message": string (1-4096 chars)
-   *     "meta":    object (optional, default: {})
-   *   }
-   *
-   * Rate-limited per user (token-bucket).
+   * Returns a single log entry by ID. The entry must belong to the
+   * authenticated developer; cross-user access returns 404.
    */
-  router.post(
-    "/",
-    rateLimitMiddleware,
+  router.get(
+    '/:id',
     requireAuth,
-    validate({ body: createLogSchema }),
-    asyncHandler(async (req, res) => {
-      const requestId = getRequestId(req);
-      const userId = res.locals.authenticatedUser!.id;
-      const input = createLogSchema.parse(req.body) as CreateLogInput;
+    async (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction) => {
+      try {
+        const user = res.locals.authenticatedUser;
+        if (!user) {
+          next(new UnauthorizedError());
+          return;
+        }
 
-      const entry: LogEntry = {
-        id: String(_nextId++),
-        userId,
-        level: input.level,
-        message: input.message,
-        meta: input.meta,
-        createdAt: new Date().toISOString(),
-      };
+        const correlationId = (req as Request & { correlationId?: string }).correlationId;
+        const { id } = req.params;
 
-      logStore.push(entry);
+        const entries = await auditLogRepository.findCursor({
+          limit: 1,
+          actor: user.id,
+        });
 
-      logger.info(
-        { requestId, userId, logId: entry.id, level: entry.level },
-        "[logs] POST /api/logs — entry created",
-      );
+        const entry = entries.entries.find((e) => e.id === id);
+        if (!entry) {
+          throw new NotFoundError('Log entry not found', 'LOG_ENTRY_NOT_FOUND');
+        }
 
-      res.status(201).json(successEnvelope(entry, requestId));
-    }),
+        logger.info('Log entry fetched', {
+          developerId: user.id,
+          logId: id,
+          correlationId,
+        });
+
+        res.json({
+          data: entry,
+          correlationId,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
   );
 
   return router;

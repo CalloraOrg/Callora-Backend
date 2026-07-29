@@ -42,11 +42,9 @@ Key resolution (priority order):
 
 ## API Catalog Pagination (`GET /api/apis`)
 
-The public API catalog endpoint supports two pagination modes. Cursor pagination is preferred for stable, gap-free traversal over large catalogs; offset pagination is available for backward compatibility.
+The public API catalog endpoint uses **keyset cursor pagination** over `(created_at DESC, id DESC)` for stable, gap-free traversal under concurrent writes. Offset-based pagination has been removed; all requests now return cursor-based responses.
 
-### Cursor pagination (recommended)
-
-Results are ordered **newest-first** by `(created_at DESC, id DESC)`. Pass the opaque `nextCursor` value returned in one response as the `cursor` query parameter on the next request.
+Results are ordered **newest-first** by `(created_at DESC, id DESC)`. Pass the opaque `nextCursor` value returned in one response as the `cursor` query parameter on the next request. Omit `cursor` for the first page.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -89,19 +87,7 @@ When `hasMore` is `false` and `nextCursor` is absent, you have reached the last 
 
 A malformed or tampered cursor returns `HTTP 400` with `code: "VALIDATION_ERROR"`.
 
-### Offset pagination (legacy)
-
-Omit `cursor` and use `limit` + `offset` (or `page`). Results may shift if new APIs are inserted during traversal.
-
-```
-GET /api/apis?limit=20&offset=40
-```
-```json
-{
-  "data": [ ... ],
-  "meta": { "limit": 20, "offset": 40 }
-}
-```
+The `offset` and `page` query parameters are ignored (cursor pagination does not support random-access jumping).
 
 ## Fee Abstraction
 
@@ -174,7 +160,7 @@ The migration is in `migrations/0019_disputes.sql` (rollback: `migrations/0019_d
 
 - Health check: `GET /api/health`
 - Marketplace routes:
-  - `GET /api/apis` — list public (active, non-deleted) APIs with cursor **or** offset pagination
+  - `GET /api/apis` — list public (active, non-deleted) APIs with cursor pagination over `(created_at, id)`
   - `GET /api/apis/:id`
   - `POST /api/apis` for authenticated developers to register an API with priced endpoints
 - Usage route: `GET /api/usage`
@@ -191,6 +177,8 @@ The migration is in `migrations/0019_disputes.sql` (rollback: `migrations/0019_d
 - Multi-region read-replica routing: optional round-robin routing of SELECT queries to PostgreSQL read replicas via `REPLICA_URLS`; writes always use the primary; automatic fallback to primary on replica failure (see [docs/replica-routing.md](./docs/replica-routing.md))
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - Per-user global REST rate limiting for authenticated `/api/billing`, `/api/usage`, `/api/developers`, `/api/vault`, and `/api/keys` traffic, with IP fallback for unauthenticated requests
+- Per-user token-bucket rate limiting for all `/api/quotas` traffic (capacity and refill rate independently configurable via `QUOTA_RATE_LIMIT_CAPACITY` / `QUOTA_RATE_LIMIT_REFILL_RATE`); exceeded requests return `HTTP 429` with a `Retry-After` header and the standardised error envelope
+- Quota dependency probe: `GET /api/quotas/health` reports the status of `/api/quotas`'s external dependencies (currently the database) for ops dashboards/alerting, mirroring the `{ status, timestamp, dependencies }` shape of `GET /api/health/dependencies`; no auth required, subject to the same `/api/quotas` rate limit; see [docs/quotas-health-probe.md](./docs/quotas-health-probe.md)
 - In-memory `VaultRepository` with:
   - `create(userId, contractId, network)`
   - `findByUserId(userId, network)`
@@ -475,8 +463,8 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 | `RATE_LIMIT_WINDOW_MS` | No | `60000` | Token-bucket refill window for `RATE_LIMIT_MAX_REQUESTS` (ms) |
 | `RATE_LIMIT_STORE` | No | `memory` | `memory` or `postgres`. Use `postgres` to share bucket state across multiple gateway instances |
 | `RATE_LIMIT_PG_TABLE` | No | `gateway_rate_limit_buckets` | Table name used when `RATE_LIMIT_STORE=postgres` (auto-created) |
-| `LOGS_RATE_LIMIT_CAPACITY` | No | `60` | Burst ceiling (tokens) for per-user token-bucket rate limit on `/api/logs` |
-| `LOGS_RATE_LIMIT_REFILL_RATE` | No | `1` | Tokens refilled per second for the `/api/logs` rate limiter |
+| `QUOTA_RATE_LIMIT_CAPACITY` | No | `60` | Token-bucket burst capacity for all `/api/quotas` endpoints (per user / IP) |
+| `QUOTA_RATE_LIMIT_REFILL_RATE` | No | `1` | Tokens added per second to each `/api/quotas` bucket; governs steady-state request rate |
 | `CORS_ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed origins |
 | `SOROBAN_RPC_ENABLED` | No | `false` | Enable Soroban RPC health check |
 | `SOROBAN_RPC_URL` | If `SOROBAN_RPC_ENABLED=true` | — | Soroban RPC endpoint URL |
@@ -488,6 +476,7 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 | `SETTLEMENT_STATUS_SYNC_TIMEOUT_MS` | No | `5000` | Per-request Horizon timeout for settlement sync (ms) |
 | `SETTLEMENT_RECON_INTERVAL_MS` | No | `86400000` | Nightly settlement reconciliation interval (ms, default 24h) |
 | `HEALTH_CHECK_DB_TIMEOUT` | No | `2000` | DB health check timeout (ms) |
+| `HEALTH_REQUEST_TIMEOUT_MS` | No | `5000` | Per-request timeout for `GET /api/health` (ms). When the full health check does not complete within this window the request is cooperatively aborted and the caller receives HTTP 504 with `code: "GATEWAY_TIMEOUT"`. |
 | `APP_VERSION` | No | `1.0.0` | Reported in health check responses |
 | `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `ACCESS_LOG_SAMPLE_RATE` | No | `1` | Fraction of requests logged as access events (`1` = 100%) |
@@ -504,12 +493,17 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 
 Each dependency uses its own bounded timeout, so a hung database or remote Stellar service cannot stall the full health response. Use `HEALTH_CHECK_DB_TIMEOUT` for PostgreSQL, `SOROBAN_RPC_TIMEOUT` for Soroban RPC, and `HORIZON_TIMEOUT` for Horizon.
 
-## Production Shutdown Expectations- The server listens for `SIGTERM` and `SIGINT` and performs a graceful shutdown.
+## Production Shutdown Expectations
+- The server listens for `SIGTERM` and `SIGINT` and performs a graceful shutdown.
 - On shutdown, it stops accepting new HTTP requests, drains in-flight `/v1/call` proxy work, waits for active webhook deliveries to finish, and then closes database resources.
+- New requests that arrive at `/v1/call` **after** the shutdown signal is received are immediately rejected with `503 Service Unavailable` (headers: `Connection: close`, `Retry-After: 0`) so load balancers can route traffic to healthy instances without delay.
+- Requests that were already in flight when the shutdown signal arrived are allowed to complete normally.
 - A 30 second timeout is enforced for in-flight connections; lingering sockets are destroyed to prevent hung termination.
 - Background workers should stop scheduling new runs as soon as shutdown begins and finish any in-flight work inside the same drain window.
 - Shutdown hooks are registered with `process.once(...)` to avoid duplicate execution during restarts.
 - The dev workflow (`npm run dev` with `tsx watch`) is preserved. Restarts trigger the same graceful path instead of abrupt termination.
+
+See [docs/graceful-shutdown.md](./docs/graceful-shutdown.md) for the full drain sequence, proxy drain guard configuration, and testing guidance.
 
 ### Stellar/Soroban Network Configuration
 

@@ -25,12 +25,45 @@ import {
 import { quotasDrainTracker } from "./routes/quotas/counts.js";
 import type { Socket } from "net";
 
+import { createDeveloperRouter } from "./routes/developerRoutes.js";
+import { createGatewayRouter } from "./routes/gatewayRoutes.js";
+import { createProxyRouter } from "./routes/proxyRoutes.js";
+import adminRouter from "./routes/admin.js";
+import logsRouter from "./routes/logs.js";
+import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
+import refundsRouter from "./routes/refunds.js";
+import { defaultDeveloperRepository } from "./repositories/developerRepository.js";
+import { createBillingService } from "./services/billingService.js";
+import {
+  createConfiguredRateLimiter,
+  resolveRateLimiterConfig,
+} from "./services/rateLimiter.js";
+import { PgUsageEventsRepository } from "./repositories/usageEventsRepository.pg.js";
+import { createRevenueLedgerIndexerJob } from "./services/revenueLedgerIndexer.js";
+import { RevenueSettlementService } from "./services/revenueSettlementService.js";
+import { createSettlementStatusSyncJob } from "./services/settlementStatusSyncJob.js";
+import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
+import { createPostgresUsageStore } from "./services/usageStore.js";
+import { createPostgresSettlementStore } from "./services/settlementStore.js";
+import { createApiRegistry } from "./data/apiRegistry.js";
+import { ApiKey } from "./types/gateway.js";
+import { listingsCache } from "./lib/listingsCache.js";
+import { createSlowQueryAlerterJob } from "./workers/slowQueryAlerter.js";
+import { createAnomalyDetectorJob } from "./workers/anomalyDetector.js";
+import {
+  initSloRecorder,
+  sloRecorderMiddleware,
+} from "./workers/sloAlertRecorder.js";
+import { createSloAlertJob } from "./workers/sloAlertJob.js";
+import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
+import { createSettlementReconWorker } from "./workers/settlementRecon.js";
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
-import { createWebhooksRouter } from './routes/webhooks.js';
-import adminRouter from './routes/admin.js';
-import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
+import { createRefreshTokenRouter } from './routes/refresh-token.js';
+import { AuthController } from './controllers/authController.js';
+import { RefreshTokenService } from './services/refreshTokenService.js';
+import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { defaultDeveloperRepository } from './repositories/developerRepository.js';
 import { createBillingService } from './services/billingService.js';
 import { createRateLimiter } from './services/rateLimiter.js';
@@ -232,6 +265,10 @@ if (isDirectExecution) {
   app.use("/api/developers", developerRouter);
   // Mounted before the generic admin router so it is not shadowed by
   // adminRouter's `/usage/:developerId` route.
+  app.use("/api/admin/usage/anomalies", createUsageAnomaliesRouter({ pool }));
+  app.use("/api/admin", adminRouter);
+  app.use("/api/refunds", refundsRouter);
+  app.use("/api/logs", logsRouter);
   app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
 
   // Webhook management routes
@@ -250,6 +287,13 @@ if (isDirectExecution) {
   app.use("/api/gateway", createGatewayIpAllowlist(), gatewayRouter);
 
   // New proxy route: /v1/call/:apiSlugOrId/*
+  //
+  // The proxyDrainTracker middleware (mounted below) counts in-flight requests
+  // and is wired as a shutdown subsystem so the process waits for them to
+  // finish before exiting.  The drainState hook passed to createProxyRouter
+  // lets the router immediately reject *new* requests with 503 once shutdown
+  // begins, while already-in-flight requests continue to completion.
+  const proxyDrainTracker = createInFlightDrainTracker("gateway-proxy");
   const proxyRouter = createProxyRouter({
     billing,
     rateLimiter,
@@ -260,18 +304,39 @@ if (isDirectExecution) {
       timeoutMs: config.proxy.timeoutMs,
       allowedHosts: config.proxy.allowedHosts,
     },
+    // Pass the drain state so the router can reject new requests with 503
+    // during the graceful shutdown window.
+    drainState: { isDraining: proxyDrainTracker.isDraining },
   });
-  const proxyDrainTracker = createInFlightDrainTracker("gateway-proxy");
   const keysDrainTracker = createInFlightDrainTracker("api-keys");
   const apiKeyRouter = createApiKeyRouter({
     apiRepository: defaultApiRepository,
     developerRepository: defaultDeveloperRepository,
   });
+  const proxyDrainTracker = createInFlightDrainTracker('gateway-proxy');
+
+  // --- Refresh-token drain tracker ---
+  // Tracks in-flight POST /api/refresh-token requests so that a SIGTERM during
+  // a token refresh will wait for the response to be sent before the process
+  // exits.  The subsystem is registered below alongside the other shutdown
+  // subsystems.
+  const refreshTokenDrainTracker = createInFlightDrainTracker('refresh-token');
+
+  const refreshTokenService = new RefreshTokenService({
+    jwtSecret: config.jwt.secret,
+    accessTokenExpiry: process.env.ACCESS_TOKEN_EXPIRY ?? '15m',
+    refreshTokenExpiry: process.env.REFRESH_TOKEN_EXPIRY ?? '7d',
+  });
+  const refreshTokenRepository = new DatabaseRefreshTokenRepository(pool);
+  const authController = new AuthController({
+    refreshTokenService,
+    refreshTokenRepository,
+  });
+
   const shutdownSubsystems: DrainableSubsystem[] = [
     proxyDrainTracker.subsystem,
-    keysDrainTracker.subsystem,
-    // Drain in-flight /api/quotas requests before closing (issue #883).
-    quotasDrainTracker.subsystem,
+    // Drain in-flight refresh-token requests before the process exits.
+    refreshTokenDrainTracker.subsystem,
     {
       name: "revenue-ledger-indexer",
       beginShutdown: () => revenueLedgerIndexerJob.beginShutdown(),
@@ -294,44 +359,16 @@ if (isDirectExecution) {
     },
   ];
 
-  if (slowQueryAlerterJob) {
-    shutdownSubsystems.push({
-      name: "slow-query-alerter",
-      beginShutdown: () => slowQueryAlerterJob.beginShutdown(),
-      awaitIdle: () => slowQueryAlerterJob.awaitIdle(),
-    });
-  }
-
-  if (anomalyDetectorJob) {
-    shutdownSubsystems.push({
-      name: "usage-anomaly-detector",
-      beginShutdown: () => anomalyDetectorJob.beginShutdown(),
-      awaitIdle: () => anomalyDetectorJob.awaitIdle(),
-    });
-  }
-
-  if (sloAlertJob) {
-    shutdownSubsystems.push({
-      name: "slo-alert-job",
-      beginShutdown: () => sloAlertJob!.beginShutdown(),
-      awaitIdle: () => sloAlertJob!.awaitIdle(),
-    });
-  }
-
-  shutdownSubsystems.push({
-    name: "monthly-invoice-job",
-    beginShutdown: () => monthlyInvoiceJob.beginShutdown(),
-    awaitIdle: () => monthlyInvoiceJob.awaitIdle(),
-  });
+  // Mount the refresh-token router. The drain middleware is applied inside the
+  // router so every request through this path is counted in the drain tracker.
   app.use(
-    "/v1/call",
-    legacyV1DeprecationMiddleware,
-    proxyDrainTracker.middleware,
+    '/api/refresh-token',
+    createRefreshTokenRouter({
+      authController,
+      drainMiddleware: refreshTokenDrainTracker.middleware,
+    }),
   );
-  app.use("/v1/call", proxyRouter);
 
-  app.use("/api", keysDrainTracker.middleware);
-  app.use("/api", apiKeyRouter);
 
   app.use(express.json());
 

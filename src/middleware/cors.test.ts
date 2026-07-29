@@ -4,6 +4,7 @@ import {
   createCorsAllowlistMiddleware,
   createMaintenanceCorsMiddleware,
   createSubscriptionCorsMiddleware,
+  createApisCorsMiddleware,
   parseAllowedOrigins,
   CORS_ERROR_CODE,
 } from './cors.js';
@@ -413,3 +414,89 @@ describe('createSubscriptionCorsMiddleware', () => {
     expect(res.headers['access-control-allow-credentials']).toBeUndefined();
   });
 });
+
+describe('createApisCorsMiddleware', () => {
+  const originalEnv = process.env.APIS_CORS_ALLOWED_ORIGINS;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.APIS_CORS_ALLOWED_ORIGINS;
+    } else {
+      process.env.APIS_CORS_ALLOWED_ORIGINS = originalEnv;
+    }
+  });
+
+  it('denies by default when APIS_CORS_ALLOWED_ORIGINS is unset', async () => {
+    delete process.env.APIS_CORS_ALLOWED_ORIGINS;
+    const app = express();
+    app.use(
+      '/a',
+      createApisCorsMiddleware(),
+      (_req, res) => res.json({ ok: true }),
+    );
+    const res = await request(app)
+      .get('/a')
+      .set('Origin', 'https://admin.example.com');
+    expect(res.status).toBe(403);
+  });
+
+  it('denies an origin not on the allowlist', async () => {
+    process.env.APIS_CORS_ALLOWED_ORIGINS = 'https://allowed.example.com';
+    const app = express();
+    app.use(
+      '/a',
+      createApisCorsMiddleware(),
+      (_req, res) => res.json({ ok: true }),
+    );
+    const res = await request(app)
+      .get('/a')
+      .set('Origin', 'https://evil.example.com');
+    expect(res.status).toBe(403);
+  });
+
+  it('allows an origin that is on the allowlist', async () => {
+    process.env.APIS_CORS_ALLOWED_ORIGINS =
+      'https://allowed.example.com,https://also-ok.example.com';
+    const app = express();
+    app.use(
+      '/a',
+      createApisCorsMiddleware(),
+      (_req, res) => res.json({ ok: true }),
+    );
+    const res = await request(app)
+      .get('/a')
+      .set('Origin', 'https://also-ok.example.com');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('caches the preflight result (Access-Control-Max-Age header set)', async () => {
+    process.env.APIS_CORS_ALLOWED_ORIGINS = 'https://allowed.example.com';
+    const app = express();
+    app.use(
+      '/a',
+      createApisCorsMiddleware(),
+      (_req, res) => res.json({ ok: true }),
+    );
+    const res = await request(app)
+      .options('/a')
+      .set('Origin', 'https://allowed.example.com');
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-max-age']).toBe('600');
+  });
+
+  it('includes Access-Control-Allow-Credentials for the apis route', async () => {
+    process.env.APIS_CORS_ALLOWED_ORIGINS = 'https://allowed.example.com';
+    const app = express();
+    app.use(
+      '/a',
+      createApisCorsMiddleware(),
+      (_req, res) => res.json({ ok: true }),
+    );
+    const res = await request(app)
+      .get('/a')
+      .set('Origin', 'https://allowed.example.com');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+  });
+});
+

@@ -1,27 +1,92 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { z } from 'zod';
 import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
+import { createForecastAccessLogMiddleware } from '../middleware/forecastAccessLog.js';
 import { successEnvelope } from '../lib/envelope.js';
 import { getRequestId } from '../logger.js';
 import { logger } from '../logger.js';
 import { defaultAuditService } from '../services/auditService.js';
 import {
+  BadRequestError,
   GatewayTimeoutError,
   NotFoundError,
-  BadRequestError,
   UnauthorizedError,
 } from '../errors/index.js';
+import {
+  listForecastQuerySchema,
+  forecastParamsSchema,
+  createForecastSchema,
+  updateForecastSchema,
+  FORECAST_MAX_LIMIT,
+  FORECAST_DEFAULT_LIMIT,
+  type CreateForecastInput,
+  type UpdateForecastInput,
+} from '../validators/forecast.js';
+
+export { FORECAST_MAX_LIMIT, FORECAST_DEFAULT_LIMIT };
 
 export interface ForecastPoint {
   timestamp: string;
   value: number;
 }
 
+/**
+ * @deprecated Use PaginatedForecastResponse instead.
+ * Kept for backward-compat with internal uses of the old single-shot response shape.
+ */
 export interface ForecastResponse {
   forecast: ForecastPoint[];
   generatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pagination types for GET /api/forecast
+// ---------------------------------------------------------------------------
+
+/**
+ * Paginated envelope returned by GET /api/forecast.
+ *
+ * - `items`       – the current page of ForecastPoint objects.
+ * - `next_cursor` – opaque base-64 cursor; present only when a subsequent
+ *                   page exists.  Absent (not `null`) when this is the last page.
+ * - `total`       – total number of points in the underlying data set.
+ *                   Allows clients to show "page X of Y" UI without a second
+ *                   round-trip.
+ */
+export interface PaginatedForecastResponse {
+  items: ForecastPoint[];
+  next_cursor?: string;
+  total: number;
+}
+
+// ---------------------------------------------------------------------------
+// Cursor helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode an integer index into an opaque base-64 cursor.
+ * Format (before encoding): `fc:<index>`
+ */
+function encodeCursor(index: number): string {
+  return Buffer.from(`fc:${index}`, 'utf-8').toString('base64url');
+}
+
+/**
+ * Decode a cursor back to a numeric index.
+ * Returns `null` when the cursor is missing or malformed so callers can
+ * surface a structured 400 error.
+ */
+function decodeCursor(cursor: string): number | null {
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf-8');
+    const match = /^fc:(\d+)$/.exec(decoded);
+    if (!match) return null;
+    const idx = parseInt(match[1], 10);
+    return Number.isFinite(idx) && idx >= 0 ? idx : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface Forecast {
@@ -35,25 +100,6 @@ export interface Forecast {
 
 // In-memory store for forecast data (simulated persistence)
 const forecastStore = new Map<string, Forecast>();
-
-// -----------------------------------------------------------------------
-// Validation schemas
-// -----------------------------------------------------------------------
-
-const createForecastSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().max(1000),
-});
-
-const updateForecastSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  description: z.string().max(1000).optional(),
-}).refine((v) => Object.keys(v).length > 0, {
-  message: 'At least one field must be provided',
-});
-
-type CreateForecastInput = z.infer<typeof createForecastSchema>;
-type UpdateForecastInput = z.infer<typeof updateForecastSchema>;
 
 // -----------------------------------------------------------------------
 // Helper functions
@@ -272,21 +318,81 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
 
   router.use(createTimeoutMiddleware({ durationMs: timeoutMs }));
 
+  // Structured access log for every /api/forecast request.
+  // Emits: req-id, latency, status, response size, and actor on the `forecast` channel.
+  router.use(createForecastAccessLogMiddleware());
+
   // -----------------------------------------------------------------------
   // GET /api/forecast
-  // Retrieve a generated forecast (read-only, not audited).
+  // List forecast points with cursor-based pagination.
+  //
+  // Query params:
+  //   limit  – integer 1-100, default 20
+  //   cursor – opaque cursor returned by a previous response (base64url)
+  //
+  // Response shape (inside successEnvelope.data):
+  //   {
+  //     items:       ForecastPoint[],   // current page of points
+  //     next_cursor: string | undefined, // present only when more pages exist
+  //     total:       number,             // total points in the data set
+  //   }
+  //
+  // Not audited (read-only).
   // -----------------------------------------------------------------------
-  router.get('/', (req: Request, res: Response) => {
-    const requestId = getRequestId(req) ?? 'unknown';
-    const forecast = simulateForecastCalculation(req.signal ?? req.abortSignal);
+  router.get(
+    '/',
+    validate({ query: listForecastQuerySchema }),
+    (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const requestId = getRequestId(req) ?? 'unknown';
 
-    const data: ForecastResponse = {
-      forecast,
-      generatedAt: new Date().toISOString(),
-    };
+        const { limit, cursor: rawCursor } = listForecastQuerySchema.parse(req.query);
 
-    res.json(successEnvelope(data, requestId));
-  });
+        // ---- Resolve start index from cursor -----------------------------------
+        let startIndex = 0;
+        if (rawCursor !== undefined && rawCursor.trim() !== '') {
+          const decoded = decodeCursor(rawCursor.trim());
+          if (decoded === null) {
+            // Malformed or tampered cursor – return 400.
+            throw new BadRequestError(
+              'Invalid or malformed cursor. Obtain a fresh cursor from the next_cursor field of a previous response.',
+            );
+          }
+          startIndex = decoded;
+        }
+
+        // ---- Generate the full forecast data set (deterministic per request) --
+        const allPoints = simulateForecastCalculation(req.signal ?? req.abortSignal);
+        const total = allPoints.length;
+
+        // ---- Slice the requested page ------------------------------------------
+        const pagePoints = allPoints.slice(startIndex, startIndex + limit);
+        const nextIndex = startIndex + limit;
+        const hasMore = nextIndex < total;
+
+        // ---- Build paginated response envelope --------------------------------
+        const data: PaginatedForecastResponse = {
+          items: pagePoints,
+          total,
+          ...(hasMore ? { next_cursor: encodeCursor(nextIndex) } : {}),
+        };
+
+        // ---- Structured logging with correlation ID ---------------------------
+        logger.info('forecast.list', {
+          requestId,
+          limit,
+          startIndex,
+          returnedCount: pagePoints.length,
+          total,
+          hasMore,
+        });
+
+        res.json(successEnvelope(data, requestId));
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   // -----------------------------------------------------------------------
   // POST /api/forecast
@@ -304,8 +410,6 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
       const input = createForecastSchema.parse(req.body);
       const forecast = await createForecast(input, user.id, req);
 
-      // Log to audit trail (also called by createForecast, but this ensures
-      // structured logging consistency across the app)
       logger.audit('forecast.create', user.id, {
         forecastId: forecast.id,
         name: forecast.name,
@@ -322,10 +426,12 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   // -----------------------------------------------------------------------
   router.get(
     '/:id',
+    validate({ params: forecastParamsSchema }),
     asyncHandler(async (req, res) => {
-      const forecast = forecastStore.get(req.params.id);
+      const { id } = forecastParamsSchema.parse(req.params);
+      const forecast = forecastStore.get(id);
       if (!forecast) {
-        throw new NotFoundError(`Forecast ${req.params.id} not found`);
+        throw new NotFoundError(`Forecast ${id} not found`);
       }
 
       const requestId = getRequestId(req) ?? 'unknown';
@@ -341,13 +447,14 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   router.patch(
     '/:id',
     requireAuth,
-    validate({ body: updateForecastSchema }),
+    validate({ params: forecastParamsSchema, body: updateForecastSchema }),
     asyncHandler(async (req, res) => {
       const user = res.locals.authenticatedUser;
       if (!user) throw new UnauthorizedError();
 
+      const { id } = forecastParamsSchema.parse(req.params);
       const input = updateForecastSchema.parse(req.body);
-      const updated = await updateForecast(req.params.id, input, user.id, req);
+      const updated = await updateForecast(id, input, user.id, req);
 
       logger.audit('forecast.update', user.id, {
         forecastId: updated.id,
@@ -367,14 +474,16 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   router.delete(
     '/:id',
     requireAuth,
+    validate({ params: forecastParamsSchema }),
     asyncHandler(async (req, res) => {
       const user = res.locals.authenticatedUser;
       if (!user) throw new UnauthorizedError();
 
-      await deleteForecast(req.params.id, user.id, req);
+      const { id } = forecastParamsSchema.parse(req.params);
+      await deleteForecast(id, user.id, req);
 
       logger.audit('forecast.delete', user.id, {
-        forecastId: req.params.id,
+        forecastId: id,
       });
 
       const requestId = getRequestId(req) ?? 'unknown';

@@ -28,6 +28,7 @@ export interface CircuitBreakerConfig {
   failureThreshold?: number;
   cooldownMs?: number;
   successThreshold?: number;
+  onOpenError?: (message: string) => Error;
 }
 
 export interface CircuitBreakerMetrics {
@@ -299,20 +300,16 @@ export class CircuitBreaker {
         metrics = this.transitionTo(metrics, CircuitBreakerState.HALF_OPEN, now, breakerKey);
         await this.store.set(breakerKey, metrics);
       } else {
-        throw new CircuitBreakerOpenError(
-          `Circuit breaker is open. Cooldown remaining: ${
-            this.config.cooldownMs - timeSinceFailure
-          }ms`
-        );
+        const msg = `Circuit breaker is open. Cooldown remaining: ${this.config.cooldownMs - timeSinceFailure}ms`;
+        throw this.config.onOpenError ? this.config.onOpenError(msg) : new CircuitBreakerOpenError(msg);
       }
     }
 
     // Enforce exactly one trial call in HALF_OPEN state
     if (metrics.state === CircuitBreakerState.HALF_OPEN) {
       if (this.activeTrials.has(breakerKey)) {
-        throw new CircuitBreakerOpenError(
-          'Circuit breaker is in half-open state. Only one trial call allowed at a time.'
-        );
+        const msg = 'Circuit breaker is in half-open state. Only one trial call allowed at a time.';
+        throw this.config.onOpenError ? this.config.onOpenError(msg) : new CircuitBreakerOpenError(msg);
       }
       this.activeTrials.add(breakerKey);
     }
@@ -423,6 +420,28 @@ export class CircuitBreaker {
   }
 
   /**
+   * Returns true if the breaker would currently reject a call (i.e. the circuit
+   * is OPEN and still within its cooldown window).
+   *
+   * This mirrors the rejection logic in execute() so callers can perform a
+   * pre-flight check — for example, to skip billing before attempting a call
+   * that is guaranteed to be rejected.
+   *
+   * When this returns false the call MAY succeed: the breaker is either CLOSED,
+   * HALF_OPEN, or OPEN but past its cooldown (meaning execute() will transition
+   * to HALF_OPEN and allow a probe).
+   */
+  async wouldBlock(breakerKey: string): Promise<boolean> {
+    const now = Date.now();
+    const metrics = (await this.store.get(breakerKey)) || { ...DEFAULT_METRICS };
+    if (metrics.state !== CircuitBreakerState.OPEN) {
+      return false;
+    }
+    const timeSinceFailure = now - (metrics.lastFailureTime ?? 0);
+    return timeSinceFailure < this.config.cooldownMs;
+  }
+
+  /**
    * Force reset the circuit breaker to CLOSED state.
    * Use with caution - primarily for testing or manual intervention.
    */
@@ -455,6 +474,11 @@ export class CircuitBreaker {
       state: CircuitBreakerState.OPEN,
       consecutiveSuccesses: 0,
       lastStateChange: now,
+      // Set lastFailureTime so the cooldown window is correctly enforced.
+      // Without this, the next execute() call would see timeSinceFailure ≈ now
+      // (because lastFailureTime was null → 0) and immediately transition to
+      // HALF_OPEN, bypassing the intended cooldown period.
+      lastFailureTime: now,
     };
     await this.store.set(breakerKey, newMetrics);
     this.activeTrials.delete(breakerKey);
@@ -537,4 +561,41 @@ export function getDefaultBreakerRegistry(): BreakerRegistry {
     _defaultRegistry = new BreakerRegistry();
   }
   return _defaultRegistry;
+}
+
+/**
+ * Wraps an operation with a per-endpoint circuit breaker drawn from a registry.
+ *
+ * This is the primary integration point for route handlers that make downstream
+ * calls (e.g. rate-limit store probes, external HTTP calls, database reads) and
+ * need per-endpoint isolation.
+ *
+ * Behaviour:
+ *  - CLOSED  — operation executes normally; failures are counted.
+ *  - OPEN    — throws `CircuitBreakerOpenError` immediately without calling the
+ *              operation (fast-fail). Callers should map this to HTTP 503.
+ *  - HALF_OPEN — one trial call is allowed through; success closes the breaker,
+ *                failure re-opens it.
+ *
+ * The `endpointSlug` is the stable, human-readable identifier for this endpoint
+ * (e.g. `"rate-limit/health/in_memory_store"`). It is used as both the registry
+ * key and the Prometheus label so metrics stay per-endpoint.
+ *
+ * @param registry  - BreakerRegistry from which to retrieve (or lazily create) the breaker.
+ * @param endpointSlug - Stable identifier for the downstream dependency.
+ * @param operation - Async function representing the downstream call.
+ * @param config    - Optional circuit-breaker configuration overrides. Only applied
+ *                   when the breaker is first created; subsequent calls reuse the
+ *                   already-created instance.
+ * @returns Promise that resolves with the operation result or rejects with
+ *          `CircuitBreakerOpenError` (circuit open) or the original error (circuit closed/half-open).
+ */
+export async function withCircuitBreaker<T>(
+  registry: BreakerRegistry,
+  endpointSlug: string,
+  operation: () => Promise<T>,
+  config?: CircuitBreakerConfig,
+): Promise<T> {
+  const breaker = registry.getOrCreate(endpointSlug, config);
+  return breaker.execute(endpointSlug, operation);
 }

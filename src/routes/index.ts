@@ -16,20 +16,28 @@ import { InMemoryRestRateLimiter } from "../middleware/restRateLimit.js";
 import { createUsageCsvRouter } from "./usage/csv.js";
 import { createUsageByEndpointRouter } from "./usage/byEndpoint.js";
 import { createUsageAggregateRouter } from "./usage/aggregate.js";
+import { createUsageHealthRouter } from "./usage/health.js";
+import type { HealthCheckConfig } from "../services/healthCheck.js";
 import { createExportSchedulesRouter } from "./exports/schedules.js";
 import { createExportsRouter } from "./exports.js";
+import { createUsageAccessLogMiddleware } from "../middleware/usageAccessLog.js";
+import { config } from "../config/index.js";
 import type { ScheduledExportsService } from "../services/scheduledExports.js";
 import type { ReportExporterService } from "../services/reportExporter.js";
 import { createSubscriptionRouter } from "./subscriptionRoutes.js";
+import { createSubscriptionHealthRouter } from "./subscriptions/health.js";
 import { createRefreshTokenRouter } from "./refresh-token.js";
 import type { SubscriptionRepository } from "../repositories/subscriptionRepository.js";
 import type { DeveloperRepository } from "../repositories/developerRepository.js";
 import type { ApiRepository } from "../repositories/apiRepository.js";
 import { createForecastRouter } from "./forecast.js";
+import { createPlansRouter } from "./plans.js";
+import { createCreditsRouter } from "./credits.js";
+import type { CreditsRepository } from "../repositories/creditsRepository.js";
 import { createErrorsRouter } from "./errors.js";
-import { config } from "../config/index.js";
 import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
-import { createLogsRouter } from "./logs.js";
+import { createAuditRouter } from "./audit.js";
+import { createInvoicesRouter } from "./invoices.js";
 import type { AuditService } from "../services/auditService.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
@@ -47,14 +55,26 @@ export interface ApiRouterDeps
   apiRepository?: ApiRepository;
   usageSseBroadcaster?: UsageSseBroadcaster;
   auditService?: AuditService;
+  /** Health-check configuration forwarded to GET /api/usage/health. */
+  healthCheckConfig?: HealthCheckConfig;
+  /** Credits repository for the /api/credits hot-path lookup. */
+  creditsRepository?: CreditsRepository;
 }
 
 export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   const router = Router();
 
   router.use("/health", healthRouter);
+  router.use("/plans", createPlansRouter());
+  // Hot-path credits lookup (idx_credits_lookup_hot) — see migrations/credits_index.sql
+  router.use(
+    "/credits",
+    createCreditsRouter({ creditsRepository: deps.creditsRepository }),
+  );
   router.use("/spike", createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
+  router.use("/audit", createAuditRouter({ auditService: deps.auditService }));
+  router.use("/invoices", createInvoicesRouter());
 
   // Logs — per-user structured log ingestion and retrieval, rate-limited via
   // a token-bucket limiter (see src/routes/logs.ts and LOGS_RATE_LIMIT_* env vars).
@@ -68,9 +88,10 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     }),
   );
 
-  // Mounted before '/usage' so the more specific CSV export path matches first.
+  // Mounted before '/usage' so the more specific paths match first.
   router.use(
     "/usage/csv",
+    usageAccessLogMiddleware,
     createUsageCsvRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
@@ -78,6 +99,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use(
     "/usage/by-endpoint",
+    usageAccessLogMiddleware,
     createUsageByEndpointRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
@@ -85,6 +107,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use(
     "/usage/aggregate",
+    usageAccessLogMiddleware,
     createUsageAggregateRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
@@ -92,13 +115,22 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use(
     "/usage/sse",
+    usageAccessLogMiddleware,
     createUsageSseRouter({
       broadcaster: deps.usageSseBroadcaster,
     }),
   );
 
+  // Usage subsystem external-dependency health probe (GrantFox FWC26).
+  // Mounted before the generic /usage handler to avoid path shadowing.
+  router.use(
+    "/usage/health",
+    createUsageHealthRouter({ config: deps.healthCheckConfig }),
+  );
+
   router.use(
     "/usage",
+    usageAccessLogMiddleware,
     createUsageRouter({
       usageEventsRepository: deps.usageEventsRepository!,
     }),
@@ -123,6 +155,13 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
       }),
     );
   }
+
+  // Subscriptions subsystem external-dependency health probe (b#089).
+  // Mounted before the generic /subscriptions handler to avoid path shadowing.
+  router.use(
+    "/subscriptions/health",
+    createSubscriptionHealthRouter({ config: deps.healthCheckConfig }),
+  );
 
   // Subscriptions — developers subscribe to marketplace APIs with metering preferences.
   if (

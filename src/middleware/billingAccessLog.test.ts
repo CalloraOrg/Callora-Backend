@@ -61,13 +61,18 @@ describe('createBillingAccessLogMiddleware', () => {
         expect.objectContaining({
           correlationId: 'billing-req-1',
           requestId: 'billing-req-1',
+          'req-id': 'billing-req-1',
           method: 'POST',
           path: '/billing/deduct',
           status: 200,
           statusCode: 200,
           ms: expect.any(Number),
           durationMs: expect.any(Number),
+          latency: expect.any(Number),
+          latencyMs: expect.any(Number),
+          size: expect.any(Number),
           userId: 'user-1',
+          actor: 'user-1',
           apiId: 'api-123',
           endpointId: 'ep-456',
           apiKeyId: 'ak-789',
@@ -392,6 +397,99 @@ describe('createBillingAccessLogMiddleware', () => {
       res.emit('close');
 
       expect(infoSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  test('extracts actor from body.developerId when no authenticatedUser', () => {
+    const infoSpy = jest.spyOn(billingLogger, 'info').mockImplementation(() => billingLogger);
+
+    try {
+      const middleware = createBillingAccessLogMiddleware();
+
+      const req = Object.assign(new EventEmitter(), {
+        method: 'POST',
+        path: '/billing/deduct',
+        headers: {},
+        id: 'billing-dev-actor',
+        body: { developerId: 'dev-123' },
+      }) as unknown as EventEmitter & Request & { id?: string; body: Record<string, unknown> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+        setHeader: jest.fn(),
+        locals: {},
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+          locals: Record<string, unknown>;
+        };
+
+      middleware(req, res, jest.fn());
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ actor: 'dev-123' }),
+      );
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  test('redacts req-id, latency, size, and actor when configured', () => {
+    const infoSpy = jest.spyOn(billingLogger, 'info').mockImplementation(() => billingLogger);
+
+    try {
+      const middleware = createBillingAccessLogMiddleware({
+        redactFields: ['req-id', 'latency', 'size', 'actor'],
+      });
+
+      const req = Object.assign(new EventEmitter(), {
+        method: 'POST',
+        path: '/billing/deduct',
+        headers: {},
+        id: 'billing-redact-all',
+        body: { developerId: 'dev-secret' },
+      }) as unknown as EventEmitter & Request & { id?: string; body: Record<string, unknown> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+        setHeader: jest.fn(),
+        locals: {},
+      }) as unknown as EventEmitter &
+        Response & {
+          statusCode: number;
+          write: jest.Mock;
+          end: jest.Mock;
+          setHeader: jest.Mock;
+          writableEnded: boolean;
+          locals: Record<string, unknown>;
+        };
+
+      middleware(req, res, jest.fn());
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          'req-id': BILLING_LOG_REDACTED_VALUE,
+          latency: BILLING_LOG_REDACTED_VALUE,
+          size: BILLING_LOG_REDACTED_VALUE,
+          actor: BILLING_LOG_REDACTED_VALUE,
+        }),
+      );
     } finally {
       infoSpy.mockRestore();
     }
