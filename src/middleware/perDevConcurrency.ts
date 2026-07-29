@@ -1,5 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { DeveloperSemaphore } from '../utils/developerSemaphore.js';
+import { DeveloperSemaphore, sharedDeveloperSemaphore } from '../utils/developerSemaphore.js';
 import { resolveRequestUserId } from './requireAuth.js';
 import { config } from '../config/index.js';
 import { logger } from '../logger.js';
@@ -9,6 +9,13 @@ export interface PerDevConcurrencyOptions {
   maxConcurrent?: number;
   /** TTL in ms before idle developer state is evicted (default: 300_000). */
   ttlMs?: number;
+  /**
+   * DeveloperSemaphore instance to use.  When omitted and no other options
+   * are customised, defaults to {@link sharedDeveloperSemaphore} so that the
+   * admin concurrency-stats route sees real in-flight counts.  Pass an
+   * isolated instance in unit tests to avoid cross-test state pollution.
+   */
+  semaphore?: DeveloperSemaphore;
 }
 
 /**
@@ -37,7 +44,16 @@ export function createPerDevConcurrencyMiddleware(
   const maxConcurrent = options.maxConcurrent ?? config.billingConcurrency.maxPerDeveloper;
   const ttlMs = options.ttlMs ?? config.billingConcurrency.semaphoreTtlMs;
 
-  const semaphore = new DeveloperSemaphore(maxConcurrent, ttlMs);
+  // Prefer an explicitly supplied semaphore (useful in tests).  Otherwise use
+  // the shared singleton when the caller has not customised maxConcurrent/ttlMs
+  // so that the admin metrics route observes real in-flight counts.  When the
+  // caller HAS customised the limits (e.g. per-route overrides) create a
+  // dedicated instance to keep the slot counts independent.
+  const semaphore: DeveloperSemaphore =
+    options.semaphore ??
+    (options.maxConcurrent === undefined && options.ttlMs === undefined
+      ? sharedDeveloperSemaphore
+      : new DeveloperSemaphore(maxConcurrent, ttlMs));
 
   return (req: Request, res: Response, next: NextFunction): void => {
     const { userId } = resolveRequestUserId(req);
