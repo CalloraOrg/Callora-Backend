@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
+import { createForecastAccessLogMiddleware } from '../middleware/forecastAccessLog.js';
 import { successEnvelope } from '../lib/envelope.js';
 import { getRequestId } from '../logger.js';
 import { logger } from '../logger.js';
@@ -10,7 +11,6 @@ import { defaultAuditService } from '../services/auditService.js';
 import {
   GatewayTimeoutError,
   NotFoundError,
-  BadRequestError,
   UnauthorizedError,
 } from '../errors/index.js';
 
@@ -355,6 +355,10 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   const router = Router();
 
   router.use(createTimeoutMiddleware({ durationMs: timeoutMs }));
+
+  // Structured access log for every /api/forecast request.
+  // Emits: req-id, latency, status, response size, and actor on the `forecast` channel.
+  router.use(createForecastAccessLogMiddleware());
 
   // -----------------------------------------------------------------------
   // GET /api/forecast
