@@ -125,6 +125,8 @@ export const config = {
     },
     timeout: env.HEALTH_CHECK_DB_TIMEOUT,
   },
+  /** Per-request timeout for GET /api/health (ms). Sends 504 on exceed. */
+  healthRequestTimeoutMs: env.HEALTH_REQUEST_TIMEOUT_MS,
   dbPool: {
     max: env.DB_POOL_MAX,
     idleTimeoutMillis: env.DB_IDLE_TIMEOUT_MS,

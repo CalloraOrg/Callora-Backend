@@ -448,6 +448,7 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 | `SETTLEMENT_STATUS_SYNC_TIMEOUT_MS` | No | `5000` | Per-request Horizon timeout for settlement sync (ms) |
 | `SETTLEMENT_RECON_INTERVAL_MS` | No | `86400000` | Nightly settlement reconciliation interval (ms, default 24h) |
 | `HEALTH_CHECK_DB_TIMEOUT` | No | `2000` | DB health check timeout (ms) |
+| `HEALTH_REQUEST_TIMEOUT_MS` | No | `5000` | Per-request timeout for `GET /api/health` (ms). When the full health check does not complete within this window the request is cooperatively aborted and the caller receives HTTP 504 with `code: "GATEWAY_TIMEOUT"`. |
 | `APP_VERSION` | No | `1.0.0` | Reported in health check responses |
 | `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `ACCESS_LOG_SAMPLE_RATE` | No | `1` | Fraction of requests logged as access events (`1` = 100%) |

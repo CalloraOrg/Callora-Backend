@@ -71,6 +71,7 @@ import {
   requestIdMiddleware,
   responseEnrichMiddleware,
 } from "./middleware/requestId.js";
+import { createTimeoutMiddleware } from "./middleware/timeout.js";
 //import { envelopeValidator } from './middleware/envelopeValidator.js';
 import {
   successEnvelope,
@@ -384,7 +385,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }),
   );
 
-  app.get("/api/health", async (req, res) => {
+  app.get("/api/health", createTimeoutMiddleware({ timeoutMs: config.healthRequestTimeoutMs }), async (req, res) => {
     const requestId = getRequestId(req);
     // If no health check config provided, return simple health check
     if (!dependencies?.healthCheckConfig) {
@@ -394,12 +395,27 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }
 
     try {
+      // Cooperative abort: if the per-request timeout fires while performHealthCheck
+      // is awaiting a dependency probe, the aborted signal propagates to any
+      // in-flight fetch calls inside the service layer, allowing them to cancel
+      // quickly rather than burning the full per-component timeout.
       const healthStatus = await performHealthCheck(
         dependencies.healthCheckConfig,
+        req.abortSignal,
       );
+
+      // Guard: if the timeout middleware already sent a 504 (res.headersSent)
+      // we must not attempt to write a second response.
+      if (res.headersSent) {
+        return;
+      }
+
       const statusCode = healthStatus.status === "down" ? 503 : 200;
       res.status(statusCode).json(successEnvelope(healthStatus, requestId));
     } catch {
+      if (res.headersSent) {
+        return;
+      }
       // Never expose internal errors in health check
       res.status(503).json(
         errorEnvelope("SERVICE_UNAVAILABLE", "Health check failed", requestId, {
