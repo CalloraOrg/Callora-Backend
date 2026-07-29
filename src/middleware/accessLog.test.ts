@@ -6,6 +6,7 @@ import {
   createAccessLogMiddleware,
   ACCESS_LOG_REDACTED_VALUE,
   createHealthAccessLogMiddleware,
+  createPlansAccessLogMiddleware,
 } from './accessLog.js';
 
 describe('createAccessLogMiddleware', () => {
@@ -449,60 +450,80 @@ describe('createHealthAccessLogMiddleware', () => {
   });
 });
 
-describe('billingAccessLog re-exports from accessLog', () => {
-  test('exports createBillingAccessLogMiddleware and billingAccessLogMiddleware', () => {
-    const {
-      createBillingAccessLogMiddleware,
-      billingAccessLogMiddleware,
-    } = require('./accessLog.js');
-    expect(typeof createBillingAccessLogMiddleware).toBe('function');
-    expect(typeof billingAccessLogMiddleware).toBe('function');
-  });
-
-  test('re-exported middleware logs structured JSON with req-id, latency, status, size, actor', () => {
-    const {
-      createBillingAccessLogMiddleware,
-      billingLogger,
-    } = require('./accessLog.js');
-    const infoSpy = jest.spyOn(billingLogger, 'info').mockImplementation(() => billingLogger);
+describe('createPlansAccessLogMiddleware', () => {
+  test('logs structured JSON with req-id, latency, status, size, and actor', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+    const middleware = createPlansAccessLogMiddleware();
 
     try {
-      const middleware = createBillingAccessLogMiddleware();
-
       const req = Object.assign(new EventEmitter(), {
-        method: 'POST',
-        path: '/api/billing/deduct',
-        headers: { 'x-request-id': 'reexport-req-1' },
-        id: 'reexport-req-1',
-        body: { developerId: 'dev-777' },
-      }) as unknown as EventEmitter & Request & { id?: string; body: Record<string, unknown> };
+        method: 'GET',
+        path: '/api/plans',
+        headers: { 'x-request-id': 'req-plans-1' },
+        id: 'req-plans-1',
+      }) as unknown as EventEmitter & Request & { headers: Record<string, string>; id?: string };
 
       const res = Object.assign(new EventEmitter(), {
         statusCode: 200,
         writableEnded: true,
+        setHeader: jest.fn(),
         write: jest.fn(() => true),
         end: jest.fn(() => true),
-        setHeader: jest.fn(),
-        locals: { authenticatedUser: { id: 'user-777' } },
-      }) as unknown as EventEmitter & Response & { statusCode: number; locals: Record<string, unknown> };
+        locals: {
+          authenticatedUser: { id: 'actor-123' },
+        },
+      }) as unknown as EventEmitter & Response & { statusCode: number; write: jest.Mock; end: jest.Mock; setHeader: jest.Mock; writableEnded: boolean; locals: any };
 
       middleware(req, res, jest.fn());
+      res.write(Buffer.from('plans'));
+      res.end(Buffer.from('ok'));
       res.emit('finish');
 
       expect(infoSpy).toHaveBeenCalledTimes(1);
-      expect(infoSpy.mock.calls[0][0]).toEqual(
+      const logPayload = infoSpy.mock.calls[0][0];
+      expect(logPayload).toEqual(
         expect.objectContaining({
-          'req-id': 'reexport-req-1',
-          requestId: 'reexport-req-1',
+          requestId: 'req-plans-1',
+          latencyMs: expect.any(Number),
           status: 200,
-          latency: expect.any(Number),
-          size: expect.any(Number),
-          actor: 'user-777',
+          responseBytes: 7,
+          actor: 'actor-123',
         }),
       );
     } finally {
       infoSpy.mockRestore();
     }
   });
-});
 
+  test('omits actor if authenticatedUser is not set', () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => logger);
+    const middleware = createPlansAccessLogMiddleware();
+
+    try {
+      const req = Object.assign(new EventEmitter(), {
+        method: 'GET',
+        path: '/api/plans',
+        headers: { 'x-request-id': 'req-plans-2' },
+      }) as unknown as EventEmitter & Request & { headers: Record<string, string> };
+
+      const res = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        writableEnded: true,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(() => true),
+        locals: {},
+      }) as unknown as EventEmitter & Response & { statusCode: number; write: jest.Mock; end: jest.Mock; setHeader: jest.Mock; writableEnded: boolean; locals: any };
+
+      middleware(req, res, jest.fn());
+      res.end();
+      res.emit('finish');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const logPayload = infoSpy.mock.calls[0][0];
+      expect(logPayload).not.toHaveProperty('actor');
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+});
