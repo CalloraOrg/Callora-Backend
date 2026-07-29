@@ -131,8 +131,71 @@ describe('GET /api/forecast — paginated envelope shape', () => {
   it('total always equals 24 regardless of the page size', async () => {
     const res1 = await request(app).get('/api/forecast?limit=5');
     const res2 = await request(app).get('/api/forecast?limit=100');
+    expect(res1.body.data.total).toBe(24);
+    expect(res2.body.data.total).toBe(24);
+  });
+});
 
-  describe('PATCH /api/forecast/:id (update)', () => {
+describe('Zod Validation for /api/forecast', () => {
+  it('returns 400 with structured validation error when limit is invalid', async () => {
+    const res = await request(app).get('/api/forecast?limit=invalid');
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.message).toBe('Request validation failed');
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details[0].field).toBe('query.limit');
+  });
+
+  it('returns 400 with structured validation error when limit is non-positive', async () => {
+    const res = await request(app).get('/api/forecast?limit=-5');
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].field).toBe('query.limit');
+  });
+
+  it('returns 400 with structured validation error when POST body is missing required name', async () => {
+    const token = createToken('dev-user-1');
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ description: 'A forecast without name' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].field).toBe('body.name');
+  });
+
+  it('returns 400 with structured validation error when POST body name exceeds max length', async () => {
+    const token = createToken('dev-user-1');
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'x'.repeat(256), description: 'Long name forecast' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].field).toBe('body.name');
+  });
+
+  it('returns 400 with structured validation error when PATCH body has no fields', async () => {
+    const token = createToken('dev-user-1');
+    const res = await request(app)
+      .patch('/api/forecast/forecast_123')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+});
+
+describe('PATCH /api/forecast/:id (update)', () => {
     it('should update a forecast and record before/after audit', async () => {
       const token = createToken('dev-user-1');
 

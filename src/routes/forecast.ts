@@ -1,5 +1,4 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { z } from 'zod';
 import { createTimeoutMiddleware } from '../middleware/timeout.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
@@ -9,10 +8,23 @@ import { getRequestId } from '../logger.js';
 import { logger } from '../logger.js';
 import { defaultAuditService } from '../services/auditService.js';
 import {
+  BadRequestError,
   GatewayTimeoutError,
   NotFoundError,
   UnauthorizedError,
 } from '../errors/index.js';
+import {
+  listForecastQuerySchema,
+  forecastParamsSchema,
+  createForecastSchema,
+  updateForecastSchema,
+  FORECAST_MAX_LIMIT,
+  FORECAST_DEFAULT_LIMIT,
+  type CreateForecastInput,
+  type UpdateForecastInput,
+} from '../validators/forecast.js';
+
+export { FORECAST_MAX_LIMIT, FORECAST_DEFAULT_LIMIT };
 
 export interface ForecastPoint {
   timestamp: string;
@@ -31,12 +43,6 @@ export interface ForecastResponse {
 // ---------------------------------------------------------------------------
 // Pagination types for GET /api/forecast
 // ---------------------------------------------------------------------------
-
-/** Maximum number of forecast points that can be returned in a single page. */
-export const FORECAST_MAX_LIMIT = 100;
-
-/** Default page size when no `limit` query param is provided. */
-export const FORECAST_DEFAULT_LIMIT = 20;
 
 /**
  * Paginated envelope returned by GET /api/forecast.
@@ -83,31 +89,6 @@ function decodeCursor(cursor: string): number | null {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Validation schema for list query params
-// ---------------------------------------------------------------------------
-
-/**
- * Zod schema for GET /api/forecast query parameters.
- *
- * - `limit`  – page size, 1–100, default 20
- * - `cursor` – opaque pagination cursor from a previous response
- */
-const listForecastQuerySchema = z.object({
-  limit: z
-    .string()
-    .optional()
-    .transform((val) => {
-      if (val === undefined || val.trim() === '') return FORECAST_DEFAULT_LIMIT;
-      const n = Number(val);
-      if (!Number.isInteger(n) || n < 1) {
-        throw new BadRequestError('limit must be a positive integer');
-      }
-      return Math.min(n, FORECAST_MAX_LIMIT);
-    }),
-  cursor: z.string().optional(),
-});
-
 export interface Forecast {
   id: string;
   name: string;
@@ -119,25 +100,6 @@ export interface Forecast {
 
 // In-memory store for forecast data (simulated persistence)
 const forecastStore = new Map<string, Forecast>();
-
-// -----------------------------------------------------------------------
-// Validation schemas
-// -----------------------------------------------------------------------
-
-const createForecastSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().max(1000),
-});
-
-const updateForecastSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  description: z.string().max(1000).optional(),
-}).refine((v) => Object.keys(v).length > 0, {
-  message: 'At least one field must be provided',
-});
-
-type CreateForecastInput = z.infer<typeof createForecastSchema>;
-type UpdateForecastInput = z.infer<typeof updateForecastSchema>;
 
 // -----------------------------------------------------------------------
 // Helper functions
@@ -377,69 +339,60 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   //
   // Not audited (read-only).
   // -----------------------------------------------------------------------
-  router.get('/', (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const requestId = getRequestId(req) ?? 'unknown';
+  router.get(
+    '/',
+    validate({ query: listForecastQuerySchema }),
+    (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const requestId = getRequestId(req) ?? 'unknown';
 
-      // ---- Parse & validate query parameters --------------------------------
-      const parseResult = listForecastQuerySchema.safeParse(req.query);
-      if (!parseResult.success) {
-        // Surface Zod validation failures as a structured 400 error.
-        throw new BadRequestError(
-          parseResult.error.issues.map((i) => i.message).join('; '),
-        );
-      }
+        const { limit, cursor: rawCursor } = listForecastQuerySchema.parse(req.query);
 
-      const { limit, cursor: rawCursor } = parseResult.data;
-
-      // ---- Resolve start index from cursor -----------------------------------
-      let startIndex = 0;
-      if (rawCursor !== undefined && rawCursor.trim() !== '') {
-        const decoded = decodeCursor(rawCursor.trim());
-        if (decoded === null) {
-          // Malformed or tampered cursor – return 400.
-          throw new BadRequestError(
-            'Invalid or malformed cursor. Obtain a fresh cursor from the next_cursor field of a previous response.',
-          );
+        // ---- Resolve start index from cursor -----------------------------------
+        let startIndex = 0;
+        if (rawCursor !== undefined && rawCursor.trim() !== '') {
+          const decoded = decodeCursor(rawCursor.trim());
+          if (decoded === null) {
+            // Malformed or tampered cursor – return 400.
+            throw new BadRequestError(
+              'Invalid or malformed cursor. Obtain a fresh cursor from the next_cursor field of a previous response.',
+            );
+          }
+          startIndex = decoded;
         }
-        startIndex = decoded;
+
+        // ---- Generate the full forecast data set (deterministic per request) --
+        const allPoints = simulateForecastCalculation(req.signal ?? req.abortSignal);
+        const total = allPoints.length;
+
+        // ---- Slice the requested page ------------------------------------------
+        const pagePoints = allPoints.slice(startIndex, startIndex + limit);
+        const nextIndex = startIndex + limit;
+        const hasMore = nextIndex < total;
+
+        // ---- Build paginated response envelope --------------------------------
+        const data: PaginatedForecastResponse = {
+          items: pagePoints,
+          total,
+          ...(hasMore ? { next_cursor: encodeCursor(nextIndex) } : {}),
+        };
+
+        // ---- Structured logging with correlation ID ---------------------------
+        logger.info('forecast.list', {
+          requestId,
+          limit,
+          startIndex,
+          returnedCount: pagePoints.length,
+          total,
+          hasMore,
+        });
+
+        res.json(successEnvelope(data, requestId));
+      } catch (err) {
+        next(err);
       }
-
-      // ---- Generate the full forecast data set (deterministic per request) --
-      // All 24 hourly points for the current UTC day are computed on-the-fly.
-      // This avoids any persistent state while still offering a realistic data
-      // set that clients can page through.
-      const allPoints = simulateForecastCalculation(req.signal ?? req.abortSignal);
-      const total = allPoints.length;
-
-      // ---- Slice the requested page ------------------------------------------
-      // Guard: if startIndex >= total, return an empty last page (no next_cursor).
-      const pagePoints = allPoints.slice(startIndex, startIndex + limit);
-      const nextIndex = startIndex + limit;
-      const hasMore = nextIndex < total;
-
-      // ---- Build paginated response envelope --------------------------------
-      const data: PaginatedForecastResponse = {
-        items: pagePoints,
-        total,
-        ...(hasMore ? { next_cursor: encodeCursor(nextIndex) } : {}),
-      };
-
-      // ---- Structured logging with correlation ID ---------------------------
-      logger.info('forecast.list', {
-        requestId,
-        limit,
-        startIndex,
-        returnedCount: pagePoints.length,
-        total,
-        hasMore,
-      });
-
-      res.json(successEnvelope(data, requestId));
-    } catch (err) {
-      next(err);
-    }
-  });
+    },
+  );
 
   // -----------------------------------------------------------------------
   // POST /api/forecast
@@ -457,8 +410,6 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
       const input = createForecastSchema.parse(req.body);
       const forecast = await createForecast(input, user.id, req);
 
-      // Log to audit trail (also called by createForecast, but this ensures
-      // structured logging consistency across the app)
       logger.audit('forecast.create', user.id, {
         forecastId: forecast.id,
         name: forecast.name,
@@ -475,10 +426,12 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   // -----------------------------------------------------------------------
   router.get(
     '/:id',
+    validate({ params: forecastParamsSchema }),
     asyncHandler(async (req, res) => {
-      const forecast = forecastStore.get(req.params.id);
+      const { id } = forecastParamsSchema.parse(req.params);
+      const forecast = forecastStore.get(id);
       if (!forecast) {
-        throw new NotFoundError(`Forecast ${req.params.id} not found`);
+        throw new NotFoundError(`Forecast ${id} not found`);
       }
 
       const requestId = getRequestId(req) ?? 'unknown';
@@ -494,13 +447,14 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   router.patch(
     '/:id',
     requireAuth,
-    validate({ body: updateForecastSchema }),
+    validate({ params: forecastParamsSchema, body: updateForecastSchema }),
     asyncHandler(async (req, res) => {
       const user = res.locals.authenticatedUser;
       if (!user) throw new UnauthorizedError();
 
+      const { id } = forecastParamsSchema.parse(req.params);
       const input = updateForecastSchema.parse(req.body);
-      const updated = await updateForecast(req.params.id, input, user.id, req);
+      const updated = await updateForecast(id, input, user.id, req);
 
       logger.audit('forecast.update', user.id, {
         forecastId: updated.id,
@@ -520,14 +474,16 @@ export function createForecastRouter(timeoutMs = 5_000): Router {
   router.delete(
     '/:id',
     requireAuth,
+    validate({ params: forecastParamsSchema }),
     asyncHandler(async (req, res) => {
       const user = res.locals.authenticatedUser;
       if (!user) throw new UnauthorizedError();
 
-      await deleteForecast(req.params.id, user.id, req);
+      const { id } = forecastParamsSchema.parse(req.params);
+      await deleteForecast(id, user.id, req);
 
       logger.audit('forecast.delete', user.id, {
-        forecastId: req.params.id,
+        forecastId: id,
       });
 
       const requestId = getRequestId(req) ?? 'unknown';
