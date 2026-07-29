@@ -24,6 +24,38 @@ import {
 } from "./lifecycle/shutdown.js";
 import type { Socket } from "net";
 
+import { createDeveloperRouter } from "./routes/developerRoutes.js";
+import { createGatewayRouter } from "./routes/gatewayRoutes.js";
+import { createProxyRouter } from "./routes/proxyRoutes.js";
+import adminRouter from "./routes/admin.js";
+import logsRouter from "./routes/logs.js";
+import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
+import refundsRouter from "./routes/refunds.js";
+import { defaultDeveloperRepository } from "./repositories/developerRepository.js";
+import { createBillingService } from "./services/billingService.js";
+import {
+  createConfiguredRateLimiter,
+  resolveRateLimiterConfig,
+} from "./services/rateLimiter.js";
+import { PgUsageEventsRepository } from "./repositories/usageEventsRepository.pg.js";
+import { createRevenueLedgerIndexerJob } from "./services/revenueLedgerIndexer.js";
+import { RevenueSettlementService } from "./services/revenueSettlementService.js";
+import { createSettlementStatusSyncJob } from "./services/settlementStatusSyncJob.js";
+import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
+import { createPostgresUsageStore } from "./services/usageStore.js";
+import { createPostgresSettlementStore } from "./services/settlementStore.js";
+import { createApiRegistry } from "./data/apiRegistry.js";
+import { ApiKey } from "./types/gateway.js";
+import { listingsCache } from "./lib/listingsCache.js";
+import { createSlowQueryAlerterJob } from "./workers/slowQueryAlerter.js";
+import { createAnomalyDetectorJob } from "./workers/anomalyDetector.js";
+import {
+  initSloRecorder,
+  sloRecorderMiddleware,
+} from "./workers/sloAlertRecorder.js";
+import { createSloAlertJob } from "./workers/sloAlertJob.js";
+import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
+import { createSettlementReconWorker } from "./workers/settlementRecon.js";
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
@@ -231,6 +263,10 @@ if (isDirectExecution) {
   app.use("/api/developers", developerRouter);
   // Mounted before the generic admin router so it is not shadowed by
   // adminRouter's `/usage/:developerId` route.
+  app.use("/api/admin/usage/anomalies", createUsageAnomaliesRouter({ pool }));
+  app.use("/api/admin", adminRouter);
+  app.use("/api/refunds", refundsRouter);
+  app.use("/api/logs", logsRouter);
   app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
 
   // Webhook management routes
