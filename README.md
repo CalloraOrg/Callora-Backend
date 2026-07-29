@@ -140,6 +140,7 @@ The migration is in `migrations/0019_disputes.sql` (rollback: `migrations/0019_d
 - JSON body parsing plus gateway API key authentication for upstream proxy routes
 - Per-user global REST rate limiting for authenticated `/api/billing`, `/api/usage`, `/api/developers`, `/api/vault`, and `/api/keys` traffic, with IP fallback for unauthenticated requests
 - Per-user token-bucket rate limiting for all `/api/quotas` traffic (capacity and refill rate independently configurable via `QUOTA_RATE_LIMIT_CAPACITY` / `QUOTA_RATE_LIMIT_REFILL_RATE`); exceeded requests return `HTTP 429` with a `Retry-After` header and the standardised error envelope
+- Quota dependency probe: `GET /api/quotas/health` reports the status of `/api/quotas`'s external dependencies (currently the database) for ops dashboards/alerting, mirroring the `{ status, timestamp, dependencies }` shape of `GET /api/health/dependencies`; no auth required, subject to the same `/api/quotas` rate limit; see [docs/quotas-health-probe.md](./docs/quotas-health-probe.md)
 - In-memory `VaultRepository` with:
   - `create(userId, contractId, network)`
   - `findByUserId(userId, network)`
