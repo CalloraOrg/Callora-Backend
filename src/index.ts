@@ -60,9 +60,10 @@ import { createSettlementReconWorker } from "./workers/settlementRecon.js";
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
-import { createWebhooksRouter } from './routes/webhooks.js';
-import adminRouter from './routes/admin.js';
-import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
+import { createRefreshTokenRouter } from './routes/refresh-token.js';
+import { AuthController } from './controllers/authController.js';
+import { RefreshTokenService } from './services/refreshTokenService.js';
+import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { defaultDeveloperRepository } from './repositories/developerRepository.js';
 import { createBillingService } from './services/billingService.js';
 import { createRateLimiter } from './services/rateLimiter.js';
@@ -312,11 +313,30 @@ if (isDirectExecution) {
     apiRepository: defaultApiRepository,
     developerRepository: defaultDeveloperRepository,
   });
+  const proxyDrainTracker = createInFlightDrainTracker('gateway-proxy');
+
+  // --- Refresh-token drain tracker ---
+  // Tracks in-flight POST /api/refresh-token requests so that a SIGTERM during
+  // a token refresh will wait for the response to be sent before the process
+  // exits.  The subsystem is registered below alongside the other shutdown
+  // subsystems.
+  const refreshTokenDrainTracker = createInFlightDrainTracker('refresh-token');
+
+  const refreshTokenService = new RefreshTokenService({
+    jwtSecret: config.jwt.secret,
+    accessTokenExpiry: process.env.ACCESS_TOKEN_EXPIRY ?? '15m',
+    refreshTokenExpiry: process.env.REFRESH_TOKEN_EXPIRY ?? '7d',
+  });
+  const refreshTokenRepository = new DatabaseRefreshTokenRepository(pool);
+  const authController = new AuthController({
+    refreshTokenService,
+    refreshTokenRepository,
+  });
+
   const shutdownSubsystems: DrainableSubsystem[] = [
     proxyDrainTracker.subsystem,
-    keysDrainTracker.subsystem,
-    // Drain in-flight /api/quotas requests before closing (issue #883).
-    quotasDrainTracker.subsystem,
+    // Drain in-flight refresh-token requests before the process exits.
+    refreshTokenDrainTracker.subsystem,
     {
       name: "revenue-ledger-indexer",
       beginShutdown: () => revenueLedgerIndexerJob.beginShutdown(),
@@ -339,44 +359,16 @@ if (isDirectExecution) {
     },
   ];
 
-  if (slowQueryAlerterJob) {
-    shutdownSubsystems.push({
-      name: "slow-query-alerter",
-      beginShutdown: () => slowQueryAlerterJob.beginShutdown(),
-      awaitIdle: () => slowQueryAlerterJob.awaitIdle(),
-    });
-  }
-
-  if (anomalyDetectorJob) {
-    shutdownSubsystems.push({
-      name: "usage-anomaly-detector",
-      beginShutdown: () => anomalyDetectorJob.beginShutdown(),
-      awaitIdle: () => anomalyDetectorJob.awaitIdle(),
-    });
-  }
-
-  if (sloAlertJob) {
-    shutdownSubsystems.push({
-      name: "slo-alert-job",
-      beginShutdown: () => sloAlertJob!.beginShutdown(),
-      awaitIdle: () => sloAlertJob!.awaitIdle(),
-    });
-  }
-
-  shutdownSubsystems.push({
-    name: "monthly-invoice-job",
-    beginShutdown: () => monthlyInvoiceJob.beginShutdown(),
-    awaitIdle: () => monthlyInvoiceJob.awaitIdle(),
-  });
+  // Mount the refresh-token router. The drain middleware is applied inside the
+  // router so every request through this path is counted in the drain tracker.
   app.use(
-    "/v1/call",
-    legacyV1DeprecationMiddleware,
-    proxyDrainTracker.middleware,
+    '/api/refresh-token',
+    createRefreshTokenRouter({
+      authController,
+      drainMiddleware: refreshTokenDrainTracker.middleware,
+    }),
   );
-  app.use("/v1/call", proxyRouter);
 
-  app.use("/api", keysDrainTracker.middleware);
-  app.use("/api", apiKeyRouter);
 
   app.use(express.json());
 

@@ -158,3 +158,193 @@ describe('proxy drain tracker', () => {
     expect(settled).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// refresh-token drain tracker
+// ---------------------------------------------------------------------------
+// These tests exercise every code path in createInFlightDrainTracker that is
+// relevant to the /api/refresh-token SIGTERM drain feature (#903).
+// They use createInFlightDrainTracker directly — the same function that is
+// wired into the graceful-shutdown handler for the refresh-token subsystem —
+// so the coverage applies to the production code path without needing a live
+// HTTP server.
+// ---------------------------------------------------------------------------
+
+/** Helper: build a minimal mock Express response that records `once` listeners. */
+function makeRes() {
+  const listeners = new Map<string, () => void>();
+  const res = {
+    setHeader: jest.fn(),
+    once: jest.fn((event: string, handler: () => void) => {
+      listeners.set(event, handler);
+      return res;
+    }),
+    emit: (event: string) => listeners.get(event)?.(),
+  } as any;
+  return { res, listeners };
+}
+
+describe('refresh-token drain tracker', () => {
+  it('is immediately idle when no requests are in flight', async () => {
+    const tracker = createInFlightDrainTracker('refresh-token');
+
+    tracker.subsystem.beginShutdown();
+
+    // awaitIdle must resolve without any finish/close events.
+    await expect(tracker.subsystem.awaitIdle()).resolves.toBeUndefined();
+  });
+
+  it('resolves awaitIdle once the single in-flight request finishes', async () => {
+    const tracker = createInFlightDrainTracker('refresh-token');
+    const next = jest.fn();
+    const { res, listeners } = makeRes();
+
+    tracker.middleware({} as any, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+
+    tracker.subsystem.beginShutdown();
+    const idlePromise = tracker.subsystem.awaitIdle();
+
+    let settled = false;
+    void idlePromise.then(() => { settled = true; });
+    await Promise.resolve();
+
+    // Still waiting — request has not finished yet.
+    expect(settled).toBe(false);
+
+    // Simulate the response finishing.
+    listeners.get('finish')?.();
+
+    await expect(idlePromise).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
+  it('resolves awaitIdle via the close event when finish never fires', async () => {
+    const tracker = createInFlightDrainTracker('refresh-token');
+    const next = jest.fn();
+    const { res, listeners } = makeRes();
+
+    tracker.middleware({} as any, res, next);
+    tracker.subsystem.beginShutdown();
+
+    const idlePromise = tracker.subsystem.awaitIdle();
+    let settled = false;
+    void idlePromise.then(() => { settled = true; });
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+
+    // Simulate socket close without a finish event.
+    listeners.get('close')?.();
+
+    await expect(idlePromise).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
+  it('does not double-decrement when both finish and close fire for one request', async () => {
+    // Regression guard: the settled flag in the middleware ensures the active
+    // counter is decremented exactly once even if both events fire.
+    const tracker = createInFlightDrainTracker('refresh-token');
+    const next = jest.fn();
+
+    // Dispatch two requests so we can verify the counter lands on zero, not
+    // below zero (which would leave awaitIdle hanging forever if a third
+    // request came in after the double-decrement).
+    const { res: res1, listeners: l1 } = makeRes();
+    const { res: res2, listeners: l2 } = makeRes();
+
+    tracker.middleware({} as any, res1, next);
+    tracker.middleware({} as any, res2, next);
+
+    tracker.subsystem.beginShutdown();
+    const idlePromise = tracker.subsystem.awaitIdle();
+
+    // Fire both events for request 1 — should only decrement once.
+    l1.get('finish')?.();
+    l1.get('close')?.();
+
+    // Still one request in flight.
+    let settled = false;
+    void idlePromise.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    // Finish request 2 — now idle.
+    l2.get('finish')?.();
+    await expect(idlePromise).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
+  it('waits for all concurrent in-flight requests before becoming idle', async () => {
+    const tracker = createInFlightDrainTracker('refresh-token');
+    const next = jest.fn();
+
+    const { res: res1, listeners: l1 } = makeRes();
+    const { res: res2, listeners: l2 } = makeRes();
+    const { res: res3, listeners: l3 } = makeRes();
+
+    tracker.middleware({} as any, res1, next);
+    tracker.middleware({} as any, res2, next);
+    tracker.middleware({} as any, res3, next);
+    expect(next).toHaveBeenCalledTimes(3);
+
+    tracker.subsystem.beginShutdown();
+    const idlePromise = tracker.subsystem.awaitIdle();
+
+    let settled = false;
+    void idlePromise.then(() => { settled = true; });
+    await Promise.resolve();
+
+    l1.get('finish')?.();
+    await Promise.resolve();
+    expect(settled).toBe(false);   // still 2 in flight
+
+    l2.get('finish')?.();
+    await Promise.resolve();
+    expect(settled).toBe(false);   // still 1 in flight
+
+    l3.get('finish')?.();
+    await expect(idlePromise).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
+  it('sets Connection: close on responses received after beginShutdown', () => {
+    const tracker = createInFlightDrainTracker('refresh-token');
+    const next = jest.fn();
+    const { res: resBefore } = makeRes();
+    const { res: resAfter } = makeRes();
+
+    // Request arriving BEFORE shutdown starts — no Connection: close.
+    tracker.middleware({} as any, resBefore, next);
+    expect(resBefore.setHeader).not.toHaveBeenCalledWith('Connection', 'close');
+
+    // Signal shutdown.
+    tracker.subsystem.beginShutdown();
+
+    // Request arriving AFTER shutdown starts — must get Connection: close.
+    tracker.middleware({} as any, resAfter, next);
+    expect(resAfter.setHeader).toHaveBeenCalledWith('Connection', 'close');
+  });
+
+  it('resolves multiple awaitIdle callers once all requests finish', async () => {
+    const tracker = createInFlightDrainTracker('refresh-token');
+    const next = jest.fn();
+    const { res, listeners } = makeRes();
+
+    tracker.middleware({} as any, res, next);
+    tracker.subsystem.beginShutdown();
+
+    // Two independent callers waiting for idle (e.g. shutdown handler + test).
+    const idle1 = tracker.subsystem.awaitIdle();
+    const idle2 = tracker.subsystem.awaitIdle();
+
+    listeners.get('finish')?.();
+
+    await expect(Promise.all([idle1, idle2])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it('exposes the subsystem name that was passed to the factory', () => {
+    const tracker = createInFlightDrainTracker('refresh-token');
+    expect(tracker.subsystem.name).toBe('refresh-token');
+  });
+});
