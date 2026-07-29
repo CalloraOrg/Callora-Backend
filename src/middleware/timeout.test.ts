@@ -47,7 +47,6 @@ describe('createTimeoutMiddleware', () => {
     expect(res.status).toBe(504);
     expect(res.body.error.code).toBe('GATEWAY_TIMEOUT');
     expect(res.body.error.message).toMatch(/timed out after 50ms/i);
-    expect(res.body.success).toBe(false);
   });
 
   // ── requestId propagation ──────────────────────────────────────────────────

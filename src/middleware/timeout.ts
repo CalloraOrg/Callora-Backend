@@ -42,7 +42,6 @@ export interface TimeoutMiddlewareOptions {
   timeoutMs?: number;
   /** Alias for `timeoutMs` for backwards compatibility. */
   durationMs?: number;
-  /** Human-readable message included in the 504 response body. */
   message?: string;
 }
 
@@ -57,20 +56,9 @@ export interface TimeoutMiddlewareOptions {
 export function createTimeoutMiddleware(
   options: TimeoutMiddlewareOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
-  // Resolve timeout value: prefer timeoutMs, fall back to durationMs, then default.
-  const rawMs =
-    options.timeoutMs !== undefined
-      ? options.timeoutMs
-      : options.durationMs !== undefined
-        ? options.durationMs
-        : 5_000;
-
-  // A value ≤ 0 is treated as "disabled" — the middleware becomes a pass-through
-  // that still attaches an AbortController (never aborted) for API consistency.
-  const disabled = rawMs <= 0;
-  const timeoutMs = disabled ? 0 : rawMs;
-
-  const timeoutMessage = options.message ?? 'Request timed out';
+  const rawTimeout = options.timeoutMs ?? options.durationMs ?? 5000;
+  const timeoutMs = rawTimeout > 0 ? rawTimeout : 5000;
+  const message = options.message ?? `Request timed out after ${timeoutMs}ms`;
 
   return (req: Request, res: Response, next: NextFunction): void => {
     // Create an AbortController for this request. Even when the timeout is
@@ -111,13 +99,8 @@ export function createTimeoutMiddleware(
           timeoutMs,
         });
 
-        res.status(504).json(
-          buildErrorEnvelope(
-            'GATEWAY_TIMEOUT',
-            `Request timed out after ${timeoutMs}ms`,
-            requestId,
-          ),
-        );
+        const body = buildErrorEnvelope('GATEWAY_TIMEOUT', message, requestId);
+        res.status(504).json(body);
       }
 
       const requestId = getRequestId(req);

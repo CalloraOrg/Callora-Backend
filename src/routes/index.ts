@@ -31,6 +31,7 @@ import type { SubscriptionRepository } from "../repositories/subscriptionReposit
 import type { DeveloperRepository } from "../repositories/developerRepository.js";
 import type { ApiRepository } from "../repositories/apiRepository.js";
 import { createForecastRouter } from "./forecast.js";
+import { createPlansRouter } from "./plans.js";
 import { createErrorsRouter } from "./errors.js";
 import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
 import { createAuditRouter } from "./audit.js";
@@ -62,6 +63,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use("/health", healthRouter);
   router.use("/plans", plansRouter);
   router.use("/spike", createSpikeRouter());
+  router.use("/plans", createPlansRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
   router.use("/audit", createAuditRouter({ auditService: deps.auditService }));
   router.use("/invoices", createInvoicesRouter());
