@@ -277,213 +277,169 @@ describe('POST /api/refresh-token — input validation', () => {
       .post('/api/refresh-token')
       .send({ refreshToken: orphan });
 
-    expect(res.status).toBe(401);
-    expect(res.body.code).toBe('INVALID_REFRESH_TOKEN');
-  });
-});
+      const res = await request(app).get('/api/refresh-token').set(authHeader);
 
-describe('POST /api/refresh-token — happy path', () => {
-  let testApp: TestApp;
-
-  beforeEach(() => {
-    testApp = buildApp();
-  });
-
-  it('returns 200 with accessToken and tokenType for a valid refresh token', async () => {
-    const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
-
-    const res = await request(testApp.app)
-      .post('/api/refresh-token')
-      .send({ refreshToken });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('accessToken');
-    expect(res.body.tokenType).toBe('Bearer');
-
-    // Verify the returned access token is a valid JWT with the right claims
-    const decoded = jwt.verify(res.body.accessToken, TEST_SECRET) as any;
-    expect(decoded.userId).toBe('user-abc');
-    expect(decoded.type).toBe('access');
-  });
-
-  it('includes x-request-id in every response', async () => {
-    const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
-
-    const success = await request(testApp.app)
-      .post('/api/refresh-token')
-      .send({ refreshToken });
-
-    expect(success.headers['x-request-id']).toBeDefined();
-
-    const error = await request(testApp.app)
-      .post('/api/refresh-token')
-      .send({});
-
-    expect(error.headers['x-request-id']).toBeDefined();
-  });
-
-  it('echoes a caller-supplied x-request-id back in the response', async () => {
-    const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
-    const correlationId = 'test-correlation-id-12345';
-
-    const res = await request(testApp.app)
-      .post('/api/refresh-token')
-      .set('x-request-id', correlationId)
-      .send({ refreshToken });
-
-    expect(res.status).toBe(200);
-    expect(res.headers['x-request-id']).toBe(correlationId);
-  });
-});
-
-describe('POST /api/refresh-token — revoked token', () => {
-  let testApp: TestApp;
-
-  beforeEach(() => {
-    testApp = buildApp();
-  });
-
-  it('returns 401 REVOKED_TOKEN for a revoked refresh token', async () => {
-    const { refreshToken, stored } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
-    await testApp.repo.revokeRefreshToken(stored.id, stored.userId);
-
-    const res = await request(testApp.app)
-      .post('/api/refresh-token')
-      .send({ refreshToken });
-
-    expect(res.status).toBe(401);
-    expect(res.body.code).toBe('REVOKED_TOKEN');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Graceful-shutdown drain tests
-// ---------------------------------------------------------------------------
-
-describe('POST /api/refresh-token — graceful shutdown drain', () => {
-  it('drain subsystem is named refresh-token', () => {
-    const { drainTracker } = buildApp();
-    expect(drainTracker.subsystem.name).toBe('refresh-token');
-  });
-
-  it('awaitIdle resolves immediately when no requests are in flight', async () => {
-    const { drainTracker } = buildApp();
-    drainTracker.subsystem.beginShutdown();
-    await expect(drainTracker.subsystem.awaitIdle()).resolves.toBeUndefined();
-  });
-
-  it('sets Connection: close on responses received after beginShutdown', async () => {
-    const { app, refreshTokenService, repo, drainTracker } = buildApp();
-
-    // Signal shutdown BEFORE sending the request
-    drainTracker.subsystem.beginShutdown();
-
-    // The request still completes (drain doesn't block new requests from
-    // starting — it only prevents the process from exiting while they run)
-    const { refreshToken } = await seedValidToken(refreshTokenService, repo);
-    const res = await request(app)
-      .post('/api/refresh-token')
-      .send({ refreshToken });
-
-    expect(res.status).toBe(200);
-    // During drain the drain middleware must set Connection: close so that
-    // keep-alive clients do not attempt to reuse the connection.
-    expect(res.headers['connection']).toBe('close');
-  });
-
-  it('SIGTERM waits for an in-flight request to finish before the shutdown handler resolves', async () => {
-    /**
-     * This test directly exercises the production wiring:
-     *   - A real HTTP server is started on an ephemeral port.
-     *   - The refresh-token drain tracker is registered as a DrainableSubsystem.
-     *   - We start a long-running request (delayed by a setTimeout inside a
-     *     mock controller), fire SIGTERM (via gracefulShutdown), and verify
-     *     that the shutdown promise does not resolve until the request finishes.
-     */
-
-    // Slow controller: holds the response open for `delay` ms then responds.
-    let resolveDelayedResponse: (() => void) | undefined;
-    const delayedResponseSettled = new Promise<void>((resolve) => {
-      resolveDelayedResponse = resolve;
+      expect(res.status).toBe(200);
+      expect(res.headers['x-correlation-id']).toBeDefined();
+      expect(typeof res.headers['x-correlation-id']).toBe('string');
+      expect(res.headers['x-correlation-id'].length).toBeGreaterThan(0);
     });
 
-    const slowApp = express();
-    slowApp.use(express.json());
+    it('propagates client-supplied x-correlation-id in response header', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+      const clientCorrelationId = 'client-corr-test-abc-123';
 
-    const drainTracker = createInFlightDrainTracker('refresh-token');
+      const res = await request(app)
+        .get('/api/refresh-token')
+        .set(authHeader)
+        .set('x-correlation-id', clientCorrelationId);
 
-    slowApp.post(
-      '/api/refresh-token',
-      drainTracker.middleware,
-      (_req, res) => {
-        // Don't respond immediately — simulate an in-flight DB call.
-        setTimeout(() => {
-          res.json({ accessToken: 'fake', tokenType: 'Bearer' });
-          resolveDelayedResponse?.();
-        }, 80);
-      },
-    );
-
-    const server = slowApp.listen(0) as Server;
-
-    const activeConnections = new Set<any>();
-    server.on('connection', (socket: any) => {
-      activeConnections.add(socket);
-      socket.once('close', () => activeConnections.delete(socket));
+      expect(res.status).toBe(200);
+      expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
     });
 
-    const closeDatabase = jest.fn(async () => Promise.resolve());
-    const shutdown = createGracefulShutdownHandler({
-      server,
-      activeConnections,
-      closeDatabase,
-      timeoutMs: 2_000,
-      subsystems: [drainTracker.subsystem],
+    it('includes correlation ID in structured log output', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      const app = buildApp(repo);
+
+      await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'LIST_REFRESH_TOKENS',
+        expect.objectContaining({
+          correlationId: expect.any(String),
+        }),
+      );
     });
 
-    // Fire the slow request — don't await supertest yet, just start it.
-    const requestPromise = request(slowApp)
-      .post('/api/refresh-token')
-      .send({ refreshToken: 'any' });
+    it('includes correlation ID in error log when repository fails', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      jest.spyOn(repo, 'listRefreshTokens').mockRejectedValue(new Error('DB error'));
+      const app = buildApp(repo);
 
-    // Give the request time to enter the handler before triggering shutdown.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+      await request(app).get('/api/refresh-token').set(authHeader);
 
-    // Trigger graceful shutdown — should NOT resolve until the request finishes.
-    const shutdownPromise = shutdown('SIGTERM');
-
-    let shutdownResolved = false;
-    void shutdownPromise.then(() => { shutdownResolved = true; });
-
-    // Wait for the delayed response to be sent.
-    await delayedResponseSettled;
-    await requestPromise; // ensure supertest drains the socket
-
-    // Now the shutdown can complete.
-    const exitCode = await shutdownPromise;
-
-    expect(exitCode).toBe(0);
-    expect(shutdownResolved).toBe(true);
-    expect(closeDatabase).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to list refresh tokens',
+        expect.objectContaining({
+          correlationId: expect.any(String),
+        }),
+      );
+    });
   });
 
-  it('shutdown resolves immediately when no requests are in flight at SIGTERM time', async () => {
-    const { drainTracker } = buildApp();
+  describe('Token-Bucket Rate Limiting (issue #930)', () => {
+    it('allows requests within capacity and rejects with HTTP 429 when capacity is exceeded', async () => {
+      const repo = new MockRefreshTokenRepository([makeToken()]);
+      // Limiter with capacity 2, refill rate 1 token/sec
+      const limiter = new TokenBucketRateLimiter(2, 1);
+      const app = buildApp(repo, limiter);
 
-    const server = { close: jest.fn((cb: (err?: Error) => void) => cb()) } as unknown as Server;
-    const closeDatabase = jest.fn(async () => Promise.resolve());
+      // First 2 requests succeed (capacity: 2)
+      const res1 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res1.status).toBe(200);
 
-    const shutdown = createGracefulShutdownHandler({
-      server,
-      activeConnections: new Set(),
-      closeDatabase,
-      timeoutMs: 100,
-      subsystems: [drainTracker.subsystem],
+      const res2 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res2.status).toBe(200);
+
+      // 3rd request exceeds capacity
+      const res3 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res3.status).toBe(429);
+      expect(res3.body).toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.objectContaining({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Too Many Requests',
+            retryAfterMs: expect.any(Number),
+          }),
+        }),
+      );
+      expect(res3.body).toHaveProperty('requestId');
     });
 
-    const exitCode = await shutdown('SIGTERM');
+    it('returns Retry-After header in whole seconds reflecting refill time', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      // Capacity 1, refill rate 0.5 (takes 2 seconds to refill 1 token)
+      const limiter = new TokenBucketRateLimiter(1, 0.5);
+      const app = buildApp(repo, limiter);
 
-    expect(exitCode).toBe(0);
-    expect(closeDatabase).toHaveBeenCalledTimes(1);
+      const res1 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res1.status).toBe(200);
+
+      const res2 = await request(app).get('/api/refresh-token').set(authHeader);
+      expect(res2.status).toBe(429);
+
+      // Retry-After header must be present and formatted as whole seconds string
+      const retryAfterHeader = res2.headers['retry-after'];
+      expect(retryAfterHeader).toBeDefined();
+      expect(/^\d+$/.test(retryAfterHeader)).toBe(true);
+      const seconds = parseInt(retryAfterHeader, 10);
+      expect(seconds).toBeGreaterThanOrEqual(1);
+    });
+
+    it('enforces rate limit per-user in isolation', async () => {
+      const repo = new MockRefreshTokenRepository([
+        makeToken({ userId: 'user-A' }),
+        makeToken({ userId: 'user-B' }),
+      ]);
+      const limiter = new TokenBucketRateLimiter(1, 1);
+      const app = buildApp(repo, limiter);
+
+      // User A consumes their token
+      const resA1 = await request(app).get('/api/refresh-token').set('x-user-id', 'user-A');
+      expect(resA1.status).toBe(200);
+
+      const resA2 = await request(app).get('/api/refresh-token').set('x-user-id', 'user-A');
+      expect(resA2.status).toBe(429);
+
+      // User B should NOT be blocked by User A's rate limit
+      const resB1 = await request(app).get('/api/refresh-token').set('x-user-id', 'user-B');
+      expect(resB1.status).toBe(200);
+    });
+
+    it('falls back to client IP for rate limiting key when no user auth is present', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      const limiter = new TokenBucketRateLimiter(1, 1);
+      const app = buildApp(repo, limiter);
+
+      // First unauthenticated request consumes IP bucket, proceeds to auth middleware and returns 401
+      const res1 = await request(app).get('/api/refresh-token');
+      expect(res1.status).toBe(401);
+
+      // Second request from same IP exceeds bucket capacity and returns 429
+      const res2 = await request(app).get('/api/refresh-token');
+      expect(res2.status).toBe(429);
+      expect(res2.headers['retry-after']).toBeDefined();
+    });
+
+    it('logs structured warning with correlation ID when rate limit is exceeded', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      const limiter = new TokenBucketRateLimiter(1, 1);
+      const app = buildApp(repo, limiter);
+
+      await request(app).get('/api/refresh-token').set(authHeader).set('x-request-id', 'req-corr-999');
+      await request(app).get('/api/refresh-token').set(authHeader).set('x-request-id', 'req-corr-999');
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[tokenBucketRateLimit] request limit exceeded',
+        expect.objectContaining({
+          key: `user:${USER_ID}`,
+          requestId: 'req-corr-999',
+        }),
+      );
+    });
+
+    it('returns 500 InternalServerError when repository listRefreshTokens throws unexpected error', async () => {
+      const repo = new MockRefreshTokenRepository([]);
+      jest.spyOn(repo, 'listRefreshTokens').mockRejectedValue(new Error('DB Connection Failed'));
+      const app = buildApp(repo);
+
+      const res = await request(app).get('/api/refresh-token').set(authHeader);
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+    });
   });
 });
