@@ -1,29 +1,11 @@
 import { Router } from 'express';
-import { z } from 'zod';
-import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
+import { requireAuth } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
+import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { ReportExporterService } from '../services/reportExporter.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
-
-/**
- * Query parameters for listing exports
- */
-const exportsQuerySchema = z.object({
-  limit: z
-    .string()
-    .optional()
-    .transform((val) => (val ? parseInt(val, 10) : 20))
-    .pipe(z.number().int())
-    .transform((val) => Math.min(Math.max(val, 1), 100)),
-  offset: z
-    .string()
-    .optional()
-    .transform((val) => (val ? parseInt(val, 10) : 0))
-    .pipe(z.number().int().min(0)),
-  developerId: z.string().trim().min(1).max(255).optional(),
-  format: z.enum(['csv', 'json']).optional(),
-});
+import { exportsQuerySchema } from '../validators/export.js';
 
 export interface ExportsRouterDeps {
   reportExporterService: ReportExporterService;
@@ -38,6 +20,10 @@ export function createExportsRouter(deps: ExportsRouterDeps): Router {
   const router = Router();
   const { reportExporterService, developerRepository } = deps;
 
+  // Apply CSP, X-Content-Type-Options, and Referrer-Policy on every /api/exports response
+  // (success and error paths) — GrantFox FWC26 security header sweep.
+  router.use(securityHeadersMiddleware);
+
   /**
    * GET /api/exports
    *
@@ -51,6 +37,7 @@ export function createExportsRouter(deps: ExportsRouterDeps): Router {
    *   format     - Filter by format: 'csv' or 'json' (optional)
    *
    * Security: Requires authentication. Non-admin users can only access their own exports.
+   * Responses always include Content-Security-Policy, X-Content-Type-Options, and Referrer-Policy.
    *
    * @example Request
    * GET /api/exports?limit=10&offset=0

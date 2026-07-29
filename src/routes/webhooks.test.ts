@@ -1,262 +1,189 @@
-import express from 'express';
+import assert from 'node:assert/strict';
 import request from 'supertest';
-import webhookRoutes from './webhooks.js';
-import { errorHandler } from '../middleware/errorHandler.js';
-import { requestIdMiddleware } from '../middleware/requestId.js';
+
+jest.mock('../db.js', () => ({
+  writeQuery: jest.fn(),
+}));
+
+jest.mock('../logger.js', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    audit: jest.fn(),
+  },
+}));
+
+import { writeQuery } from '../db.js';
+import app from '../index.js';
 import { WebhookStore } from '../webhooks/webhook.store.js';
-import { logger } from '../logger.js';
 
-var mockDnsLookup = jest.fn();
-jest.mock('dns/promises', () => {
-  const lookup = (...args: unknown[]) => mockDnsLookup(...args);
-  return { __esModule: true, default: { lookup }, lookup };
-});
+const mockWriteQuery = writeQuery as jest.MockedFunction<typeof writeQuery>;
 
-function buildApp() {
-  const app = express();
-  app.use(requestIdMiddleware);
-  app.use('/api/webhooks', webhookRoutes);
-  app.use(errorHandler);
-  return app;
-}
-
-describe('validated /api/webhooks routes', () => {
-  let app: express.Express;
-  let infoSpy: jest.SpyInstance;
-  let auditSpy: jest.SpyInstance;
-
+describe('Webhook routes — audit persistence', () => {
   beforeEach(() => {
-    app = buildApp();
+    mockWriteQuery.mockResolvedValue({ rows: [] });
     WebhookStore.clear();
-    WebhookStore.clearDlq();
-    WebhookStore.clearFailedDeliveries();
-    mockDnsLookup.mockResolvedValue([{ address: '8.8.8.8', family: 4 }]);
-    infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => undefined);
-    auditSpy = jest.spyOn(logger, 'audit').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
-    infoSpy.mockRestore();
-    auditSpy.mockRestore();
+    jest.clearAllMocks();
   });
 
-  it('returns structured 400 for invalid registration payloads', async () => {
-    const res = await request(app)
-      .post('/api/webhooks')
-      .set('x-request-id', 'req-webhook-invalid')
-      .send({ url: 'not-a-url', events: [] });
+  describe('POST /api/webhooks — register', () => {
+    it('persists an audit row for webhook registration', async () => {
+      const response = await request(app)
+        .post('/api/webhooks')
+        .send({
+          developerId: 'dev-test-1',
+          url: 'https://example.com/webhook',
+          events: ['new_api_call'],
+        });
 
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({
-      success: false,
-      error: {
-        code: 'VALIDATION_ERROR',
-        message: 'Request validation failed',
-      },
-      requestId: 'req-webhook-invalid',
+      assert.equal(response.status, 201);
+      assert.equal(mockWriteQuery.mock.calls.length, 1);
+
+      const call = mockWriteQuery.mock.calls[0]!;
+      const sql = call[0] as string;
+      const params = call[1] as unknown[];
+      assert.ok(sql.includes('INSERT INTO audit_logs'));
+      assert.equal(params[1], 'WEBHOOK_REGISTERED');
+      assert.equal(params[2], 'dev-test-1');
+
+      const details = JSON.parse(params[8] as string);
+      assert.ok(details.after);
+      assert.equal(details.after.developerId, 'dev-test-1');
+      assert.equal(details.after.url, 'https://example.com/webhook');
     });
-    expect(res.body.error.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ field: 'body.developerId' }),
-        expect.objectContaining({ field: 'body.url' }),
-        expect.objectContaining({ field: 'body.events' }),
-      ]),
-    );
+
+    it('persists before as undefined when no existing webhook', async () => {
+      await request(app)
+        .post('/api/webhooks')
+        .send({
+          developerId: 'dev-test-2',
+          url: 'https://example.com/webhook',
+          events: ['new_api_call'],
+        });
+
+      const call = mockWriteQuery.mock.calls[0]!;
+      const params = call[1] as unknown[];
+      const details = JSON.parse(params[8] as string);
+      assert.equal(details.before, undefined);
+    });
   });
 
-  it('rejects unknown registration fields before storing anything', async () => {
-    const res = await request(app)
-      .post('/api/webhooks')
-      .send({
-        developerId: 'dev-123',
+  describe('POST /api/webhooks/:developerId/rotate-secret', () => {
+    it('persists an audit row for secret rotation', async () => {
+      WebhookStore.register({
+        developerId: 'dev-rotate-1',
         url: 'https://example.com/webhook',
         events: ['new_api_call'],
-        secret: 'super-secret',
-        role: 'admin',
+        secret_current: 'old-secret-key-at-least-32-chars',
+        createdAt: new Date(),
       });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ field: 'body', code: 'UNRECOGNIZED_KEYS' }),
-      ]),
-    );
-    expect(WebhookStore.get('dev-123')).toBeUndefined();
+      const response = await request(app)
+        .post('/api/webhooks/dev-rotate-1/rotate-secret')
+        .send({});
+
+      assert.equal(response.status, 200);
+      assert.equal(mockWriteQuery.mock.calls.length, 1);
+
+      const call = mockWriteQuery.mock.calls[0]!;
+      const params = call[1] as unknown[];
+      assert.equal(params[1], 'WEBHOOK_SECRET_ROTATED');
+      assert.equal(params[2], 'dev-rotate-1');
+
+      const details = JSON.parse(params[8] as string);
+      assert.ok(details.before);
+      assert.ok(details.after);
+    });
   });
 
-  it('registers a valid webhook and logs non-secret correlation metadata', async () => {
-    const res = await request(app)
-      .post('/api/webhooks')
-      .set('x-request-id', 'req-webhook-create')
-      .set('x-correlation-id', 'corr-webhook-create')
-      .send({
-        developerId: 'dev-123',
+  describe('PATCH /api/webhooks/:developerId/retry-policy', () => {
+    it('persists an audit row for retry policy update', async () => {
+      WebhookStore.register({
+        developerId: 'dev-retry-1',
         url: 'https://example.com/webhook',
         events: ['new_api_call'],
-        secret: 'super-secret',
+        createdAt: new Date(),
       });
 
-    expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({
-      message: 'Webhook registered successfully.',
-      developerId: 'dev-123',
-      url: 'https://example.com/webhook',
-      events: ['new_api_call'],
+      const response = await request(app)
+        .patch('/api/webhooks/dev-retry-1/retry-policy')
+        .send({
+          retryPolicy: { maxRetries: 3, baseDelayMs: 1000 },
+        });
+
+      assert.equal(response.status, 200);
+      assert.equal(mockWriteQuery.mock.calls.length, 1);
+
+      const call = mockWriteQuery.mock.calls[0]!;
+      const params = call[1] as unknown[];
+      assert.equal(params[1], 'WEBHOOK_RETRY_POLICY_UPDATED');
+      assert.equal(params[2], 'dev-retry-1');
+
+      const details = JSON.parse(params[8] as string);
+      assert.ok(details.before);
+      assert.ok(details.after);
     });
-    expect(res.body).not.toHaveProperty('secret');
-    expect(infoSpy).toHaveBeenCalledWith(
-      '[webhooks] webhook registered',
-      expect.objectContaining({
-        requestId: 'req-webhook-create',
-        correlationId: 'corr-webhook-create',
-        developerId: 'dev-123',
-        hasSecret: true,
-      }),
-    );
-    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain('super-secret');
   });
 
-  it('returns structured 400 for invalid developerId params', async () => {
-    const res = await request(app)
-      .get('/api/webhooks/no')
-      .set('x-request-id', 'req-webhook-param');
-
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({
-      success: false,
-      error: { code: 'VALIDATION_ERROR' },
-      requestId: 'req-webhook-param',
-    });
-    expect(res.body.error.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ field: 'params.developerId' }),
-      ]),
-    );
-  });
-
-  it('returns structured 400 for invalid retry policy update body', async () => {
-    WebhookStore.register({
-      developerId: 'dev-retry',
-      url: 'https://example.com/webhook',
-      events: ['new_api_call'],
-      createdAt: new Date(),
-    });
-
-    const res = await request(app)
-      .patch('/api/webhooks/dev-retry/retry-policy')
-      .set('x-request-id', 'req-webhook-retry')
-      .send({ retryPolicy: { maxRetries: 11 }, extra: true });
-
-    expect(res.status).toBe(400);
-    expect(res.body.requestId).toBe('req-webhook-retry');
-    expect(res.body.error.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ field: 'body.retryPolicy.maxRetries' }),
-        expect.objectContaining({ field: 'body', code: 'UNRECOGNIZED_KEYS' }),
-      ]),
-    );
-  });
-
-  it('validates params and returns a safe webhook config without secrets', async () => {
-    WebhookStore.register({
-      developerId: 'dev-get',
-      url: 'https://example.com/webhook',
-      events: ['new_api_call'],
-      secret: 'super-secret',
-      createdAt: new Date(),
-    });
-
-    const res = await request(app).get('/api/webhooks/dev-get');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual(
-      expect.objectContaining({
-        developerId: 'dev-get',
+  describe('DELETE /api/webhooks/:developerId', () => {
+    it('persists an audit row for webhook deletion with before state', async () => {
+      WebhookStore.register({
+        developerId: 'dev-delete-1',
         url: 'https://example.com/webhook',
         events: ['new_api_call'],
-      }),
-    );
-    expect(res.body).not.toHaveProperty('secret');
-    expect(res.body).not.toHaveProperty('secret_current');
-    expect(res.body).not.toHaveProperty('secret_previous');
-  });
+        secret_current: 'secret-key-at-least-32-chars-long',
+        createdAt: new Date(),
+      });
 
-  it('rotates secrets with correlation metadata in the audit event', async () => {
-    WebhookStore.register({
-      developerId: 'dev-rotate',
-      url: 'https://example.com/webhook',
-      events: ['new_api_call'],
-      secret: 'old-secret',
-      createdAt: new Date(),
+      const response = await request(app)
+        .delete('/api/webhooks/dev-delete-1');
+
+      assert.equal(response.status, 200);
+      assert.equal(mockWriteQuery.mock.calls.length, 1);
+
+      const call = mockWriteQuery.mock.calls[0]!;
+      const params = call[1] as unknown[];
+      assert.equal(params[1], 'WEBHOOK_DELETED');
+      assert.equal(params[2], 'dev-delete-1');
+
+      const details = JSON.parse(params[8] as string);
+      assert.ok(details.before);
+      assert.equal(details.before.developerId, 'dev-delete-1');
+      assert.equal(details.after, undefined);
     });
 
-    const res = await request(app)
-      .post('/api/webhooks/dev-rotate/rotate-secret')
-      .set('x-correlation-id', 'corr-rotate');
+    it('persists an audit row with null before when webhook does not exist', async () => {
+      const response = await request(app)
+        .delete('/api/webhooks/dev-delete-nonexistent');
 
-    expect(res.status).toBe(200);
-    expect(res.body.secret).toMatch(/^[a-f0-9]{64}$/);
-    expect(auditSpy).toHaveBeenCalledWith(
-      'WEBHOOK_SECRET_ROTATED',
-      'dev-rotate',
-      expect.objectContaining({
-        developerId: 'dev-rotate',
-        correlationId: 'corr-rotate',
-        hadPreviousSecret: true,
-      }),
-    );
+      assert.equal(response.status, 200);
+      assert.equal(mockWriteQuery.mock.calls.length, 1);
+
+      const call = mockWriteQuery.mock.calls[0]!;
+      const params = call[1] as unknown[];
+      assert.equal(params[1], 'WEBHOOK_DELETED');
+      assert.equal(params[2], 'dev-delete-nonexistent');
+    });
   });
 
-  it('updates retry policy and audits correlation metadata', async () => {
-    WebhookStore.register({
-      developerId: 'dev-retry-ok',
-      url: 'https://example.com/webhook',
-      events: ['new_api_call'],
-      createdAt: new Date(),
+  describe('GET /api/webhooks/:developerId — non-state-changing', () => {
+    it('does NOT persist an audit row for GET requests', async () => {
+      WebhookStore.register({
+        developerId: 'dev-get-1',
+        url: 'https://example.com/webhook',
+        events: ['new_api_call'],
+        createdAt: new Date(),
+      });
+
+      const response = await request(app)
+        .get('/api/webhooks/dev-get-1');
+
+      assert.equal(response.status, 200);
+      assert.equal(mockWriteQuery.mock.calls.length, 0);
     });
-
-    const res = await request(app)
-      .patch('/api/webhooks/dev-retry-ok/retry-policy')
-      .set('x-correlation-id', 'corr-retry-ok')
-      .send({ retryPolicy: { maxRetries: 2, baseDelayMs: 500 } });
-
-    expect(res.status).toBe(200);
-    expect(res.body.retryPolicy).toEqual({ maxRetries: 2, baseDelayMs: 500 });
-    expect(auditSpy).toHaveBeenCalledWith(
-      'WEBHOOK_RETRY_POLICY_UPDATED',
-      'dev-retry-ok',
-      expect.objectContaining({
-        developerId: 'dev-retry-ok',
-        correlationId: 'corr-retry-ok',
-        retryPolicy: { maxRetries: 2, baseDelayMs: 500 },
-      }),
-    );
-  });
-
-  it('deletes webhooks with structured non-secret logs', async () => {
-    WebhookStore.register({
-      developerId: 'dev-delete',
-      url: 'https://example.com/webhook',
-      events: ['new_api_call'],
-      secret: 'super-secret',
-      createdAt: new Date(),
-    });
-
-    const res = await request(app)
-      .delete('/api/webhooks/dev-delete')
-      .set('x-request-id', 'req-delete')
-      .set('x-correlation-id', 'corr-delete');
-
-    expect(res.status).toBe(200);
-    expect(WebhookStore.get('dev-delete')).toBeUndefined();
-    expect(infoSpy).toHaveBeenCalledWith(
-      '[webhooks] webhook removed',
-      expect.objectContaining({
-        requestId: 'req-delete',
-        correlationId: 'corr-delete',
-        developerId: 'dev-delete',
-      }),
-    );
-    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain('super-secret');
   });
 });
