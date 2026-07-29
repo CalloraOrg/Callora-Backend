@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { bodyValidator, validate } from '../middleware/validate.js';
 import { buildSuccessEnvelope } from '../middleware/envelope.js';
+import { etagMiddleware, generateETag } from '../middleware/etag.js';
 import { logger } from '../logger.js';
 import {
   createTenantSchema,
@@ -25,12 +26,17 @@ export interface TenantRecord {
 }
 
 export interface TenantRepository {
+  list(): Promise<TenantRecord[]>;
   create(input: CreateTenantInput, actorId: string): Promise<TenantRecord>;
   update(tenantId: string, input: UpdateTenantInput, actorId: string): Promise<TenantRecord>;
 }
 
 class InMemoryTenantRepository implements TenantRepository {
   private tenants = new Map<string, TenantRecord>();
+
+  async list(): Promise<TenantRecord[]> {
+    return Array.from(this.tenants.values());
+  }
 
   async create(input: CreateTenantInput, actorId: string): Promise<TenantRecord> {
     const now = new Date().toISOString();
@@ -141,6 +147,34 @@ export function createTenantsRouter(deps: TenantsRouterDeps = {}): Router {
         });
 
         res.json(buildSuccessEnvelope(tenant, requestId(req)));
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/',
+    requireAuth,
+    etagMiddleware,
+    async (req: Request, res: Response<unknown, AuthenticatedLocals>, next) => {
+      try {
+        const tenants = await tenantRepository.list();
+
+        logger.info('[tenants] tenants listed', {
+          requestId: requestId(req),
+          correlationId: correlationId(req),
+          count: tenants.length,
+        });
+
+        // Pre-set a strong ETag derived from the tenant data alone, so that the
+        // ETag is stable across calls that return the same tenant list regardless
+        // of envelope fields that change per-request (timestamp, requestId).
+        // The etagMiddleware will honour the pre-set ETag and evaluate
+        // If-None-Match against it without recomputing a new hash.
+        res.setHeader('ETag', generateETag(JSON.stringify(tenants)));
+
+        res.json(buildSuccessEnvelope(tenants, requestId(req)));
       } catch (error) {
         next(error);
       }
