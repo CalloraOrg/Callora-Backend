@@ -5,6 +5,7 @@ import { requestIdMiddleware } from '../middleware/requestId.js';
 import { createExportsRouter } from './exports.js';
 import { InMemoryExportStore, ReportExporterService } from '../services/reportExporter.js';
 import { HmacObjectStorageClient } from '../services/scheduledExports.js';
+import { encodeCursor } from '../lib/cursorPagination.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { Developer } from '../db/schema.js';
 
@@ -24,10 +25,19 @@ const reportExporterService = new ReportExporterService(
 );
 
 // Mock developer repository for testing
-const mockDeveloperRepository: DeveloperRepository = {
-  findByUserId: jest.fn(),
-  getOrCreateByUserId: jest.fn(),
-  upsertProfile: jest.fn(),
+const mockDeveloperRepository: jest.Mocked<DeveloperRepository> = {
+  findByUserId: jest.fn<
+    ReturnType<DeveloperRepository['findByUserId']>,
+    Parameters<DeveloperRepository['findByUserId']>
+  >(),
+  getOrCreateByUserId: jest.fn<
+    ReturnType<DeveloperRepository['getOrCreateByUserId']>,
+    Parameters<DeveloperRepository['getOrCreateByUserId']>
+  >(),
+  upsertProfile: jest.fn<
+    ReturnType<DeveloperRepository['upsertProfile']>,
+    Parameters<DeveloperRepository['upsertProfile']>
+  >(),
 };
 
 // Helper to create a mock developer
@@ -60,7 +70,7 @@ describe('GET /api/exports', () => {
     // Clear the export store before each test
     // Access the internal records map and clear it
     // Note: This is a workaround for the InMemoryExportStore not having a clear method
-    (exportStore as any).records?.clear();
+    (exportStore as unknown as { records?: Map<string, unknown> }).records?.clear();
     
     // Mock a developer profile for user-1
     mockDeveloperRepository.findByUserId.mockImplementation((userId: string) => {
@@ -81,7 +91,7 @@ describe('GET /api/exports', () => {
   it('should return 403 when user has no developer profile', async () => {
     const app = createTestApp();
     // Mock findByUserId to return undefined for this user
-    mockDeveloperRepository.findByUserId.mockImplementationOnce((userId: string) => {
+    mockDeveloperRepository.findByUserId.mockImplementationOnce(() => {
       return Promise.resolve(undefined);
     });
     const response = await request(app)
@@ -106,7 +116,7 @@ describe('GET /api/exports', () => {
     
     // Add a test export record for user-1 with future dates
     const exportedAt = new Date('2026-07-01T00:00:00.000Z');
-    const expiresAt = new Date('2026-07-28T00:00:00.000Z'); // 27 days from exportedAt (more than 7 days in the future)
+    const expiresAt = new Date('2099-07-28T00:00:00.000Z');
     await exportStore.save({
       id: 'export-1',
       developerId: 'user-1',
@@ -141,7 +151,7 @@ describe('GET /api/exports', () => {
       format: 'csv',
       s3Key: 'daily-exports/dev-1/2026-07-01.csv',
       exportedAt: new Date('2026-07-01'),
-      expiresAt: new Date('2026-07-28'),
+      expiresAt: new Date('2099-07-28'),
     });
     
     // Add JSON export with future dates
@@ -151,7 +161,7 @@ describe('GET /api/exports', () => {
       format: 'json',
       s3Key: 'daily-exports/dev-1/2026-07-01.json',
       exportedAt: new Date('2026-07-01'),
-      expiresAt: new Date('2026-07-28'),
+      expiresAt: new Date('2099-07-28'),
     });
 
     // Request only CSV exports
@@ -162,6 +172,16 @@ describe('GET /api/exports', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.length).toBe(1);
     expect(response.body.data[0].format).toBe('csv');
+  });
+
+  it('should reject another developerId filter for non-admin callers', async () => {
+    const app = createTestApp();
+    const response = await request(app)
+      .get('/api/exports?developerId=other-developer')
+      .set('x-user-id', 'user-1');
+
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe('FORBIDDEN');
   });
 
   it('should respect pagination parameters', async () => {
@@ -175,7 +195,7 @@ describe('GET /api/exports', () => {
         format: 'csv',
         s3Key: `daily-exports/dev-1/2026-07-${i+1}.csv`,
         exportedAt: new Date(`2026-07-${i+1}`),
-        expiresAt: new Date(`2026-07-${i+28}`), // 27 days later
+        expiresAt: new Date('2099-07-28T00:00:00.000Z'),
       });
     }
 
@@ -188,6 +208,84 @@ describe('GET /api/exports', () => {
     expect(response.body.data.length).toBe(3);
     expect(response.body.pagination.limit).toBe(3);
     expect(response.body.pagination.offset).toBe(0);
+    expect(response.body.pagination.hasMore).toBe(true);
+    expect(response.body.pagination.nextCursor).toEqual(expect.any(String));
+  });
+
+  it('should paginate exports with a stable cursor over exportedAt and id', async () => {
+    const app = createTestApp();
+    const sameTimestamp = new Date('2026-07-01T12:00:00.000Z');
+    const expiresAt = new Date('2099-07-28T00:00:00.000Z');
+
+    for (const id of ['export-c', 'export-b', 'export-a']) {
+      await exportStore.save({
+        id,
+        developerId: 'user-1',
+        format: 'csv',
+        s3Key: `daily-exports/dev-1/${id}.csv`,
+        exportedAt: sameTimestamp,
+        expiresAt,
+      });
+    }
+
+    const pageOne = await request(app)
+      .get('/api/exports?limit=2')
+      .set('x-user-id', 'user-1');
+
+    expect(pageOne.status).toBe(200);
+    expect(pageOne.body.data.map((record: { id: string }) => record.id)).toEqual(['export-c', 'export-b']);
+    expect(pageOne.body.pagination.nextCursor).toBe(encodeCursor(sameTimestamp, 'export-b'));
+
+    await exportStore.save({
+      id: 'export-d',
+      developerId: 'user-1',
+      format: 'csv',
+      s3Key: 'daily-exports/dev-1/export-d.csv',
+      exportedAt: new Date('2026-07-02T00:00:00.000Z'),
+      expiresAt,
+    });
+
+    const pageTwo = await request(app)
+      .get(`/api/exports?limit=2&cursor=${encodeURIComponent(pageOne.body.pagination.nextCursor)}`)
+      .set('x-user-id', 'user-1');
+
+    expect(pageTwo.status).toBe(200);
+    expect(pageTwo.body.data.map((record: { id: string }) => record.id)).toEqual(['export-a']);
+    expect(pageTwo.body.pagination.hasMore).toBe(false);
+    expect(pageTwo.body.pagination.nextCursor).toBeUndefined();
+    expect(pageTwo.body.pagination.offset).toBeUndefined();
+  });
+
+  it('should return 400 with validation details for an invalid cursor', async () => {
+    const app = createTestApp();
+    const response = await request(app)
+      .get('/api/exports?cursor=not-a-valid-cursor')
+      .set('x-user-id', 'user-1');
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    expect(response.body.error.details).toEqual([
+      expect.objectContaining({
+        field: 'query.cursor',
+        message: 'Invalid cursor format',
+      }),
+    ]);
+  });
+
+  it('should reject non-integer pagination parameters at the boundary', async () => {
+    const app = createTestApp();
+    const response = await request(app)
+      .get('/api/exports?limit=3abc')
+      .set('x-user-id', 'user-1');
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    expect(response.body.error.details).toEqual([
+      expect.objectContaining({
+        field: 'query.limit',
+        code: 'INVALID_FORMAT',
+      }),
+    ]);
   });
 
   it('should have standardized error envelope', async () => {

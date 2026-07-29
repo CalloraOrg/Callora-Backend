@@ -16,6 +16,19 @@ export interface DeveloperExportRecord {
   expiresAt: Date;
 }
 
+export interface DeveloperExportCursor {
+  exportedAt: Date;
+  id: string;
+}
+
+export interface DeveloperExportListOptions {
+  limit: number;
+  offset?: number;
+  now: Date;
+  cursor?: DeveloperExportCursor;
+  format?: DeveloperExportRecord['format'];
+}
+
 // ─────────────────────────────────────────────
 // Store interface + in-memory implementation
 // ─────────────────────────────────────────────
@@ -24,7 +37,7 @@ export interface DeveloperExportStore {
   save(record: DeveloperExportRecord): Promise<DeveloperExportRecord>;
   listByDeveloper(
     developerId: string,
-    opts: { limit: number; offset: number; now: Date },
+    opts: DeveloperExportListOptions,
   ): Promise<DeveloperExportRecord[]>;
   getById(id: string): Promise<DeveloperExportRecord | undefined>;
 }
@@ -39,21 +52,50 @@ export class InMemoryExportStore implements DeveloperExportStore {
 
   async listByDeveloper(
     developerId: string,
-    opts: { limit: number; offset: number; now: Date },
+    opts: DeveloperExportListOptions,
   ): Promise<DeveloperExportRecord[]> {
     const results = [...this.records.values()]
       .filter(
         (r) => r.developerId === developerId && r.expiresAt > opts.now,
       )
-      // Newest first
-      .sort((a, b) => b.exportedAt.getTime() - a.exportedAt.getTime());
+      .filter((r) => opts.format === undefined || r.format === opts.format)
+      .sort(compareExportsNewestFirst)
+      .filter((r) => isAfterExportCursor(r, opts.cursor));
 
-    return results.slice(opts.offset, opts.offset + opts.limit);
+    const offset = opts.cursor ? 0 : (opts.offset ?? 0);
+    return results.slice(offset, offset + opts.limit);
   }
 
   async getById(id: string): Promise<DeveloperExportRecord | undefined> {
     return this.records.get(id);
   }
+}
+
+function compareExportsNewestFirst(a: DeveloperExportRecord, b: DeveloperExportRecord): number {
+  const timestampDiff = b.exportedAt.getTime() - a.exportedAt.getTime();
+  if (timestampDiff !== 0) {
+    return timestampDiff;
+  }
+
+  if (a.id === b.id) {
+    return 0;
+  }
+
+  return a.id > b.id ? -1 : 1;
+}
+
+function isAfterExportCursor(
+  record: DeveloperExportRecord,
+  cursor: DeveloperExportCursor | undefined,
+): boolean {
+  if (!cursor) {
+    return true;
+  }
+
+  const recordTime = record.exportedAt.getTime();
+  const cursorTime = cursor.exportedAt.getTime();
+
+  return recordTime < cursorTime || (recordTime === cursorTime && record.id < cursor.id);
 }
 
 // ─────────────────────────────────────────────
@@ -201,7 +243,7 @@ export class ReportExporterService {
    */
   async listExportsForDeveloper(
     developerId: string,
-    opts: { limit: number; offset: number },
+    opts: Omit<DeveloperExportListOptions, 'now'>,
   ): Promise<DeveloperExportRecord[]> {
     return this.exportRecordStore.listByDeveloper(developerId, {
       ...opts,
