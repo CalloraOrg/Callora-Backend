@@ -518,9 +518,53 @@ describe('shutdown module', () => {
       await expect(tracker.subsystem.awaitIdle()).resolves.toBeUndefined();
     });
 
-    it('should provide descriptive subsystem name', () => {
-      const tracker = createInFlightDrainTracker('my-custom-tracker');
-      expect(tracker.subsystem.name).toBe('my-custom-tracker');
-    });
-  });
+   it('should provide descriptive subsystem name', () => {
+     const tracker = createInFlightDrainTracker('my-custom-tracker');
+     expect(tracker.subsystem.name).toBe('my-custom-tracker');
+   });
+ });
+
+ describe('keys drain tracker', () => {
+   it('waits for active keys requests to finish before becoming idle', async () => {
+     const tracker = createInFlightDrainTracker('api-keys');
+     const next = jest.fn();
+     const listeners = new Map<string, () => void>();
+     const res = {
+       setHeader: jest.fn(),
+       once: jest.fn((event: string, handler: () => void) => {
+         listeners.set(event, handler);
+         return res;
+       }),
+     } as unknown as Response;
+
+     tracker.middleware({} as unknown as Request, res, next);
+     tracker.subsystem.beginShutdown();
+     const idlePromise = tracker.subsystem.awaitIdle();
+
+     let settled = false;
+     void idlePromise.then(() => {
+       settled = true;
+     });
+     await Promise.resolve();
+
+     expect(next).toHaveBeenCalledTimes(1);
+     expect(settled).toBe(false);
+
+     listeners.get('finish')?.();
+     await expect(idlePromise).resolves.toBeUndefined();
+     expect(settled).toBe(true);
+   });
+
+   it('sets Connection: close header on new requests during drain', () => {
+     const tracker = createInFlightDrainTracker('api-keys');
+     const res = {
+       setHeader: jest.fn(),
+       once: jest.fn(() => res),
+     } as unknown as Response;
+
+     tracker.subsystem.beginShutdown();
+     tracker.middleware({} as unknown as Request, res, jest.fn());
+     expect(res.setHeader).toHaveBeenCalledWith('Connection', 'close');
+   });
+ });
 });

@@ -751,3 +751,584 @@ describe('Proxy usage recording – finish vs premature close', () => {
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(999);
   });
 });
+
+// ── Idempotency-Key tests ────────────────────────────────────────────────────
+//
+// Tests for the Idempotency-Key header on POST/PATCH requests.
+// Ensures:
+// - First request with a key → upstream call made, response cached
+// - Repeat request with same key/payload → cached response replayed (no upstream call)
+// - Repeat request with same key but different payload → 409 IDEMPOTENCY_KEY_REUSE_MISMATCH
+// - In-progress requests → 409 IDEMPOTENCY_IN_PROGRESS
+// - Concurrent requests with same key → only one upstream call executes
+// - GET/DELETE are unaffected by idempotency middleware
+// - Actor scoping: different API key cannot retrieve another key's cached response
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Proxy Idempotency-Key support (issue #896)', () => {
+  beforeEach(() => {
+    usageStore.clear();
+    billing.clear();
+    billing.setBalance(TEST_DEVELOPER_ID, 1000);
+    rateLimiter.reset();
+    resetAllMetrics();
+    setUpstreamHandler((_req, res) => {
+      res.status(200).json({ message: 'upstream OK', timestamp: Date.now() });
+    });
+  });
+
+  describe('First request with Idempotency-Key', () => {
+    it('forwards POST request with Idempotency-Key to upstream and caches response', async () => {
+      let upstreamCallCount = 0;
+      setUpstreamHandler((req, res) => {
+        upstreamCallCount++;
+        res.status(200).json({ id: 'resource-1', created: true });
+      });
+
+      const idempotencyKey = 'idem-key-001';
+      const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Resource A' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Idempotent-Replayed')).toBeFalsy();
+      const body = await res.json();
+      expect(body.id).toBe('resource-1');
+      expect(upstreamCallCount).toBe(1);
+
+      // Usage recorded
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      const events = usageStore.getEvents(TEST_API_KEY);
+      expect(events).toHaveLength(1);
+      expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(999);
+    });
+
+    it('forwards PATCH request with Idempotency-Key to upstream and caches response', async () => {
+      let upstreamCallCount = 0;
+      setUpstreamHandler((req, res) => {
+        upstreamCallCount++;
+        res.status(200).json({ id: 'resource-1', updated: true });
+      });
+
+      const idempotencyKey = 'idem-key-patch-001';
+      const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources/123`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ status: 'active' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Idempotent-Replayed')).toBeFalsy();
+      const body = await res.json();
+      expect(body.id).toBe('resource-1');
+      expect(upstreamCallCount).toBe(1);
+    });
+  });
+
+  describe('Repeat request with same Idempotency-Key', () => {
+    it('returns cached response without re-executing upstream call', async () => {
+      let upstreamCallCount = 0;
+      setUpstreamHandler((req, res) => {
+        upstreamCallCount++;
+        res.status(200).json({
+          id: 'cached-resource',
+          created: true,
+          timestamp: 12345,
+        });
+      });
+
+      const idempotencyKey = 'idem-cache-001';
+
+      // First request
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Cached Resource' }),
+      });
+
+      expect(res1.status).toBe(200);
+      const body1 = await res1.json();
+      expect(body1.timestamp).toBe(12345);
+      expect(upstreamCallCount).toBe(1);
+
+      // Wait for upstream call to complete
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Retry with same key — should replay from cache
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Cached Resource' }),
+      });
+
+      expect(res2.status).toBe(200);
+      expect(res2.headers.get('Idempotent-Replayed')).toBe('true');
+      const body2 = await res2.json();
+      // Identical response from cache
+      expect(body2.timestamp).toBe(12345);
+      // Upstream NOT called again
+      expect(upstreamCallCount).toBe(1);
+
+      // Usage only recorded once
+      await new Promise((resolve) => setImmediate(resolve));
+      const events = usageStore.getEvents(TEST_API_KEY);
+      expect(events).toHaveLength(1);
+    });
+
+    it('returns 409 when retry has same Idempotency-Key but different payload', async () => {
+      const idempotencyKey = 'idem-mismatch-001';
+
+      // First request with payload A
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Resource A' }),
+      });
+
+      expect(res1.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Retry with different payload B using the same key
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Resource B', status: 'active' }),
+      });
+
+      expect(res2.status).toBe(409);
+      const body2 = await res2.json();
+      expect(body2.code).toBe('IDEMPOTENCY_KEY_REUSE_MISMATCH');
+      expect(body2.message).toMatch(/different request payload/i);
+      expect(body2.conflictingSummary).toBeDefined();
+      expect(body2.conflictingSummary.idempotencyKey).toBe(idempotencyKey);
+      expect(body2.conflictingSummary.incomingPayloadFingerprint).toBeTruthy();
+      expect(body2.conflictingSummary.storedPayloadFingerprint).toBeTruthy();
+    });
+
+    it('returns 409 IDEMPOTENCY_IN_PROGRESS when request is still being processed', async () => {
+      // This test requires the ability to delay upstream response completion.
+      // We'll set an upstream handler that hangs, then send a concurrent retry.
+
+      const upstreamReady = Promise.withResolvers<void>();
+      const upstreamShouldReply = Promise.withResolvers<void>();
+
+      setUpstreamHandler(async (req, res) => {
+        upstreamReady.resolve();
+        await upstreamShouldReply.promise;
+        res.status(200).json({ id: 'slow-resource', created: true });
+      });
+
+      const idempotencyKey = 'idem-in-progress-001';
+
+      // Fire first request but don't await it yet
+      const promise1 = fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Slow Resource' }),
+      });
+
+      // Wait for upstream to start processing
+      await upstreamReady.promise;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Now send a concurrent retry with the same key while first is still in progress
+      const promise2 = fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Slow Resource' }),
+      });
+
+      // Let first request complete
+      upstreamShouldReply.resolve();
+      const res1 = await promise1;
+      const res2 = await promise2;
+
+      // First should succeed
+      expect(res1.status).toBe(200);
+      const body1 = await res1.json();
+      expect(body1.id).toBe('slow-resource');
+
+      // Second (concurrent retry) should get 409 IN_PROGRESS
+      expect(res2.status).toBe(409);
+      const body2 = await res2.json();
+      expect(body2.code).toBe('IDEMPOTENCY_IN_PROGRESS');
+      expect(body2.message).toMatch(/already in progress/i);
+    });
+  });
+
+  describe('Idempotency-Key not required (optional)', () => {
+    it('processes POST request without Idempotency-Key normally', async () => {
+      const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          // No Idempotency-Key header
+        },
+        body: JSON.stringify({ name: 'Resource' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Idempotent-Replayed')).toBeFalsy();
+    });
+
+    it('processes PATCH request without Idempotency-Key normally', async () => {
+      const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources/123`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          // No Idempotency-Key header
+        },
+        body: JSON.stringify({ status: 'active' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Idempotent-Replayed')).toBeFalsy();
+    });
+  });
+
+  describe('GET and DELETE are not affected by idempotency middleware', () => {
+    it('GET requests bypass idempotency middleware even if Idempotency-Key is provided', async () => {
+      let upstreamCallCount = 0;
+      setUpstreamHandler((req, res) => {
+        upstreamCallCount++;
+        res.status(200).json({ items: [1, 2, 3], timestamp: Date.now() });
+      });
+
+      // First GET with Idempotency-Key
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'GET',
+        headers: {
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': 'idem-get-001',
+        },
+      });
+
+      expect(res1.status).toBe(200);
+      const body1 = await res1.json();
+      const timestamp1 = body1.timestamp;
+      expect(upstreamCallCount).toBe(1);
+
+      // Wait a bit
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Retry GET with same Idempotency-Key — should call upstream again (GET is not idempotent in this context)
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'GET',
+        headers: {
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': 'idem-get-001',
+        },
+      });
+
+      expect(res2.status).toBe(200);
+      const body2 = await res2.json();
+      const timestamp2 = body2.timestamp;
+      // Timestamps should differ (different upstream call)
+      expect(timestamp2).not.toBe(timestamp1);
+      // Upstream called twice
+      expect(upstreamCallCount).toBe(2);
+    });
+
+    it('DELETE requests bypass idempotency middleware even if Idempotency-Key is provided', async () => {
+      let upstreamCallCount = 0;
+      setUpstreamHandler((req, res) => {
+        upstreamCallCount++;
+        res.status(204).send();
+      });
+
+      // First DELETE with Idempotency-Key
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources/123`, {
+        method: 'DELETE',
+        headers: {
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': 'idem-delete-001',
+        },
+      });
+
+      expect(res1.status).toBe(204);
+      expect(upstreamCallCount).toBe(1);
+
+      // Retry DELETE with same Idempotency-Key
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources/123`, {
+        method: 'DELETE',
+        headers: {
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': 'idem-delete-001',
+        },
+      });
+
+      expect(res2.status).toBe(204);
+      // Upstream called twice (not idempotent-protected for DELETE)
+      expect(upstreamCallCount).toBe(2);
+    });
+  });
+
+  describe('Actor scoping: different API keys cannot access each other cached responses', () => {
+    it('does not leak cached response across different API keys', async () => {
+      // Set up a second API key for a different developer
+      const OTHER_DEVELOPER_ID = 'dev_other';
+      const OTHER_API_KEY = 'proxy-test-key-other';
+      const apiKeys = new Map<string, ApiKey>([
+        [TEST_API_KEY, { key: TEST_API_KEY, developerId: TEST_DEVELOPER_ID, apiId: TEST_API_ID }],
+        [OTHER_API_KEY, { key: OTHER_API_KEY, developerId: OTHER_DEVELOPER_ID, apiId: TEST_API_ID }],
+      ]);
+
+      // Restart proxy with both keys
+      await new Promise<void>((resolve) => proxyServer.close(() => resolve()));
+
+      const app = express();
+      app.use(express.json());
+      app.use(requestIdMiddleware);
+      app.use('/v1/call', legacyV1DeprecationMiddleware);
+
+      const registryEntry: ApiRegistryEntry = {
+        id: TEST_API_ID,
+        slug: TEST_API_SLUG,
+        base_url: upstreamUrl,
+        developerId: TEST_DEVELOPER_ID,
+        endpoints: [{ endpointId: 'default', path: '*', priceUsdc: 1 }],
+      };
+      const registry = new InMemoryApiRegistry([registryEntry]);
+
+      billing.setBalance(TEST_DEVELOPER_ID, 1000);
+      billing.setBalance(OTHER_DEVELOPER_ID, 1000);
+
+      const proxyRouter = createProxyRouter({
+        billing,
+        rateLimiter,
+        usageStore,
+        registry,
+        apiKeys,
+        proxyConfig: {
+          timeoutMs: 2000,
+          allowedHosts: ['localhost'],
+        },
+      });
+      app.use('/v1/call', proxyRouter);
+      app.use(errorHandler);
+
+      await new Promise<void>((resolve) => {
+        proxyServer = app.listen(0, () => {
+          const addr = proxyServer.address();
+          if (addr && typeof addr === 'object') {
+            proxyUrl = `http://localhost:${addr.port}`;
+          }
+          resolve();
+        });
+      });
+
+      let responseTimestamp = 0;
+      setUpstreamHandler((req, res) => {
+        responseTimestamp = Date.now();
+        res.status(200).json({
+          resource: 'secret-data',
+          timestamp: responseTimestamp,
+          actor: 'determined-by-api-key',
+        });
+      });
+
+      const idempotencyKey = 'idem-shared-key';
+
+      // User 1 makes request with the key
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/secret`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ action: 'read' }),
+      });
+
+      expect(res1.status).toBe(200);
+      const body1 = await res1.json();
+      const timestamp1 = body1.timestamp;
+      expect(body1.resource).toBe('secret-data');
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // User 2 tries to use the same Idempotency-Key
+      // Should NOT get User 1's cached response; should treat as new request
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/secret`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': OTHER_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ action: 'read' }),
+      });
+
+      expect(res2.status).toBe(200);
+      const body2 = await res2.json();
+      const timestamp2 = body2.timestamp;
+      
+      // Should be a different response (new upstream call), not cached from User 1
+      expect(timestamp2).toBeGreaterThan(timestamp1);
+      expect(res2.headers.get('Idempotent-Replayed')).toBeFalsy();
+    });
+  });
+
+  describe('Payload mismatch detection with canonicalization', () => {
+    it('treats payloads with same data but different key order as matching', async () => {
+      let upstreamCallCount = 0;
+      setUpstreamHandler((req, res) => {
+        upstreamCallCount++;
+        res.status(200).json({ id: 'resource', created: true });
+      });
+
+      const idempotencyKey = 'idem-canonical-001';
+
+      // First request: { b: 2, a: 1 }
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ b: 2, a: 1 }),
+      });
+
+      expect(res1.status).toBe(200);
+      expect(upstreamCallCount).toBe(1);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Retry with different key order: { a: 1, b: 2 }
+      // Should match because canonical form is the same
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ a: 1, b: 2 }),
+      });
+
+      expect(res2.status).toBe(200);
+      expect(res2.headers.get('Idempotent-Replayed')).toBe('true');
+      // Upstream NOT called again
+      expect(upstreamCallCount).toBe(1);
+    });
+
+    it('detects mismatch even with nested objects in different key orders', async () => {
+      const idempotencyKey = 'idem-nested-001';
+
+      // First request: nested object with z, a order
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({
+          nested: { z: 26, a: 1 },
+          name: 'Resource',
+        }),
+      });
+
+      expect(res1.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Retry with same nested data but reordered: a, z order
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({
+          name: 'Resource',
+          nested: { a: 1, z: 26 },
+        }),
+      });
+
+      expect(res2.status).toBe(200);
+      expect(res2.headers.get('Idempotent-Replayed')).toBe('true');
+    });
+  });
+
+  describe('Headers: Idempotency-Key case-insensitivity and variants', () => {
+    it('accepts Idempotency-Key header in any case', async () => {
+      let upstreamCallCount = 0;
+      setUpstreamHandler((req, res) => {
+        upstreamCallCount++;
+        res.status(200).json({ id: 'resource', created: true });
+      });
+
+      const idempotencyKey = 'idem-case-001';
+
+      // First request with lowercase
+      const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'idempotency-key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Resource' }),
+      });
+
+      expect(res1.status).toBe(200);
+      expect(upstreamCallCount).toBe(1);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Retry with Capitalized case
+      const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': TEST_API_KEY,
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify({ name: 'Resource' }),
+      });
+
+      expect(res2.status).toBe(200);
+      expect(res2.headers.get('Idempotent-Replayed')).toBe('true');
+      expect(upstreamCallCount).toBe(1);
+    });
+  });
+});

@@ -18,6 +18,7 @@ import {
   type ListingsCache,
 } from "../lib/listingsCache.js";
 import { recordCacheHit, recordCacheMiss } from "../metrics.js";
+import { recordApisLatency } from "../metrics/registry.js";
 import {
   requireAuth,
   type AuthenticatedLocals,
@@ -100,6 +101,24 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
     });
 
   router.use(rateLimitMiddleware);
+
+  /**
+   * Middleware to record request timing for all /api/apis routes.
+   * Captures the full request lifecycle and records the duration to the histogram
+   * with method and status code labels.
+   */
+  const recordApisTimingMiddleware = (req: Request, res: Response, next) => {
+    const startTime = Date.now();
+
+    res.on('finish', () => {
+      const duration = Date.now() - startTime;
+      recordApisLatency(req.method, res.statusCode, duration);
+    });
+
+    next();
+  };
+
+  router.use(recordApisTimingMiddleware);
 
   /**
    * GET /api/apis — public marketplace listings with conditional GET support.

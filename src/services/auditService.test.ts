@@ -1,75 +1,175 @@
+import assert from 'node:assert/strict';
+
+jest.mock('../db.js', () => ({
+  writeQuery: jest.fn(),
+}));
+
 import { writeQuery } from '../db.js';
+import { appendAuditRow, type AuditRowInput } from './auditService.js';
 
-jest.mock('../db.js', () => ({ writeQuery: jest.fn() }));
-const writeQueryMock = writeQuery as jest.MockedFunction<typeof writeQuery>;
+const mockWriteQuery = writeQuery as jest.MockedFunction<typeof writeQuery>;
 
-import { defaultAuditService } from './auditService.js';
+beforeEach(() => {
+  mockWriteQuery.mockResolvedValue({ rows: [] });
+});
 
-describe('auditService.record', () => {
-  beforeEach(() => {
-    writeQueryMock.mockReset();
-    writeQueryMock.mockResolvedValue({ rows: [] });
+afterEach(() => {
+  jest.clearAllMocks();
+});
+
+describe('appendAuditRow', () => {
+  const baseInput: AuditRowInput = {
+    actor: 'dev-123',
+    action: 'WEBHOOK_REGISTERED',
+    before: null,
+    after: { developerId: 'dev-123', url: 'https://example.com', events: ['new_api_call'] },
+  };
+
+  it('inserts a row with all required fields', async () => {
+    const result = await appendAuditRow(baseInput);
+
+    assert.ok(result.id);
+    assert.equal(result.actor, 'dev-123');
+    assert.equal(result.action, 'WEBHOOK_REGISTERED');
+    assert.ok(result.createdAt);
   });
 
-  it('inserts one row into audit_logs with a generated id and all fields', async () => {
-    await defaultAuditService.record({
-      event: 'API_CREATE',
-      actor: 'dev-1',
-      tenantId: 'dev-1',
-      clientIp: '1.2.3.4',
-      userAgent: 'jest-UA',
-      correlationId: 'req-1',
-      bodyHash: 'deadbeef',
-      details: { before: null, after: { name: 'X' } },
+  it('calls writeQuery with correct SQL and params', async () => {
+    await appendAuditRow(baseInput);
+
+    assert.equal(mockWriteQuery.mock.calls.length, 1);
+    const call = mockWriteQuery.mock.calls[0]!;
+    const sql = call[0] as string;
+    const params = call![1];
+    assert.ok(sql.includes('INSERT INTO audit_logs'));
+    assert.equal(params[1]!, 'WEBHOOK_REGISTERED');
+    assert.equal(params[2]!, 'dev-123');
+  });
+
+  it('includes tenantId when provided', async () => {
+    await appendAuditRow({ ...baseInput, tenantId: 'tenant-abc' });
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    assert.equal(params[3], 'tenant-abc');
+  });
+
+  it('passes null for tenantId when not provided', async () => {
+    await appendAuditRow(baseInput);
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    assert.equal(params[3], null);
+  });
+
+  it('includes correlationId when provided', async () => {
+    await appendAuditRow({ ...baseInput, correlationId: 'req-xyz' });
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    assert.equal(params[6], 'req-xyz');
+  });
+
+  it('includes clientIp when provided', async () => {
+    await appendAuditRow({ ...baseInput, clientIp: '192.168.1.1' });
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    assert.equal(params[4], '192.168.1.1');
+  });
+
+  it('includes userAgent when provided', async () => {
+    await appendAuditRow({ ...baseInput, userAgent: 'Mozilla/5.0' });
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    assert.equal(params[5], 'Mozilla/5.0');
+  });
+
+  it('includes bodyHash when provided', async () => {
+    await appendAuditRow({ ...baseInput, bodyHash: 'abc123' });
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    assert.equal(params[7], 'abc123');
+  });
+
+  it('serializes details JSON with before and after', async () => {
+    await appendAuditRow(baseInput);
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    const details = JSON.parse(params[8] as string);
+    assert.ok(details.before);
+    assert.ok(details.after);
+    assert.equal(details.after.developerId, 'dev-123');
+  });
+
+  it('masks secret_current in before/after details', async () => {
+    await appendAuditRow({
+      ...baseInput,
+      before: { secret_current: 'sk_live_abc123def456', url: 'https://example.com' },
+      after: { secret_current: 'sk_live_xyz789abc012', url: 'https://example.com' },
     });
 
-    expect(writeQueryMock).toHaveBeenCalledTimes(1);
-    const [sql, params] = writeQueryMock.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain('INSERT INTO audit_logs');
-    expect(params).toHaveLength(9);
-    expect(typeof params[0]).toBe('string');
-    expect(params.slice(1)).toEqual([
-      'API_CREATE',
-      'dev-1',
-      'dev-1',
-      '1.2.3.4',
-      'jest-UA',
-      'req-1',
-      'deadbeef',
-      JSON.stringify({ before: null, after: { name: 'X' } }),
-    ]);
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    const details = JSON.parse(params[8] as string);
+    assert.equal(details.before.secret_current, 'sk_l****c012');
+    assert.equal(details.after.secret_current, 'sk_l****c012');
   });
 
-  it('nulls optional forensic fields and details when omitted', async () => {
-    await defaultAuditService.record({ event: 'E', actor: 'a' });
-    const [, params] = writeQueryMock.mock.calls[0] as [string, unknown[]];
-    expect(params.slice(3)).toEqual([null, null, null, null, null, null]);
-  });
-
-  it('persists error mutation audit rows (ERROR_CREATE, ERROR_UPDATE, ERROR_DELETE)', async () => {
-    await defaultAuditService.record({
-      event: 'ERROR_CREATE',
-      actor: 'dev-user-123',
-      correlationId: 'req-corr-456',
-      details: {
-        errorId: '1',
-        before: null,
-        after: { code: 'ERR_01', message: 'Something went wrong', statusCode: 400 },
-      },
+  it('masks secret in before/after details', async () => {
+    await appendAuditRow({
+      ...baseInput,
+      before: { secret: 'sk_live_abc123def456' },
+      after: { secret: 'sk_live_xyz789abc012' },
     });
 
-    expect(writeQueryMock).toHaveBeenCalledTimes(1);
-    const [sql, params] = writeQueryMock.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain('INSERT INTO audit_logs');
-    expect(params[1]).toBe('ERROR_CREATE');
-    expect(params[2]).toBe('dev-user-123');
-    expect(params[6]).toBe('req-corr-456');
-    expect(params[8]).toBe(
-      JSON.stringify({
-        errorId: '1',
-        before: null,
-        after: { code: 'ERR_01', message: 'Something went wrong', statusCode: 400 },
-      }),
-    );
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    const details = JSON.parse(params[8] as string);
+    assert.equal(details.before.secret, 'sk_l****f456');
+    assert.equal(details.after.secret, 'sk_l****c012');
+  });
+
+  it('handles short secrets by masking entirely', async () => {
+    await appendAuditRow({
+      ...baseInput,
+      before: { secret_current: 'short' },
+      after: { secret_current: 'short' },
+    });
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    const details = JSON.parse(params[8] as string);
+    assert.equal(details.before.secret_current, '****');
+    assert.equal(details.after.secret_current, '****');
+  });
+
+  it('returns the row with id, createdAt, and all input fields', async () => {
+    const result = await appendAuditRow(baseInput);
+
+    assert.ok(result.id);
+    assert.ok(result.createdAt);
+    assert.equal(result.actor, 'dev-123');
+    assert.equal(result.action, 'WEBHOOK_REGISTERED');
+    assert.equal(result.before, null);
+    assert.deepEqual(result.after, { developerId: 'dev-123', url: 'https://example.com', events: ['new_api_call'] });
+  });
+
+  it('includes null fields when before and after are both null', async () => {
+    await appendAuditRow({
+      actor: 'dev-123',
+      action: 'WEBHOOK_DELETED',
+      before: null,
+      after: null,
+    });
+
+    const call = mockWriteQuery.mock.calls[0]!;
+    const params = call[1]!;
+    const details = JSON.parse(params[8] as string);
+    assert.equal(details.before, undefined);
+    assert.equal(details.after, undefined);
   });
 });

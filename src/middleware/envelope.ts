@@ -36,6 +36,7 @@ export const errorEnvelopeSchema = z.object({
       message: z.string(),
       code: z.string(),
     })).optional(),
+    retryAfterMs: z.number().optional(),
   }),
   requestId: z.string(),
   timestamp: z.string().datetime(),
@@ -81,6 +82,7 @@ export function buildErrorEnvelope(
   message: string,
   requestId: string,
   details?: ValidationErrorDetail[],
+  retryAfterMs?: number,
 ): ErrorEnvelope {
   const envelope: ErrorEnvelope = {
     success: false,
@@ -93,6 +95,9 @@ export function buildErrorEnvelope(
   };
   if (details && details.length > 0) {
     envelope.error.details = details;
+  }
+  if (retryAfterMs !== undefined) {
+    envelope.error.retryAfterMs = retryAfterMs;
   }
   return envelope;
 }
@@ -129,6 +134,7 @@ export function envelopeMiddleware(req: Request, res: Response, next: NextFuncti
       let code = 'BAD_REQUEST';
       let message = 'Request failed';
       let details: ValidationErrorDetail[] | undefined;
+      let retryAfterMs: number | undefined;
 
       if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
         const bodyObj = body as Record<string, unknown>;
@@ -145,9 +151,12 @@ export function envelopeMiddleware(req: Request, res: Response, next: NextFuncti
         if (Array.isArray(bodyObj.details)) {
           details = bodyObj.details as ValidationErrorDetail[];
         }
+        if (typeof bodyObj.retryAfterMs === 'number') {
+          retryAfterMs = bodyObj.retryAfterMs;
+        }
       }
 
-      return buildErrorEnvelope(code, message, requestId, details);
+      return buildErrorEnvelope(code, message, requestId, details, retryAfterMs);
     }
 
     let data = body;
