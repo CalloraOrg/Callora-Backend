@@ -1,9 +1,13 @@
 import express from 'express';
+import { createExportsHealthRouter } from './routes/exports/health.js';
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
 
 app.use(express.json());
+
+// Exports feature routes
+app.use('/api/exports/health', createExportsHealthRouter());
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'callora-backend' });
