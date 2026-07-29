@@ -16,6 +16,10 @@ import type { RequestHandler } from 'express';
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
+import { createRefreshTokenRouter } from './routes/refresh-token.js';
+import { AuthController } from './controllers/authController.js';
+import { RefreshTokenService } from './services/refreshTokenService.js';
+import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { defaultDeveloperRepository } from './repositories/developerRepository.js';
 import { createBillingService } from './services/billingService.js';
 import { createRateLimiter } from './services/rateLimiter.js';
@@ -310,8 +314,29 @@ if (isDirectExecution) {
     },
   });
   const proxyDrainTracker = createInFlightDrainTracker('gateway-proxy');
+
+  // --- Refresh-token drain tracker ---
+  // Tracks in-flight POST /api/refresh-token requests so that a SIGTERM during
+  // a token refresh will wait for the response to be sent before the process
+  // exits.  The subsystem is registered below alongside the other shutdown
+  // subsystems.
+  const refreshTokenDrainTracker = createInFlightDrainTracker('refresh-token');
+
+  const refreshTokenService = new RefreshTokenService({
+    jwtSecret: config.jwt.secret,
+    accessTokenExpiry: process.env.ACCESS_TOKEN_EXPIRY ?? '15m',
+    refreshTokenExpiry: process.env.REFRESH_TOKEN_EXPIRY ?? '7d',
+  });
+  const refreshTokenRepository = new DatabaseRefreshTokenRepository(pool);
+  const authController = new AuthController({
+    refreshTokenService,
+    refreshTokenRepository,
+  });
+
   const shutdownSubsystems: DrainableSubsystem[] = [
     proxyDrainTracker.subsystem,
+    // Drain in-flight refresh-token requests before the process exits.
+    refreshTokenDrainTracker.subsystem,
     {
       name: 'revenue-ledger-indexer',
       beginShutdown: () => revenueLedgerIndexerJob.beginShutdown(),
@@ -330,6 +355,16 @@ if (isDirectExecution) {
   ];
   app.use('/v1/call', proxyDrainTracker.middleware);
   app.use('/v1/call', proxyRouter);
+
+  // Mount the refresh-token router. The drain middleware is applied inside the
+  // router so every request through this path is counted in the drain tracker.
+  app.use(
+    '/api/refresh-token',
+    createRefreshTokenRouter({
+      authController,
+      drainMiddleware: refreshTokenDrainTracker.middleware,
+    }),
+  );
 
 
   app.use(express.json());
