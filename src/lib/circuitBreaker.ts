@@ -474,6 +474,10 @@ export class CircuitBreaker {
       state: CircuitBreakerState.OPEN,
       consecutiveSuccesses: 0,
       lastStateChange: now,
+      // Set lastFailureTime so the cooldown window is correctly enforced.
+      // Without this, the next execute() call would see timeSinceFailure ≈ now
+      // (because lastFailureTime was null → 0) and immediately transition to
+      // HALF_OPEN, bypassing the intended cooldown period.
       lastFailureTime: now,
     };
     await this.store.set(breakerKey, newMetrics);
@@ -557,4 +561,41 @@ export function getDefaultBreakerRegistry(): BreakerRegistry {
     _defaultRegistry = new BreakerRegistry();
   }
   return _defaultRegistry;
+}
+
+/**
+ * Wraps an operation with a per-endpoint circuit breaker drawn from a registry.
+ *
+ * This is the primary integration point for route handlers that make downstream
+ * calls (e.g. rate-limit store probes, external HTTP calls, database reads) and
+ * need per-endpoint isolation.
+ *
+ * Behaviour:
+ *  - CLOSED  — operation executes normally; failures are counted.
+ *  - OPEN    — throws `CircuitBreakerOpenError` immediately without calling the
+ *              operation (fast-fail). Callers should map this to HTTP 503.
+ *  - HALF_OPEN — one trial call is allowed through; success closes the breaker,
+ *                failure re-opens it.
+ *
+ * The `endpointSlug` is the stable, human-readable identifier for this endpoint
+ * (e.g. `"rate-limit/health/in_memory_store"`). It is used as both the registry
+ * key and the Prometheus label so metrics stay per-endpoint.
+ *
+ * @param registry  - BreakerRegistry from which to retrieve (or lazily create) the breaker.
+ * @param endpointSlug - Stable identifier for the downstream dependency.
+ * @param operation - Async function representing the downstream call.
+ * @param config    - Optional circuit-breaker configuration overrides. Only applied
+ *                   when the breaker is first created; subsequent calls reuse the
+ *                   already-created instance.
+ * @returns Promise that resolves with the operation result or rejects with
+ *          `CircuitBreakerOpenError` (circuit open) or the original error (circuit closed/half-open).
+ */
+export async function withCircuitBreaker<T>(
+  registry: BreakerRegistry,
+  endpointSlug: string,
+  operation: () => Promise<T>,
+  config?: CircuitBreakerConfig,
+): Promise<T> {
+  const breaker = registry.getOrCreate(endpointSlug, config);
+  return breaker.execute(endpointSlug, operation);
 }
