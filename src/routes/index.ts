@@ -17,6 +17,8 @@ import { InMemoryRestRateLimiter } from "../middleware/restRateLimit.js";
 import { createUsageCsvRouter } from "./usage/csv.js";
 import { createUsageByEndpointRouter } from "./usage/byEndpoint.js";
 import { createUsageAggregateRouter } from "./usage/aggregate.js";
+import { createUsageHealthRouter } from "./usage/health.js";
+import type { HealthCheckConfig } from "../services/healthCheck.js";
 import { createExportSchedulesRouter } from "./exports/schedules.js";
 import { createExportsRouter } from "./exports.js";
 import { createUsageAccessLogMiddleware } from "../middleware/usageAccessLog.js";
@@ -50,6 +52,8 @@ export interface ApiRouterDeps
   apiRepository?: ApiRepository;
   usageSseBroadcaster?: UsageSseBroadcaster;
   auditService?: AuditService;
+  /** Health-check configuration forwarded to GET /api/usage/health. */
+  healthCheckConfig?: HealthCheckConfig;
 }
 
 export function createApiRouter(deps: ApiRouterDeps = {}): Router {
@@ -70,14 +74,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     }),
   );
 
-  // Structured JSON access log for all /api/usage/* routes.
-  // Applied at the parent level so sub-routers (csv, by-endpoint, aggregate, sse)
-  // are automatically covered without needing per-route middleware.
-  const usageAccessLogMiddleware = createUsageAccessLogMiddleware({
-    redactFields: config.usageAccessLog.redactFields,
-  });
-
-  // Mounted before '/usage' so the more specific CSV export path matches first.
+  // Mounted before '/usage' so the more specific paths match first.
   router.use(
     "/usage/csv",
     usageAccessLogMiddleware,
@@ -108,6 +105,13 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     createUsageSseRouter({
       broadcaster: deps.usageSseBroadcaster,
     }),
+  );
+
+  // Usage subsystem external-dependency health probe (GrantFox FWC26).
+  // Mounted before the generic /usage handler to avoid path shadowing.
+  router.use(
+    "/usage/health",
+    createUsageHealthRouter({ config: deps.healthCheckConfig }),
   );
 
   router.use(
