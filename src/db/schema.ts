@@ -81,6 +81,21 @@ export const credits = sqliteTable('credits', {
 export type Credit = typeof credits.$inferSelect;
 export type NewCredit = typeof credits.$inferInsert;
 
+// Plans table — subscription plan offerings with pricing and request limits
+export const plans = sqliteTable('plans', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  priceUsdc: text('price_usdc').notNull().default('0'),
+  requestsPerMonth: integer('requests_per_month').notNull().default(0),
+  createdAt: text('created_at')
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type Plan = typeof plans.$inferSelect;
+export type NewPlan = typeof plans.$inferInsert;
+
 // Type exports for use in application code
 export type Api = typeof apis.$inferSelect;
 export type NewApi = typeof apis.$inferInsert;
