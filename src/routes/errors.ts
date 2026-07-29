@@ -6,6 +6,7 @@ import { BadRequestError, NotFoundError, UnauthorizedError } from '../errors/ind
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { successEnvelope } from '../lib/envelope.js';
+import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
 
 export interface ErrorRecord {
   id: string;
@@ -113,6 +114,10 @@ export function resetErrorStore(): void {
 export function createErrorsRouter(deps: ErrorsRouterDeps = {}): Router {
   const router = Router();
   const auditService = deps.auditService ?? defaultAuditService;
+
+  // Apply CSP, X-Content-Type-Options, and Referrer-Policy on every /api/errors
+  // response (success and error paths) — GrantFox FWC26 security header sweep.
+  router.use(securityHeadersMiddleware);
 
   /**
    * GET /api/errors — List error definitions (read-only, non-audited).

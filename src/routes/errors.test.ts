@@ -299,3 +299,190 @@ describe('/api/errors audit logging (#918)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Security header sweep — GrantFox FWC26 (#945)
+// Verifies that every /api/errors response (success and error paths, across
+// all HTTP verbs) carries the required security headers.
+// ---------------------------------------------------------------------------
+
+const EXPECTED_CSP_FRAGMENT = "default-src 'self'";
+const EXPECTED_XCT = 'nosniff';
+const EXPECTED_RP = 'strict-origin-when-cross-origin';
+
+/** Shared no-op audit service for read-only and header-only tests. */
+const noopAudit: AuditService = { record: jest.fn().mockResolvedValue(undefined) };
+
+describe('/api/errors security headers (#945)', () => {
+  beforeEach(() => {
+    resetErrorStore();
+  });
+
+  // -----------------------------------------------------------------------
+  // GET /api/errors — list (unauthenticated, public read)
+  // -----------------------------------------------------------------------
+  describe('GET /api/errors', () => {
+    it('includes Content-Security-Policy with default-src self', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app).get('/api/errors');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-security-policy']).toBeDefined();
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+    });
+
+    it('includes X-Content-Type-Options: nosniff', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app).get('/api/errors');
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+    });
+
+    it('includes Referrer-Policy: strict-origin-when-cross-origin', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app).get('/api/errors');
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // GET /api/errors/:id — single record (404 error path)
+  // -----------------------------------------------------------------------
+  describe('GET /api/errors/:id — 404 error path', () => {
+    it('includes all three security headers on a 404 response', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app).get('/api/errors/nonexistent');
+      expect(res.status).toBe(404);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // POST /api/errors — create (201 success path)
+  // -----------------------------------------------------------------------
+  describe('POST /api/errors', () => {
+    it('includes all three security headers on a 201 Created response', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app)
+        .post('/api/errors')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ code: 'ERR_SEC_001', message: 'Security test', statusCode: 400 });
+      expect(res.status).toBe(201);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+
+    it('includes security headers on 401 Unauthorized response', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app)
+        .post('/api/errors')
+        .send({ code: 'ERR_SEC_001', message: 'Security test', statusCode: 400 });
+      expect(res.status).toBe(401);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+
+    it('includes security headers on 400 validation-error response', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app)
+        .post('/api/errors')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ message: 'Missing required fields' });
+      expect(res.status).toBe(400);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // PATCH /api/errors/:id — update (200 success path)
+  // -----------------------------------------------------------------------
+  describe('PATCH /api/errors/:id', () => {
+    it('includes all three security headers on a 200 OK response', async () => {
+      const app = buildApp(noopAudit);
+      // Seed a record first
+      await request(app)
+        .post('/api/errors')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ code: 'ERR_PATCH_SEED', message: 'Seed record', statusCode: 422 });
+
+      const res = await request(app)
+        .patch('/api/errors/1')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ message: 'Updated security test message' });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+
+    it('includes security headers on 404 response for unknown resource', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app)
+        .patch('/api/errors/9999')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ message: 'Does not exist' });
+      expect(res.status).toBe(404);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // PUT /api/errors/:id — full update
+  // -----------------------------------------------------------------------
+  describe('PUT /api/errors/:id', () => {
+    it('includes all three security headers on a 200 OK response', async () => {
+      const app = buildApp(noopAudit);
+      await request(app)
+        .post('/api/errors')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ code: 'ERR_PUT_SEED', message: 'Seed for PUT', statusCode: 503 });
+
+      const res = await request(app)
+        .put('/api/errors/1')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ code: 'ERR_PUT_UPDATED' });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // DELETE /api/errors/:id — deletion (204 No Content)
+  // -----------------------------------------------------------------------
+  describe('DELETE /api/errors/:id', () => {
+    it('includes all three security headers on a 204 No Content response', async () => {
+      const app = buildApp(noopAudit);
+      await request(app)
+        .post('/api/errors')
+        .set('x-user-id', 'dev-sec-1')
+        .send({ code: 'ERR_DEL_SEED', message: 'Seed for DELETE', statusCode: 500 });
+
+      const res = await request(app)
+        .delete('/api/errors/1')
+        .set('x-user-id', 'dev-sec-1');
+      expect(res.status).toBe(204);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+
+    it('includes security headers on 404 response for unknown resource', async () => {
+      const app = buildApp(noopAudit);
+      const res = await request(app)
+        .delete('/api/errors/9999')
+        .set('x-user-id', 'dev-sec-1');
+      expect(res.status).toBe(404);
+      expect(res.headers['content-security-policy']).toContain(EXPECTED_CSP_FRAGMENT);
+      expect(res.headers['x-content-type-options']).toBe(EXPECTED_XCT);
+      expect(res.headers['referrer-policy']).toBe(EXPECTED_RP);
+    });
+  });
+});
