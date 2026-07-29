@@ -6,6 +6,7 @@ import { getClientIp } from '../../lib/clientIp.js';
 import { logger } from '../../logger.js';
 import { validate } from '../../middleware/validate.js';
 import { DeveloperSemaphore, sharedDeveloperSemaphore } from '../../utils/developerSemaphore.js';
+import { computeConcurrencyStats } from '../../services/concurrency.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const GRANTFOX_FWC26_CAMPAIGN = 'GrantFox FWC26';
@@ -30,6 +31,10 @@ export interface AdminDevMetricsRouterDeps {
  * traffic.
  *
  * @example
+ * // Per-developer concurrency stats overview
+ * GET /api/admin/metrics
+ * // → { data: { totalActive: 3, activeDeveloperCount: 2, perDeveloper: [...], ... } }
+ *
  * // Active slot counts for all developers
  * GET /api/admin/metrics/concurrency
  * // → { data: { devCounts: { "dev_abc": 2 }, totalActive: 2 } }
@@ -43,6 +48,53 @@ export function createAdminDevMetricsRouter(
 ): Router {
   const router = Router();
   const developerSemaphore = deps.developerSemaphore ?? sharedDeveloperSemaphore;
+
+  /**
+   * GET /
+   *
+   * Returns a per-developer concurrency stats overview.  This is a
+   * dashboard-friendly summary that includes per-developer breakdown with
+   * utilisation percentages, total active slots, and system-level counts.
+   *
+   * Response shape:
+   * ```json
+   * {
+   *   "data": {
+   *     "totalActive": 3,
+   *     "maxConcurrencyPerDeveloper": 1,
+   *     "activeDeveloperCount": 2,
+   *     "perDeveloper": [
+   *       { "developerId": "dev_abc", "activeCount": 2, "atLimit": true, "utilizationPercent": 200 },
+   *       { "developerId": "dev_def", "activeCount": 1, "atLimit": false, "utilizationPercent": 100 }
+   *     ],
+   *     "campaign": "GrantFox FWC26"
+   *   }
+   * }
+   * ```
+   */
+  router.get('/', (req, res, next) => {
+    try {
+      const stats = computeConcurrencyStats(developerSemaphore);
+
+      logger.audit('READ_DEV_CONCURRENCY_STATS', res.locals.adminActor, {
+        campaign: GRANTFOX_FWC26_CAMPAIGN,
+        totalActive: stats.totalActive,
+        activeDeveloperCount: stats.activeDeveloperCount,
+        clientIp: getClientIp(req, TRUST_PROXY),
+        userAgent: req.get('User-Agent'),
+        correlationId: req.headers['x-request-id'] ?? req.headers['x-correlation-id'],
+      });
+
+      res.json({ data: stats });
+    } catch (error) {
+      if (error instanceof AppError) {
+        next(error);
+        return;
+      }
+      logger.error('Failed to read developer concurrency stats', { error });
+      next(new InternalServerError());
+    }
+  });
 
   /**
    * GET /concurrency
