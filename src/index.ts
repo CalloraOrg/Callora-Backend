@@ -22,6 +22,7 @@ import {
   createInFlightDrainTracker,
   type DrainableSubsystem,
 } from "./lifecycle/shutdown.js";
+import { quotasDrainTracker } from "./routes/quotas/counts.js";
 import type { Socket } from "net";
 
 import { createDeveloperRouter } from './routes/developerRoutes.js';
@@ -269,6 +270,8 @@ if (isDirectExecution) {
   const shutdownSubsystems: DrainableSubsystem[] = [
     proxyDrainTracker.subsystem,
     keysDrainTracker.subsystem,
+    // Drain in-flight /api/quotas requests before closing (issue #883).
+    quotasDrainTracker.subsystem,
     {
       name: "revenue-ledger-indexer",
       beginShutdown: () => revenueLedgerIndexerJob.beginShutdown(),

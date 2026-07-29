@@ -117,6 +117,25 @@ interface AppDependencies {
   createApiWithEndpoints?: (input: CreateApiInput) => Promise<ApiWithEndpoints>;
 }
 
+/**
+ * Re-export the quotas drain tracker so application entry-points (e.g.
+ * `src/index.ts`) can register it with {@link createGracefulShutdownHandler}
+ * without importing directly from the route module.
+ *
+ * @example Wire into shutdown handler
+ * ```ts
+ * import { quotasDrainTracker } from './app.js';
+ *
+ * const shutdown = createGracefulShutdownHandler({
+ *   server,
+ *   activeConnections,
+ *   closeDatabase,
+ *   subsystems: [quotasDrainTracker.subsystem],
+ * });
+ * ```
+ */
+export { quotasDrainTracker } from './routes/quotas/counts.js';
+
 const isValidGroupBy = (value: string): value is GroupBy =>
   value === "day" || value === "week" || value === "month";
 
