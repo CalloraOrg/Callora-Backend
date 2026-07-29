@@ -1,5 +1,5 @@
 /**
- * Tests for /api/subscriptions latency histogram (FWC26 issue #873).
+ * Tests for /api/subscriptions latency histogram (FWC26 issue #742).
  *
  * Covers:
  *   - Histogram is registered and accessible from the registry
@@ -202,7 +202,7 @@ describe('subscriptions_request_duration_seconds histogram registration', () => 
     const metrics = await client.register.getMetricsAsJSON();
     const found = metrics.find((m) => m.name === 'subscriptions_request_duration_seconds');
     expect(found!.help).toContain('/api/subscriptions');
-    expect(found!.help).toContain('#873');
+    expect(found!.help).toContain('#742');
   });
 
   it('has explicit buckets tuned for subscription operations', async () => {
