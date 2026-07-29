@@ -13,7 +13,7 @@ import { decodeCursor } from '../lib/cursorPagination.js';
 // ---------------------------------------------------------------------------
 function createUsageEventsRepository() {
   const db = newDb();
-
+const effectiveLimit = Math.max(1, limit);
   db.public.registerFunction({
     name: 'now',
     returns: DataType.timestamp,
