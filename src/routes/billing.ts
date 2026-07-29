@@ -35,10 +35,13 @@ import refundRouter from "./billing/refund.js";
 import { createFeeAbstractionRouter } from "./billing/feeAbstraction.js";
 import { createBillingForecastRouter } from "./billing/forecast.js";
 import { etagMiddleware } from "../middleware/etag.js";
+import { createTimeoutMiddleware } from "../middleware/timeout.js";
+import { config } from "../config/index.js";
 
 const router = Router();
 
 router.use(billingAccessLogMiddleware);
+router.use(createTimeoutMiddleware({ timeoutMs: config.billingTimeoutMs }));
 
 router.use("/credits", creditsRouter);
 router.use("/disputes", disputesRouter);

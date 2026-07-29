@@ -115,8 +115,8 @@ export function createTimeoutMiddleware(
           buildErrorEnvelope(
             'GATEWAY_TIMEOUT',
             `Request timed out after ${timeoutMs}ms`,
-            requestId
-          )
+            requestId,
+          ),
         );
       }
 
