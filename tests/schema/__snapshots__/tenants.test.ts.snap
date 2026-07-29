@@ -1,0 +1,129 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`PATCH /api/tenants/:tenantId — Response Schema Stability 400 validation error — error envelope shape matches the patch validation error envelope snapshot: patch-tenant-validation-error 1`] = `
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "details": [
+      {
+        "code": "CUSTOM",
+        "field": "body",
+        "message": "At least one tenant field must be provided",
+      },
+    ],
+    "message": "Request validation failed",
+  },
+  "requestId": "req-schema-patch-invalid-snap",
+  "success": false,
+  "timestamp": "<TIMESTAMP>",
+}
+`;
+
+exports[`PATCH /api/tenants/:tenantId — Response Schema Stability snapshot — full PATCH /api/tenants/:tenantId response matches the stable full update-tenant response snapshot: patch-tenant-full-response 1`] = `
+{
+  "data": {
+    "contactEmail": "stadium@grantfox.test",
+    "createdAt": "<CREATED_AT>",
+    "createdBy": "dev-1",
+    "id": "tenant-abc-001",
+    "metadata": {
+      "campaign": "fwc26",
+    },
+    "name": "GrantFox Stadium Ops",
+    "plan": "enterprise",
+    "slug": "grantfox-ops",
+    "updatedAt": "<UPDATED_AT>",
+  },
+  "requestId": "req-schema-update-snap",
+  "success": true,
+  "timestamp": "<TIMESTAMP>",
+}
+`;
+
+exports[`PATCH /api/tenants/:tenantId — Response Schema Stability snapshot — full PATCH /api/tenants/:tenantId response matches the top-level shape snapshot: patch-tenant-shape 1`] = `
+{
+  "dataKeys": [
+    "createdAt",
+    "createdBy",
+    "id",
+    "name",
+    "plan",
+    "slug",
+    "updatedAt",
+  ],
+  "successValue": true,
+  "topLevelKeys": [
+    "data",
+    "requestId",
+    "success",
+    "timestamp",
+  ],
+}
+`;
+
+exports[`POST /api/tenants — Response Schema Stability 400 validation error — error envelope shape matches the validation error envelope snapshot: post-tenant-validation-error 1`] = `
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "details": [
+      {
+        "code": "INVALID_TYPE",
+        "field": "body.name",
+        "message": "Invalid input: expected string, received undefined",
+      },
+      {
+        "code": "INVALID_FORMAT",
+        "field": "body.contactEmail",
+        "message": "contactEmail must be a valid email address",
+      },
+    ],
+    "message": "Request validation failed",
+  },
+  "requestId": "req-schema-invalid-snap",
+  "success": false,
+  "timestamp": "<TIMESTAMP>",
+}
+`;
+
+exports[`POST /api/tenants — Response Schema Stability snapshot — full POST /api/tenants response matches the stable full create-tenant response snapshot: post-tenant-full-response 1`] = `
+{
+  "data": {
+    "contactEmail": "ops@grantfox.test",
+    "createdAt": "<CREATED_AT>",
+    "createdBy": "dev-1",
+    "id": "ten_fixture_001",
+    "metadata": {
+      "campaign": "fwc26",
+      "priority": 1,
+    },
+    "name": "GrantFox Ops",
+    "plan": "growth",
+    "slug": "grantfox-ops",
+    "updatedAt": "<UPDATED_AT>",
+  },
+  "requestId": "req-schema-snapshot",
+  "success": true,
+  "timestamp": "<TIMESTAMP>",
+}
+`;
+
+exports[`POST /api/tenants — Response Schema Stability snapshot — full POST /api/tenants response matches the top-level shape snapshot: post-tenant-shape 1`] = `
+{
+  "dataKeys": [
+    "createdAt",
+    "createdBy",
+    "id",
+    "name",
+    "plan",
+    "slug",
+    "updatedAt",
+  ],
+  "successValue": true,
+  "topLevelKeys": [
+    "data",
+    "requestId",
+    "success",
+    "timestamp",
+  ],
+}
+`;
