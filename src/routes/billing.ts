@@ -27,7 +27,7 @@ import {
   SorobanRpcError,
 } from "../services/sorobanBilling.js";
 import { redactSimulationDetails } from "../lib/simulationDiagnostics.js";
-import { billingAccessLogMiddleware } from "../middleware/billingAccessLog.js";
+import { billingAccessLogMiddleware } from "../middleware/accessLog.js";
 import creditsRouter from "./billing/credits.js";
 import deductRouter from "./billing/deduct.js";
 import disputesRouter from "./billing/disputes.js";

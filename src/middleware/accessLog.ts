@@ -311,3 +311,13 @@ export function createHealthAccessLogMiddleware(): (
 }
 
 export const healthAccessLog = createHealthAccessLogMiddleware();
+
+export {
+  createBillingAccessLogMiddleware,
+  billingAccessLogMiddleware,
+  billingLogger,
+  BILLING_LOG_REDACTED_VALUE,
+  type BillingAccessLogPayload,
+  type BillingAccessLogOptions,
+} from './billingAccessLog.js';
+
