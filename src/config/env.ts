@@ -99,6 +99,23 @@ export const envSchema = z
       .int()
       .positive()
       .default(1),
+    // Per-endpoint circuit breaker config for /api/gateway downstream calls.
+    // Each API endpoint gets its own breaker keyed by apiId.
+    GATEWAY_BREAKER_FAILURE_THRESHOLD: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5),
+    GATEWAY_BREAKER_COOLDOWN_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(30_000),
+    GATEWAY_BREAKER_SUCCESS_THRESHOLD: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1),
     REST_RATE_LIMIT_WINDOW_MS: z.coerce
       .number()
       .int()
