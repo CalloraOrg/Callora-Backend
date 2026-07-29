@@ -77,7 +77,7 @@ describe('GET /api/health — per-request timeout', () => {
     // Canonical error envelope shape required by the repo
     expect(res.body.success).toBe(false);
     expect(res.body.error.code).toBe('GATEWAY_TIMEOUT');
-    expect(res.body.error.message).toBe('Request timed out');
+    expect(res.body.error.message).toBe('Request timed out after 50ms');
     expect(typeof res.body.requestId).toBe('string');
     expect(typeof res.body.timestamp).toBe('string');
   });
