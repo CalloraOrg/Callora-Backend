@@ -543,12 +543,15 @@ describe('GET /api/refresh-token', () => {
       expect(res3.status).toBe(429);
       expect(res3.body).toEqual(
         expect.objectContaining({
-          code: 'TOO_MANY_REQUESTS',
-          message: 'Too Many Requests',
+          success: false,
+          error: expect.objectContaining({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Too Many Requests',
+            retryAfterMs: expect.any(Number),
+          }),
         }),
       );
       expect(res3.body).toHaveProperty('requestId');
-      expect(res3.body).toHaveProperty('retryAfterMs');
     });
 
     it('returns Retry-After header in whole seconds reflecting refill time', async () => {

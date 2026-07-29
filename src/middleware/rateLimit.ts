@@ -96,10 +96,14 @@ export function createTokenBucketRateLimitMiddleware(
 
       res.set("Retry-After", String(retryAfterSeconds));
       res.status(429).json({
-        code: "TOO_MANY_REQUESTS",
-        message: "Too Many Requests",
+        success: false,
+        error: {
+          code: "TOO_MANY_REQUESTS",
+          message: "Too Many Requests",
+          retryAfterMs,
+        },
         requestId,
-        retryAfterMs,
+        timestamp: new Date().toISOString(),
       });
       return;
     }
