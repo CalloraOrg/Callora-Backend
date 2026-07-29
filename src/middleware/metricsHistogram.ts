@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { performance } from 'node:perf_hooks';
 import {
+  recordAdminDuration,
   recordBillingDeductDuration,
   recordRefreshTokenDuration,
   recordMaintenanceDuration,
@@ -46,6 +47,22 @@ export function maintenanceHistogramMiddleware(
   res.on('finish', () => {
     const durationMs = performance.now() - start;
     recordMaintenanceDuration(res.statusCode, durationMs);
+  });
+
+  next();
+}
+
+export function adminHistogramMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const start = performance.now();
+  const route = req.baseUrl + (req.route?.path ?? req.path);
+
+  res.on('finish', () => {
+    const durationMs = performance.now() - start;
+    recordAdminDuration(route, res.statusCode, durationMs);
   });
 
   next();
