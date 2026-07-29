@@ -1731,10 +1731,9 @@
                           ]
                         }
                       ],
-                      "pagination": {
+                      "meta": {
                         "limit": 20,
-                        "offset": 0,
-                        "total": 2
+                        "hasMore": false
                       }
                     }
                   }
@@ -4270,7 +4269,7 @@
         "type": "object",
         "required": [
           "data",
-          "pagination"
+          "meta"
         ],
         "properties": {
           "data": {
@@ -4279,22 +4278,22 @@
               "$ref": "#/components/schemas/ApiDetailsResponse"
             }
           },
-          "pagination": {
+          "meta": {
             "type": "object",
             "required": [
               "limit",
-              "offset",
-              "total"
+              "hasMore"
             ],
             "properties": {
               "limit": {
                 "type": "integer"
               },
-              "offset": {
-                "type": "integer"
+              "hasMore": {
+                "type": "boolean"
               },
-              "total": {
-                "type": "integer"
+              "nextCursor": {
+                "type": "string",
+                "description": "Opaque base64 cursor for the next page. Absent when hasMore is false."
               }
             }
           }

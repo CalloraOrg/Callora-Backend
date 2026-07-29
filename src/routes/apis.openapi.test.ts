@@ -38,10 +38,9 @@ describe('OpenAPI examples for API marketplace routes', () => {
     expect(listExample).toBeDefined();
     expect(listExample.summary).toBe('Active API listings page');
     const listExampleValue = asObject(listExample.value);
-    expect(listExampleValue.pagination).toEqual({
+    expect(listExampleValue.meta).toMatchObject({
       limit: 20,
-      offset: 0,
-      total: 2,
+      hasMore: false,
     });
     expect((listExampleValue.data as unknown[])[0]).toEqual(
       expect.objectContaining({

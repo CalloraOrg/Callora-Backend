@@ -4,11 +4,9 @@ API gateway, usage metering, and billing services for the Callora API marketplac
 
 ## API Catalog Pagination (`GET /api/apis`)
 
-The public API catalog endpoint supports two pagination modes. Cursor pagination is preferred for stable, gap-free traversal over large catalogs; offset pagination is available for backward compatibility.
+The public API catalog endpoint uses **keyset cursor pagination** over `(created_at DESC, id DESC)` for stable, gap-free traversal under concurrent writes. Offset-based pagination has been removed; all requests now return cursor-based responses.
 
-### Cursor pagination (recommended)
-
-Results are ordered **newest-first** by `(created_at DESC, id DESC)`. Pass the opaque `nextCursor` value returned in one response as the `cursor` query parameter on the next request.
+Results are ordered **newest-first** by `(created_at DESC, id DESC)`. Pass the opaque `nextCursor` value returned in one response as the `cursor` query parameter on the next request. Omit `cursor` for the first page.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -51,19 +49,7 @@ When `hasMore` is `false` and `nextCursor` is absent, you have reached the last 
 
 A malformed or tampered cursor returns `HTTP 400` with `code: "VALIDATION_ERROR"`.
 
-### Offset pagination (legacy)
-
-Omit `cursor` and use `limit` + `offset` (or `page`). Results may shift if new APIs are inserted during traversal.
-
-```
-GET /api/apis?limit=20&offset=40
-```
-```json
-{
-  "data": [ ... ],
-  "meta": { "limit": 20, "offset": 40 }
-}
-```
+The `offset` and `page` query parameters are ignored (cursor pagination does not support random-access jumping).
 
 ## Fee Abstraction
 
@@ -136,7 +122,7 @@ The migration is in `migrations/0019_disputes.sql` (rollback: `migrations/0019_d
 
 - Health check: `GET /api/health`
 - Marketplace routes:
-  - `GET /api/apis` — list public (active, non-deleted) APIs with cursor **or** offset pagination
+  - `GET /api/apis` — list public (active, non-deleted) APIs with cursor pagination over `(created_at, id)`
   - `GET /api/apis/:id`
   - `POST /api/apis` for authenticated developers to register an API with priced endpoints
 - Usage route: `GET /api/usage`
