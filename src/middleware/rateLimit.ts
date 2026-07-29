@@ -212,6 +212,54 @@ export function createQuotaRateLimitMiddleware(
   };
 }
 
+/**
+ * Creates a per-user token-bucket rate limit middleware for the proxy route.
+ */
+export function createProxyRateLimitMiddleware(
+  options?: TokenBucketOptions,
+  limiter?: TokenBucketRateLimiter,
+): RequestHandler {
+  const opts: TokenBucketOptions = options ?? { capacity: 100, refillRate: 10 };
+  const bucket = limiter ?? new TokenBucketRateLimiter(opts.capacity, opts.refillRate);
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    let key: string;
+    const apiKeyRecord = (req as any).apiKeyRecord;
+
+    if (apiKeyRecord && apiKeyRecord.userId) {
+      key = `user:${apiKeyRecord.userId}`;
+    } else {
+      const { userId } = resolveRequestUserId(req);
+      if (userId) {
+        key = `user:${userId}`;
+      } else {
+        const clientIp = getClientIp(req);
+        key = `ip:${clientIp}`;
+      }
+    }
+
+    const result = bucket.check(key);
+
+    if (!result.allowed) {
+      const retryAfterMs = result.retryAfterMs ?? 1000;
+      const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+      const requestId = getRequestId(req);
+
+      logger.warn("[proxyRateLimit] request limit exceeded", {
+        requestId,
+        key,
+        retryAfterMs,
+      });
+
+      res.set("Retry-After", String(retryAfterSeconds));
+      next(new TooManyRequestsError("Too Many Requests"));
+      return;
+    }
+
+    next();
+  };
+}
+
 // ─── Fixed-Window Rate Limiter ───────────────────────────────────────────────
 
 /**

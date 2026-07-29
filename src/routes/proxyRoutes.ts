@@ -11,6 +11,7 @@ import {
 } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
 import { createConfiguredPerKeyConcurrencyMiddleware } from '../middleware/perKeyConcurrency.js';
+import { createProxyRateLimitMiddleware } from '../middleware/rateLimit.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import {
@@ -122,6 +123,9 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   // so that req.apiKeyRecord is populated.
   const perKeyConcurrency = deps.perKeyConcurrency ?? createConfiguredPerKeyConcurrencyMiddleware();
 
+  // Per-user token-bucket rate limit for the proxy route.
+  const proxyRateLimit = deps.proxyRateLimit ?? createProxyRateLimitMiddleware();
+
   // Idempotency middleware for POST/PATCH to prevent duplicate downstream calls.
   // Caches request→response keyed by Idempotency-Key header, ensuring safe retries.
   // See docs/api-proxy-idempotency.md for the contract.
@@ -170,23 +174,23 @@ export function createProxyRouter(deps: ProxyDeps): Router {
 
   // Use a param of 0 to capture the wildcard path (everything after the slug)
   // POST and PATCH routes get idempotency protection; GET/DELETE are naturally safe.
-  router.post('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
-  router.patch('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
-  router.post('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
-  router.patch('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, idempotencyForProxy, handleProxy);
+  router.post('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
+  router.post('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
 
   // GET, DELETE, and other methods pass through without idempotency caching
-  router.get('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.delete('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.put('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.options('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.head('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.get('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.delete('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.put('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.options('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.head('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
 
-  router.get('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.delete('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.put('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.options('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
-  router.head('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, handleProxy);
+  router.get('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.delete('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.put('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.options('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.head('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

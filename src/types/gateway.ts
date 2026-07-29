@@ -166,6 +166,7 @@ export interface ProxyDeps {
   authMiddleware?: RequestHandler;
   /** Per-API-key concurrency tracker. Defaults to the shared-semaphore middleware. */
   perKeyConcurrency?: RequestHandler;
+  proxyRateLimit?: RequestHandler;
   proxyConfig?: Partial<ProxyConfig>;
   circuitBreakerStore?: CircuitBreakerStore;
   /**
