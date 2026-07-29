@@ -25,6 +25,7 @@ import { config } from "../config/index.js";
 import type { ScheduledExportsService } from "../services/scheduledExports.js";
 import type { ReportExporterService } from "../services/reportExporter.js";
 import { createSubscriptionRouter } from "./subscriptionRoutes.js";
+import { createSubscriptionHealthRouter } from "./subscriptions/health.js";
 import { createRefreshTokenRouter } from "./refresh-token.js";
 import type { SubscriptionRepository } from "../repositories/subscriptionRepository.js";
 import type { DeveloperRepository } from "../repositories/developerRepository.js";
@@ -141,6 +142,13 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
       }),
     );
   }
+
+  // Subscriptions subsystem external-dependency health probe (b#089).
+  // Mounted before the generic /subscriptions handler to avoid path shadowing.
+  router.use(
+    "/subscriptions/health",
+    createSubscriptionHealthRouter({ config: deps.healthCheckConfig }),
+  );
 
   // Subscriptions — developers subscribe to marketplace APIs with metering preferences.
   if (
