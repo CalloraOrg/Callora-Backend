@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
 import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { createSubscriptionCorsMiddleware } from '../middleware/cors.js';
 import {
   BadRequestError,
   ConflictError,
@@ -108,6 +109,11 @@ const listQuerySchema = z.object({
 export function createSubscriptionRouter(deps: SubscriptionRoutesDeps): Router {
   const router = Router();
   const { subscriptionRepository, apiRepository, developerRepository } = deps;
+
+  // Env-driven CORS allowlist (deny by default; preflight cached).
+  // Applied before auth so the preflight OPTIONS request can succeed
+  // without requiring credentials.
+  router.use(createSubscriptionCorsMiddleware());
 
   // Per-user token-bucket rate limit. Configurable via deps for testing.
   const subscriptionRateLimit = createRateLimitMiddleware({
