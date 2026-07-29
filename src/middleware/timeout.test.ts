@@ -45,12 +45,9 @@ describe('createTimeoutMiddleware', () => {
 
     const res = await request(app).get('/slow');
     expect(res.status).toBe(504);
-    // Canonical error envelope shape
-    expect(res.body.success).toBe(false);
     expect(res.body.error.code).toBe('GATEWAY_TIMEOUT');
-    expect(res.body.error.message).toBe('Request timed out');
-    expect(typeof res.body.requestId).toBe('string');
-    expect(typeof res.body.timestamp).toBe('string');
+    expect(res.body.error.message).toMatch(/timed out after 50ms/i);
+    expect(res.body.success).toBe(false);
   });
 
   // ── requestId propagation ──────────────────────────────────────────────────

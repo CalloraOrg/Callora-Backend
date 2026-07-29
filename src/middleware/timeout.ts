@@ -35,9 +35,7 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
-import { errorEnvelope, getRequestId } from '../lib/envelope.js';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { buildErrorEnvelope } from './envelope.js';
 
 export interface TimeoutMiddlewareOptions {
   /** Deadline in milliseconds. Takes precedence over `durationMs`. */
@@ -103,9 +101,23 @@ export function createTimeoutMiddleware(
       // 1. Cooperative abort — signal any in-flight I/O to cancel.
       controller.abort();
 
-      // 2. Only send a response if one hasn't been started yet.
-      if (res.headersSent) {
-        return;
+      if (!res.headersSent) {
+        const requestId = (req as Request & { id?: string }).id ?? 'unknown';
+
+        logger.warn('[timeout] request timed out', {
+          requestId,
+          method: req.method,
+          path: req.path,
+          timeoutMs,
+        });
+
+        res.status(504).json(
+          buildErrorEnvelope(
+            'GATEWAY_TIMEOUT',
+            `Request timed out after ${timeoutMs}ms`,
+            requestId
+          )
+        );
       }
 
       const requestId = getRequestId(req);
