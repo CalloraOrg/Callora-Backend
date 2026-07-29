@@ -3,11 +3,10 @@ import { Express } from 'express';
 import express from 'express';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import { auditEnrichMiddleware } from '../middleware/auditEnrich.js';
-import { requireAuth } from '../middleware/requireAuth.js';
 import { errorHandler } from '../middleware/errorHandler.js';
-import { envelopeMiddleware } from '../middleware/envelope.js';
 import { createForecastRouter } from './forecast.js';
 import { defaultAuditService } from '../services/auditService.js';
+import { forecastLogger } from '../middleware/forecastAccessLog.js';
 import jwt from 'jsonwebtoken';
 
 // Mock auditService to capture audit calls
@@ -538,5 +537,309 @@ describe('Forecast Routes with Audit Logging', () => {
       const auditCall = mockAuditService.record.mock.calls[0][0];
       expect(auditCall.userAgent).toBe('TestClient/1.0');
     });
+  });
+});
+
+// =============================================================================
+// Access log integration tests
+//
+// These tests verify that createForecastAccessLogMiddleware is correctly wired
+// into the forecast router and emits structured log entries containing all
+// required fields: req-id, latency, status, response size, and actor.
+// =============================================================================
+
+describe('Forecast access log integration', () => {
+  let app: Express;
+  let infoSpy: jest.SpyInstance;
+  let warnSpy: jest.SpyInstance;
+  let errorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    // Spy on the forecast Pino child logger used by the middleware
+    infoSpy = jest.spyOn(forecastLogger, 'info').mockImplementation(() => forecastLogger);
+    warnSpy = jest.spyOn(forecastLogger, 'warn').mockImplementation(() => forecastLogger);
+    errorSpy = jest.spyOn(forecastLogger, 'error').mockImplementation(() => forecastLogger);
+
+    // Stub auditService so mutations don't fail
+    (defaultAuditService as jest.Mocked<typeof defaultAuditService>).record.mockResolvedValue(undefined);
+
+    // Stub JWT
+    const mockJwt = jwt as unknown as { verify: jest.Mock };
+    mockJwt.verify.mockImplementation((token: string) => {
+      const userId = (token as string).replace('mock-token-', '');
+      return { userId, sub: userId };
+    });
+
+    process.env.JWT_SECRET = 'test-secret-key';
+
+    app = (() => {
+      const a = express();
+      a.use(express.json());
+      a.use(requestIdMiddleware);
+      a.use(auditEnrichMiddleware);
+      a.use('/api/forecast', createForecastRouter());
+      a.use(errorHandler);
+      return a;
+    })();
+  });
+
+  afterEach(() => {
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET / — unauthenticated read
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with req-id, status 200, latency, and response size for GET /', async () => {
+    const res = await request(app)
+      .get('/api/forecast')
+      .set('X-Request-Id', 'req-get-root');
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-get-root');
+    expect(payload.correlationId).toBe('req-get-root');
+    expect(payload.method).toBe('GET');
+    expect(payload.status).toBe(200);
+    expect(payload.statusCode).toBe(200);
+    expect(typeof payload.ms).toBe('number');
+    expect(payload.ms as number).toBeGreaterThanOrEqual(0);
+    expect(payload.durationMs).toBe(payload.ms);
+    expect(typeof payload.responseBytes).toBe('number');
+    expect(payload.responseBytes as number).toBeGreaterThan(0);
+    // No actor for unauthenticated GET
+    expect(payload).not.toHaveProperty('actor');
+    expect(payload).not.toHaveProperty('userId');
+  });
+
+  // ---------------------------------------------------------------------------
+  // POST / — authenticated create, actor must appear
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with actor for authenticated POST /', async () => {
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-42')
+      .set('X-Request-Id', 'req-post-create')
+      .send({ name: 'Access Log Test', description: 'Testing access log' });
+
+    expect(res.status).toBe(201);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-post-create');
+    expect(payload.method).toBe('POST');
+    expect(payload.status).toBe(201);
+    expect(payload.statusCode).toBe(201);
+    expect(payload.actor).toBe('dev-user-42');
+    expect(payload.userId).toBe('dev-user-42');
+    expect(typeof payload.ms).toBe('number');
+    expect(typeof payload.responseBytes).toBe('number');
+    expect(payload.responseBytes as number).toBeGreaterThan(0);
+    // No forecastId on the collection endpoint
+    expect(payload).not.toHaveProperty('forecastId');
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /:id — forecastId must appear in the log
+  // ---------------------------------------------------------------------------
+
+  it('includes forecastId in the access log for GET /:id', async () => {
+    // First create a forecast to get a real ID
+    const createRes = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-1')
+      .send({ name: 'ID Test', description: 'Testing forecastId in log' });
+
+    const forecastId = createRes.body.data.id as string;
+
+    infoSpy.mockClear();
+
+    const res = await request(app)
+      .get(`/api/forecast/${forecastId}`)
+      .set('X-Request-Id', 'req-get-by-id');
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-get-by-id');
+    expect(payload.forecastId).toBe(forecastId);
+    expect(payload.status).toBe(200);
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /:id 404 — warn level, forecastId still present
+  // ---------------------------------------------------------------------------
+
+  it('emits a warn log at status 404 for GET /:id with unknown ID', async () => {
+    const res = await request(app)
+      .get('/api/forecast/does-not-exist')
+      .set('X-Request-Id', 'req-get-404');
+
+    expect(res.status).toBe(404);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(infoSpy).not.toHaveBeenCalled();
+
+    const payload = warnSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-get-404');
+    expect(payload.status).toBe(404);
+    expect(payload.statusCode).toBe(404);
+  });
+
+  // ---------------------------------------------------------------------------
+  // PATCH /:id — actor + forecastId + 200
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with actor and forecastId for authenticated PATCH /:id', async () => {
+    const createRes = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-5')
+      .send({ name: 'Before', description: 'Patch test' });
+
+    const forecastId = createRes.body.data.id as string;
+    infoSpy.mockClear();
+
+    const res = await request(app)
+      .patch(`/api/forecast/${forecastId}`)
+      .set('Authorization', 'Bearer mock-token-dev-user-5')
+      .set('X-Request-Id', 'req-patch-1')
+      .send({ name: 'After' });
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-patch-1');
+    expect(payload.method).toBe('PATCH');
+    expect(payload.status).toBe(200);
+    expect(payload.actor).toBe('dev-user-5');
+    expect(payload.forecastId).toBe(forecastId);
+  });
+
+  // ---------------------------------------------------------------------------
+  // DELETE /:id — actor + forecastId + 204
+  // ---------------------------------------------------------------------------
+
+  it('emits an info log with actor and forecastId for authenticated DELETE /:id', async () => {
+    const createRes = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-6')
+      .send({ name: 'ToDelete', description: 'Delete test' });
+
+    const forecastId = createRes.body.data.id as string;
+    infoSpy.mockClear();
+
+    const res = await request(app)
+      .delete(`/api/forecast/${forecastId}`)
+      .set('Authorization', 'Bearer mock-token-dev-user-6')
+      .set('X-Request-Id', 'req-delete-1');
+
+    expect(res.status).toBe(204);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-delete-1');
+    expect(payload.method).toBe('DELETE');
+    expect(payload.status).toBe(204);
+    expect(payload.actor).toBe('dev-user-6');
+    expect(payload.forecastId).toBe(forecastId);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 401 — warn level, no actor
+  // ---------------------------------------------------------------------------
+
+  it('emits a warn log at status 401 when authentication is missing on POST /', async () => {
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('X-Request-Id', 'req-unauth-post')
+      .send({ name: 'No Auth', description: 'Test' });
+
+    expect(res.status).toBe(401);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    const payload = warnSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-unauth-post');
+    expect(payload.status).toBe(401);
+    expect(payload).not.toHaveProperty('actor');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 400 — warn level for validation failure
+  // ---------------------------------------------------------------------------
+
+  it('emits a warn log at status 400 for a validation failure on POST /', async () => {
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-1')
+      .set('X-Request-Id', 'req-bad-input')
+      .send({ description: 'missing name' }); // name is required
+
+    expect(res.status).toBe(400);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    const payload = warnSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-bad-input');
+    expect(payload.status).toBe(400);
+  });
+
+  // ---------------------------------------------------------------------------
+  // X-Request-Id echoed in response header
+  // ---------------------------------------------------------------------------
+
+  it('echoes X-Request-Id back in the response header', async () => {
+    const res = await request(app)
+      .get('/api/forecast')
+      .set('X-Request-Id', 'req-echo-check');
+
+    expect(res.headers['x-request-id']).toBe('req-echo-check');
+  });
+
+  // ---------------------------------------------------------------------------
+  // x-correlation-id takes precedence for correlationId field
+  // ---------------------------------------------------------------------------
+
+  it('uses x-correlation-id as correlationId when both headers are present', async () => {
+    const res = await request(app)
+      .get('/api/forecast')
+      .set('X-Request-Id', 'req-id-abc')
+      .set('X-Correlation-Id', 'corr-id-xyz');
+
+    expect(res.status).toBe(200);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+
+    const payload = infoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.correlationId).toBe('corr-id-xyz');
+    expect(payload.requestId).toBe('req-id-abc');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 500 — error level
+  // ---------------------------------------------------------------------------
+
+  it('emits an error log at status 500 when audit persistence fails', async () => {
+    (defaultAuditService as jest.Mocked<typeof defaultAuditService>).record
+      .mockRejectedValueOnce(new Error('DB down'));
+
+    const res = await request(app)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-user-1')
+      .set('X-Request-Id', 'req-500-test')
+      .send({ name: 'Fail', description: 'Test' });
+
+    expect(res.status).toBe(500);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    const payload = errorSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.requestId).toBe('req-500-test');
+    expect(payload.status).toBe(500);
   });
 });
