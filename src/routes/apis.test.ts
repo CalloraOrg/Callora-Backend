@@ -96,13 +96,14 @@ describe('createApisRouter', () => {
     return app;
   }
 
-  it('returns only active apis by default with pagination metadata', async () => {
+  it('returns only active apis by default with cursor pagination metadata', async () => {
     const app = buildApp();
 
     const res = await request(app).get('/api/apis');
 
     expect(res.status).toBe(200);
-    expect(res.body.meta).toEqual({ total: 1, limit: 20, offset: 0 });
+    expect(res.body.meta).toMatchObject({ limit: 20, hasMore: false });
+    expect(res.body.meta).not.toHaveProperty('offset');
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0]).toEqual(
       expect.objectContaining({
@@ -126,7 +127,8 @@ describe('createApisRouter', () => {
     const res = await request(app).get('/api/apis?status=draft');
 
     expect(res.status).toBe(200);
-    expect(res.body.meta).toEqual({ total: 1, limit: 20, offset: 0 });
+    expect(res.body.meta).toMatchObject({ limit: 20, hasMore: false });
+    expect(res.body.meta).not.toHaveProperty('offset');
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].id).toBe(2);
     expect(res.body.data[0].status).toBe('draft');
@@ -167,10 +169,11 @@ describe('createApisRouter', () => {
   it('applies pagination params to the response metadata and items', async () => {
     const app = buildApp();
 
-    const res = await request(app).get('/api/apis?status=active&limit=1&offset=0');
+    const res = await request(app).get('/api/apis?status=active&limit=1');
 
     expect(res.status).toBe(200);
-    expect(res.body.meta).toEqual({ total: 1, limit: 1, offset: 0 });
+    expect(res.body.meta).toMatchObject({ limit: 1, hasMore: false });
+    expect(res.body.meta).not.toHaveProperty('offset');
     expect(res.body.data).toHaveLength(1);
   });
 

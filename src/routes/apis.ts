@@ -5,8 +5,6 @@ import {
   UnauthorizedError,
 } from "../errors/index.js";
 import {
-  parsePagination,
-  paginatedResponse,
   parseCursorPagination,
   decodeCursor,
   generateCursor,
@@ -139,16 +137,15 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       const search =
         typeof req.query.search === "string" ? req.query.search : undefined;
 
-      // ── Cursor-based pagination path ───────────────────────────────────────
-      if (query.cursor !== undefined && query.cursor.trim() !== "") {
-        const { limit, cursor: rawCursor } = parseCursorPagination(query);
+      const { limit, cursor: rawCursor } = parseCursorPagination(query);
 
-        // decodeCursor throws a ValidationError (400) on malformed input.
-        const { created_at: cursorCreatedAt, id: cursorId } = decodeCursor(
-          rawCursor!,
-        );
-        const cursorDate = new Date(cursorCreatedAt);
-        const cursorIdNum = parseInt(cursorId, 10);
+      let cursorDate: Date | undefined;
+      let cursorIdNum: number | undefined;
+
+      if (rawCursor) {
+        const decoded = decodeCursor(rawCursor);
+        cursorDate = new Date(decoded.created_at);
+        cursorIdNum = parseInt(decoded.id, 10);
         if (!Number.isFinite(cursorIdNum) || cursorIdNum <= 0) {
           next(
             new BadRequestError(
@@ -157,58 +154,15 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
           );
           return;
         }
-
-        const cacheKey = buildCacheKey({
-          limit,
-          offset: 0,
-          category,
-          search,
-          cursor: rawCursor,
-        });
-        const cached = cache.get(cacheKey);
-        if (cached !== undefined) {
-          recordCacheHit();
-          res.json(cached);
-          return;
-        }
-
-        recordCacheMiss();
-        // Fetch limit+1 rows; the repository already applies +1 internally.
-        const rows = await apiRepository.listPublic({
-          limit,
-          category,
-          search,
-          cursor: { after_created_at: cursorDate, after_id: cursorIdNum },
-        });
-
-        const hasMore = rows.length > limit;
-        const pageRows = rows.slice(0, limit);
-
-        // Generate the next cursor from the last item in this page.
-        let nextCursor: string | undefined;
-        if (hasMore && pageRows.length > 0) {
-          const last = pageRows[pageRows.length - 1];
-          nextCursor = generateCursor(
-            last.created_at.toISOString(),
-            String(last.id),
-          );
-        }
-
-        const response = cursorPaginatedResponse(pageRows, {
-          limit,
-          nextCursor,
-          hasMore,
-        });
-
-        cache.set(cacheKey, response);
-        res.json(response);
-        return;
       }
 
-      // ── Offset-based pagination path (legacy / default) ────────────────────
-      const { limit, offset } = parsePagination(query);
-
-      const cacheKey = buildCacheKey({ limit, offset, category, search });
+      const cacheKey = buildCacheKey({
+        limit,
+        offset: 0,
+        category,
+        search,
+        cursor: rawCursor,
+      });
       const cached = cache.get(cacheKey);
       if (cached !== undefined) {
         recordCacheHit();
@@ -217,13 +171,37 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       }
 
       recordCacheMiss();
-      const apis = await apiRepository.listPublic({
-        limit,
-        offset,
+      // Fetch limit+1 rows for hasMore detection.
+      // The repository already applies +1 internally when cursor is set,
+      // so we only pass the extra row when no cursor is present.
+      const fetchLimit = rawCursor ? limit : limit + 1;
+      const rows = await apiRepository.listPublic({
+        limit: fetchLimit,
         category,
         search,
+        cursor:
+          cursorDate && cursorIdNum
+            ? { after_created_at: cursorDate, after_id: cursorIdNum }
+            : undefined,
       });
-      const response = paginatedResponse(apis, { limit, offset });
+
+      const hasMore = rows.length > limit;
+      const pageRows = rows.slice(0, limit);
+
+      let nextCursor: string | undefined;
+      if (hasMore && pageRows.length > 0) {
+        const last = pageRows[pageRows.length - 1];
+        nextCursor = generateCursor(
+          last.created_at.toISOString(),
+          String(last.id),
+        );
+      }
+
+      const response = cursorPaginatedResponse(pageRows, {
+        limit,
+        nextCursor,
+        hasMore,
+      });
 
       cache.set(cacheKey, response);
       res.json(response);

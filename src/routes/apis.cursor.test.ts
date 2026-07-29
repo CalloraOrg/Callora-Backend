@@ -185,15 +185,18 @@ describe('GET /api/apis — cursor pagination', () => {
 
   // ── No-cursor first page ───────────────────────────────────────────────────
 
-  it('first page (no cursor) returns newest-first items and a nextCursor', async () => {
+  it('first page (no cursor) returns cursor-based response with nextCursor and hasMore', async () => {
     const res = await request(buildFixtureApp()).get('/api/apis?limit=2');
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(2);
     expect(res.body.data[0].id).toBe(5);
     expect(res.body.data[1].id).toBe(4);
-    // The offset path uses paginatedResponse, so meta has `offset`.
+    // Cursor path is now the default; meta has cursor fields, not offset.
     expect(res.body.meta).toHaveProperty('limit', 2);
+    expect(res.body.meta).toHaveProperty('hasMore', true);
+    expect(typeof res.body.meta.nextCursor).toBe('string');
+    expect(res.body.meta).not.toHaveProperty('offset');
   });
 
   // ── Tie-breaking on identical timestamps ──────────────────────────────────
@@ -293,26 +296,25 @@ describe('GET /api/apis — cursor pagination', () => {
     expect(res.body.data[0].id).toBe(8);
   });
 
-  // ── Backward compatibility: offset path still works ────────────────────────
+  // ── Cursor pagination is always the default ────────────────────────────────
 
-  it('falls back to offset pagination when no cursor is supplied', async () => {
-    const res = await request(buildFixtureApp()).get('/api/apis?limit=2&offset=2');
+  it('uses cursor pagination even when no cursor is supplied', async () => {
+    const res = await request(buildFixtureApp()).get('/api/apis?limit=2');
 
     expect(res.status).toBe(200);
-    expect(res.body.meta).toHaveProperty('offset', 2);
     expect(res.body.meta).toHaveProperty('limit', 2);
-    // In the offset path meta should NOT include cursor fields.
-    expect(res.body.meta).not.toHaveProperty('nextCursor');
-    expect(res.body.meta).not.toHaveProperty('hasMore');
+    expect(res.body.meta).toHaveProperty('hasMore');
+    expect(res.body.meta).toHaveProperty('nextCursor');
+    expect(res.body.meta).not.toHaveProperty('offset');
   });
 
-  it('ignores an empty cursor string and uses the offset path', async () => {
+  it('treats empty cursor string as first page (cursor-based)', async () => {
     const res = await request(buildFixtureApp()).get('/api/apis?cursor=');
 
     expect(res.status).toBe(200);
-    // Response should be the plain offset-style envelope.
-    expect(res.body.meta).toHaveProperty('offset');
-    expect(res.body.meta).not.toHaveProperty('nextCursor');
+    expect(res.body.meta).toHaveProperty('hasMore');
+    expect(res.body.meta).toHaveProperty('nextCursor');
+    expect(res.body.meta).not.toHaveProperty('offset');
   });
 
   // ── Cache isolation ────────────────────────────────────────────────────────
