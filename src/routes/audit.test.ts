@@ -46,6 +46,16 @@ describe('/api/audit mutations', () => {
     expect(res.body.data).toBeInstanceOf(Array);
   });
 
+  it('sets the required security headers on audit responses', async () => {
+    const res = await request(app).get('/api/audit');
+
+    expect(res.headers['content-security-policy']).toBe(
+      "default-src 'self'; frame-ancestors 'none'; object-src 'none'",
+    );
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  });
+
   it('POST /api/audit creates a new config and logs AUDIT_CONFIG_CREATE', async () => {
     const res = await request(app).post('/api/audit').send({
       targetEndpoint: '/users',
