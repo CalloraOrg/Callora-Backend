@@ -1,30 +1,11 @@
-import { Router, type Response } from "express";
-import {
-  BadRequestError,
-  NotFoundError,
-  UnauthorizedError,
-} from "../errors/index.js";
-import { apiStatusEnum, type ApiStatus } from "../db/schema.js";
-import {
-  parseCursorPagination,
-  decodeCursor,
-  generateCursor,
-  cursorPaginatedResponse,
-} from "../lib/pagination.js";
-import {
-  buildCacheKey,
-  listingsCache,
-  type ListingsCache,
-} from "../lib/listingsCache.js";
-import { recordCacheHit, recordCacheMiss } from "../metrics.js";
-import { recordApisLatency } from "../metrics/registry.js";
-import { createApisCorsMiddleware } from "../middleware/cors.js";
-import {
-  requireAuth,
-  type AuthenticatedLocals,
-} from "../middleware/requireAuth.js";
-import { bodyValidator } from "../middleware/validate.js";
-import { etagMiddleware } from "../middleware/etag.js";
+import { Router, type Response } from 'express';
+import { BadRequestError, NotFoundError, UnauthorizedError } from '../errors/index.js';
+import { parsePagination, paginatedResponse } from '../lib/pagination.js';
+import { buildCacheKey, listingsCache, type ListingsCache } from '../lib/listingsCache.js';
+import { recordCacheHit, recordCacheMiss } from '../metrics.js';
+import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
+import { bodyValidator } from '../middleware/validate.js';
+import { computeStrongETag, isETagMatch } from '../middleware/etagCache.js';
 import {
   defaultApiRepository,
   type ApiRepository,
@@ -189,6 +170,18 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       const cached = cache.get(cacheKey);
       if (cached !== undefined) {
         recordCacheHit();
+
+        // ── Strong ETag / 304 (cache-hit path) ───────────────────────────
+        // The response body is already available in `cached`, so we can
+        // compute the ETag without touching the DB.  This is the fast path:
+        // both the DB and the full HTTP body are skipped on a 304.
+        const etag = computeStrongETag(cached);
+        if (isETagMatch(etag, req.headers['if-none-match'])) {
+          res.status(304).set('ETag', etag).end();
+          return;
+        }
+
+        res.set('ETag', etag);
         res.json(cached);
         return;
       }
@@ -255,6 +248,18 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       });
 
       cache.set(cacheKey, response);
+
+      // ── Strong ETag / 304 (cache-miss path) ──────────────────────────────
+      // Approach: compute-then-compare.  The response is built before the ETag
+      // check because the cache miss already required the DB read.  The cost
+      // of JSON serialisation + SHA-256 is sub-millisecond and negligible.
+      const etag = computeStrongETag(response);
+      if (isETagMatch(etag, req.headers['if-none-match'])) {
+        res.status(304).set('ETag', etag).end();
+        return;
+      }
+
+      res.set('ETag', etag);
       res.json(response);
     } catch (error) {
       next(error);
@@ -278,7 +283,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
 
       const endpoints = await apiRepository.getEndpoints(id);
 
-      res.json({
+      const responseBody = {
         id: api.id,
         name: api.name,
         description: api.description,
@@ -288,7 +293,21 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         status: api.status,
         developer: api.developer,
         endpoints,
-      });
+      };
+
+      // ── Strong ETag / 304 ─────────────────────────────────────────────────
+      // Approach: compute-then-compare.  The DB reads for findById and
+      // getEndpoints are required to build the response, so they cannot be
+      // skipped.  The ETag is computed from the assembled response object and
+      // the 304 shortcut avoids sending the JSON body over the wire.
+      const etag = computeStrongETag(responseBody);
+      if (isETagMatch(etag, req.headers['if-none-match'])) {
+        res.status(304).set('ETag', etag).end();
+        return;
+      }
+
+      res.set('ETag', etag);
+      res.json(responseBody);
     } catch (error) {
       next(error);
     }
