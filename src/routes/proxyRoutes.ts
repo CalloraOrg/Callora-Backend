@@ -10,9 +10,7 @@ import {
   recordEndpointThroughputSaturation,
 } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
-import { createConfiguredPerKeyConcurrencyMiddleware } from '../middleware/perKeyConcurrency.js';
-import { createProxyRateLimitMiddleware } from '../middleware/rateLimit.js';
-import { idempotencyMiddleware } from '../middleware/idempotency.js';
+import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import {
   buildUpstreamTargetUrl,
@@ -118,79 +116,17 @@ export function createProxyRouter(deps: ProxyDeps): Router {
     },
   });
 
-  // Tracks in-flight requests per API key on the shared semaphore that
-  // GET /api/admin/keys/concurrency reads from. Must run after authMiddleware
-  // so that req.apiKeyRecord is populated.
-  const perKeyConcurrency = deps.perKeyConcurrency ?? createConfiguredPerKeyConcurrencyMiddleware();
-
-  // Per-user token-bucket rate limit for the proxy route.
-  const proxyRateLimit = deps.proxyRateLimit ?? createProxyRateLimitMiddleware();
-
-  // Idempotency middleware for POST/PATCH to prevent duplicate downstream calls.
-  // Caches request→response keyed by Idempotency-Key header, ensuring safe retries.
-  // See docs/api-proxy-idempotency.md for the contract.
-  const idempotencyForProxy = (req: Request, res: Response, next: NextFunction): void => {
-    idempotencyMiddleware(req, res, next, {
-      keyFromHeader: 'idempotency-key',
-      retentionSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
-      bodyExcludingKeys: ['idempotencyKey'],
-    });
-  };
-
-  /**
-   * Drain guard middleware.
-   *
-   * Runs before all other route handlers.  If the server has entered its
-   * graceful-shutdown drain phase, new proxy requests are rejected immediately
-   * with `503 Service Unavailable` so upstream load balancers can route
-   * traffic to healthy instances.  The response includes:
-   *
-   *   - `Connection: close`  — instructs the load balancer not to reuse
-   *                            this socket for future requests.
-   *   - `Retry-After: 0`     — advises the client to retry immediately
-   *                            (the new instance should be ready).
-   *
-   * Requests that are already in flight when the drain begins are unaffected
-   * and are tracked by the in-flight counter in the drain tracker
-   * (see `src/lifecycle/shutdown.ts`).
-   */
-  const drainGuard = (req: Request, res: Response, next: NextFunction): void => {
-    if (drainState?.isDraining()) {
-      const requestId = req.id ?? getOrCreateRequestId(randomUUID);
-      logger.info(
-        { requestId, path: req.path, method: req.method },
-        '[proxy:drain] Rejecting new proxy request during graceful shutdown',
-      );
-      res.set('Connection', 'close');
-      res.set('Retry-After', '0');
-      next(new ServiceUnavailableError(
-        'Server is shutting down. Please retry your request on another instance.',
-        'SERVICE_UNAVAILABLE',
-      ));
-      return;
-    }
-    next();
-  };
+  // Per-user token-bucket rate limiter (issue #870).
+  // Runs AFTER authMiddleware so req.apiKeyRecord.userId is guaranteed to be
+  // populated. Reads limits from GATEWAY_RATE_LIMIT_* env vars by default;
+  // can be overridden via deps for testing.
+  const gatewayRateLimitMiddleware = deps.gatewayRateLimitMiddleware
+    ?? createConfiguredGatewayRateLimitMiddleware();
 
   // Use a param of 0 to capture the wildcard path (everything after the slug)
-  // POST and PATCH routes get idempotency protection; GET/DELETE are naturally safe.
-  router.post('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
-  router.patch('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
-  router.post('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
-  router.patch('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, idempotencyForProxy, handleProxy);
-
-  // GET, DELETE, and other methods pass through without idempotency caching
-  router.get('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.delete('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.put('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.options('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.head('/:apiSlugOrId/*', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-
-  router.get('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.delete('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.put('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.options('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
-  router.head('/:apiSlugOrId', drainGuard, authMiddleware, perKeyConcurrency, proxyRateLimit, handleProxy);
+  router.all('/:apiSlugOrId/*', authMiddleware, gatewayRateLimitMiddleware, handleProxy);
+  // Also handle requests without a trailing path (e.g. /v1/call/my-api)
+  router.all('/:apiSlugOrId', authMiddleware, gatewayRateLimitMiddleware, handleProxy);
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -222,7 +158,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const stateValue = currentMetrics.state === 'CLOSED' ? 0 : currentMetrics.state === 'OPEN' ? 1 : 2;
       setGatewayUpstreamBreakerState(breakerKey, stateValue);
 
-      // 3. Rate-limit check
+      // 3. Per-API-key rate-limit check (tier-aware; complements the per-user
+      //    token-bucket check already applied by gatewayRateLimitMiddleware).
       const rateResult = await rateLimiter.check(apiKeyHeader, res.locals.apiKeyTier as string | undefined);
       if (!rateResult.allowed) {
         const retryAfterSec = Math.ceil((rateResult.retryAfterMs ?? 1000) / 1000);

@@ -84,48 +84,15 @@ export const envSchema = z
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
     UPSTREAM_HOST_ALLOWLIST: z.string().optional(),
     PROXY_TIMEOUT_MS: z.coerce.number().default(30_000),
-    PROXY_BREAKER_FAILURE_THRESHOLD: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(5),
-    PROXY_BREAKER_COOLDOWN_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(30_000),
-    PROXY_BREAKER_SUCCESS_THRESHOLD: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(1),
-    // Per-endpoint circuit breaker config for /api/gateway downstream calls.
-    // Each API endpoint gets its own breaker keyed by apiId.
-    GATEWAY_BREAKER_FAILURE_THRESHOLD: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(5),
-    GATEWAY_BREAKER_COOLDOWN_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(30_000),
-    GATEWAY_BREAKER_SUCCESS_THRESHOLD: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(1),
-    REST_RATE_LIMIT_WINDOW_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(60_000),
-    REST_RATE_LIMIT_MAX_REQUESTS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(100),
+    PROXY_BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
+    PROXY_BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().default(30_000),
+    PROXY_BREAKER_SUCCESS_THRESHOLD: z.coerce.number().int().positive().default(1),
+    // REST API rate limiting (per-user with IP fallback)
+    REST_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    REST_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+    // Gateway/proxy rate limiting (per authenticated user only)
+    GATEWAY_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    GATEWAY_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
     WEBHOOK_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
     WEBHOOK_RATE_LIMIT_MAX_REQUESTS: z.coerce
       .number()

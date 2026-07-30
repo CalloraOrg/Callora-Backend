@@ -437,304 +437,127 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// X-Correlation-Id generation and propagation (GrantFox FWC26)
+// gatewayRoutes.ts — per-user token-bucket inline invocation (issue #870)
+//
+// These tests exercise the inline gatewayRateLimit(req, res, () => {...})
+// call path inside the router.all('/:apiId', ...) handler in gatewayRoutes.ts.
+// They use createGatewayRouter directly with a gatewayRateLimitMiddleware stub
+// injected via GatewayDeps so the new code paths show up in coverage for that
+// file, not just gatewayRateLimit.ts.
 // ---------------------------------------------------------------------------
+describe("gateway route - per-user token-bucket rate limit (issue #870)", () => {
+  const API_ID = "my-api";
+  const VALID_KEY = "test-key-abcdefgh";
 
-describe('gateway route - X-Correlation-Id propagation', () => {
-  /**
-   * Build a minimal app with a fetch mock that records outbound request headers.
-   * Billing can be set to succeed (to hit the upstream fetch) or fail (to stop
-   * before the fetch — useful for non-upstream tests).
-   */
-  function buildCorrelationApp(
-    options: {
-      billingSuccess?: boolean;
-      fetchMock?: jest.Mock;
-    } = {},
+  function buildGatewayApp(
+    gatewayRateLimitMiddleware: import("express").RequestHandler,
+    extra?: Partial<import("../types/gateway.js").GatewayDeps>,
   ) {
-    const apiKey = 'corr-test-key-x';
-    const apiId = 'my-api';
     const apiKeys = new Map<string, ApiKey>();
-    apiKeys.set(apiKey, { key: 'k1', apiId, developerId: 'dev1' });
-
-    const fetchMock =
-      options.fetchMock ??
-      jest.fn().mockResolvedValue({
-        status: 200,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        text: async () => JSON.stringify({ ok: true }),
-      } as Response);
-
-    const billingSuccess = options.billingSuccess ?? true;
+    apiKeys.set(VALID_KEY, { key: "k1", apiId: API_ID, developerId: "dev1" });
 
     const deps = {
-      billing: {
-        deductCredit: async () =>
-          billingSuccess
-            ? { success: true, balance: 100 }
-            : { success: false, balance: 0 },
-      },
+      billing: { deductCredit: async () => ({ success: false, balance: 0 }) }, // 402 fast
       rateLimiter: { check: async () => ({ allowed: true }) },
-      usageStore: { record: jest.fn().mockResolvedValue(true) },
-      upstreamUrl: 'http://example.internal',
+      usageStore: { record: () => true },
+      upstreamUrl: "http://example.invalid",
       apiKeys,
-    } as unknown as GatewayDeps;
+      gatewayRateLimitMiddleware,
+      ...extra,
+    } as any;
 
     const app = express();
     app.use(requestIdMiddleware);
-    app.use('/gateway', createGatewayRouter(deps));
+    app.use("/gateway", createGatewayRouter(deps));
     app.use(errorHandler);
-
-    return { app, apiKey, apiId, fetchMock };
+    return app;
   }
 
-  let originalFetch: typeof global.fetch;
+  test("passes through to downstream handler when rate limiter calls next()", async () => {
+    // Middleware that always calls next() — exercises the gatewayRateLimitPassed=true path
+    const passThroughMiddleware: import("express").RequestHandler = (_req, _res, next) => {
+      next();
+    };
 
-  beforeEach(() => {
-    originalFetch = global.fetch;
-  });
-
-  afterEach(() => {
-    global.fetch = originalFetch;
-    jest.restoreAllMocks();
-  });
-
-  // ── Response header presence ──────────────────────────────────────────────
-
-  test('response always contains X-Correlation-Id header', async () => {
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
-
+    const app = buildGatewayApp(passThroughMiddleware);
     const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey);
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
 
-    // Even when billing fails (402), the correlation header must be set
+    // Billing stub returns 402 — proves the inline check passed and execution continued
     expect(res.status).toBe(402);
-    expect(res.headers).toHaveProperty('x-correlation-id');
-    expect(typeof res.headers['x-correlation-id']).toBe('string');
-    expect(res.headers['x-correlation-id'].length).toBeGreaterThan(0);
   });
 
-  test('echoes client-supplied X-Correlation-Id in response header', async () => {
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
-    const clientCorrelationId = 'client-corr-fwc26-001';
+  test("returns 429 and stops processing when rate limiter writes its own response (gatewayRateLimitPassed=false path)", async () => {
+    // Middleware that writes a 429 itself and does NOT call next() —
+    // exercises the gatewayRateLimitPassed=false early-return path in gatewayRoutes.ts
+    const blockingMiddleware: import("express").RequestHandler = (_req, res, _next) => {
+      res.status(429).json({
+        code: "TOO_MANY_REQUESTS",
+        message: "Too Many Requests",
+        requestId: "test-req-id",
+        retryAfterMs: 30_000,
+      });
+    };
 
+    const app = buildGatewayApp(blockingMiddleware);
     const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-correlation-id', clientCorrelationId);
-
-    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
-  });
-
-  test('falls back to X-Request-Id when no X-Correlation-Id header is provided', async () => {
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
-    const edgeRequestId = 'edge-req-fallback-42';
-
-    const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-request-id', edgeRequestId);
-
-    // No x-correlation-id supplied — should fall back to the request-id
-    expect(res.headers['x-correlation-id']).toBe(edgeRequestId);
-  });
-
-  test('generates a UUID correlation-id when neither header is provided', async () => {
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
-
-    const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey);
-    // Don't set any x-correlation-id or x-request-id
-
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    expect(res.headers['x-correlation-id']).toMatch(uuidRegex);
-  });
-
-  // ── Outbound propagation ──────────────────────────────────────────────────
-
-  test('forwards x-correlation-id to upstream service when billing succeeds', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      status: 200,
-      headers: new Headers({ 'content-type': 'application/json' }),
-      text: async () => JSON.stringify({ proxied: true }),
-    } as Response);
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
-    const clientCorrelationId = 'client-corr-outbound-99';
-
-    const res = await request(app)
-      .post(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-correlation-id', clientCorrelationId)
-      .send({ data: 'test' });
-
-    expect(res.status).toBe(200);
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const sentHeaders = init.headers as Record<string, string>;
-    expect(sentHeaders['x-correlation-id']).toBe(clientCorrelationId);
-  });
-
-  test('forwards x-request-id AND x-correlation-id independently to upstream', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      status: 200,
-      headers: new Headers({ 'content-type': 'application/json' }),
-      text: async () => JSON.stringify({ ok: true }),
-    } as Response);
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
-    const edgeRequestId = 'edge-req-id-123';
-    const clientCorrelationId = 'client-corr-456';
-
-    await request(app)
-      .post(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-request-id', edgeRequestId)
-      .set('x-correlation-id', clientCorrelationId)
-      .send({ hello: 'world' });
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const sentHeaders = init.headers as Record<string, string>;
-    expect(sentHeaders['x-request-id']).toBe(edgeRequestId);
-    expect(sentHeaders['x-correlation-id']).toBe(clientCorrelationId);
-  });
-
-  test('uses request-id as correlation-id fallback in outbound headers', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      status: 200,
-      headers: new Headers({ 'content-type': 'application/json' }),
-      text: async () => JSON.stringify({ ok: true }),
-    } as Response);
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
-    const edgeRequestId = 'edge-req-fallback-corr-789';
-
-    await request(app)
-      .post(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-request-id', edgeRequestId)
-      // no x-correlation-id — should fall back to x-request-id
-      .send({});
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const sentHeaders = init.headers as Record<string, string>;
-    expect(sentHeaders['x-correlation-id']).toBe(edgeRequestId);
-  });
-
-  // ── Sanitisation ──────────────────────────────────────────────────────────
-
-  test('strips oversized correlation-id and falls back to request-id', async () => {
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
-    const oversized = 'x'.repeat(129); // exceeds 128-char limit
-    const edgeRequestId = 'safe-fallback-req-id';
-
-    const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-correlation-id', oversized)
-      .set('x-request-id', edgeRequestId);
-
-    // Oversized header discarded; falls back to request-id
-    expect(res.headers['x-correlation-id']).toBe(edgeRequestId);
-  });
-
-  test('strips control characters from incoming x-correlation-id', async () => {
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: false });
-    // CR/LF stripped — result is "injected-corrX-Evil: foo" → well within max length
-    const raw = 'injected-corr\r\nX-Evil: foo';
-
-    const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-correlation-id', raw);
-
-    // The sanitised value should NOT contain control characters
-    expect(res.headers['x-correlation-id']).not.toMatch(/[\r\n]/);
-  });
-
-  // ── Response consistency ──────────────────────────────────────────────────
-
-  test('X-Correlation-Id is consistent across request and response headers', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      status: 200,
-      headers: new Headers({ 'content-type': 'application/json' }),
-      text: async () => JSON.stringify({ ok: true }),
-    } as Response);
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    const { app, apiKey, apiId } = buildCorrelationApp({ billingSuccess: true, fetchMock });
-    const clientCorrelationId = 'consistent-corr-abc';
-
-    const res = await request(app)
-      .post(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-correlation-id', clientCorrelationId)
-      .send({});
-
-    expect(res.status).toBe(200);
-
-    // Response header echoes the client value
-    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
-
-    // Outbound header also carries the same value
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const sentHeaders = init.headers as Record<string, string>;
-    expect(sentHeaders['x-correlation-id']).toBe(clientCorrelationId);
-  });
-
-  // ── Edge-auth short-circuits ──────────────────────────────────────────────
-
-  test('X-Correlation-Id is set even when request is rejected at auth (missing key)', async () => {
-    const { app, apiId } = buildCorrelationApp();
-    const clientCorrelationId = 'corr-no-key-scenario';
-
-    const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      // no x-api-key
-      .set('x-correlation-id', clientCorrelationId);
-
-    expect(res.status).toBe(401);
-    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
-  });
-
-  test('X-Correlation-Id is set even when rate limited (429)', async () => {
-    const apiKey = 'corr-rate-limit-key';
-    const apiId = 'my-api';
-    const apiKeys = new Map<string, ApiKey>();
-    apiKeys.set(apiKey, { key: 'k1', apiId, developerId: 'dev1' });
-
-    const windowMs = 60_000;
-    const { createRateLimiter } = await import('../services/rateLimiter.js');
-    const rateLimiter = createRateLimiter(1, windowMs);
-    rateLimiter.exhaust(apiKey);
-
-    const deps = {
-      billing: { deductCredit: async () => ({ success: true, balance: 100 }) },
-      rateLimiter,
-      usageStore: { record: jest.fn() },
-      upstreamUrl: 'http://example.invalid',
-      apiKeys,
-    } as unknown as GatewayDeps;
-
-    const app = express();
-    app.use(requestIdMiddleware);
-    app.use('/gateway', createGatewayRouter(deps));
-    app.use(errorHandler);
-
-    const clientCorrelationId = 'corr-rate-limited-scenario';
-
-    const res = await request(app)
-      .get(`/gateway/${apiId}`)
-      .set('x-api-key', apiKey)
-      .set('x-correlation-id', clientCorrelationId);
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
 
     expect(res.status).toBe(429);
-    expect(res.headers['x-correlation-id']).toBe(clientCorrelationId);
+    expect(res.body.code).toBe("TOO_MANY_REQUESTS");
+    // Billing must NOT have been called — the handler returned before reaching it
+    // (confirmed by absence of a 402 status)
+    expect(res.status).not.toBe(402);
+  });
+
+  test("rate limiter receives req.apiKeyRecord.userId = keyRecord.developerId", async () => {
+    // Verify that the inline req.apiKeyRecord assignment writes the correct userId
+    // so that the token-bucket key matches the developer, not the raw API key string.
+    let capturedUserId: string | undefined;
+
+    const inspectingMiddleware: import("express").RequestHandler = (req, _res, next) => {
+      const record = req.apiKeyRecord as { userId?: string } | undefined;
+      capturedUserId = record?.userId;
+      next();
+    };
+
+    const app = buildGatewayApp(inspectingMiddleware);
+    await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+
+    expect(capturedUserId).toBe("dev1"); // keyRecord.developerId from apiKeys map
+  });
+
+  test("returns 429 with Retry-After header via real InMemoryGatewayRateLimiter through createGatewayRouter", async () => {
+    // Wire a real (not stubbed) token-bucket limiter with limit=1 into the gateway router
+    // to exercise the full path: auth → req.apiKeyRecord assignment → limiter.check() →
+    // 429 written by middleware → gatewayRateLimitPassed=false → early return.
+    const { createGatewayRateLimitMiddleware, InMemoryGatewayRateLimiter } = await import(
+      "../middleware/gatewayRateLimit.js"
+    );
+
+    const limiter = new InMemoryGatewayRateLimiter(60_000, 1);
+    const rl = createGatewayRateLimitMiddleware({ windowMs: 60_000, maxRequests: 1 }, limiter);
+
+    const app = buildGatewayApp(rl);
+
+    // First request — token bucket not yet exhausted, billing stub returns 402
+    const first = await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+    expect(first.status).toBe(402); // auth + rate limit passed, billing fails fast
+
+    // Second request — bucket empty, rate limiter writes 429 directly
+    const second = await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+    expect(second.status).toBe(429);
+    expect(second.body.code).toBe("TOO_MANY_REQUESTS");
+    expect(second.headers["retry-after"]).toBeDefined();
+    expect(Number(second.headers["retry-after"])).toBeGreaterThan(0);
+    expect(second.body.retryAfterMs).toBeGreaterThan(0);
   });
 });

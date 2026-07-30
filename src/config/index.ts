@@ -156,6 +156,11 @@ export const config = {
     maxRequests: env.REST_RATE_LIMIT_MAX_REQUESTS,
   },
 
+  gatewayRateLimit: {
+    windowMs: env.GATEWAY_RATE_LIMIT_WINDOW_MS,
+    maxRequests: env.GATEWAY_RATE_LIMIT_MAX_REQUESTS,
+  },
+
   webhookRateLimit: {
     windowMs: env.WEBHOOK_RATE_LIMIT_WINDOW_MS ?? env.REST_RATE_LIMIT_WINDOW_MS,
     maxRequests:
