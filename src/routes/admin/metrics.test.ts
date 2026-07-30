@@ -36,6 +36,120 @@ function buildApp(developerSemaphore: DeveloperSemaphore) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/admin/metrics — per-developer concurrency stats overview
+// ---------------------------------------------------------------------------
+
+describe('GET /api/admin/metrics', () => {
+  let developerSemaphore: DeveloperSemaphore;
+
+  beforeEach(() => {
+    developerSemaphore = new DeveloperSemaphore(5, 1000);
+  });
+
+  afterEach(() => {
+    developerSemaphore.clear();
+  });
+
+  it('returns empty stats when no developers are active', async () => {
+    const app = buildApp(developerSemaphore);
+
+    const res = await request(app)
+      .get('/api/admin/metrics')
+      .set('x-admin-api-key', ADMIN_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      totalActive: 0,
+      activeDeveloperCount: 0,
+      perDeveloper: [],
+      campaign: 'GrantFox FWC26',
+    });
+    expect(res.body.data.maxConcurrencyPerDeveloper).toBe(5);
+  });
+
+  it('returns per-developer stats with correct utilization', async () => {
+    const app = buildApp(developerSemaphore);
+
+    await developerSemaphore.withSlot('dev_abc', async () => {
+      await developerSemaphore.withSlot('dev_abc', async () => {
+        await developerSemaphore.withSlot('dev_def', async () => {
+          const res = await request(app)
+            .get('/api/admin/metrics')
+            .set('x-admin-api-key', ADMIN_KEY);
+
+          expect(res.status).toBe(200);
+          expect(res.body.data.totalActive).toBe(3);
+          expect(res.body.data.activeDeveloperCount).toBe(2);
+          expect(res.body.data.perDeveloper).toHaveLength(2);
+          expect(res.body.data.perDeveloper[0]).toMatchObject({
+            developerId: 'dev_abc',
+            activeCount: 2,
+            atLimit: false,
+            utilizationPercent: 40,
+          });
+          expect(res.body.data.perDeveloper[1]).toMatchObject({
+            developerId: 'dev_def',
+            activeCount: 1,
+            atLimit: false,
+            utilizationPercent: 20,
+          });
+        });
+      });
+    });
+  });
+
+  it('reports atLimit and 100% utilization when exactly at the ceiling', async () => {
+    const sem = new DeveloperSemaphore(1, 1000);
+    const app = buildApp(sem);
+
+    await sem.withSlot('dev_maxed', async () => {
+      const res = await request(app)
+        .get('/api/admin/metrics')
+        .set('x-admin-api-key', ADMIN_KEY);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.perDeveloper[0]).toMatchObject({
+        developerId: 'dev_maxed',
+        activeCount: 1,
+        atLimit: true,
+        utilizationPercent: 100,
+      });
+    });
+    sem.clear();
+  });
+
+  it('sorts per-developer results by active count descending', async () => {
+    const app = buildApp(developerSemaphore);
+
+    await developerSemaphore.withSlot('dev_light', async () => {
+      await developerSemaphore.withSlot('dev_heavy', async () => {
+        await developerSemaphore.withSlot('dev_heavy', async () => {
+          await developerSemaphore.withSlot('dev_heavy', async () => {
+            const res = await request(app)
+              .get('/api/admin/metrics')
+              .set('x-admin-api-key', ADMIN_KEY);
+
+            expect(res.status).toBe(200);
+            expect(res.body.data.perDeveloper[0].developerId).toBe('dev_heavy');
+            expect(res.body.data.perDeveloper[0].activeCount).toBe(3);
+            expect(res.body.data.perDeveloper[1].developerId).toBe('dev_light');
+            expect(res.body.data.perDeveloper[1].activeCount).toBe(1);
+          });
+        });
+      });
+    });
+  });
+
+  it('requires admin authentication — 401 without credentials', async () => {
+    const app = buildApp(developerSemaphore);
+
+    const res = await request(app).get('/api/admin/metrics');
+
+    expect(res.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/admin/metrics/concurrency — collection endpoint
 // ---------------------------------------------------------------------------
 
