@@ -1194,71 +1194,82 @@ paths:
   /api/webhooks:
     post:
       summary: Register a webhook
-      description: Registers a new webhook for the authenticated developer.
+      description: >
+        Registers a new webhook endpoint for a developer. The `events` array
+        must be non-empty and contain only supported event types. The optional
+        `secret` is used for HMAC-SHA256 signing; if omitted the server
+        generates one. The optional `retryPolicy` constrains reattempt
+        behaviour (0–10 retries, 100–60 000 ms base delay).
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/WebhookRegisterRequest"
             examples:
-              registerWebhook:
-                summary: Register a webhook for API and balance events
+              registerFull:
+                summary: Register with all optional fields
                 value:
-                  developerId: "dev-123"
-                  url: "https://example.com/webhook"
+                  developerId: dev-123
+                  url: "https://hooks.example.com/callora"
                   events:
-                    - "new_api_call"
-                    - "low_balance_alert"
-                  secret: "my_super_secret"
+                    - new_api_call
+                    - low_balance_alert
+                  secret: s3cr3t-hmac-key
                   retryPolicy:
                     maxRetries: 3
-                    initialIntervalMs: 1000
-                    backoffFactor: 2.0
+                    baseDelayMs: 1000
+              registerMinimal:
+                summary: Register with required fields only
+                value:
+                  developerId: dev-456
+                  url: "https://hooks.example.com/minimal"
+                  events:
+                    - settlement_completed
       responses:
         "201":
-          description: Webhook registered successfully
+          description: Webhook registered successfully.
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/WebhookRegisterResponse"
               examples:
                 registered:
-                  summary: Successfully registered
+                  summary: Registration confirmed
                   value:
                     message: Webhook registered successfully.
-                    developerId: "dev-123"
-                    url: "https://example.com/webhook"
+                    developerId: dev-123
+                    url: "https://hooks.example.com/callora"
                     events:
-                      - "new_api_call"
-                      - "low_balance_alert"
+                      - new_api_call
+                      - low_balance_alert
         "400":
-          description: Bad request — invalid webhook registration
+          description: Request body failed validation.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardErrorEnvelope"
               examples:
                 missingFields:
-                  summary: Missing required fields
+                  summary: developerId, url, or events missing
                   value:
                     success: false
                     error:
                       code: BAD_REQUEST
-                      message: developerId, url, and a non-empty events array are required.
+                      message: "developerId, url, and a non-empty events array are required."
                     requestId: req-webhook-post-400-missing
                     timestamp: "2026-07-27T09:15:00.000Z"
                 invalidEventTypes:
-                  summary: Invalid event types
+                  summary: Event type not in the supported set
                   value:
                     success: false
                     error:
                       code: BAD_REQUEST
-                      message: Invalid event types: invalid_event. Valid: new_api_call, settlement_completed, low_balance_alert
+                      message: "Invalid event types: invalid_event. Valid: new_api_call, settlement_completed, low_balance_alert"
                     requestId: req-webhook-post-400-events
                     timestamp: "2026-07-27T09:16:00.000Z"
                 invalidUrl:
-                  summary: Invalid webhook URL
+                  summary: URL failed reachability validation
                   value:
                     success: false
                     error:
@@ -1267,7 +1278,7 @@ paths:
                     requestId: req-webhook-post-400-url
                     timestamp: "2026-07-27T09:17:00.000Z"
                 invalidRetryPolicy:
-                  summary: Invalid retry policy
+                  summary: Retry policy values out of range
                   value:
                     success: false
                     error:
@@ -1276,91 +1287,147 @@ paths:
                     requestId: req-webhook-post-400-retry
                     timestamp: "2026-07-27T09:18:00.000Z"
   /api/webhooks/{developerId}:
+    parameters:
+      - name: developerId
+        in: path
+        required: true
+        description: >
+          Developer identifier — 3–128 characters, letters/numbers/underscores/hyphens.
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        examples:
+          valid:
+            summary: Valid developer ID
+            value: dev-123
     get:
-      summary: Get webhook config
-      description: Returns the webhook configuration for the given developer.
+      summary: Get webhook configuration
+      description: >
+        Returns the webhook configuration for the given developer. Signing
+        secrets are never returned; the secret fields are omitted from the
+        response.
       responses:
         "200":
-          description: Webhook configuration
+          description: Webhook configuration returned successfully.
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/WebhookConfig"
               examples:
                 found:
-                  summary: Webhook config
+                  summary: Webhook configuration with retry policy
                   value:
-                    developerId: "dev-123"
-                    url: "https://example.com/webhook"
+                    developerId: dev-123
+                    url: "https://hooks.example.com/callora"
                     events:
-                      - "new_api_call"
-                      - "low_balance_alert"
+                      - new_api_call
+                      - low_balance_alert
                     retryPolicy:
                       maxRetries: 3
-                      initialIntervalMs: 1000
-                      backoffFactor: 2.0
+                      baseDelayMs: 1000
+                    createdAt: "2026-07-27T09:00:00.000Z"
+                foundNoRetryPolicy:
+                  summary: Webhook configuration without a custom retry policy
+                  value:
+                    developerId: dev-456
+                    url: "https://hooks.example.com/minimal"
+                    events:
+                      - settlement_completed
+                    createdAt: "2026-07-27T09:05:00.000Z"
         "404":
-          description: Webhook not found
-          content:
-            application/json:
-              schema:
-                type: object
-              examples:
-                notFound:
-                  summary: No webhook registered
-                  value:
-                    message: "No webhook registered for this developer."
-  /api/webhooks/{developerId}:
-    delete:
-      summary: Remove webhook
-      description: >
-        Removes the webhook configuration for the given developer. The webhook
-        will no longer receive events. This action is idempotent — calling
-        delete on a non-existent webhook still returns success.
-      responses:
-        "200":
-          description: Webhook removed successfully
-          content:
-            application/json:
-              schema:
-                type: object
-              examples:
-                removed:
-                  summary: Successfully removed
-                  value:
-                    message: Webhook removed.
-  /api/webhooks/{developerId}/rotate-secret:
-    post:
-      summary: Rotate webhook signing secret
-      description: >
-        Rotates the HMAC signing secret for the given developer's webhook. The
-        previous secret remains valid for a grace period (configurable via
-        WEBHOOK_SECRET_ROTATION_GRACE_MS) so consumers can transition without
-        delivery gaps.
-      responses:
-        "200":
-          description: Secret rotated successfully
-          content:
-            application/json:
-              schema:
-                type: object
-              examples:
-                rotated:
-                  summary: Successfully rotated
-                  value:
-                    message: Webhook secret rotated successfully.
-                    developerId: "dev-123"
-                    secret: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
-                    previous_expires_at: "2026-07-27T10:15:00.000Z"
-        "404":
-          description: Webhook not found
+          description: No webhook registered for this developer.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardErrorEnvelope"
               examples:
                 notFound:
-                  summary: No webhook registered
+                  summary: Developer has no registered webhook
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: No webhook registered for this developer.
+                    requestId: req-webhook-get-404
+                    timestamp: "2026-07-27T09:06:00.000Z"
+    delete:
+      summary: Remove webhook
+      description: >
+        Removes the webhook configuration for the given developer. The webhook
+        will no longer receive events after deletion.
+      responses:
+        "200":
+          description: Webhook removed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDeleteResponse"
+              examples:
+                removed:
+                  summary: Webhook deleted
+                  value:
+                    message: Webhook removed.
+        "404":
+          description: No webhook registered for this developer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: Developer has no registered webhook
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: No webhook registered for this developer.
+                    requestId: req-webhook-delete-404
+                    timestamp: "2026-07-27T09:07:00.000Z"
+  /api/webhooks/{developerId}/rotate-secret:
+    post:
+      summary: Rotate webhook signing secret
+      description: >
+        Rotates the HMAC-SHA256 signing secret for the developer's webhook. The
+        previous secret remains valid for a configurable grace period
+        (WEBHOOK_SECRET_ROTATION_GRACE_MS) so consumers can transition without
+        delivery gaps. The new secret is returned once and never again — store
+        it immediately.
+      parameters:
+        - name: developerId
+          in: path
+          required: true
+          description: Developer identifier.
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+          examples:
+            valid:
+              summary: Valid developer ID
+              value: dev-123
+      responses:
+        "200":
+          description: Secret rotated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookRotateSecretResponse"
+              examples:
+                rotated:
+                  summary: New secret and grace-period expiry returned
+                  value:
+                    message: Webhook secret rotated successfully.
+                    developerId: dev-123
+                    secret: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+                    previous_expires_at: "2026-07-27T10:15:00.000Z"
+        "404":
+          description: No webhook registered for this developer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: Developer has no registered webhook
                   value:
                     success: false
                     error:
@@ -1372,68 +1439,94 @@ paths:
     patch:
       summary: Update webhook retry policy
       description: >
-        Updates the per-subscription retry policy for the given developer's
-        webhook. Only the retryPolicy field is replaced; all other settings
-        remain unchanged.
+        Replaces the retry policy for the developer's webhook subscription.
+        Only `retryPolicy` is updated; all other settings remain unchanged. At
+        least one of `maxRetries` or `baseDelayMs` must be provided.
+      parameters:
+        - name: developerId
+          in: path
+          required: true
+          description: Developer identifier.
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+          examples:
+            valid:
+              summary: Valid developer ID
+              value: dev-123
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/WebhookRetryPolicyUpdateRequest"
             examples:
-              updateRetryPolicy:
-                summary: Set custom retry policy
+              setCustomPolicy:
+                summary: Apply a custom retry policy
                 value:
                   retryPolicy:
                     maxRetries: 5
                     baseDelayMs: 2000
+              setMaxRetriesOnly:
+                summary: Change only the retry count
+                value:
+                  retryPolicy:
+                    maxRetries: 10
       responses:
         "200":
-          description: Retry policy updated successfully
+          description: Retry policy updated successfully.
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/WebhookRetryPolicyUpdateResponse"
               examples:
                 updated:
-                  summary: Successfully updated
+                  summary: Full webhook config with the new retry policy
                   value:
                     message: Webhook retry policy updated successfully.
-                    developerId: "dev-123"
-                    url: "https://example.com/webhook"
+                    developerId: dev-123
+                    url: "https://hooks.example.com/callora"
                     events:
-                      - "new_api_call"
-                      - "low_balance_alert"
+                      - new_api_call
+                      - low_balance_alert
                     retryPolicy:
                       maxRetries: 5
                       baseDelayMs: 2000
                     createdAt: "2026-07-27T09:00:00.000Z"
         "400":
-          description: Bad request — invalid retry policy
+          description: Retry policy values are out of range or missing.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardErrorEnvelope"
               examples:
-                invalidRetryPolicy:
-                  summary: Invalid retry policy
+                maxRetriesOutOfRange:
+                  summary: maxRetries exceeds the allowed maximum
                   value:
                     success: false
                     error:
                       code: BAD_REQUEST
                       message: retryPolicy.maxRetries must be between 0 and 10
-                    requestId: req-webhook-retry-patch-400
+                    requestId: req-webhook-retry-patch-400-range
                     timestamp: "2026-07-27T09:21:00.000Z"
+                emptyRetryPolicy:
+                  summary: retryPolicy object provided but empty
+                  value:
+                    success: false
+                    error:
+                      code: BAD_REQUEST
+                      message: retryPolicy must include maxRetries or baseDelayMs when provided
+                    requestId: req-webhook-retry-patch-400-empty
+                    timestamp: "2026-07-27T09:21:30.000Z"
         "404":
-          description: Webhook not found
+          description: No webhook registered for this developer.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardErrorEnvelope"
               examples:
                 notFound:
-                  summary: No webhook registered
+                  summary: Developer has no registered webhook
                   value:
                     success: false
                     error:
@@ -1443,65 +1536,119 @@ paths:
                     timestamp: "2026-07-27T09:22:00.000Z"
   /api/webhooks/deliver/{developerId}:
     post:
-      summary: Deliver a webhook event
+      summary: Deliver a signed webhook event
       description: >
-        Receives a signed webhook event from an external system. The request
-        body must include an HMAC-SHA256 signature in the
-        X-Callora-Signature-256 header and a timestamp in the
-        X-Callora-Timestamp header. The signature is verified before the
-        payload is processed.
+        Receives a signed webhook event payload from an external system. The
+        request must include an HMAC-SHA256 signature in the
+        `X-Callora-Signature-256` header and a Unix timestamp in the
+        `X-Callora-Timestamp` header. The signature is verified against all
+        active secrets (current and grace-period previous) before the payload
+        is processed.
+      parameters:
+        - name: developerId
+          in: path
+          required: true
+          description: Developer identifier.
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+          examples:
+            valid:
+              summary: Valid developer ID
+              value: dev-123
+        - name: X-Callora-Signature-256
+          in: header
+          required: true
+          description: >
+            HMAC-SHA256 signature of the raw request body, prefixed with
+            `sha256=`. Computed as `sha256=<hex(hmac-sha256(secret, body))>`.
+          schema:
+            type: string
+          examples:
+            signature:
+              summary: Example signature header
+              value: "sha256=abc123def456..."
+        - name: X-Callora-Timestamp
+          in: header
+          required: true
+          description: Unix timestamp (seconds) of when the event was sent.
+          schema:
+            type: string
+          examples:
+            ts:
+              summary: Example timestamp header
+              value: "1722074400"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/WebhookDeliveryPayload"
             examples:
-              deliverEvent:
+              newApiCall:
                 summary: Deliver a new_api_call event
                 value:
                   event: new_api_call
                   timestamp: "2026-07-27T09:30:00.000Z"
-                  developerId: "dev-123"
+                  developerId: dev-123
                   data:
-                    apiId: "api-456"
+                    apiId: api-456
                     endpoint: /v1/checkout
                     method: POST
                     statusCode: 200
                     latencyMs: 145
                     creditsUsed: 10
+              settlementCompleted:
+                summary: Deliver a settlement_completed event
+                value:
+                  event: settlement_completed
+                  timestamp: "2026-07-27T09:35:00.000Z"
+                  developerId: dev-123
+                  data:
+                    settlementId: stl-789
+                    amountCredits: 500
+                    currency: XLM
+              lowBalanceAlert:
+                summary: Deliver a low_balance_alert event
+                value:
+                  event: low_balance_alert
+                  timestamp: "2026-07-27T09:40:00.000Z"
+                  developerId: dev-123
+                  data:
+                    currentBalance: 50
+                    thresholdCredits: 100
       responses:
         "200":
-          description: Webhook delivery accepted
+          description: Webhook delivery accepted and payload echoed.
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/WebhookDeliveryResponse"
               examples:
                 accepted:
-                  summary: Delivery accepted
+                  summary: Delivery accepted — payload echoed back
                   value:
                     message: Webhook delivery accepted.
                     body:
                       event: new_api_call
                       timestamp: "2026-07-27T09:30:00.000Z"
-                      developerId: "dev-123"
+                      developerId: dev-123
                       data:
-                        apiId: "api-456"
+                        apiId: api-456
                         endpoint: /v1/checkout
                         method: POST
                         statusCode: 200
                         latencyMs: 145
                         creditsUsed: 10
         "400":
-          description: Bad request — invalid payload
+          description: Signature headers are missing or the payload is malformed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardErrorEnvelope"
               examples:
                 missingSignature:
-                  summary: Missing signature headers
+                  summary: X-Callora-Signature-256 or X-Callora-Timestamp header absent
                   value:
                     success: false
                     error:
@@ -1510,14 +1657,14 @@ paths:
                     requestId: req-webhook-deliver-400-sig
                     timestamp: "2026-07-27T09:31:00.000Z"
         "401":
-          description: Invalid webhook signature
+          description: HMAC signature verification failed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardErrorEnvelope"
               examples:
                 invalidSignature:
-                  summary: Signature verification failed
+                  summary: Signature does not match any active secret
                   value:
                     success: false
                     error:
@@ -1526,14 +1673,14 @@ paths:
                     requestId: req-webhook-deliver-401-invalid
                     timestamp: "2026-07-27T09:32:00.000Z"
         "404":
-          description: Webhook not found
+          description: No webhook registered for this developer.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardErrorEnvelope"
               examples:
                 notFound:
-                  summary: No webhook registered
+                  summary: Developer has no registered webhook
                   value:
                     success: false
                     error:
@@ -1759,143 +1906,211 @@ components:
           type: [string, "null"]
           maxLength: 1000
     # ---------------------------------------------------------------------------
-    # Tenant schemas
+    # Webhook schemas
     # ---------------------------------------------------------------------------
-    TenantPlan:
+    WebhookEventType:
       type: string
-      enum: [starter, growth, enterprise]
-      description: Billing plan for the tenant.
-    TenantMetadata:
+      enum:
+        - new_api_call
+        - settlement_completed
+        - low_balance_alert
+        - usage_event.created
+      description: >
+        Supported webhook event types. Subscribe to one or more in the
+        `events` array when registering.
+    WebhookRetryPolicy:
       type: object
       description: >
-        Arbitrary key/value pairs attached to the tenant. Keys must be 1–64
-        characters; values may be strings (≤ 256 chars), finite numbers, or
-        booleans. Maximum 20 keys.
-      maxProperties: 20
-      additionalProperties:
-        oneOf:
-          - type: string
-            maxLength: 256
-          - type: number
-          - type: boolean
-    TenantRecord:
-      type: object
-      required: [id, name, slug, plan, createdBy, createdAt, updatedAt]
+        Controls reattempt behaviour when the target URL does not return 2xx.
+        At least one of `maxRetries` or `baseDelayMs` must be provided.
+      minProperties: 1
       properties:
-        id:
-          type: string
-          description: Tenant identifier prefixed with `ten_`.
-          example: ten_a1b2c3d4-e5f6-7890-abcd-ef1234567890
-        name:
-          type: string
-          minLength: 1
-          maxLength: 120
-          description: Human-readable tenant name (leading/trailing whitespace is trimmed).
-        slug:
-          type: string
-          pattern: "^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$"
+        maxRetries:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: Maximum number of delivery attempts after the initial failure (0–10).
+        baseDelayMs:
+          type: integer
+          minimum: 100
+          maximum: 60000
           description: >
-            URL-safe lowercase identifier derived from the name when omitted.
-            3–63 characters; letters, numbers, and internal hyphens only.
-        contactEmail:
+            Base delay in milliseconds before the first retry. Subsequent
+            retries use exponential back-off up to this ceiling (100–60 000 ms).
+      additionalProperties: false
+    WebhookRegisterRequest:
+      type: object
+      required: [developerId, url, events]
+      description: >
+        Request body for POST /api/webhooks. The `events` array must be
+        non-empty and contain only supported WebhookEventType values. The
+        optional `secret` seeds the HMAC-SHA256 signing key; when omitted the
+        server generates a 64-character hex secret automatically.
+      properties:
+        developerId:
           type: string
-          format: email
-          maxLength: 254
-          description: Optional primary contact address for the tenant.
-        plan:
-          $ref: "#/components/schemas/TenantPlan"
-        metadata:
-          $ref: "#/components/schemas/TenantMetadata"
-        createdBy:
+          pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+          description: Developer identifier (3–128 chars, alphanumeric/underscore/hyphen).
+        url:
           type: string
-          description: ID of the user who created the tenant.
+          format: uri
+          maxLength: 2048
+          description: >
+            Absolute HTTPS URL that will receive event POST requests. The URL
+            is validated for reachability at registration time.
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+          minItems: 1
+          description: One or more event types to subscribe to.
+        secret:
+          type: string
+          minLength: 8
+          maxLength: 256
+          description: >
+            Optional HMAC signing secret (8–256 chars). If omitted the server
+            generates one automatically.
+        retryPolicy:
+          $ref: "#/components/schemas/WebhookRetryPolicy"
+      additionalProperties: false
+    WebhookRegisterResponse:
+      type: object
+      required: [message, developerId, url, events]
+      description: Response body for a successful POST /api/webhooks (201).
+      properties:
+        message:
+          type: string
+          example: Webhook registered successfully.
+        developerId:
+          type: string
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+    WebhookConfig:
+      type: object
+      required: [developerId, url, events]
+      description: >
+        Webhook configuration returned by GET /api/webhooks/{developerId}.
+        Signing secrets are never included in this response.
+      properties:
+        developerId:
+          type: string
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEventType"
+        retryPolicy:
+          $ref: "#/components/schemas/WebhookRetryPolicy"
         createdAt:
           type: string
           format: date-time
-        updatedAt:
+    WebhookDeleteResponse:
+      type: object
+      required: [message]
+      description: Response body for a successful DELETE /api/webhooks/{developerId}.
+      properties:
+        message:
+          type: string
+          example: Webhook removed.
+    WebhookRotateSecretResponse:
+      type: object
+      required: [message, developerId, secret]
+      description: >
+        Response body for a successful POST /api/webhooks/{developerId}/rotate-secret.
+        The new secret is returned once only — store it immediately.
+      properties:
+        message:
+          type: string
+          example: Webhook secret rotated successfully.
+        developerId:
+          type: string
+        secret:
+          type: string
+          description: The new HMAC-SHA256 signing secret (64 hex chars).
+          example: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+        previous_expires_at:
           type: string
           format: date-time
-    TenantResponse:
+          description: >
+            UTC timestamp after which the previous secret is no longer valid.
+            Consumers should rotate to the new secret before this time.
+    WebhookRetryPolicyUpdateRequest:
       type: object
-      required: [success, data, requestId, timestamp]
-      description: Success envelope wrapping a single TenantRecord.
+      description: >
+        Request body for PATCH /api/webhooks/{developerId}/retry-policy. The
+        `retryPolicy` object must include at least one field.
       properties:
-        success:
-          type: boolean
-          enum: [true]
-        data:
-          $ref: "#/components/schemas/TenantRecord"
-        requestId:
-          type: string
-        timestamp:
-          type: string
-          format: date-time
-    TenantListResponse:
+        retryPolicy:
+          $ref: "#/components/schemas/WebhookRetryPolicy"
+      additionalProperties: false
+    WebhookRetryPolicyUpdateResponse:
       type: object
-      required: [success, data, requestId, timestamp]
-      description: Success envelope wrapping an array of TenantRecords.
+      required: [message, developerId, url, events]
+      description: >
+        Response body for a successful PATCH /api/webhooks/{developerId}/retry-policy.
+        Returns the full webhook config with the updated retry policy applied.
       properties:
-        success:
-          type: boolean
-          enum: [true]
-        data:
+        message:
+          type: string
+          example: Webhook retry policy updated successfully.
+        developerId:
+          type: string
+        url:
+          type: string
+          format: uri
+        events:
           type: array
           items:
-            $ref: "#/components/schemas/TenantRecord"
-        requestId:
+            $ref: "#/components/schemas/WebhookEventType"
+        retryPolicy:
+          $ref: "#/components/schemas/WebhookRetryPolicy"
+        createdAt:
           type: string
+          format: date-time
+    WebhookDeliveryPayload:
+      type: object
+      required: [event, timestamp, developerId, data]
+      description: >
+        Signed event payload for POST /api/webhooks/deliver/{developerId}.
+        The request must carry an `X-Callora-Signature-256` header (HMAC-SHA256
+        over the raw body) and an `X-Callora-Timestamp` header (Unix seconds).
+      properties:
+        event:
+          $ref: "#/components/schemas/WebhookEventType"
         timestamp:
           type: string
           format: date-time
-    TenantCreateRequest:
-      type: object
-      required: [name]
-      description: >
-        Zod-validated at the route boundary using `createTenantSchema`. The
-        schema is `.strict()` — any unrecognised key triggers a 400 with
-        code UNRECOGNIZED_KEYS in the details array.
-      properties:
-        name:
+          description: ISO-8601 datetime when the event was emitted.
+        developerId:
           type: string
-          minLength: 1
-          maxLength: 120
-          description: Tenant name. Leading/trailing whitespace is trimmed by the validator.
-        slug:
-          type: string
-          pattern: "^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$"
+          description: Developer for whom this event is intended.
+        data:
+          type: object
+          additionalProperties: true
           description: >
-            Optional URL-safe slug. Converted to lowercase by the validator.
-            Auto-derived from `name` when omitted.
-        contactEmail:
-          type: string
-          format: email
-          maxLength: 254
-        plan:
-          $ref: "#/components/schemas/TenantPlan"
-        metadata:
-          $ref: "#/components/schemas/TenantMetadata"
+            Event-specific payload. Keys and value types depend on the event
+            type (e.g. `apiId`, `latencyMs` for `new_api_call`).
       additionalProperties: false
-    TenantUpdateRequest:
+    WebhookDeliveryResponse:
       type: object
+      required: [message, body]
       description: >
-        Zod-validated at the route boundary using `updateTenantSchema`. The
-        schema is `.strict()` — unrecognised keys (e.g. `slug`) are rejected.
-        At least one field must be present; an empty body triggers a 400.
-      minProperties: 1
+        Response body for a successful POST /api/webhooks/deliver/{developerId}.
+        The received payload is echoed back for debugging.
       properties:
-        name:
+        message:
           type: string
-          minLength: 1
-          maxLength: 120
-        contactEmail:
-          type: string
-          format: email
-          maxLength: 254
-        plan:
-          $ref: "#/components/schemas/TenantPlan"
-        metadata:
-          $ref: "#/components/schemas/TenantMetadata"
-      additionalProperties: false
+          example: Webhook delivery accepted.
+        body:
+          $ref: "#/components/schemas/WebhookDeliveryPayload"
     # Distinct from the pre-existing flat ErrorResponse — this matches the
     # actual envelope produced by errorHandler.ts / buildErrorEnvelope():
     # { success: false, error: { code, message, details? }, requestId, timestamp }
