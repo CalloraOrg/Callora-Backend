@@ -830,6 +830,367 @@ paths:
                       message: Error definition 999 not found
                     requestId: req-errors-delete-404
                     timestamp: "2026-07-27T09:15:00.000Z"
+  /api/tenants:
+    get:
+      summary: List tenants
+      description: >
+        Returns all tenants visible to the authenticated user. Responses are
+        ETag-stamped so clients can use conditional GET (If-None-Match) to avoid
+        redundant transfers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: x-user-id
+          in: header
+          required: true
+          description: Authenticated user identifier (set by auth middleware).
+          schema:
+            type: string
+          examples:
+            developer:
+              summary: Authenticated developer
+              value: dev-1
+        - name: If-None-Match
+          in: header
+          required: false
+          description: >
+            Strong ETag from a prior response. Returns 304 if the tenant list
+            has not changed.
+          schema:
+            type: string
+          examples:
+            etag:
+              summary: Strong ETag from prior response
+              value: '"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"'
+      responses:
+        "200":
+          description: Tenant list retrieved successfully.
+          headers:
+            ETag:
+              description: Strong ETag of the current tenant list payload.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantListResponse"
+              examples:
+                withTenants:
+                  summary: Two tenants returned
+                  value:
+                    success: true
+                    data:
+                      - id: ten_a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                        name: GrantFox Ops
+                        slug: grantfox-ops
+                        contactEmail: ops@grantfox.test
+                        plan: growth
+                        metadata:
+                          campaign: fwc26
+                        createdBy: dev-1
+                        createdAt: "2026-07-28T00:00:00.000Z"
+                        updatedAt: "2026-07-28T00:00:00.000Z"
+                      - id: ten_b2c3d4e5-f6a7-8901-bcde-f12345678901
+                        name: GrantFox Stadium
+                        slug: grantfox-stadium
+                        plan: enterprise
+                        createdBy: dev-1
+                        createdAt: "2026-07-28T00:00:00.000Z"
+                        updatedAt: "2026-07-28T00:00:00.000Z"
+                    requestId: req-tenants-list-1
+                    timestamp: "2026-07-28T10:00:00.000Z"
+                empty:
+                  summary: No tenants exist yet
+                  value:
+                    success: true
+                    data: []
+                    requestId: req-tenants-list-2
+                    timestamp: "2026-07-28T10:01:00.000Z"
+        "304":
+          description: >
+            Tenant list has not changed since the ETag supplied in
+            If-None-Match.
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Unauthorized
+                    requestId: req-tenants-list-401
+                    timestamp: "2026-07-28T10:02:00.000Z"
+    post:
+      summary: Create a tenant
+      description: >
+        Creates a new tenant. The request body is Zod-validated at the route
+        boundary; unrecognised keys are rejected with a structured 400 error
+        envelope so clients receive per-field details without any internal
+        information leaking.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantCreateRequest"
+            examples:
+              createFull:
+                summary: Full tenant payload with optional fields
+                value:
+                  name: GrantFox Ops
+                  slug: grantfox-ops
+                  contactEmail: ops@grantfox.test
+                  plan: growth
+                  metadata:
+                    campaign: fwc26
+                    priority: 1
+                    active: true
+              createMinimal:
+                summary: Minimal tenant — only name is required
+                value:
+                  name: GrantFox Stadium
+      responses:
+        "201":
+          description: Tenant created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+              examples:
+                created:
+                  summary: Newly created tenant
+                  value:
+                    success: true
+                    data:
+                      id: ten_a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                      name: GrantFox Ops
+                      slug: grantfox-ops
+                      contactEmail: ops@grantfox.test
+                      plan: growth
+                      metadata:
+                        campaign: fwc26
+                        priority: 1
+                        active: true
+                      createdBy: dev-1
+                      createdAt: "2026-07-28T10:00:00.000Z"
+                      updatedAt: "2026-07-28T10:00:00.000Z"
+                    requestId: req-tenants-create-1
+                    timestamp: "2026-07-28T10:00:00.000Z"
+        "400":
+          description: >
+            Request body failed Zod validation. The error envelope includes a
+            per-field `details` array so clients can surface precise messages
+            without any server internals leaking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                missingName:
+                  summary: Required field missing
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed
+                      details:
+                        - field: body.name
+                          message: name is required
+                          code: INVALID_TYPE
+                    requestId: req-tenants-create-400-name
+                    timestamp: "2026-07-28T10:01:00.000Z"
+                invalidEmail:
+                  summary: Invalid contactEmail format
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed
+                      details:
+                        - field: body.contactEmail
+                          message: contactEmail must be a valid email address
+                          code: INVALID_STRING
+                    requestId: req-tenants-create-400-email
+                    timestamp: "2026-07-28T10:02:00.000Z"
+                unknownKey:
+                  summary: Unrecognised key rejected by strict schema
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed
+                      details:
+                        - field: body
+                          message: "Unrecognized key(s) in object: 'unsafeRole'"
+                          code: UNRECOGNIZED_KEYS
+                    requestId: req-tenants-create-400-unknown
+                    timestamp: "2026-07-28T10:03:00.000Z"
+                invalidPlan:
+                  summary: Plan value outside the allowed enum
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed
+                      details:
+                        - field: body.plan
+                          message: "Invalid option: expected one of 'starter' | 'growth' | 'enterprise'"
+                          code: INVALID_ENUM_VALUE
+                    requestId: req-tenants-create-400-plan
+                    timestamp: "2026-07-28T10:04:00.000Z"
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Unauthorized
+                    requestId: req-tenants-create-401
+                    timestamp: "2026-07-28T10:05:00.000Z"
+  /api/tenants/{tenantId}:
+    patch:
+      summary: Update a tenant
+      description: >
+        Partially updates an existing tenant. Both the route parameter and the
+        request body are Zod-validated; all validation errors are collected in a
+        single pass and returned together in the structured 400 envelope so the
+        client can fix all issues in one round-trip.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          description: >
+            Tenant identifier — 3–64 characters, letters/numbers/underscores/hyphens.
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$"
+          examples:
+            valid:
+              summary: Valid tenant ID
+              value: tenant_123
+            tooShort:
+              summary: ID too short — triggers 400
+              value: no
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantUpdateRequest"
+            examples:
+              updatePlan:
+                summary: Upgrade the plan
+                value:
+                  plan: enterprise
+              updateContactEmail:
+                summary: Update contact email only
+                value:
+                  contactEmail: stadium@grantfox.test
+              updateMultiple:
+                summary: Update name, plan, and metadata together
+                value:
+                  name: GrantFox Stadium Ops
+                  plan: enterprise
+                  metadata:
+                    campaign: fwc26-final
+      responses:
+        "200":
+          description: Tenant updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantResponse"
+              examples:
+                updated:
+                  summary: Updated tenant record
+                  value:
+                    success: true
+                    data:
+                      id: tenant_123
+                      name: GrantFox Stadium Ops
+                      slug: grantfox-stadium
+                      contactEmail: stadium@grantfox.test
+                      plan: enterprise
+                      metadata:
+                        campaign: fwc26-final
+                      createdBy: dev-1
+                      createdAt: "2026-07-28T00:00:00.000Z"
+                      updatedAt: "2026-07-28T11:00:00.000Z"
+                    requestId: req-tenants-update-1
+                    timestamp: "2026-07-28T11:00:00.000Z"
+        "400":
+          description: >
+            Route parameter or body failed Zod validation. All errors are
+            collected in one pass and returned in the `details` array.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                invalidParamAndEmptyBody:
+                  summary: Invalid tenantId param and empty body collected together
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed
+                      details:
+                        - field: body
+                          message: At least one tenant field must be provided
+                          code: CUSTOM
+                        - field: params.tenantId
+                          message: >-
+                            tenantId must be 3-64 characters using letters,
+                            numbers, underscores, or hyphens
+                          code: INVALID_STRING
+                    requestId: req-tenants-update-400
+                    timestamp: "2026-07-28T11:01:00.000Z"
+                unknownKey:
+                  summary: Unrecognised key in update body
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed
+                      details:
+                        - field: body
+                          message: "Unrecognized key(s) in object: 'slug'"
+                          code: UNRECOGNIZED_KEYS
+                    requestId: req-tenants-update-400-key
+                    timestamp: "2026-07-28T11:02:00.000Z"
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                unauthorized:
+                  summary: Missing or invalid authentication
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Unauthorized
+                    requestId: req-tenants-update-401
+                    timestamp: "2026-07-28T11:03:00.000Z"
   /api/webhooks:
     post:
       summary: Register a webhook
@@ -1397,6 +1758,144 @@ components:
         description:
           type: [string, "null"]
           maxLength: 1000
+    # ---------------------------------------------------------------------------
+    # Tenant schemas
+    # ---------------------------------------------------------------------------
+    TenantPlan:
+      type: string
+      enum: [starter, growth, enterprise]
+      description: Billing plan for the tenant.
+    TenantMetadata:
+      type: object
+      description: >
+        Arbitrary key/value pairs attached to the tenant. Keys must be 1–64
+        characters; values may be strings (≤ 256 chars), finite numbers, or
+        booleans. Maximum 20 keys.
+      maxProperties: 20
+      additionalProperties:
+        oneOf:
+          - type: string
+            maxLength: 256
+          - type: number
+          - type: boolean
+    TenantRecord:
+      type: object
+      required: [id, name, slug, plan, createdBy, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          description: Tenant identifier prefixed with `ten_`.
+          example: ten_a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Human-readable tenant name (leading/trailing whitespace is trimmed).
+        slug:
+          type: string
+          pattern: "^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$"
+          description: >
+            URL-safe lowercase identifier derived from the name when omitted.
+            3–63 characters; letters, numbers, and internal hyphens only.
+        contactEmail:
+          type: string
+          format: email
+          maxLength: 254
+          description: Optional primary contact address for the tenant.
+        plan:
+          $ref: "#/components/schemas/TenantPlan"
+        metadata:
+          $ref: "#/components/schemas/TenantMetadata"
+        createdBy:
+          type: string
+          description: ID of the user who created the tenant.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TenantResponse:
+      type: object
+      required: [success, data, requestId, timestamp]
+      description: Success envelope wrapping a single TenantRecord.
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          $ref: "#/components/schemas/TenantRecord"
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    TenantListResponse:
+      type: object
+      required: [success, data, requestId, timestamp]
+      description: Success envelope wrapping an array of TenantRecords.
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TenantRecord"
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    TenantCreateRequest:
+      type: object
+      required: [name]
+      description: >
+        Zod-validated at the route boundary using `createTenantSchema`. The
+        schema is `.strict()` — any unrecognised key triggers a 400 with
+        code UNRECOGNIZED_KEYS in the details array.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Tenant name. Leading/trailing whitespace is trimmed by the validator.
+        slug:
+          type: string
+          pattern: "^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$"
+          description: >
+            Optional URL-safe slug. Converted to lowercase by the validator.
+            Auto-derived from `name` when omitted.
+        contactEmail:
+          type: string
+          format: email
+          maxLength: 254
+        plan:
+          $ref: "#/components/schemas/TenantPlan"
+        metadata:
+          $ref: "#/components/schemas/TenantMetadata"
+      additionalProperties: false
+    TenantUpdateRequest:
+      type: object
+      description: >
+        Zod-validated at the route boundary using `updateTenantSchema`. The
+        schema is `.strict()` — unrecognised keys (e.g. `slug`) are rejected.
+        At least one field must be present; an empty body triggers a 400.
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        contactEmail:
+          type: string
+          format: email
+          maxLength: 254
+        plan:
+          $ref: "#/components/schemas/TenantPlan"
+        metadata:
+          $ref: "#/components/schemas/TenantMetadata"
+      additionalProperties: false
     # Distinct from the pre-existing flat ErrorResponse — this matches the
     # actual envelope produced by errorHandler.ts / buildErrorEnvelope():
     # { success: false, error: { code, message, details? }, requestId, timestamp }
