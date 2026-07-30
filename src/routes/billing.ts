@@ -37,6 +37,8 @@ import { createBillingForecastRouter } from "./billing/forecast.js";
 import { etagMiddleware } from "../middleware/etag.js";
 import { createTimeoutMiddleware } from "../middleware/timeout.js";
 import { config } from "../config/index.js";
+import { logger } from "../logger.js";
+import { getRequestId } from "../lib/envelope.js";
 
 const router = Router();
 
@@ -116,6 +118,14 @@ function sendSimulationFailure(
   });
 }
 
+/**
+ * GET /api/billing
+ *
+ * Returns paginated billing requests for the authenticated developer.
+ * Hot-path lookup is filtered by `developer_id` and backed by the
+ * EXPLAIN-verified index `idx_billing_requests_lookup_hot`
+ * (see migrations/billing_index.sql).
+ */
 router.get(
   "/",
   requireAuth,
@@ -145,6 +155,7 @@ router.get(
         return;
       }
 
+      // Hot path: filter by developer_id — uses idx_billing_requests_lookup_hot
       const query = {
         text: `
           SELECT id, request_id, developer_id, api_id, endpoint_id, api_key_id, amount_usdc, created_at
@@ -176,6 +187,14 @@ router.get(
       const nextCursor = hasMore && data.length > 0
         ? encodeCursor(data[data.length - 1].created_at, data[data.length - 1].id)
         : null;
+
+      const correlationId = getRequestId(req) ?? "unknown";
+      logger.info(`Billing requests retrieved for developer ${user.id}`, {
+        correlationId,
+        developerId: user.id,
+        count: data.length,
+        indexHint: "idx_billing_requests_lookup_hot",
+      });
 
       res.status(200).json({
         data: data.map((row) => ({
