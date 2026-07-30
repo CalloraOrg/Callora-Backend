@@ -52,6 +52,8 @@ export interface ApisRouterDeps {
   cache?: ListingsCache;
   /** Optional rate limit middleware for the public API routes. */
   rateLimitMiddleware?: ReturnType<typeof createRateLimitMiddleware>;
+  /** Optional CORS middleware for the API routes. Defaults to env-driven createApisCorsMiddleware. */
+  corsMiddleware?: ReturnType<typeof createApisCorsMiddleware>;
   /** Persists audit rows for state-changing calls. Defaults to the pg-backed service. */
   auditService?: AuditService;
 }
@@ -99,7 +101,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       maxRequests: 60,
     });
 
-  const apisCors = createApisCorsMiddleware();
+  const apisCors = deps.corsMiddleware ?? createApisCorsMiddleware();
 
   router.use(apisCors);
   router.use(rateLimitMiddleware);
