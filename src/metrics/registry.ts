@@ -133,6 +133,32 @@ export function resetAdminMetrics(): void {
   adminDuration.reset();
 }
 
+const apisLatencyDuration = new client.Histogram({
+  name: 'apis_request_duration_seconds',
+  help: 'Latency of /api/apis requests in seconds (FWC26 #893)',
+  labelNames: ['route', 'method', 'status_code'],
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export function recordApisLatency(
+  method: string,
+  statusCode: number,
+  durationMs: number,
+): void {
+  apisLatencyDuration.observe(
+    {
+      route: '/api/apis',
+      method: method.toUpperCase(),
+      status_code: String(statusCode),
+    },
+    durationMs / 1000,
+  );
+}
+
+export function resetApisMetrics(): void {
+  apisLatencyDuration.reset();
+}
+
 export {
   billingDeductDuration,
   refreshTokenDuration,
@@ -140,4 +166,6 @@ export {
   creditsDuration,
   adminDuration,
   subscriptionsLatencyDuration,
+  apisLatencyDuration,
 };
+

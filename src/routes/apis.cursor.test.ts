@@ -64,6 +64,7 @@ function buildApp(repo: InMemoryApiRepository) {
       apiRepository: repo,
       developerRepository,
       cache: new ListingsCache({ ttlMs: 0 }),  // TTL=0 → immediate expiry, never serves from cache
+      corsMiddleware: (_req, _res, next) => next(),
     }),
   );
   app.use(errorHandler);
@@ -309,7 +310,7 @@ describe('GET /api/apis — cursor pagination', () => {
   });
 
   it('treats empty cursor string as first page (cursor-based)', async () => {
-    const res = await request(buildFixtureApp()).get('/api/apis?cursor=');
+    const res = await request(buildFixtureApp()).get('/api/apis?cursor=&limit=2');
 
     expect(res.status).toBe(200);
     expect(res.body.meta).toHaveProperty('hasMore');
