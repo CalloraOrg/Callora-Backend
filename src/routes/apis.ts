@@ -4,6 +4,7 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from "../errors/index.js";
+import { apiStatusEnum, type ApiStatus } from "../db/schema.js";
 import {
   parseCursorPagination,
   decodeCursor,
@@ -139,6 +140,23 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       const search =
         typeof req.query.search === "string" ? req.query.search : undefined;
 
+      // Validate optional ?status filter against the known enum values.
+      // The public listing only returns active APIs by default; callers may
+      // explicitly request a different status (e.g. draft) but unknown values
+      // are rejected early to avoid silent no-result responses.
+      const statusParam =
+        typeof req.query.status === "string" ? req.query.status : undefined;
+      if (statusParam !== undefined) {
+        if (!apiStatusEnum.includes(statusParam as ApiStatus)) {
+          next(
+            new BadRequestError(
+              `status must be one of: ${apiStatusEnum.join(", ")}`,
+            ),
+          );
+          return;
+        }
+      }
+
       const { limit, cursor: rawCursor } = parseCursorPagination(query);
 
       let cursorDate: Date | undefined;
@@ -164,6 +182,9 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         category,
         search,
         cursor: rawCursor,
+        // Include status in the key so different status filters are cached
+        // independently and never collide.
+        status: statusParam,
       });
       const cached = cache.get(cacheKey);
       if (cached !== undefined) {
@@ -179,6 +200,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       const fetchLimit = rawCursor ? limit : limit + 1;
       const rows = await apiRepository.listPublic({
         limit: fetchLimit,
+        status: statusParam as ApiStatus | undefined,
         category,
         search,
         cursor:
@@ -199,7 +221,34 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         );
       }
 
-      const response = cursorPaginatedResponse(pageRows, {
+      // Enrich each row with developer info and endpoints.
+      // findById returns the full ApiDetails (including joined developer).
+      // getEndpoints is a lightweight indexed lookup per API.
+      const enrichedRows = await Promise.all(
+        pageRows.map(async (api) => {
+          const [details, endpoints] = await Promise.all([
+            apiRepository.findById(api.id),
+            apiRepository.getEndpoints(api.id),
+          ]);
+          return {
+            id: api.id,
+            name: api.name,
+            description: api.description,
+            base_url: api.base_url,
+            logo_url: api.logo_url,
+            category: api.category,
+            status: api.status,
+            developer: details?.developer ?? {
+              name: null,
+              website: null,
+              description: null,
+            },
+            endpoints,
+          };
+        }),
+      );
+
+      const response = cursorPaginatedResponse(enrichedRows, {
         limit,
         nextCursor,
         hasMore,
@@ -212,7 +261,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
     }
   });
 
-  router.get("/:id", etagMiddleware, async (req, res, next) => {
+  router.get("/:id", async (req, res, next) => {
     try {
       const id = Number(req.params.id);
 

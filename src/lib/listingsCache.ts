@@ -46,6 +46,8 @@ export interface ListingsCacheKeyParams {
   search?: string;
   /** Opaque cursor string for keyset pagination. When present, offset is ignored. */
   cursor?: string;
+  /** Optional status filter. When absent, the route returns active APIs by default. */
+  status?: string;
 }
 
 // ── Cache key builder ─────────────────────────────────────────────────────────
@@ -67,6 +69,9 @@ export function buildCacheKey(params: ListingsCacheKeyParams): string {
     category: params.category ?? null,
     search: params.search ?? null,
     cursor: params.cursor ?? null,
+    // Status is included so ?status=draft and ?status=active are cached
+    // independently and never serve each other's data.
+    status: params.status ?? null,
   });
 }
 
