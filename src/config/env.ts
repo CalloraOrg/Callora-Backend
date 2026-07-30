@@ -42,8 +42,12 @@ export const envSchema = z
     PROXY_BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
     PROXY_BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().default(30_000),
     PROXY_BREAKER_SUCCESS_THRESHOLD: z.coerce.number().int().positive().default(1),
+    // REST API rate limiting (per-user with IP fallback)
     REST_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     REST_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+    // Gateway/proxy rate limiting (per authenticated user only)
+    GATEWAY_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    GATEWAY_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
     WEBHOOK_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
     WEBHOOK_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().optional(),
     WEBHOOK_SECRET_ROTATION_GRACE_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),

@@ -353,3 +353,129 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
     expect(mismatchRes.body.message).toBe(unknownRes.body.message);
   });
 });
+
+// ---------------------------------------------------------------------------
+// gatewayRoutes.ts — per-user token-bucket inline invocation (issue #870)
+//
+// These tests exercise the inline gatewayRateLimit(req, res, () => {...})
+// call path inside the router.all('/:apiId', ...) handler in gatewayRoutes.ts.
+// They use createGatewayRouter directly with a gatewayRateLimitMiddleware stub
+// injected via GatewayDeps so the new code paths show up in coverage for that
+// file, not just gatewayRateLimit.ts.
+// ---------------------------------------------------------------------------
+describe("gateway route - per-user token-bucket rate limit (issue #870)", () => {
+  const API_ID = "my-api";
+  const VALID_KEY = "test-key-abcdefgh";
+
+  function buildGatewayApp(
+    gatewayRateLimitMiddleware: import("express").RequestHandler,
+    extra?: Partial<import("../types/gateway.js").GatewayDeps>,
+  ) {
+    const apiKeys = new Map<string, ApiKey>();
+    apiKeys.set(VALID_KEY, { key: "k1", apiId: API_ID, developerId: "dev1" });
+
+    const deps = {
+      billing: { deductCredit: async () => ({ success: false, balance: 0 }) }, // 402 fast
+      rateLimiter: { check: async () => ({ allowed: true }) },
+      usageStore: { record: () => true },
+      upstreamUrl: "http://example.invalid",
+      apiKeys,
+      gatewayRateLimitMiddleware,
+      ...extra,
+    } as any;
+
+    const app = express();
+    app.use(requestIdMiddleware);
+    app.use("/gateway", createGatewayRouter(deps));
+    app.use(errorHandler);
+    return app;
+  }
+
+  test("passes through to downstream handler when rate limiter calls next()", async () => {
+    // Middleware that always calls next() — exercises the gatewayRateLimitPassed=true path
+    const passThroughMiddleware: import("express").RequestHandler = (_req, _res, next) => {
+      next();
+    };
+
+    const app = buildGatewayApp(passThroughMiddleware);
+    const res = await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+
+    // Billing stub returns 402 — proves the inline check passed and execution continued
+    expect(res.status).toBe(402);
+  });
+
+  test("returns 429 and stops processing when rate limiter writes its own response (gatewayRateLimitPassed=false path)", async () => {
+    // Middleware that writes a 429 itself and does NOT call next() —
+    // exercises the gatewayRateLimitPassed=false early-return path in gatewayRoutes.ts
+    const blockingMiddleware: import("express").RequestHandler = (_req, res, _next) => {
+      res.status(429).json({
+        code: "TOO_MANY_REQUESTS",
+        message: "Too Many Requests",
+        requestId: "test-req-id",
+        retryAfterMs: 30_000,
+      });
+    };
+
+    const app = buildGatewayApp(blockingMiddleware);
+    const res = await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+
+    expect(res.status).toBe(429);
+    expect(res.body.code).toBe("TOO_MANY_REQUESTS");
+    // Billing must NOT have been called — the handler returned before reaching it
+    // (confirmed by absence of a 402 status)
+    expect(res.status).not.toBe(402);
+  });
+
+  test("rate limiter receives req.apiKeyRecord.userId = keyRecord.developerId", async () => {
+    // Verify that the inline req.apiKeyRecord assignment writes the correct userId
+    // so that the token-bucket key matches the developer, not the raw API key string.
+    let capturedUserId: string | undefined;
+
+    const inspectingMiddleware: import("express").RequestHandler = (req, _res, next) => {
+      const record = req.apiKeyRecord as { userId?: string } | undefined;
+      capturedUserId = record?.userId;
+      next();
+    };
+
+    const app = buildGatewayApp(inspectingMiddleware);
+    await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+
+    expect(capturedUserId).toBe("dev1"); // keyRecord.developerId from apiKeys map
+  });
+
+  test("returns 429 with Retry-After header via real InMemoryGatewayRateLimiter through createGatewayRouter", async () => {
+    // Wire a real (not stubbed) token-bucket limiter with limit=1 into the gateway router
+    // to exercise the full path: auth → req.apiKeyRecord assignment → limiter.check() →
+    // 429 written by middleware → gatewayRateLimitPassed=false → early return.
+    const { createGatewayRateLimitMiddleware, InMemoryGatewayRateLimiter } = await import(
+      "../middleware/gatewayRateLimit.js"
+    );
+
+    const limiter = new InMemoryGatewayRateLimiter(60_000, 1);
+    const rl = createGatewayRateLimitMiddleware({ windowMs: 60_000, maxRequests: 1 }, limiter);
+
+    const app = buildGatewayApp(rl);
+
+    // First request — token bucket not yet exhausted, billing stub returns 402
+    const first = await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+    expect(first.status).toBe(402); // auth + rate limit passed, billing fails fast
+
+    // Second request — bucket empty, rate limiter writes 429 directly
+    const second = await request(app)
+      .get(`/gateway/${API_ID}`)
+      .set("x-api-key", VALID_KEY);
+    expect(second.status).toBe(429);
+    expect(second.body.code).toBe("TOO_MANY_REQUESTS");
+    expect(second.headers["retry-after"]).toBeDefined();
+    expect(Number(second.headers["retry-after"])).toBeGreaterThan(0);
+    expect(second.body.retryAfterMs).toBeGreaterThan(0);
+  });
+});

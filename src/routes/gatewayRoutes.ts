@@ -3,6 +3,7 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import { z } from 'zod';
 import { startUpstreamTimer, getUpstreamHealth, type UpstreamOutcome } from '../metrics.js';
 import { validate } from '../middleware/validate.js';
+import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
 import type { GatewayDeps, ApiKey } from '../types/gateway.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
@@ -123,6 +124,12 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
   const maxBodySize = deps.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
   const router = Router();
 
+  // Per-user token-bucket rate limiter for authenticated gateway requests.
+  // A separate instance is created per router so tests can construct
+  // isolated routers without shared limiter state.  The configured instance
+  // reads limits from GATEWAY_RATE_LIMIT_WINDOW_MS / GATEWAY_RATE_LIMIT_MAX_REQUESTS.
+  const gatewayRateLimit = deps.gatewayRateLimitMiddleware ?? createConfiguredGatewayRateLimitMiddleware();
+
   // Enforce body size limits at the router level so the gateway is self-contained
   // regardless of whether a global body parser is present. Oversized bodies surface
   // as 413 via the app-level error handler.
@@ -222,6 +229,24 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
 
         if (keyRecord.revoked) {
           next(new ForbiddenError('Forbidden: API key has been revoked'));
+          return;
+        }
+
+        // Per-user token-bucket rate limit (issue #870).
+        // Attach the resolved record to req so the shared middleware helper can
+        // read userId, then invoke it inline.  The middleware either calls next()
+        // to continue, or writes the 429 response itself and returns without
+        // calling next — in that case res.headersSent is true and we bail out.
+        req.apiKeyRecord = {
+          userId: keyRecord.developerId,
+          id: keyRecord.key,
+          apiId: keyRecord.apiId,
+        } as Record<string, unknown>;
+
+        let gatewayRateLimitPassed = false;
+        gatewayRateLimit(req, res, () => { gatewayRateLimitPassed = true; });
+        if (!gatewayRateLimitPassed) {
+          // Middleware wrote the 429 response; stop processing this request.
           return;
         }
 

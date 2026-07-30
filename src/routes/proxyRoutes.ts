@@ -4,6 +4,7 @@ import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../ty
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import { startUpstreamTimer, recordProxyPrematureAbort, type UpstreamOutcome, setGatewayUpstreamBreakerState } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
+import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import {
   buildUpstreamTargetUrl,
@@ -101,10 +102,17 @@ export function createProxyRouter(deps: ProxyDeps): Router {
     },
   });
 
+  // Per-user token-bucket rate limiter (issue #870).
+  // Runs AFTER authMiddleware so req.apiKeyRecord.userId is guaranteed to be
+  // populated. Reads limits from GATEWAY_RATE_LIMIT_* env vars by default;
+  // can be overridden via deps for testing.
+  const gatewayRateLimitMiddleware = deps.gatewayRateLimitMiddleware
+    ?? createConfiguredGatewayRateLimitMiddleware();
+
   // Use a param of 0 to capture the wildcard path (everything after the slug)
-  router.all('/:apiSlugOrId/*', authMiddleware, handleProxy);
+  router.all('/:apiSlugOrId/*', authMiddleware, gatewayRateLimitMiddleware, handleProxy);
   // Also handle requests without a trailing path (e.g. /v1/call/my-api)
-  router.all('/:apiSlugOrId', authMiddleware, handleProxy);
+  router.all('/:apiSlugOrId', authMiddleware, gatewayRateLimitMiddleware, handleProxy);
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -131,7 +139,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const stateValue = currentMetrics.state === 'CLOSED' ? 0 : currentMetrics.state === 'OPEN' ? 1 : 2;
       setGatewayUpstreamBreakerState(breakerKey, stateValue);
 
-      // 3. Rate-limit check
+      // 3. Per-API-key rate-limit check (tier-aware; complements the per-user
+      //    token-bucket check already applied by gatewayRateLimitMiddleware).
       const rateResult = await rateLimiter.check(apiKeyHeader, res.locals.apiKeyTier as string | undefined);
       if (!rateResult.allowed) {
         const retryAfterSec = Math.ceil((rateResult.retryAfterMs ?? 1000) / 1000);
