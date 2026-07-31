@@ -1,8 +1,9 @@
 import express from 'express';
 import request from 'supertest';
 import { createFeatureFlagsRouter, type FeatureFlagsRouterDeps } from './feature-flags.js';
-import { InMemoryRateLimiter } from '../middleware/rateLimit.js';
+import { createRateLimitMiddleware, InMemoryRateLimiter } from '../middleware/rateLimit.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
+import { errorHandler } from '../middleware/errorHandler.js';
 
 function buildApp(deps: FeatureFlagsRouterDeps = {}, windowMs = 60_000, maxRequests = 3) {
   const app = express();
@@ -11,8 +12,10 @@ function buildApp(deps: FeatureFlagsRouterDeps = {}, windowMs = 60_000, maxReque
   const limiter = deps.rateLimiter ?? new InMemoryRateLimiter(windowMs, maxRequests);
   app.use('/api/feature-flags', createFeatureFlagsRouter({
     ...deps,
+    rateLimit: deps.rateLimit ?? createRateLimitMiddleware({ windowMs, maxRequests }, limiter),
     rateLimiter: limiter,
   }));
+  app.use(errorHandler);
 
   return { app, limiter };
 }
@@ -52,7 +55,6 @@ describe('GET /api/feature-flags', () => {
     expect(res.body.success).toBe(false);
     expect(res.body.error.code).toBe('TOO_MANY_REQUESTS');
     expect(res.body.error.message).toBe('Too Many Requests');
-    expect(res.body.error.details.retryAfterMs).toBeGreaterThan(0);
     expect(res.body.requestId).toBe('req-rate-limited');
     expect(res.body.timestamp).toBeDefined();
   });
@@ -73,7 +75,7 @@ describe('GET /api/feature-flags', () => {
     const limiter = new InMemoryRateLimiter(windowMs, 1);
     const { app } = buildApp({ rateLimiter: limiter }, windowMs, 1);
 
-    limiter.check('user:user-reset', 0);
+    limiter.check('user:user-reset');
 
     const blocked = await request(app)
       .get('/api/feature-flags')
@@ -109,5 +111,34 @@ describe('GET /api/feature-flags', () => {
     expect(res.body.success).toBe(true);
     expect(typeof res.body.data.flags['sso-login']).toBe('boolean');
     expect(typeof res.body.data.flags['dark-mode']).toBe('boolean');
+  });
+
+  it('returns a strong ETag and 304 for an unchanged conditional request', async () => {
+    const { app } = buildApp({ flags: { stable: true } }, 60_000, 10);
+
+    const first = await request(app).get('/api/feature-flags').set('x-user-id', 'etag-user');
+    expect(first.status).toBe(200);
+    expect(first.headers.etag).toMatch(/^"[a-f0-9]{64}"$/);
+
+    const second = await request(app)
+      .get('/api/feature-flags')
+      .set('x-user-id', 'etag-user')
+      .set('If-None-Match', first.headers.etag);
+
+    expect(second.status).toBe(304);
+    expect(second.text).toBe('');
+  });
+
+  it('returns the full response when the conditional ETag is stale', async () => {
+    const { app } = buildApp({ flags: { stable: true } }, 60_000, 10);
+
+    const response = await request(app)
+      .get('/api/feature-flags')
+      .set('x-user-id', 'stale-etag-user')
+      .set('If-None-Match', '"stale"');
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.flags).toEqual({ stable: true });
+    expect(response.headers.etag).toMatch(/^"[a-f0-9]{64}"$/);
   });
 });

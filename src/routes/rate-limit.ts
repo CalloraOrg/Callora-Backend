@@ -11,6 +11,7 @@
 
 import { Router } from 'express';
 import { correlationMiddleware } from '../middleware/correlation.js';
+import { rateLimitAccessLogMiddleware } from '../middleware/rateLimitAccessLog.js';
 import { createRateLimitHealthRouter, type RateLimitHealthDeps } from './rate-limit/health.js';
 
 export interface RateLimitRouterDeps extends Partial<RateLimitHealthDeps> {
@@ -35,6 +36,10 @@ export function createRateLimitRouter(deps: RateLimitRouterDeps = {}): Router {
   // and attaches resolved value to req.correlationId for downstream
   // handlers, structured logging, and outbound HTTP calls.
   router.use(correlationMiddleware);
+
+  // Structured JSON access log for every /api/rate-limit request.
+  // Emits req-id, latency, status, response size, and actor when available.
+  router.use(rateLimitAccessLogMiddleware);
 
   // Rate-limit health dependency probe
   router.use(

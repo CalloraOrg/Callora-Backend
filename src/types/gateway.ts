@@ -127,6 +127,8 @@ export interface GatewayDeps {
   upstreamUrl: string;
   apiKeys?: Map<string, ApiKey>;
   authMiddleware?: RequestHandler;
+  /** Per-user token-bucket rate limiter middleware (issue #870). Defaults to configured instance. */
+  gatewayRateLimitMiddleware?: RequestHandler;
   /** Maximum allowed request body size (Express size string, e.g. '1mb', '512kb'). Default: '1mb'. */
   maxBodySize?: string;
   /**
@@ -164,9 +166,8 @@ export interface ProxyDeps {
   registry: ApiRegistry;
   apiKeys?: Map<string, ApiKey>;
   authMiddleware?: RequestHandler;
-  /** Per-API-key concurrency tracker. Defaults to the shared-semaphore middleware. */
-  perKeyConcurrency?: RequestHandler;
-  proxyRateLimit?: RequestHandler;
+  /** Per-user token-bucket rate limiter middleware (issue #870). Defaults to configured instance. */
+  gatewayRateLimitMiddleware?: RequestHandler;
   proxyConfig?: Partial<ProxyConfig>;
   circuitBreakerStore?: CircuitBreakerStore;
   /**

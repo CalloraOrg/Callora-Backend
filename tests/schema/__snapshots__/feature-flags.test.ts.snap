@@ -1,0 +1,18 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`/api/feature-flags — response schema stability GET /api/feature-flags matches the known success response shape 1`] = `
+{
+  "data": {
+    "flags": {
+      "beta-analytics": false,
+      "dark-mode": true,
+      "experimental-ui": false,
+      "new-billing-flow": false,
+      "sso-login": true,
+    },
+  },
+  "requestId": Any<String>,
+  "success": true,
+  "timestamp": Any<String>,
+}
+`;

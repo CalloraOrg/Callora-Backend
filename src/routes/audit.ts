@@ -3,6 +3,7 @@ import { defaultAuditService, type AuditService } from '../services/auditService
 import { logger } from '../logger.js';
 import { NotFoundError, BadRequestError } from '../errors/index.js';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
 
 export interface AuditConfigRecord {
   id: string;
@@ -22,6 +23,8 @@ let nextId = 1;
 export function createAuditRouter(deps: AuditRouterDeps = {}): Router {
   const router = Router();
   const auditService = deps.auditService ?? defaultAuditService;
+
+  router.use(securityHeadersMiddleware);
 
   async function recordAudit(
     req: Request,
