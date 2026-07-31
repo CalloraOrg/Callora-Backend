@@ -2,8 +2,6 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { ValidationError } from '../middleware/validate.js';
-import { requireAuth } from '../middleware/requireAuth.js';
-import { validate } from '../middleware/validate.js';
 import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
 import { createExportsCorsMiddleware } from '../middleware/cors.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
@@ -11,31 +9,13 @@ import { encodeCursor, parseCursor } from '../lib/cursorPagination.js';
 import { logger } from '../logger.js';
 import type { ReportExporterService } from '../services/reportExporter.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
-
-const strictIntegerString = (field: string) =>
-  z
-    .string()
-    .trim()
-    .regex(/^\d+$/, `${field} must be an integer`);
-
-/**
- * Query parameters for listing exports
- */
-const exportsQuerySchema = z.object({
-  limit: strictIntegerString('limit')
-    .optional()
-    .transform((val) => (val === undefined ? 20 : Number.parseInt(val, 10)))
-    .pipe(z.number().int().min(1).max(100)),
-  offset: strictIntegerString('offset')
-    .optional()
-    .transform((val) => (val === undefined ? 0 : Number.parseInt(val, 10)))
-    .pipe(z.number().int().min(0)),
-  cursor: z.string().trim().min(1).max(2048).optional(),
-  developerId: z.string().trim().min(1).max(255).optional(),
-  format: z.enum(['csv', 'json']).optional(),
-});
 import { exportsQuerySchema } from '../validators/export.js';
 
+/**
+ * Parse, validate, and normalize the export-list query string before the route
+ * executes business logic. This keeps the request boundary strict and keeps the
+ * route response contract stable for schema snapshot tests.
+ */
 function parseExportsQuery(query: unknown): z.infer<typeof exportsQuerySchema> {
   const parsed = exportsQuerySchema.safeParse(query);
   if (parsed.success) {
