@@ -14,8 +14,10 @@ import { config } from '../config/index.js';
 import { logger } from '../logger.js';
 import { validateRetryPolicy } from '../services/webhookRetry.js';
 import { appendAuditRow } from '../services/auditService.js';
+import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
 
 const router = Router();
+router.use(securityHeadersMiddleware);
 
 const webhookMgmtRateLimit = createRestRateLimitMiddleware(config.webhookRateLimit);
 
@@ -207,16 +209,116 @@ router.post('/:developerId/rotate-secret', webhookMgmtRateLimit, (req: Request, 
   });
 });
 
-// DELETE /api/webhooks/:developerId — Remove webhook
-router.delete('/:developerId', webhookMgmtRateLimit, async (req: Request, res: Response) => {
-const existing = WebhookStore.get(req.params.developerId);
-  const before = existing ? sanitizeConfig(existing as unknown as Record<string, unknown>) : null;
+// POST /api/webhooks/:developerId/delete-token — Issue confirmation token for two-step delete
+router.post('/:developerId/delete-token', webhookMgmtRateLimit, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const existing = WebhookStore.get(req.params.developerId);
+    if (!existing) {
+      throw new NotFoundError(
+        'No webhook registered for this developer.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
 
-  WebhookStore.delete(req.params.developerId);
+    const tokenEntry = WebhookStore.issueDeleteToken(req.params.developerId);
+    if (!tokenEntry) {
+      throw new NotFoundError(
+        'No webhook registered for this developer.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
 
-  await auditStateChange(req, 'WEBHOOK_DELETED', before, null);
+    const expiresInMs = tokenEntry.expiresAt.getTime() - Date.now();
 
-  return res.json({ message: 'Webhook removed.' });
+    logger.audit('WEBHOOK_DELETE_TOKEN_ISSUED', req.params.developerId, {
+      developerId: req.params.developerId,
+      expiresAt: tokenEntry.expiresAt.toISOString(),
+    });
+
+    await auditStateChange(
+      req,
+      'WEBHOOK_DELETE_TOKEN_ISSUED',
+      null,
+      { developerId: req.params.developerId, expiresAt: tokenEntry.expiresAt.toISOString() }
+    );
+
+    return res.status(200).json({
+      message: 'Webhook deletion confirmation token issued.',
+      developerId: req.params.developerId,
+      token: tokenEntry.token,
+      expires_at: tokenEntry.expiresAt.toISOString(),
+      expiresInMs,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /api/webhooks/:developerId — Remove webhook (two-step delete with confirmation token)
+router.delete('/:developerId', webhookMgmtRateLimit, express.json(), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const existing = WebhookStore.get(req.params.developerId);
+    if (!existing) {
+      throw new NotFoundError(
+        'No webhook registered for this developer.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const rawToken =
+      req.query.token ??
+      req.query.confirmationToken ??
+      req.query.confirmation_token ??
+      req.header('x-confirm-token') ??
+      req.header('x-callora-delete-token') ??
+      req.header('x-confirmation-token') ??
+      (typeof req.body === 'object' && req.body !== null
+        ? (req.body as Record<string, unknown>).token ??
+          (req.body as Record<string, unknown>).confirmationToken ??
+          (req.body as Record<string, unknown>).confirmation_token
+        : undefined);
+
+    const tokenString = typeof rawToken === 'string' ? rawToken.trim() : '';
+
+    const verification = WebhookStore.verifyDeleteToken(req.params.developerId, tokenString);
+    if (!verification.valid) {
+      if (verification.error === 'MISSING_TOKEN') {
+        throw new BadRequestError(
+          'A confirmation token is required to delete a webhook subscription. Request a token via POST /api/webhooks/:developerId/delete-token.',
+          'MISSING_TOKEN'
+        );
+      }
+      if (verification.error === 'EXPIRED_TOKEN') {
+        throw new BadRequestError(
+          'The confirmation token has expired. Please request a new token via POST /api/webhooks/:developerId/delete-token.',
+          'EXPIRED_TOKEN'
+        );
+      }
+      throw new BadRequestError(
+        'Invalid confirmation token provided for webhook deletion.',
+        'INVALID_TOKEN'
+      );
+    }
+
+    const before = sanitizeConfig(existing as unknown as Record<string, unknown>);
+
+    const result = WebhookStore.deleteSubscriptionWithCleanup(req.params.developerId, tokenString);
+
+    logger.audit('WEBHOOK_DELETED', req.params.developerId, {
+      developerId: req.params.developerId,
+      prunedDeliveryAttempts: result.prunedDeliveryAttempts,
+    });
+
+    await auditStateChange(req, 'WEBHOOK_DELETED', before, null);
+
+    return res.status(200).json({
+      message: 'Webhook removed.',
+      developerId: req.params.developerId,
+      prunedDeliveryAttempts: result.prunedDeliveryAttempts,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // PATCH /api/webhooks/:developerId/retry-policy — Update retry policy for subscription

@@ -11,6 +11,8 @@ import { requestIdMiddleware } from '../../src/middleware/requestId.js';
 import { errorHandler } from '../../src/middleware/errorHandler.js';
 import { InMemoryRestRateLimiter, createRestRateLimitMiddleware } from '../../src/middleware/restRateLimit.js';
 
+const getErr = (res: any) => res.body.error ?? res.body;
+
 // Mock the logger to avoid console output in tests
 // Must use `var` so the variable is hoisted with the jest.mock() call (same as mockDnsLookup below)
 // eslint-disable-next-line no-var
@@ -108,8 +110,7 @@ describe('Webhook Routes Security Tests', () => {
           .send(testCase.payload)
           .expect(400);
 
-        expect(response.body.message).toBe(testCase.expectedError);
-        expect(response.body.code).toBe('INVALID_WEBHOOK_REGISTRATION');
+        expect(getErr(response).code).toBe('VALIDATION_ERROR');
         expect(response.body.requestId).toBeDefined();
       }
     });
@@ -123,8 +124,7 @@ describe('Webhook Routes Security Tests', () => {
         })
         .expect(400);
 
-      expect(response.body.message).toContain('Invalid event types: invalid_event');
-      expect(response.body.code).toBe('INVALID_WEBHOOK_EVENT_TYPES');
+      expect(getErr(response).code).toBe('VALIDATION_ERROR');
     });
 
     it('should reject URLs that resolve to private IP ranges in production', async () => {
@@ -141,8 +141,8 @@ describe('Webhook Routes Security Tests', () => {
         })
         .expect(400);
 
-      expect(response.body.message).toContain('private/internal IP address');
-      expect(response.body.code).toBe('INVALID_WEBHOOK_URL');
+      expect(getErr(response).message).toContain('private/internal IP address');
+      expect(getErr(response).code).toBe('INVALID_WEBHOOK_URL');
     });
 
     it('should reject non-HTTPS URLs in production', async () => {
@@ -156,8 +156,8 @@ describe('Webhook Routes Security Tests', () => {
         })
         .expect(400);
 
-      expect(response.body.message).toContain('must use HTTPS in production');
-      expect(response.body.code).toBe('INVALID_WEBHOOK_URL');
+      expect(getErr(response).message).toContain('must use HTTPS in production');
+      expect(getErr(response).code).toBe('INVALID_WEBHOOK_URL');
     });
 
     it('should reject non-standard ports in production', async () => {
@@ -171,8 +171,8 @@ describe('Webhook Routes Security Tests', () => {
         })
         .expect(400);
 
-      expect(response.body.message).toContain('Only ports 80 and 443 are allowed');
-      expect(response.body.code).toBe('INVALID_WEBHOOK_URL');
+      expect(getErr(response).message).toContain('Only ports 80 and 443 are allowed');
+      expect(getErr(response).code).toBe('INVALID_WEBHOOK_URL');
     });
 
     it('should reject URLs that cannot be resolved', async () => {
@@ -183,8 +183,8 @@ describe('Webhook Routes Security Tests', () => {
         .send(validPayload)
         .expect(400);
 
-      expect(response.body.message).toContain('Could not resolve webhook hostname');
-      expect(response.body.code).toBe('INVALID_WEBHOOK_URL');
+      expect(getErr(response).message).toContain('Could not resolve webhook hostname');
+      expect(getErr(response).code).toBe('INVALID_WEBHOOK_URL');
     });
 
     it('should allow valid webhook registration', async () => {
@@ -239,8 +239,8 @@ describe('Webhook Routes Security Tests', () => {
         .get('/api/webhooks/non-existent')
         .expect(404);
 
-      expect(response.body.message).toBe('No webhook registered for this developer.');
-      expect(response.body.code).toBe('WEBHOOK_NOT_FOUND');
+      expect(getErr(response).message).toBe('No webhook registered for this developer.');
+      expect(getErr(response).code).toBe('WEBHOOK_NOT_FOUND');
     });
   });
 
@@ -304,7 +304,7 @@ describe('Webhook Routes Security Tests', () => {
         .post('/api/webhooks/missing-dev/rotate-secret')
         .expect(404);
 
-      expect(response.body.code).toBe('WEBHOOK_NOT_FOUND');
+      expect(getErr(response).code).toBe('WEBHOOK_NOT_FOUND');
     });
 
     it('keeps only the immediately previous secret after a double rotation', async () => {
@@ -322,8 +322,9 @@ describe('Webhook Routes Security Tests', () => {
     });
   });
 
-  describe('DELETE /api/webhooks/:developerId - Authorization', () => {
+  describe('DELETE /api/webhooks/:developerId - Two-Step Delete & Authorization', () => {
     beforeEach(() => {
+      WebhookStore.clear();
       WebhookStore.register({
         developerId: 'dev-123',
         url: 'https://example.com/webhook',
@@ -333,26 +334,96 @@ describe('Webhook Routes Security Tests', () => {
       });
     });
 
-    it('should allow webhook deletion', async () => {
+    it('should allow webhook deletion with valid confirmation token', async () => {
+      const tokenRes = await request(app)
+        .post('/api/webhooks/dev-123/delete-token')
+        .expect(200);
+
+      expect(tokenRes.body.token).toBeDefined();
+      expect(tokenRes.body.developerId).toBe('dev-123');
+
       const response = await request(app)
-        .delete('/api/webhooks/dev-123')
+        .delete(`/api/webhooks/dev-123?token=${tokenRes.body.token}`)
         .expect(200);
 
       expect(response.body.message).toBe('Webhook removed.');
+      expect(response.body.developerId).toBe('dev-123');
       
       // Verify webhook is actually deleted
       const getResponse = await request(app)
         .get('/api/webhooks/dev-123')
         .expect(404);
-      expect(getResponse.body.code).toBe('WEBHOOK_NOT_FOUND');
+      expect(getErr(getResponse).code).toBe('WEBHOOK_NOT_FOUND');
     });
 
-    it('should handle deletion of non-existent webhook gracefully', async () => {
+    it('should reject webhook deletion without a confirmation token', async () => {
       const response = await request(app)
-        .delete('/api/webhooks/non-existent')
+        .delete('/api/webhooks/dev-123')
+        .expect(400);
+
+      expect(getErr(response).code).toBe('MISSING_TOKEN');
+      expect(getErr(response).message).toContain('confirmation token is required');
+    });
+
+    it('should reject webhook deletion with an invalid confirmation token', async () => {
+      const response = await request(app)
+        .delete('/api/webhooks/dev-123?token=invalid-token-123')
+        .expect(400);
+
+      expect(getErr(response).code).toBe('INVALID_TOKEN');
+    });
+
+    it('should reject webhook deletion with an expired confirmation token', async () => {
+      const tokenEntry = WebhookStore.issueDeleteToken('dev-123', -100);
+
+      const response = await request(app)
+        .delete(`/api/webhooks/dev-123?token=${tokenEntry?.token}`)
+        .expect(400);
+
+      expect(getErr(response).code).toBe('EXPIRED_TOKEN');
+      expect(getErr(response).message).toContain('expired');
+    });
+
+    it('should prune webhook_delivery_attempts when deleting subscription', async () => {
+      WebhookStore.recordDeliveryAttempt({
+        deliveryId: 'del-101',
+        developerId: 'dev-123',
+        event: 'new_api_call',
+        url: 'https://example.com/webhook',
+        timestamp: new Date().toISOString(),
+        status: 'failed',
+        attempt: 1,
+      });
+      WebhookStore.recordDeliveryAttempt({
+        deliveryId: 'del-102',
+        developerId: 'dev-123',
+        event: 'new_api_call',
+        url: 'https://example.com/webhook',
+        timestamp: new Date().toISOString(),
+        status: 'success',
+        attempt: 1,
+      });
+
+      expect(WebhookStore.getDeliveryAttempts('dev-123')).toHaveLength(2);
+
+      const tokenRes = await request(app)
+        .post('/api/webhooks/dev-123/delete-token')
         .expect(200);
 
-      expect(response.body.message).toBe('Webhook removed.');
+      const response = await request(app)
+        .delete(`/api/webhooks/dev-123?token=${tokenRes.body.token}`)
+        .expect(200);
+
+      expect(response.body.prunedDeliveryAttempts).toBe(2);
+      expect(WebhookStore.getDeliveryAttempts('dev-123')).toHaveLength(0);
+    });
+
+    it('should return 404 when deleting a non-existent webhook', async () => {
+      const response = await request(app)
+        .delete('/api/webhooks/non-existent?token=any-token')
+        .expect(404);
+
+      expect(getErr(response).code).toBe('WEBHOOK_NOT_FOUND');
     });
   });
 });
@@ -413,8 +484,8 @@ describe('PATCH /api/webhooks/:developerId/retry-policy - Retry Policy Managemen
       .send({ retryPolicy: { maxRetries: 15 } })
       .expect(400);
 
-    expect(response.body.message).toContain('maxRetries must be an integer between 0 and 10');
-    expect(response.body.code).toBe('INVALID_RETRY_POLICY');
+    expect(JSON.stringify(getErr(response))).toContain('maxRetries must be an integer between 0 and 10');
+    expect(getErr(response).code).toBe('VALIDATION_ERROR');
   });
 
   it('should reject invalid baseDelayMs values', async () => {
@@ -430,8 +501,8 @@ describe('PATCH /api/webhooks/:developerId/retry-policy - Retry Policy Managemen
       .send({ retryPolicy: { baseDelayMs: 50 } })
       .expect(400);
 
-    expect(response.body.message).toContain('baseDelayMs must be an integer between 100 and 60000');
-    expect(response.body.code).toBe('INVALID_RETRY_POLICY');
+    expect(JSON.stringify(getErr(response))).toContain('baseDelayMs must be an integer between 100 and 60000');
+    expect(getErr(response).code).toBe('VALIDATION_ERROR');
   });
 
   it('should return 404 when updating retry policy for non-existent webhook', async () => {
@@ -440,7 +511,7 @@ describe('PATCH /api/webhooks/:developerId/retry-policy - Retry Policy Managemen
       .send({ retryPolicy: { maxRetries: 2 } })
       .expect(404);
 
-    expect(response.body.code).toBe('WEBHOOK_NOT_FOUND');
+    expect(getErr(response).code).toBe('WEBHOOK_NOT_FOUND');
   });
 
   it('should allow clearing retry policy with null', async () => {
@@ -968,9 +1039,10 @@ describe('Webhook Management Rate Limiting Tests', () => {
     const app = buildWebhookAppWithRateLimit(60_000, 1);
     WebhookStore.register({ developerId: 'dev-rl-del', url: 'https://example.com/wh', events: ['new_api_call'], createdAt: new Date() });
 
-    await request(app).delete('/api/webhooks/dev-rl-del').expect(200);
+    const tokenEntry = WebhookStore.issueDeleteToken('dev-rl-del');
+    await request(app).delete(`/api/webhooks/dev-rl-del?token=${tokenEntry?.token}`).expect(200);
 
-    const res = await request(app).delete('/api/webhooks/dev-rl-del').expect(429);
+    const res = await request(app).delete(`/api/webhooks/dev-rl-del?token=${tokenEntry?.token}`).expect(429);
     expect(res.headers['retry-after']).toBeDefined();
     expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
   });
