@@ -18,9 +18,9 @@ describe('src/openapi.yaml — webhooks examples', () => {
 
   test('includes register and get response examples for webhooks', () => {
     const content = fs.readFileSync(yamlPath, 'utf8');
-    expect(content).toContain('Register a webhook for API and balance events');
-    expect(content).toContain('Successfully registered');
-    expect(content).toContain('Webhook config');
+    expect(content).toContain('Register with all optional fields');
+    expect(content).toContain('Webhook registered successfully.');
+    expect(content).toContain('Webhook configuration with retry policy');
     expect(content).toContain('No webhook registered');
     expect(content).toContain('new_api_call');
     expect(content).toContain('low_balance_alert');
@@ -46,20 +46,27 @@ describe('src/openapi.yaml — webhooks examples', () => {
     expect(content).toContain('Webhook retry policy updated successfully.');
   });
 
+  test('documents POST /api/webhooks/{developerId}/delete-token endpoint', () => {
+    const content = fs.readFileSync(yamlPath, 'utf8');
+    expect(content).toContain('/api/webhooks/{developerId}/delete-token');
+    expect(content).toContain('Issue webhook deletion confirmation token');
+    expect(content).toContain('WebhookDeleteTokenResponse');
+  });
+
   test('documents POST /api/webhooks/deliver/{developerId} endpoint', () => {
     const content = fs.readFileSync(yamlPath, 'utf8');
     expect(content).toContain('/api/webhooks/deliver/{developerId}');
-    expect(content).toContain('Deliver a webhook event');
+    expect(content).toContain('Deliver a signed webhook event');
     expect(content).toContain('Webhook delivery accepted.');
   });
 
   test('includes error response examples for webhook endpoints', () => {
     const content = fs.readFileSync(yamlPath, 'utf8');
     // POST /api/webhooks 400 errors
-    expect(content).toContain('Missing required fields');
-    expect(content).toContain('Invalid event types');
-    expect(content).toContain('Invalid webhook URL');
-    expect(content).toContain('Invalid retry policy');
+    expect(content).toContain('developerId, url, or events missing');
+    expect(content).toContain('Event type not in the supported set');
+    expect(content).toContain('URL failed reachability validation');
+    expect(content).toContain('Retry policy values out of range');
     // rotate-secret 404
     expect(content).toContain('req-webhook-rotate-404');
     // retry-policy 400 and 404

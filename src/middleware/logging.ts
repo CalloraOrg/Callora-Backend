@@ -6,11 +6,22 @@ const isProduction = process.env.NODE_ENV === 'production';
 const defaultLevel = isProduction ? 'info' : 'debug';
 const level = (process.env.LOG_LEVEL ?? defaultLevel).toLowerCase();
 
+const defaultRedactPaths = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'req.headers["x-api-key"]',
+  'req.headers["x-auth-token"]',
+  'req.headers["x-admin-api-key"]',
+  'req.headers["proxy-authorization"]',
+];
+const defaultCensor = '[REDACTED]';
+const safeRedactLogArguments = redactLogArguments ?? ((args: unknown[]) => args);
+
 export const structuredLoggerOptions: Parameters<typeof pino>[0] = {
   level,
   redact: {
-    paths: PINO_REDACT_PATHS,
-    censor: REDACTED_LOG_VALUE,
+    paths: PINO_REDACT_PATHS ?? defaultRedactPaths,
+    censor: REDACTED_LOG_VALUE ?? defaultCensor,
   },
   hooks: {
     logMethod(args, method) {
@@ -23,7 +34,7 @@ export const structuredLoggerOptions: Parameters<typeof pino>[0] = {
         return method.apply(this, args as [obj: unknown, msg?: string | undefined, ...args: unknown[]]);
       }
 
-      const redactedArgs = redactLogArguments(args);
+      const redactedArgs = safeRedactLogArguments(args);
       if (!activeRequestId) {
         return method.apply(
           this,

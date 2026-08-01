@@ -14,7 +14,7 @@ export interface RetryPolicy {
 }
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
-  maxRetries: 3,
+  maxRetries: 5,
   baseDelayMs: 1000,
 };
 
@@ -137,16 +137,4 @@ export interface UsageEventCreatedData {
     timestamp: string;
 }
 
-// ---------------------------------------------------------------------------
-// Retry policy types
-// ---------------------------------------------------------------------------
 
-export interface RetryPolicy {
-    maxRetries?: number;
-    baseDelayMs?: number;
-}
-
-export const DEFAULT_RETRY_POLICY = {
-    maxRetries: 5,
-    baseDelayMs: 1000,
-} satisfies RetryPolicy;
