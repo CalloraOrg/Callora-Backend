@@ -19,8 +19,7 @@ const developerIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
 
 export const webhookDeveloperIdSchema = z
   .string({
-    required_error: 'developerId is required',
-    invalid_type_error: 'developerId must be a string',
+    error: 'developerId is required',
   })
   .trim()
   .regex(
@@ -35,13 +34,13 @@ export const webhookDeveloperParamsSchema = z.object({
 export const webhookRetryPolicySchema = z
   .object({
     maxRetries: z
-      .number({ invalid_type_error: 'maxRetries must be a number' })
+      .number({ error: 'maxRetries must be a number' })
       .int('maxRetries must be an integer between 0 and 10')
       .min(0, 'maxRetries must be an integer between 0 and 10')
       .max(10, 'maxRetries must be an integer between 0 and 10')
       .optional(),
     baseDelayMs: z
-      .number({ invalid_type_error: 'baseDelayMs must be a number' })
+      .number({ error: 'baseDelayMs must be a number' })
       .int('baseDelayMs must be an integer between 100 and 60000')
       .min(100, 'baseDelayMs must be an integer between 100 and 60000')
       .max(60_000, 'baseDelayMs must be an integer between 100 and 60000')
@@ -57,16 +56,14 @@ export const registerWebhookSchema = z
     developerId: webhookDeveloperIdSchema,
     url: z
       .string({
-        required_error: 'url is required',
-        invalid_type_error: 'url must be a string',
+        error: 'url is required',
       })
       .trim()
       .url('url must be a valid absolute URL')
       .max(2_048, 'url must be 2048 characters or fewer'),
     events: z
       .array(z.enum(webhookManagementEvents), {
-        required_error: 'events is required',
-        invalid_type_error: 'events must be an array',
+        error: 'events is required',
       })
       .min(1, 'events must include at least one event')
       .max(webhookManagementEvents.length, `events can include at most ${webhookManagementEvents.length} items`)
@@ -74,7 +71,7 @@ export const registerWebhookSchema = z
         message: 'events must not contain duplicates',
       }),
     secret: z
-      .string({ invalid_type_error: 'secret must be a string' })
+      .string({ error: 'secret must be a string' })
       .trim()
       .min(8, 'secret must be at least 8 characters')
       .max(256, 'secret must be 256 characters or fewer')

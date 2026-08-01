@@ -217,7 +217,7 @@ describe('POST /api/admin/webhooks/replay — input validation', () => {
         expect(res.status).toBe(400);
         // express.json() sets req.body to {} even without a body,
         // so the deliveryId check catches it with INVALID_DELIVERY_ID.
-        expect(res.body.code).toBe('INVALID_DELIVERY_ID');
+        expect(res.body.error.code).toBe('INVALID_DELIVERY_ID');
     });
 
     it('returns 400 when deliveryId is missing', async () => {
@@ -227,8 +227,8 @@ describe('POST /api/admin/webhooks/replay — input validation', () => {
             .set('x-admin-api-key', ADMIN_KEY);
 
         expect(res.status).toBe(400);
-        expect(res.body.code).toBe('INVALID_DELIVERY_ID');
-        expect(res.body.message).toContain('deliveryId');
+        expect(res.body.error.code).toBe('INVALID_DELIVERY_ID');
+        expect(res.body.error.message).toContain('deliveryId');
     });
 
     it('returns 400 when deliveryId is not a string', async () => {
@@ -238,7 +238,7 @@ describe('POST /api/admin/webhooks/replay — input validation', () => {
             .set('x-admin-api-key', ADMIN_KEY);
 
         expect(res.status).toBe(400);
-        expect(res.body.code).toBe('INVALID_DELIVERY_ID');
+        expect(res.body.error.code).toBe('INVALID_DELIVERY_ID');
     });
 
     it('returns 400 when deliveryId is an empty string', async () => {
@@ -272,8 +272,8 @@ describe('POST /api/admin/webhooks/replay — DLQ entry not found', () => {
             .set('x-admin-api-key', ADMIN_KEY);
 
         expect(res.status).toBe(404);
-        expect(res.body.code).toBe('DLQ_ENTRY_NOT_FOUND');
-        expect(res.body.message).toContain('nonexistent-delivery');
+        expect(res.body.error.code).toBe('DLQ_ENTRY_NOT_FOUND');
+        expect(res.body.error.message).toContain('nonexistent-delivery');
     });
 
     it('returns 404 when the DLQ is empty', async () => {
@@ -427,8 +427,8 @@ describe('POST /api/admin/webhooks/replay — response shape', () => {
             .set('x-admin-api-key', ADMIN_KEY);
 
         expect(res.status).toBe(400);
-        expect(res.body).toHaveProperty('code');
-        expect(res.body).toHaveProperty('message');
+        expect(res.body.error).toHaveProperty('code');
+        expect(res.body.error).toHaveProperty('message');
     });
 
     it('returns a standardized error envelope on 404', async () => {
@@ -438,8 +438,8 @@ describe('POST /api/admin/webhooks/replay — response shape', () => {
             .set('x-admin-api-key', ADMIN_KEY);
 
         expect(res.status).toBe(404);
-        expect(res.body).toHaveProperty('code', 'DLQ_ENTRY_NOT_FOUND');
-        expect(res.body).toHaveProperty('message');
+        expect(res.body.error).toHaveProperty('code', 'DLQ_ENTRY_NOT_FOUND');
+        expect(res.body.error).toHaveProperty('message');
     });
 
     it('returns a standardized error envelope on internal error', async () => {
@@ -454,7 +454,7 @@ describe('POST /api/admin/webhooks/replay — response shape', () => {
             .set('x-admin-api-key', ADMIN_KEY);
 
         expect(res.status).toBe(500);
-        expect(res.body).toHaveProperty('code');
-        expect(res.body).toHaveProperty('message');
+        expect(res.body.error).toHaveProperty('code');
+        expect(res.body.error).toHaveProperty('message');
     });
 });
