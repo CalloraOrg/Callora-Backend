@@ -57,29 +57,11 @@ import {
 import { createSloAlertJob } from "./workers/sloAlertJob.js";
 import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
 import { createSettlementReconWorker } from "./workers/settlementRecon.js";
-import { createDeveloperRouter } from './routes/developerRoutes.js';
-import { createGatewayRouter } from './routes/gatewayRoutes.js';
-import { createProxyRouter } from './routes/proxyRoutes.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
 import { createRefreshTokenRouter } from './routes/refresh-token.js';
 import { AuthController } from './controllers/authController.js';
 import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
-import { defaultDeveloperRepository } from './repositories/developerRepository.js';
-import { createBillingService } from './services/billingService.js';
-import { createRateLimiter } from './services/rateLimiter.js';
-import { PgUsageEventsRepository } from './repositories/usageEventsRepository.pg.js';
-import { createRevenueLedgerIndexerJob } from './services/revenueLedgerIndexer.js';
-import { RevenueSettlementService } from './services/revenueSettlementService.js';
-import { createSettlementStatusSyncJob } from './services/settlementStatusSyncJob.js';
-import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-import { createIdempotencySweeperJob } from './services/idempotencySweeper.js';
-import { createPostgresUsageStore } from './services/usageStore.js';
-import { createPostgresSettlementStore } from './services/settlementStore.js';
-import { createApiRegistry } from './data/apiRegistry.js';
-import { ApiKey } from './types/gateway.js';
-import { listingsCache } from './lib/listingsCache.js';
-import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
-import { createAnomalyDetectorJob } from './workers/anomalyDetector.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -134,6 +116,9 @@ app.get("/api/health", (_req, res) => {
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
+
+// Webhook routes
+app.use('/api/webhooks', createWebhooksRouter());
 
 // Check if fil is being run directly (CommonJS / ESM compatibility trick for ts-jest)
 
@@ -269,12 +254,6 @@ if (isDirectExecution) {
   app.use("/api/admin", adminRouter);
   app.use("/api/refunds", refundsRouter);
   app.use("/api/logs", logsRouter);
-  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
-
-  // Webhook management routes
-  app.use('/api/webhooks', createWebhooksRouter());
-
-  app.use('/api/admin', adminRouter);
 
   // Legacy gateway route (existing)
   const gatewayRouter = createGatewayRouter({
@@ -308,12 +287,6 @@ if (isDirectExecution) {
     // during the graceful shutdown window.
     drainState: { isDraining: proxyDrainTracker.isDraining },
   });
-  const keysDrainTracker = createInFlightDrainTracker("api-keys");
-  const apiKeyRouter = createApiKeyRouter({
-    apiRepository: defaultApiRepository,
-    developerRepository: defaultDeveloperRepository,
-  });
-  const proxyDrainTracker = createInFlightDrainTracker('gateway-proxy');
 
   // --- Refresh-token drain tracker ---
   // Tracks in-flight POST /api/refresh-token requests so that a SIGTERM during

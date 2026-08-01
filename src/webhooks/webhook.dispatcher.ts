@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
@@ -30,7 +30,7 @@ export function stopWebhookDispatching(): void {
 
 export async function awaitWebhookDispatcherIdle(): Promise<void> {
     while (inFlightDispatches.size > 0) {
-        await Promise.allSettled([...inFlightDispatches]);
+        await Promise.allSettled(Array.from(inFlightDispatches));
     }
 }
 
@@ -94,6 +94,16 @@ export async function dispatchWebhook(
                 });
 
                 if (response.ok) {
+                    WebhookStore.recordDeliveryAttempt({
+                        deliveryId,
+                        developerId: config.developerId,
+                        event: payload.event,
+                        url: config.url,
+                        timestamp: new Date().toISOString(),
+                        status: 'success',
+                        statusCode: response.status,
+                        attempt: attempt + 1,
+                    });
                     logger.info(
                         `[webhook] ✓ Delivered ${payload.event} to ${config.url}`,
                         `attempt ${attempt + 1}`
@@ -102,12 +112,33 @@ export async function dispatchWebhook(
                 }
 
                 lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
+                WebhookStore.recordDeliveryAttempt({
+                    deliveryId,
+                    developerId: config.developerId,
+                    event: payload.event,
+                    url: config.url,
+                    timestamp: new Date().toISOString(),
+                    status: 'failed',
+                    statusCode: response.status,
+                    attempt: attempt + 1,
+                    error: `HTTP ${response.status} ${response.statusText}`,
+                });
                 logger.warn(
                     `[webhook] Non-2xx response (${response.status}) for ${config.url}`,
                     `attempt ${attempt + 1}`
                 );
             } catch (err) {
                 lastError = err;
+                WebhookStore.recordDeliveryAttempt({
+                    deliveryId,
+                    developerId: config.developerId,
+                    event: payload.event,
+                    url: config.url,
+                    timestamp: new Date().toISOString(),
+                    status: 'failed',
+                    attempt: attempt + 1,
+                    error: (err as Error).message,
+                });
                 logger.warn(
                     `[webhook] Error delivering to ${config.url}, attempt ${attempt + 1}:`,
                     (err as Error).message

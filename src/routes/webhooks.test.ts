@@ -5,14 +5,18 @@ jest.mock('../db.js', () => ({
   writeQuery: jest.fn(),
 }));
 
-jest.mock('../logger.js', () => ({
-  logger: {
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    audit: jest.fn(),
-  },
-}));
+jest.mock('../logger.js', () => {
+  const actual = jest.requireActual('../logger.js');
+  return {
+    ...actual,
+    logger: {
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      audit: jest.fn(),
+    },
+  };
+});
 
 import { writeQuery } from '../db.js';
 import app from '../index.js';
@@ -139,13 +143,18 @@ describe('Webhook routes — audit persistence', () => {
         createdAt: new Date(),
       });
 
+      const tokenRes = await request(app)
+        .post('/api/webhooks/dev-delete-1/delete-token');
+      const token = tokenRes.body.token;
+      assert.equal(tokenRes.status, 200);
+
       const response = await request(app)
-        .delete('/api/webhooks/dev-delete-1');
+        .delete(`/api/webhooks/dev-delete-1?token=${token}`);
 
       assert.equal(response.status, 200);
-      assert.equal(mockWriteQuery.mock.calls.length, 1);
+      assert.equal(mockWriteQuery.mock.calls.length, 2);
 
-      const call = mockWriteQuery.mock.calls[0]!;
+      const call = mockWriteQuery.mock.calls[1]!;
       const params = call[1] as unknown[];
       assert.equal(params[1], 'WEBHOOK_DELETED');
       assert.equal(params[2], 'dev-delete-1');
@@ -156,17 +165,94 @@ describe('Webhook routes — audit persistence', () => {
       assert.equal(details.after, undefined);
     });
 
-    it('persists an audit row with null before when webhook does not exist', async () => {
+    it('returns 404 when deleting non-existent webhook', async () => {
       const response = await request(app)
         .delete('/api/webhooks/dev-delete-nonexistent');
 
-      assert.equal(response.status, 200);
-      assert.equal(mockWriteQuery.mock.calls.length, 1);
+      assert.equal(response.status, 404);
+      assert.equal(mockWriteQuery.mock.calls.length, 0);
+    });
 
-      const call = mockWriteQuery.mock.calls[0]!;
-      const params = call[1] as unknown[];
-      assert.equal(params[1], 'WEBHOOK_DELETED');
-      assert.equal(params[2], 'dev-delete-nonexistent');
+    it('returns 400 when deleting without a confirmation token', async () => {
+      WebhookStore.register({
+        developerId: 'dev-delete-2',
+        url: 'https://example.com/webhook',
+        events: ['new_api_call'],
+        createdAt: new Date(),
+      });
+
+      const response = await request(app)
+        .delete('/api/webhooks/dev-delete-2');
+
+      assert.equal(response.status, 400);
+      assert.equal(response.body.error.code, 'MISSING_TOKEN');
+      assert.equal(mockWriteQuery.mock.calls.length, 0);
+    });
+
+    it('returns 400 when deleting with an invalid confirmation token', async () => {
+      WebhookStore.register({
+        developerId: 'dev-delete-3',
+        url: 'https://example.com/webhook',
+        events: ['new_api_call'],
+        createdAt: new Date(),
+      });
+
+      const response = await request(app)
+        .delete('/api/webhooks/dev-delete-3?token=wrong-token');
+
+      assert.equal(response.status, 400);
+      assert.equal(response.body.error.code, 'INVALID_TOKEN');
+      assert.equal(mockWriteQuery.mock.calls.length, 0);
+    });
+
+    it('returns 400 when deleting with an expired confirmation token', async () => {
+      WebhookStore.register({
+        developerId: 'dev-delete-4',
+        url: 'https://example.com/webhook',
+        events: ['new_api_call'],
+        createdAt: new Date(),
+      });
+
+      const entry = WebhookStore.issueDeleteToken('dev-delete-4', -100);
+
+      const response = await request(app)
+        .delete(`/api/webhooks/dev-delete-4?token=${entry?.token}`);
+
+      assert.equal(response.status, 400);
+      assert.equal(response.body.error.code, 'EXPIRED_TOKEN');
+      assert.equal(mockWriteQuery.mock.calls.length, 0);
+    });
+
+    it('prunes webhook_delivery_attempts for the deleted subscription', async () => {
+      WebhookStore.register({
+        developerId: 'dev-delete-5',
+        url: 'https://example.com/webhook',
+        events: ['new_api_call'],
+        createdAt: new Date(),
+      });
+
+      WebhookStore.recordDeliveryAttempt({
+        deliveryId: 'del-delete-test-1',
+        developerId: 'dev-delete-5',
+        event: 'new_api_call',
+        url: 'https://example.com/webhook',
+        timestamp: new Date().toISOString(),
+        status: 'failed',
+        attempt: 1,
+      });
+
+      assert.equal(WebhookStore.getDeliveryAttempts('dev-delete-5').length, 1);
+
+      const tokenRes = await request(app)
+        .post('/api/webhooks/dev-delete-5/delete-token');
+      const token = tokenRes.body.token;
+
+      const response = await request(app)
+        .delete(`/api/webhooks/dev-delete-5?token=${token}`);
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.prunedDeliveryAttempts, 1);
+      assert.equal(WebhookStore.getDeliveryAttempts('dev-delete-5').length, 0);
     });
   });
 

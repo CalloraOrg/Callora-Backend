@@ -442,4 +442,3 @@ describe('POST /api/refresh-token — input validation', () => {
       expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
     });
   });
-});
