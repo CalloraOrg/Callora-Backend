@@ -1688,6 +1688,394 @@ paths:
                       message: No webhook registered for this developer.
                     requestId: req-webhook-deliver-404
                     timestamp: "2026-07-27T09:33:00.000Z"
+  /api/gateway:
+    get:
+      summary: List registered APIs
+      description: >
+        Returns registered APIs with cursor-based pagination ordered by
+        (created_at, id). The opaque `cursor` query parameter from a previous
+        response continues the listing; `limit` controls the page size
+        (default 20, max 100).
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque base64 cursor from a previous response.
+          schema:
+            type: string
+          examples:
+            firstPage:
+              summary: Continue from the first page
+              value: "eyJjcmVhdGVkX2F0IjoiMjAyNi0wNy0yOFQwMDowMDowMC4wMDBaIiwiaWQiOiJhcGktMTIzIn0="
+        - name: limit
+          in: query
+          required: false
+          description: Page size (default 20, max 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          examples:
+            ten:
+              summary: Ten results per page
+              value: 10
+      responses:
+        "200":
+          description: Registered APIs retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayListResponse"
+              examples:
+                withEntries:
+                  summary: First page with registered APIs
+                  value:
+                    entries:
+                      - id: api_123
+                        slug: weather-api
+                        base_url: "https://upstream.example.com/weather"
+                        developerId: dev-123
+                        endpoints:
+                          - endpointId: current
+                            path: "/current"
+                            priceUsdc: 0.01
+                          - endpointId: forecast
+                            path: "/forecast"
+                            priceUsdc: 0.02
+                      - id: api_456
+                        slug: translate-api
+                        base_url: "https://upstream.example.com/translate"
+                        developerId: dev-456
+                        endpoints:
+                          - endpointId: default
+                            path: "*"
+                            priceUsdc: 0.005
+                    nextCursor: "eyJjcmVhdGVkX2F0IjoiMjAyNi0wNy0yOFQwMDowMDowMC4wMDBaIiwiaWQiOiJhcGktNDU2In0="
+                empty:
+                  summary: No registered APIs yet
+                  value:
+                    entries: []
+                    nextCursor: null
+  /api/gateway/health/{apiSlug}:
+    get:
+      summary: Get gateway health for an API
+      description: >
+        Public endpoint (no authentication) that returns aggregated upstream
+        latency percentiles and circuit breaker state for a given API slug.
+        Only aggregated upstream metrics are exposed — no tenant identifiers,
+        request paths, or raw histogram buckets are returned. Results are
+        cached in-memory for 5 seconds.
+      parameters:
+        - name: apiSlug
+          in: path
+          required: true
+          description: API slug to query health for.
+          schema:
+            type: string
+          examples:
+            existing:
+              summary: Existing API slug
+              value: weather-api
+            missing:
+              summary: Unregistered API slug
+              value: unknown-api
+      responses:
+        "200":
+          description: Health data retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayHealthResponse"
+              examples:
+                healthy:
+                  summary: Upstream healthy with a closed circuit breaker
+                  value:
+                    apiSlug: weather-api
+                    latency:
+                      p50: 142.5
+                      p95: 310.2
+                    breaker:
+                      state: closed
+                noTraffic:
+                  summary: No traffic yet — latency unknown
+                  value:
+                    apiSlug: translate-api
+                    latency:
+                      p50: null
+                      p95: null
+                    breaker:
+                      state: closed
+                open:
+                  summary: Circuit breaker open for the endpoint
+                  value:
+                    apiSlug: weather-api
+                    latency:
+                      p50: null
+                      p95: null
+                    breaker:
+                      state: open
+        "404":
+          description: No API is registered under the supplied slug.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                notFound:
+                  summary: Unknown API slug
+                  value:
+                    success: false
+                    error:
+                      code: NOT_FOUND
+                      message: API not found
+                    requestId: req-gateway-health-404
+                    timestamp: "2026-07-28T10:00:00.000Z"
+  /api/gateway/{apiId}:
+    get:
+      summary: Proxy a read request to an upstream API
+      description: >
+        Authenticated proxy route. Any HTTP method is supported; request
+        headers are forwarded to the registered upstream service for the API
+        ID and the upstream response is returned verbatim (including non-JSON
+        payloads). Authentication uses the `x-api-key` header, which is never
+        forwarded upstream.
+      parameters:
+        - name: apiId
+          in: path
+          required: true
+          description: Registered API identifier (1–50 characters).
+          schema:
+            type: string
+            maxLength: 50
+          examples:
+            existing:
+              summary: Existing API ID
+              value: api_123
+        - name: x-api-key
+          in: header
+          required: true
+          description: API key issued to the developer for this API.
+          schema:
+            type: string
+          examples:
+            validKey:
+              summary: Valid API key
+              value: "cl_9f4a2b7c8d1e0a3b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0"
+      responses:
+        "200":
+          description: Upstream responded successfully; body is passed through.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayProxyResponse"
+              examples:
+                json:
+                  summary: JSON upstream response
+                  value:
+                    message: upstream OK
+                    data: [1, 2, 3]
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                missingKey:
+                  summary: x-api-key header absent
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: "Unauthorized: missing x-api-key header"
+                    requestId: req-gateway-proxy-401-missing
+                    timestamp: "2026-07-28T10:01:00.000Z"
+                invalidKey:
+                  summary: API key does not match the API ID
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: "Unauthorized: invalid API key"
+                    requestId: req-gateway-proxy-401-invalid
+                    timestamp: "2026-07-28T10:02:00.000Z"
+    post:
+      summary: Proxy a mutating request to an upstream API
+      description: >
+        Authenticated proxy route for requests with a body. The JSON request
+        body is forwarded to the registered upstream service for the API ID.
+        One USDC credit is deducted from the developer's balance per proxied
+        call. The upstream response is returned verbatim.
+      parameters:
+        - name: apiId
+          in: path
+          required: true
+          description: Registered API identifier (1–50 characters).
+          schema:
+            type: string
+            maxLength: 50
+          examples:
+            existing:
+              summary: Existing API ID
+              value: api_123
+        - name: x-api-key
+          in: header
+          required: true
+          description: API key issued to the developer for this API.
+          schema:
+            type: string
+          examples:
+            validKey:
+              summary: Valid API key
+              value: "cl_9f4a2b7c8d1e0a3b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayProxyRequest"
+            examples:
+              translate:
+                summary: Forward a translation request
+                value:
+                  text: "Hello, world"
+                  targetLang: fr
+              slack:
+                summary: Forward a message payload
+                value:
+                  channel: "#billing-alerts"
+                  text: "Usage threshold exceeded"
+      responses:
+        "200":
+          description: Upstream responded successfully; body is passed through.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayProxyResponse"
+              examples:
+                ok:
+                  summary: JSON upstream response
+                  value:
+                    message: upstream OK
+                    data: [1, 2, 3]
+        "401":
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                invalid:
+                  summary: x-api-key header missing or invalid
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: "Unauthorized: invalid API key"
+                    requestId: req-gateway-proxy-401
+                    timestamp: "2026-07-28T10:03:00.000Z"
+        "402":
+          description: Insufficient balance to deduct the call credit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                insufficientBalance:
+                  summary: Developer balance is zero
+                  value:
+                    success: false
+                    error:
+                      code: PAYMENT_REQUIRED
+                      message: "Payment Required: insufficient balance"
+                    requestId: req-gateway-proxy-402
+                    timestamp: "2026-07-28T10:04:00.000Z"
+        "403":
+          description: API key has been revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                revoked:
+                  summary: Key is on the revocation list
+                  value:
+                    success: false
+                    error:
+                      code: FORBIDDEN
+                      message: "Forbidden: API key has been revoked"
+                    requestId: req-gateway-proxy-403
+                    timestamp: "2026-07-28T10:05:00.000Z"
+        "429":
+          description: Per-user or per-key rate limit exceeded.
+          headers:
+            Retry-After:
+              description: Seconds until the caller may retry.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                rateLimited:
+                  summary: Token bucket exhausted
+                  value:
+                    success: false
+                    error:
+                      code: TOO_MANY_REQUESTS
+                      message: Too Many Requests
+                    requestId: req-gateway-proxy-429
+                    timestamp: "2026-07-28T10:06:00.000Z"
+        "502":
+          description: Upstream is unreachable or returned an invalid response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                badGateway:
+                  summary: Upstream could not be contacted
+                  value:
+                    success: false
+                    error:
+                      code: BAD_GATEWAY
+                      message: "Bad Gateway: upstream unreachable"
+                    requestId: req-gateway-proxy-502
+                    timestamp: "2026-07-28T10:07:00.000Z"
+        "503":
+          description: Circuit breaker is open for the endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                breakerOpen:
+                  summary: Endpoint fast-fails while the breaker is open
+                  value:
+                    success: false
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: "Service Unavailable: endpoint circuit breaker is open"
+                    requestId: req-gateway-proxy-503
+                    timestamp: "2026-07-28T10:08:00.000Z"
+        "504":
+          description: Upstream did not respond before the request timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorEnvelope"
+              examples:
+                timeout:
+                  summary: Upstream request timed out
+                  value:
+                    success: false
+                    error:
+                      code: GATEWAY_TIMEOUT
+                      message: Upstream service timed out
+                    requestId: req-gateway-proxy-504
+                    timestamp: "2026-07-28T10:09:00.000Z"
 components:
   securitySchemes:
     bearerAuth:
@@ -2111,6 +2499,99 @@ components:
           example: Webhook delivery accepted.
         body:
           $ref: "#/components/schemas/WebhookDeliveryPayload"
+    # ---------------------------------------------------------------------------
+    # Gateway schemas
+    # ---------------------------------------------------------------------------
+    GatewayEndpointPricing:
+      type: object
+      required: [endpointId, path, priceUsdc]
+      description: Pricing for a single endpoint within an API.
+      properties:
+        endpointId:
+          type: string
+        path:
+          type: string
+          description: Path pattern to match (e.g. "/data", "/translate"). Use "*" as default.
+        priceUsdc:
+          type: number
+          description: Price charged per call in USDC.
+    GatewayApiEntry:
+      type: object
+      required: [id, slug, base_url, developerId, endpoints]
+      description: A registered API with its upstream base URL and endpoint pricing.
+      properties:
+        id:
+          type: string
+        slug:
+          type: string
+        base_url:
+          type: string
+          format: uri
+        developerId:
+          type: string
+        endpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayEndpointPricing"
+        created_at:
+          type: string
+          format: date-time
+    GatewayListResponse:
+      type: object
+      required: [entries, nextCursor]
+      description: >
+        Cursor-paginated listing of registered APIs. Pass `nextCursor` back as
+        the `cursor` query parameter to fetch the next page; it is `null` when
+        no more results exist.
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayApiEntry"
+        nextCursor:
+          type: [string, "null"]
+          description: Opaque cursor for the next page, or null when the list is exhausted.
+    GatewayHealthResponse:
+      type: object
+      required: [apiSlug, latency, breaker]
+      description: >
+        Aggregated upstream health for a single API. Latency values are in
+        milliseconds and are `null` until the endpoint has observed traffic.
+      properties:
+        apiSlug:
+          type: string
+        latency:
+          type: object
+          required: [p50, p95]
+          properties:
+            p50:
+              type: [number, "null"]
+              description: Median upstream latency in milliseconds.
+            p95:
+              type: [number, "null"]
+              description: 95th-percentile upstream latency in milliseconds.
+        breaker:
+          type: object
+          required: [state]
+          properties:
+            state:
+              type: string
+              enum: [closed, open, half-open]
+              description: Current circuit breaker state for the endpoint.
+    GatewayProxyRequest:
+      type: object
+      description: >
+        Arbitrary JSON body forwarded verbatim to the registered upstream API.
+        The exact shape depends on the proxied service and is not constrained
+        by the gateway.
+      additionalProperties: true
+    GatewayProxyResponse:
+      type: object
+      description: >
+        The upstream service response is passed through verbatim. This schema
+        is illustrative only — the actual shape depends on the proxied API and
+        may be non-JSON.
+      additionalProperties: true
     # Distinct from the pre-existing flat ErrorResponse — this matches the
     # actual envelope produced by errorHandler.ts / buildErrorEnvelope():
     # { success: false, error: { code, message, details? }, requestId, timestamp }
