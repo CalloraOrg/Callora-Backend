@@ -1,5 +1,5 @@
-import type { CursorPayload } from '../lib/cursorPagination.js';
-import { readQuery } from '../db.js';
+import type { CursorPayload } from "../lib/cursorPagination.js";
+import { readQuery } from "../db.js";
 
 export interface AuditLogEntry {
   id: string;
@@ -12,6 +12,11 @@ export interface AuditLogEntry {
   bodyHash: string | null;
   details: Record<string, unknown> | null;
   createdAt: string;
+  sequenceNo: number;
+  previousHash: string;
+  integrityHash: string;
+  target: string | null;
+  outcome: "success" | "failure";
 }
 
 export interface AuditLogCursorFilters {
@@ -33,7 +38,9 @@ export interface FindAuditLogsCursorResult {
 }
 
 export interface AuditLogRepository {
-  findCursor(params: FindAuditLogsCursorParams): Promise<FindAuditLogsCursorResult>;
+  findCursor(
+    params: FindAuditLogsCursorParams,
+  ): Promise<FindAuditLogsCursorResult>;
   findById(id: string): Promise<AuditLogEntry | undefined>;
 }
 
@@ -52,6 +59,11 @@ interface AuditLogRow {
   body_hash: string | null;
   details: string | null;
   created_at: Date | string;
+  sequence_no: number;
+  previous_hash: string;
+  integrity_hash: string;
+  target: string | null;
+  outcome: "success" | "failure";
 }
 
 const parseDetails = (raw: string | null): Record<string, unknown> | null => {
@@ -61,7 +73,9 @@ const parseDetails = (raw: string | null): Record<string, unknown> | null => {
 
   try {
     const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    return typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
@@ -79,15 +93,23 @@ const mapAuditLogRow = (row: AuditLogRow): AuditLogEntry => ({
   correlationId: row.correlation_id,
   bodyHash: row.body_hash,
   details: parseDetails(row.details),
-  createdAt: row.created_at instanceof Date
-    ? row.created_at.toISOString()
-    : new Date(row.created_at).toISOString(),
+  createdAt:
+    row.created_at instanceof Date
+      ? row.created_at.toISOString()
+      : new Date(row.created_at).toISOString(),
+  sequenceNo: row.sequence_no,
+  previousHash: row.previous_hash,
+  integrityHash: row.integrity_hash,
+  target: row.target,
+  outcome: row.outcome,
 });
 
 export class PgAuditLogRepository implements AuditLogRepository {
   constructor(private readonly db?: AuditLogRepositoryQueryable) {}
 
-  async findCursor(params: FindAuditLogsCursorParams): Promise<FindAuditLogsCursorResult> {
+  async findCursor(
+    params: FindAuditLogsCursorParams,
+  ): Promise<FindAuditLogsCursorResult> {
     const fetchLimit = Math.max(1, params.limit) + 1;
     const sqlParams: unknown[] = [];
     const whereClauses: string[] = [];
@@ -131,7 +153,8 @@ export class PgAuditLogRepository implements AuditLogRepository {
 
     sqlParams.push(fetchLimit);
 
-    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const whereSql =
+      whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
     const result = await this.read<AuditLogRow>(
       `
@@ -145,7 +168,12 @@ export class PgAuditLogRepository implements AuditLogRepository {
           correlation_id,
           body_hash,
           details,
-          created_at
+          created_at,
+          sequence_no,
+          previous_hash,
+          integrity_hash,
+          target,
+          outcome
         FROM audit_logs
         ${whereSql}
         ORDER BY created_at DESC, id DESC
@@ -173,7 +201,12 @@ export class PgAuditLogRepository implements AuditLogRepository {
           correlation_id,
           body_hash,
           details,
-          created_at
+          created_at,
+          sequence_no,
+          previous_hash,
+          integrity_hash,
+          target,
+          outcome
         FROM audit_logs
         WHERE id = $1
         LIMIT 1
