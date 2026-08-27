@@ -108,6 +108,10 @@ export const envSchema = z
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(5),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     RATE_LIMIT_STORE: z.enum(["memory", "postgres"]).default("memory"),
+    RATE_LIMIT_OUTAGE_MODE: z.enum(["fail-closed", "fallback"]).default("fail-closed"),
+    RATE_LIMIT_FALLBACK_MAX_REQUESTS: z.coerce.number().int().positive().default(10),
+    RATE_LIMIT_FALLBACK_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    RATE_LIMIT_FALLBACK_MAX_BUCKETS: z.coerce.number().int().positive().default(10_000),
     RATE_LIMIT_PG_TABLE: z
       .string()
       .regex(

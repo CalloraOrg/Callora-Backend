@@ -1,5 +1,10 @@
 import type { PoolClient } from 'pg';
 import type { RateLimiter, RateLimitResult } from '../types/gateway.js';
+import { logger } from '../logger.js';
+import {
+  recordRateLimiterStoreOutage,
+  recordRateLimiterStoreRecovery,
+} from '../metrics.js';
 
 interface TokenBucket {
   tokens: number;
@@ -57,9 +62,18 @@ export interface InMemoryRateLimiterConfig extends ConfiguredRateLimiterOptions 
   store?: 'memory';
 }
 
+export type RateLimiterOutageMode = 'fail-closed' | 'fallback';
+
+export interface ResilientRateLimiterOptions {
+  outageMode?: RateLimiterOutageMode;
+  fallbackMaxRequests?: number;
+  fallbackWindowMs?: number;
+  maxFallbackBuckets?: number;
+}
+
 export type RateLimiterConfig =
   | InMemoryRateLimiterConfig
-  | PersistentRateLimiterConfig;
+  | (PersistentRateLimiterConfig & ResilientRateLimiterOptions);
 
 const DEFAULT_MAX_REQUESTS = 100;
 const DEFAULT_WINDOW_MS = 60_000;
@@ -168,11 +182,21 @@ async function rollbackQuietly(client: PersistentRateLimiterClient): Promise<voi
 export class InMemoryRateLimiterStore implements RateLimiterStore {
   private readonly buckets = new Map<string, TokenBucket>();
 
+  constructor(private readonly maxBuckets = 10_000) {
+    if (!Number.isInteger(maxBuckets) || maxBuckets <= 0) {
+      throw new Error('maxBuckets must be a positive integer.');
+    }
+  }
+
   async check(
     bucketKey: string,
     options: RateLimiterStoreCheckOptions,
   ): Promise<RateLimitResult> {
     const existingBucket = this.buckets.get(bucketKey);
+    if (!existingBucket && this.buckets.size >= this.maxBuckets) {
+      const oldestKey = this.buckets.keys().next().value as string | undefined;
+      if (oldestKey !== undefined) this.buckets.delete(oldestKey);
+    }
     const { bucket, result } = computeRateLimitResult(
       existingBucket,
       options.maxRequests,
@@ -190,6 +214,82 @@ export class InMemoryRateLimiterStore implements RateLimiterStore {
 
   reset(): void {
     this.buckets.clear();
+  }
+}
+
+/**
+ * Keeps a distributed limiter fail-safe when its backing store is unavailable.
+ *
+ * A fallback bucket is deliberately isolated from the distributed bucket: it
+ * is never written back after recovery, so a recovered store cannot inherit
+ * stale local counters. The local store also evicts the oldest key at a hard
+ * bound to prevent an outage from turning into an unbounded memory sink.
+ */
+export class ResilientRateLimiterStore implements RateLimiterStore {
+  private readonly fallback: InMemoryRateLimiterStore;
+  private degraded = false;
+  private readonly outageMode: RateLimiterOutageMode;
+  private readonly fallbackMaxRequests: number;
+  private readonly fallbackWindowMs: number;
+
+  constructor(
+    private readonly primary: RateLimiterStore,
+    options: ResilientRateLimiterOptions = {},
+  ) {
+    this.outageMode = options.outageMode ?? 'fail-closed';
+    this.fallbackMaxRequests = normalizePositiveInteger(
+      options.fallbackMaxRequests ?? 10,
+      'fallbackMaxRequests',
+    );
+    this.fallbackWindowMs = normalizePositiveInteger(
+      options.fallbackWindowMs ?? 60_000,
+      'fallbackWindowMs',
+    );
+    this.fallback = new InMemoryRateLimiterStore(options.maxFallbackBuckets ?? 10_000);
+  }
+
+  async check(
+    bucketKey: string,
+    options: RateLimiterStoreCheckOptions,
+  ): Promise<RateLimitResult> {
+    try {
+      const result = await this.primary.check(bucketKey, options);
+      if (this.degraded) {
+        this.degraded = false;
+        this.fallback.reset();
+        recordRateLimiterStoreRecovery();
+        logger.info('[rateLimiter] distributed store recovered; local fallback reset', {
+          bucketKey,
+        });
+      }
+      return result;
+    } catch (error) {
+      if (!this.degraded) {
+        this.degraded = true;
+        recordRateLimiterStoreOutage(this.outageMode);
+        logger.error('[rateLimiter] distributed store unavailable', {
+          outageMode: this.outageMode,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (this.outageMode === 'fail-closed') {
+        return {
+          allowed: false,
+          retryAfterMs: Math.max(options.windowMs, 1_000),
+        };
+      }
+
+      return this.fallback.check(bucketKey, {
+        maxRequests: Math.min(options.maxRequests, this.fallbackMaxRequests),
+        now: options.now,
+        windowMs: Math.min(options.windowMs, this.fallbackWindowMs),
+      });
+    }
+  }
+
+  isDegraded(): boolean {
+    return this.degraded;
   }
 }
 
@@ -393,6 +493,10 @@ export interface AppRateLimiterConfig {
   windowMs: number;
   store: 'memory' | 'postgres';
   postgresTable: string;
+  outageMode?: RateLimiterOutageMode;
+  fallbackMaxRequests?: number;
+  fallbackWindowMs?: number;
+  maxFallbackBuckets?: number;
 }
 
 /**
@@ -411,6 +515,10 @@ export function resolveRateLimiterConfig(
       maxRequests: config.maxRequests,
       windowMs: config.windowMs,
       tableName: config.postgresTable,
+      ...(config.outageMode ? { outageMode: config.outageMode } : {}),
+      ...(config.fallbackMaxRequests !== undefined ? { fallbackMaxRequests: config.fallbackMaxRequests } : {}),
+      ...(config.fallbackWindowMs !== undefined ? { fallbackWindowMs: config.fallbackWindowMs } : {}),
+      ...(config.maxFallbackBuckets !== undefined ? { maxFallbackBuckets: config.maxFallbackBuckets } : {}),
     };
   }
 
@@ -436,12 +544,13 @@ export function createConfiguredRateLimiter(
       );
     }
 
+    const distributedStore = new PostgresRateLimiterStore(persistentPool, {
+      tableName: config.tableName,
+    });
     return new StoreBackedRateLimiter(
       maxRequests,
       windowMs,
-      new PostgresRateLimiterStore(persistentPool, {
-        tableName: config.tableName,
-      }),
+      new ResilientRateLimiterStore(distributedStore, config),
       tierPolicies,
     );
   }

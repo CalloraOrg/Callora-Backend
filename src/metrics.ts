@@ -7,6 +7,29 @@ import { UnauthorizedError } from './errors/index.js';
 export const register = new client.Registry();
 client.collectDefaultMetrics({ register });
 
+const rateLimiterStoreOutages = new client.Counter({
+  name: 'rate_limiter_store_outages_total',
+  help: 'Number of distributed rate-limiter store outages observed',
+  labelNames: ['outage_mode'],
+});
+
+const rateLimiterStoreDegraded = new client.Gauge({
+  name: 'rate_limiter_store_degraded',
+  help: 'Whether the distributed rate-limiter store is currently degraded',
+});
+
+register.registerMetric(rateLimiterStoreOutages);
+register.registerMetric(rateLimiterStoreDegraded);
+
+export function recordRateLimiterStoreOutage(outageMode: 'fail-closed' | 'fallback'): void {
+  rateLimiterStoreOutages.inc({ outage_mode: outageMode });
+  rateLimiterStoreDegraded.set(1);
+}
+
+export function recordRateLimiterStoreRecovery(): void {
+  rateLimiterStoreDegraded.set(0);
+}
+
 // ── Route groups ──────────────────────────────────────────────────────────────
 //
 // A `route_group` label is added to every HTTP metric so dashboards can slice

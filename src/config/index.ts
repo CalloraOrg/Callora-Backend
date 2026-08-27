@@ -201,6 +201,10 @@ export const config = {
     windowMs: env.RATE_LIMIT_WINDOW_MS,
     store: env.RATE_LIMIT_STORE,
     postgresTable: env.RATE_LIMIT_PG_TABLE,
+    outageMode: env.RATE_LIMIT_OUTAGE_MODE,
+    fallbackMaxRequests: env.RATE_LIMIT_FALLBACK_MAX_REQUESTS,
+    fallbackWindowMs: env.RATE_LIMIT_FALLBACK_WINDOW_MS,
+    maxFallbackBuckets: env.RATE_LIMIT_FALLBACK_MAX_BUCKETS,
   },
 
   sorobanRpc:

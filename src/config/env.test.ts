@@ -153,6 +153,10 @@ describe('env schema — gateway rate limit config', () => {
       expect(result.data.RATE_LIMIT_WINDOW_MS).toBe(60_000);
       expect(result.data.RATE_LIMIT_STORE).toBe('memory');
       expect(result.data.RATE_LIMIT_PG_TABLE).toBe('gateway_rate_limit_buckets');
+      expect(result.data.RATE_LIMIT_OUTAGE_MODE).toBe('fail-closed');
+      expect(result.data.RATE_LIMIT_FALLBACK_MAX_REQUESTS).toBe(10);
+      expect(result.data.RATE_LIMIT_FALLBACK_WINDOW_MS).toBe(60_000);
+      expect(result.data.RATE_LIMIT_FALLBACK_MAX_BUCKETS).toBe(10_000);
     }
   });
 
@@ -171,6 +175,35 @@ describe('env schema — gateway rate limit config', () => {
       expect(result.data.RATE_LIMIT_STORE).toBe('postgres');
       expect(result.data.RATE_LIMIT_PG_TABLE).toBe('custom_rate_limit_buckets');
     }
+  });
+
+  it('accepts explicit fallback outage policy and bounds', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      RATE_LIMIT_STORE: 'postgres',
+      RATE_LIMIT_OUTAGE_MODE: 'fallback',
+      RATE_LIMIT_FALLBACK_MAX_REQUESTS: '7',
+      RATE_LIMIT_FALLBACK_WINDOW_MS: '15000',
+      RATE_LIMIT_FALLBACK_MAX_BUCKETS: '250',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.RATE_LIMIT_OUTAGE_MODE).toBe('fallback');
+      expect(result.data.RATE_LIMIT_FALLBACK_MAX_REQUESTS).toBe(7);
+      expect(result.data.RATE_LIMIT_FALLBACK_WINDOW_MS).toBe(15_000);
+      expect(result.data.RATE_LIMIT_FALLBACK_MAX_BUCKETS).toBe(250);
+    }
+  });
+
+  it('rejects an unsupported outage mode and unsafe fallback dimensions', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      RATE_LIMIT_OUTAGE_MODE: 'allow-all',
+      RATE_LIMIT_FALLBACK_MAX_REQUESTS: '0',
+      RATE_LIMIT_FALLBACK_WINDOW_MS: '-1',
+      RATE_LIMIT_FALLBACK_MAX_BUCKETS: '0',
+    });
+    expect(result.success).toBe(false);
   });
 
   it('rejects a store value other than "memory" or "postgres"', () => {
