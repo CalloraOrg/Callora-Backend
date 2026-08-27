@@ -228,11 +228,12 @@ describe('src/openapi.yaml — POST deliver examples', () => {
     expect(content).toContain('$ref: "#/components/schemas/WebhookDeliveryResponse"');
   });
 
-  test('documents signature and timestamp header parameters', () => {
+  test('documents signature, timestamp, and nonce header parameters', () => {
     const content = readOpenApiYaml();
 
     expect(content).toContain('X-Callora-Signature-256');
     expect(content).toContain('X-Callora-Timestamp');
+    expect(content).toContain('X-Callora-Nonce');
   });
 
   test('documents three delivery request examples covering all supported event types', () => {

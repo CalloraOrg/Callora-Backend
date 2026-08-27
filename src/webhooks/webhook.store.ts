@@ -1,4 +1,5 @@
 import { WebhookConfig, WebhookEventType, DeadLetterEntry, type RetryPolicy } from './webhook.types.js';
+import { WebhookNonceStore } from './webhook.nonceStore.js';
 
 const store = new Map<string, WebhookConfig>();
 const deadLetterStore = new Map<string, DeadLetterEntry>();
@@ -87,7 +88,29 @@ export const WebhookStore = {
         return nextConfig;
     },
 
+    /**
+     * Drop the previous signing key once its grace window has elapsed.
+     * Mutates `config` in place (the object held in the store).
+     * @returns true when a previous key was deleted.
+     */
+    expirePreviousSecret(config: WebhookConfig, now: Date = new Date()): boolean {
+        const expiredByClock =
+            !!config.previous_expires_at &&
+            config.previous_expires_at.getTime() < now.getTime();
+        const orphaned = !!config.secret_previous && !config.previous_expires_at;
+
+        if (!config.secret_previous || (!expiredByClock && !orphaned)) {
+            return false;
+        }
+
+        delete config.secret_previous;
+        delete config.previous_expires_at;
+        return true;
+    },
+
     getActiveSecrets(config: WebhookConfig, now: Date = new Date()): string[] {
+        this.expirePreviousSecret(config, now);
+
         const secrets = new Set<string>();
         const currentSecret = config.secret_current ?? config.secret;
 
@@ -108,6 +131,7 @@ export const WebhookStore = {
 
     delete(developerId: string): void {
         store.delete(developerId);
+        WebhookNonceStore.purgeScope(developerId);
     },
 
     getByEvent(event: WebhookEventType): WebhookConfig[] {
@@ -121,6 +145,7 @@ export const WebhookStore = {
     /** Clear all webhook configurations - for testing only */
     clear(): void {
         store.clear();
+        WebhookNonceStore.clear();
     },
 
     // ── Dead-Letter Queue (DLQ) ─────────────────────────────────────────────
