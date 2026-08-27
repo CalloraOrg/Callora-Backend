@@ -138,8 +138,9 @@ If you provide a `secret` during registration, each webhook delivery includes th
 | Header                      | Format              | Description                           |
 |-----------------------------|---------------------|---------------------------------------|
 | `X-Request-Id`              | string              | Correlation ID from the triggering request |
-| `X-Callora-Signature-256`   | `sha256=<hex>`      | HMAC-SHA256 of signed payload         |
-| `X-Callora-Timestamp`       | ISO-8601 timestamp  | Delivery timestamp for replay defense |
+| `X-Callora-Signature-256`   | `sha256=<hex>`      | HMAC-SHA256 of `<timestamp>.<nonce>.<rawBody>` |
+| `X-Callora-Timestamp`       | ISO-8601 timestamp  | Delivery timestamp for skew/replay defense |
+| `X-Callora-Nonce`           | 16–128 URL-safe chars | Unique request nonce; persisted and rejected on reuse |
 | `X-Callora-Event`           | string              | Event type being delivered |
 | `X-Callora-Delivery`        | UUID                | Unique delivery identifier for idempotency |
 | `User-Agent`                | `Callora-Webhook/1.0` | Identifies Callora as the sender |
@@ -147,25 +148,27 @@ If you provide a `secret` during registration, each webhook delivery includes th
 
 #### Signed Payload Format
 
-The signed payload combines the timestamp and raw request body:
+The signed payload combines the timestamp, nonce, and raw request body:
 
 ```
-<timestamp>.<rawBody>
+<timestamp>.<nonce>.<rawBody>
 ```
 
-For example, if the timestamp is `2026-05-31T10:00:00.000Z` and body is `{"event":"new_api_call"}`:
+For example, if the timestamp is `2026-05-31T10:00:00.000Z`, the nonce is
+`nonce-7c9e6679-7425-40de`, and the body is `{"event":"new_api_call"}`:
 
 ```
-2026-05-31T10:00:00.000Z.{"event":"new_api_call"}
+2026-05-31T10:00:00.000Z.nonce-7c9e6679-7425-40de.{"event":"new_api_call"}
 ```
 
 #### Verification Steps
 
-1. **Extract headers** — Get `X-Callora-Signature-256` and `X-Callora-Timestamp`
-2. **Reconstruct payload** — Combine `<timestamp>.<rawBody>`
-3. **Compute expected signature** — HMAC-SHA256 with your secret
-4. **Timing-safe comparison** — Compare using constant-time method
-5. **Check timestamp** — Reject if outside 5-minute tolerance window (replay protection)
+1. **Extract headers** — Get `X-Callora-Signature-256`, `X-Callora-Timestamp`, and `X-Callora-Nonce`
+2. **Reconstruct payload** — Combine `<timestamp>.<nonce>.<rawBody>`
+3. **Compute expected signature** — HMAC-SHA256 with the current secret and, during rotation, the previous secret still inside the grace window
+4. **Timing-safe comparison** — Compare every active secret using constant-time equality. Failures never identify which key matched.
+5. **Check timestamp** — Reject if outside 5-minute tolerance window (clock skew / replay)
+6. **Persist nonce** — Reject reused nonces within the same window
 
 ### Signing Secret Rotation
 

@@ -7,6 +7,7 @@ import { WebhookEventType, type RetryPolicy } from './webhook.types.js';
 import {
   captureRawBody,
   verifyWebhookSignature,
+  parseCapturedJson,
 } from './webhook.signature.js';
 import { AppError, BadRequestError, NotFoundError } from '../errors/index.js';
 import { createRestRateLimitMiddleware } from '../middleware/restRateLimit.js';
@@ -16,6 +17,13 @@ import { logger } from '../logger.js';
 import { validateRetryPolicy } from '../services/webhookRetry.js';
 import { createWebhookHealthRouter } from '../routes/webhooks/health.js';
 import { securityHeadersMiddleware } from '../middleware/securityHeaders.js';
+import { validate } from '../middleware/validate.js';
+import {
+  registerWebhookSchema,
+  webhookDeveloperParamsSchema,
+  updateWebhookRetryPolicySchema,
+  webhookDeliveryPayloadSchema,
+} from '../validators/webhooks.js';
 
 const router = Router();
 
@@ -244,7 +252,7 @@ router.post(
     next();
   },
   verifyWebhookSignature,
-  express.json(),
+  parseCapturedJson,
   validate({ body: webhookDeliveryPayloadSchema }),
   (req: Request, res: Response) => {
     // Payload has been verified — safe to process

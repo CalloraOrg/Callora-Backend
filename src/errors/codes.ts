@@ -189,6 +189,12 @@ export const ErrorCode = {
   /** Webhook signature verification failed */
   INVALID_WEBHOOK_SIGNATURE: "INVALID_WEBHOOK_SIGNATURE",
 
+  /** Webhook nonce header is malformed */
+  MALFORMED_WEBHOOK_NONCE: "MALFORMED_WEBHOOK_NONCE",
+
+  /** Webhook nonce has already been used */
+  WEBHOOK_NONCE_REPLAYED: "WEBHOOK_NONCE_REPLAYED",
+
   /** The delivery ID provided for webhook replay is missing or invalid */
   INVALID_DELIVERY_ID: "INVALID_DELIVERY_ID",
 

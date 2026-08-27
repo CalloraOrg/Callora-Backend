@@ -72,6 +72,8 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `WEBHOOK_TIMESTAMP_OUT_OF_WINDOW` | Webhooks |
 | `MALFORMED_WEBHOOK_SIGNATURE` | Webhooks |
 | `INVALID_WEBHOOK_SIGNATURE` | Webhooks |
+| `MALFORMED_WEBHOOK_NONCE` | Webhooks |
+| `WEBHOOK_NONCE_REPLAYED` | Webhooks |
 | `INVALID_DELIVERY_ID` | Webhooks |
 | `INVALID_RETRY_POLICY` | Webhooks |
 | `DLQ_ENTRY_NOT_FOUND` | Webhooks |

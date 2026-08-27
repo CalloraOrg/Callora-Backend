@@ -6,13 +6,17 @@ import type { Request, Response, NextFunction } from 'express';
 import {
   computeSignature,
   safeCompare,
+  matchesAnySecret,
   verifyWebhookSignature,
   captureRawBody,
+  parseCapturedJson,
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
+  NONCE_HEADER,
   SIGNATURE_TOLERANCE_MS,
 } from './webhook.signature.js';
 import { WebhookStore } from './webhook.store.js';
+import { WebhookNonceStore } from './webhook.nonceStore.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,26 +26,57 @@ function makeTimestamp(offsetMs = 0): string {
   return new Date(Date.now() + offsetMs).toISOString();
 }
 
+function makeNonce(label = 'test'): string {
+  return `nonce-${label}-0123456789ab`;
+}
+
 /** Minimal Request stub — only the fields our middleware touches. */
 function makeReq(
   overrides: Partial<{
     headers: Record<string, string>;
     webhookSecret: string;
     webhookSecrets: string[];
+    webhookNonceScope: string;
     rawBody: Buffer;
+    params: Record<string, string>;
   }> = {}
-): Request & { webhookSecret?: string; webhookSecrets?: string[]; rawBody?: Buffer } {
+): Request & {
+  webhookSecret?: string;
+  webhookSecrets?: string[];
+  webhookNonceScope?: string;
+  rawBody?: Buffer;
+  params: Record<string, string>;
+} {
   const emitter = new EventEmitter() as unknown as Request & {
     webhookSecret?: string;
     webhookSecrets?: string[];
+    webhookNonceScope?: string;
     rawBody?: Buffer;
     headers: Record<string, string>;
+    params: Record<string, string>;
   };
   emitter.headers = overrides.headers ?? {};
   emitter.webhookSecret = overrides.webhookSecret;
   emitter.webhookSecrets = overrides.webhookSecrets;
+  emitter.webhookNonceScope = overrides.webhookNonceScope;
   emitter.rawBody = overrides.rawBody;
+  emitter.params = overrides.params ?? { developerId: 'dev-test' };
   return emitter;
+}
+
+function signedHeaders(
+  secret: string,
+  body: Buffer | string,
+  opts: { ts?: string; nonce?: string } = {}
+): Record<string, string> {
+  const ts = opts.ts ?? makeTimestamp();
+  const nonce = opts.nonce ?? makeNonce();
+  const sig = computeSignature(secret, ts, body, nonce);
+  return {
+    [TIMESTAMP_HEADER]: ts,
+    [NONCE_HEADER]: nonce,
+    [SIGNATURE_HEADER]: `sha256=${sig}`,
+  };
 }
 
 /** Minimal Response stub that records status + json calls. */
@@ -74,6 +109,10 @@ function collectNextError(
 
   return { nextCalled, error: capturedError };
 }
+
+beforeEach(() => {
+  WebhookNonceStore.clear();
+});
 
 // ---------------------------------------------------------------------------
 // computeSignature
@@ -118,6 +157,22 @@ test('computeSignature accepts a plain string body', () => {
   const fromString = computeSignature('secret', ts, 'hello');
   const fromBuffer = computeSignature('secret', ts, Buffer.from('hello'));
   assert.equal(fromString, fromBuffer);
+});
+
+test('computeSignature includes nonce in the MAC when provided', () => {
+  const ts = '2026-01-01T00:00:00.000Z';
+  const body = Buffer.from('body');
+  const withoutNonce = computeSignature('secret', ts, body);
+  const withNonce = computeSignature('secret', ts, body, makeNonce());
+  assert.notEqual(withoutNonce, withNonce);
+});
+
+test('computeSignature differs when nonce changes', () => {
+  const ts = '2026-01-01T00:00:00.000Z';
+  const body = Buffer.from('body');
+  const a = computeSignature('secret', ts, body, makeNonce('a'));
+  const b = computeSignature('secret', ts, body, makeNonce('b'));
+  assert.notEqual(a, b);
 });
 
 // ---------------------------------------------------------------------------
@@ -167,7 +222,7 @@ test('verifyWebhookSignature rejects when signature header is missing', () => {
   const ts = makeTimestamp();
   const req = makeReq({
     webhookSecret: 'secret',
-    headers: { [TIMESTAMP_HEADER]: ts },   // no SIGNATURE_HEADER
+    headers: { [TIMESTAMP_HEADER]: ts, [NONCE_HEADER]: makeNonce() },
     rawBody: Buffer.from('{}'),
   });
   const res = makeRes();
@@ -180,7 +235,21 @@ test('verifyWebhookSignature rejects when signature header is missing', () => {
 test('verifyWebhookSignature rejects when timestamp header is missing', () => {
   const req = makeReq({
     webhookSecret: 'secret',
-    headers: { [SIGNATURE_HEADER]: 'sha256=abc' },   // no TIMESTAMP_HEADER
+    headers: { [SIGNATURE_HEADER]: 'sha256=abc', [NONCE_HEADER]: makeNonce() },
+    rawBody: Buffer.from('{}'),
+  });
+  const res = makeRes();
+  const { nextCalled, error } = collectNextError((next) => verifyWebhookSignature(req, res, next));
+  assert.equal(nextCalled, true);
+  assert.equal((error as { name?: string }).name, 'UnauthorizedError');
+  assert.equal((error as { code?: string }).code, 'MISSING_WEBHOOK_SIGNATURE_HEADERS');
+});
+
+test('verifyWebhookSignature rejects when nonce header is missing', () => {
+  const ts = makeTimestamp();
+  const req = makeReq({
+    webhookSecret: 'secret',
+    headers: { [TIMESTAMP_HEADER]: ts, [SIGNATURE_HEADER]: 'sha256=abc' },
     rawBody: Buffer.from('{}'),
   });
   const res = makeRes();
@@ -195,6 +264,7 @@ test('verifyWebhookSignature rejects a non-ISO timestamp', () => {
     webhookSecret: 'secret',
     headers: {
       [TIMESTAMP_HEADER]: 'not-a-date',
+      [NONCE_HEADER]: makeNonce(),
       [SIGNATURE_HEADER]: 'sha256=abc123',
     },
     rawBody: Buffer.from('{}'),
@@ -212,6 +282,7 @@ test('verifyWebhookSignature rejects a stale timestamp (too old)', () => {
     webhookSecret: 'secret',
     headers: {
       [TIMESTAMP_HEADER]: ts,
+      [NONCE_HEADER]: makeNonce(),
       [SIGNATURE_HEADER]: 'sha256=deadbeef',
     },
     rawBody: Buffer.from('{}'),
@@ -229,6 +300,7 @@ test('verifyWebhookSignature rejects a future timestamp outside tolerance', () =
     webhookSecret: 'secret',
     headers: {
       [TIMESTAMP_HEADER]: ts,
+      [NONCE_HEADER]: makeNonce(),
       [SIGNATURE_HEADER]: 'sha256=deadbeef',
     },
     rawBody: Buffer.from('{}'),
@@ -240,12 +312,21 @@ test('verifyWebhookSignature rejects a future timestamp outside tolerance', () =
   assert.equal((error as { code?: string }).code, 'WEBHOOK_TIMESTAMP_OUT_OF_WINDOW');
 });
 
+test('verifyWebhookSignature accepts a timestamp inside the skew window', (done) => {
+  const body = Buffer.from('{"event":"new_api_call"}');
+  const ts = makeTimestamp(-(SIGNATURE_TOLERANCE_MS - 5_000));
+  const headers = signedHeaders('secret', body, { ts });
+  const req = makeReq({ webhookSecret: 'secret', headers, rawBody: body });
+  verifyWebhookSignature(req, makeRes(), () => { done(); });
+});
+
 test('verifyWebhookSignature rejects a malformed signature header (no prefix)', () => {
   const ts = makeTimestamp();
   const req = makeReq({
     webhookSecret: 'secret',
     headers: {
       [TIMESTAMP_HEADER]: ts,
+      [NONCE_HEADER]: makeNonce(),
       [SIGNATURE_HEADER]: 'badhex',   // missing sha256= prefix
     },
     rawBody: Buffer.from('{}'),
@@ -263,6 +344,7 @@ test('verifyWebhookSignature rejects a wrong prefix (md5=…)', () => {
     webhookSecret: 'secret',
     headers: {
       [TIMESTAMP_HEADER]: ts,
+      [NONCE_HEADER]: makeNonce(),
       [SIGNATURE_HEADER]: 'md5=abc123',
     },
     rawBody: Buffer.from('{}'),
@@ -274,21 +356,53 @@ test('verifyWebhookSignature rejects a wrong prefix (md5=…)', () => {
   assert.equal((error as { code?: string }).code, 'MALFORMED_WEBHOOK_SIGNATURE');
 });
 
+test('verifyWebhookSignature rejects a malformed nonce', () => {
+  const body = Buffer.from('{}');
+  const ts = makeTimestamp();
+  const req = makeReq({
+    webhookSecret: 'secret',
+    headers: {
+      [TIMESTAMP_HEADER]: ts,
+      [NONCE_HEADER]: 'short',
+      [SIGNATURE_HEADER]: `sha256=${computeSignature('secret', ts, body, 'short')}`,
+    },
+    rawBody: body,
+  });
+  const res = makeRes();
+  const { nextCalled, error } = collectNextError((next) => verifyWebhookSignature(req, res, next));
+  assert.equal(nextCalled, true);
+  assert.equal((error as { name?: string }).name, 'BadRequestError');
+  assert.equal((error as { code?: string }).code, 'MALFORMED_WEBHOOK_NONCE');
+});
+
+test('verifyWebhookSignature rejects a nonce with illegal characters', () => {
+  const body = Buffer.from('{}');
+  const ts = makeTimestamp();
+  const nonce = 'nonce with spaces!!!!';
+  const req = makeReq({
+    webhookSecret: 'secret',
+    headers: {
+      [TIMESTAMP_HEADER]: ts,
+      [NONCE_HEADER]: nonce,
+      [SIGNATURE_HEADER]: `sha256=${computeSignature('secret', ts, body, nonce)}`,
+    },
+    rawBody: body,
+  });
+  const { error } = collectNextError((next) => verifyWebhookSignature(req, makeRes(), next));
+  assert.equal((error as { code?: string }).code, 'MALFORMED_WEBHOOK_NONCE');
+});
+
 // ---------------------------------------------------------------------------
 // verifyWebhookSignature — signature mismatch
 // ---------------------------------------------------------------------------
 
 test('verifyWebhookSignature rejects when HMAC does not match', () => {
-  const ts = makeTimestamp();
   const body = Buffer.from('{"event":"new_api_call"}');
-  const wrongHex = computeSignature('wrong-secret', ts, body);
+  const headers = signedHeaders('wrong-secret', body);
 
   const req = makeReq({
     webhookSecret: 'correct-secret',
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${wrongHex}`,
-    },
+    headers,
     rawBody: body,
   });
   const res = makeRes();
@@ -296,20 +410,18 @@ test('verifyWebhookSignature rejects when HMAC does not match', () => {
   assert.equal(nextCalled, true);
   assert.equal((error as { name?: string }).name, 'UnauthorizedError');
   assert.equal((error as { code?: string }).code, 'INVALID_WEBHOOK_SIGNATURE');
+  assert.equal((error as { message?: string }).message, 'Webhook signature verification failed.');
+  assert.doesNotMatch((error as { message?: string }).message ?? '', /current|previous|key/i);
 });
 
 test('verifyWebhookSignature rejects when body has been tampered with', () => {
-  const ts = makeTimestamp();
   const originalBody = Buffer.from('{"event":"new_api_call"}');
   const tamperedBody = Buffer.from('{"event":"settlement_completed"}');
-  const sig = computeSignature('secret', ts, originalBody);
+  const headers = signedHeaders('secret', originalBody);
 
   const req = makeReq({
     webhookSecret: 'secret',
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${sig}`,
-    },
+    headers,
     rawBody: tamperedBody,
   });
   const res = makeRes();
@@ -319,21 +431,34 @@ test('verifyWebhookSignature rejects when body has been tampered with', () => {
   assert.equal((error as { code?: string }).code, 'INVALID_WEBHOOK_SIGNATURE');
 });
 
+test('failure response does not reveal which rotation key was tested', () => {
+  const body = Buffer.from('{"event":"new_api_call"}');
+  const headers = signedHeaders('attacker-secret', body);
+  const req = makeReq({
+    webhookSecrets: ['current-secret', 'previous-secret'],
+    headers,
+    rawBody: body,
+  });
+  const { error } = collectNextError((next) => verifyWebhookSignature(req, makeRes(), next));
+  const serialized = JSON.stringify(error);
+  assert.equal((error as { code?: string }).code, 'INVALID_WEBHOOK_SIGNATURE');
+  assert.equal((error as { message?: string }).message, 'Webhook signature verification failed.');
+  assert.equal(serialized.includes('current-secret'), false);
+  assert.equal(serialized.includes('previous-secret'), false);
+  assert.equal(serialized.includes('matched'), false);
+  assert.equal('matchedKey' in (req as object), false);
+  assert.equal('webhookMatchedSecret' in (req as object), false);
+});
+
 // ---------------------------------------------------------------------------
 // verifyWebhookSignature — happy path
 // ---------------------------------------------------------------------------
 
 test('verifyWebhookSignature calls next() for a valid signature', (done) => {
-  const ts = makeTimestamp();
   const body = Buffer.from('{"event":"new_api_call"}');
-  const sig = computeSignature('my-secret', ts, body);
-
   const req = makeReq({
     webhookSecret: 'my-secret',
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${sig}`,
-    },
+    headers: signedHeaders('my-secret', body),
     rawBody: body,
   });
   const res = makeRes();
@@ -341,16 +466,10 @@ test('verifyWebhookSignature calls next() for a valid signature', (done) => {
 });
 
 test('verifyWebhookSignature accepts a signature from the current secret when multiple secrets are configured', (done) => {
-  const ts = makeTimestamp();
   const body = Buffer.from('{"event":"new_api_call"}');
-  const sig = computeSignature('current-secret', ts, body);
-
   const req = makeReq({
     webhookSecrets: ['current-secret', 'previous-secret'],
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${sig}`,
-    },
+    headers: signedHeaders('current-secret', body),
     rawBody: body,
   });
   const res = makeRes();
@@ -358,16 +477,10 @@ test('verifyWebhookSignature accepts a signature from the current secret when mu
 });
 
 test('verifyWebhookSignature accepts a signature from the unexpired previous secret', (done) => {
-  const ts = makeTimestamp();
   const body = Buffer.from('{"event":"new_api_call"}');
-  const sig = computeSignature('previous-secret', ts, body);
-
   const req = makeReq({
     webhookSecrets: ['current-secret', 'previous-secret'],
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${sig}`,
-    },
+    headers: signedHeaders('previous-secret', body),
     rawBody: body,
   });
   const res = makeRes();
@@ -375,16 +488,10 @@ test('verifyWebhookSignature accepts a signature from the unexpired previous sec
 });
 
 test('verifyWebhookSignature rejects a previous secret after its grace window is removed', () => {
-  const ts = makeTimestamp();
   const body = Buffer.from('{"event":"new_api_call"}');
-  const sig = computeSignature('previous-secret', ts, body);
-
   const req = makeReq({
     webhookSecrets: ['current-secret'],
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${sig}`,
-    },
+    headers: signedHeaders('previous-secret', body),
     rawBody: body,
   });
   const res = makeRes();
@@ -392,9 +499,10 @@ test('verifyWebhookSignature rejects a previous secret after its grace window is
   assert.equal(nextCalled, true);
   assert.equal((error as { name?: string }).name, 'UnauthorizedError');
   assert.equal((error as { code?: string }).code, 'INVALID_WEBHOOK_SIGNATURE');
+  assert.doesNotMatch((error as { message?: string }).message ?? '', /previous/i);
 });
 
-test('WebhookStore.getActiveSecrets excludes the previous secret after previous_expires_at', () => {
+test('WebhookStore.getActiveSecrets excludes and deletes the previous secret after previous_expires_at', () => {
   const config = {
     developerId: 'dev-expired',
     url: 'https://example.com/webhook',
@@ -413,19 +521,15 @@ test('WebhookStore.getActiveSecrets excludes the previous secret after previous_
     WebhookStore.getActiveSecrets(config, new Date('2026-06-25T12:00:01.000Z')),
     ['current-secret'],
   );
+  assert.equal(config.secret_previous, undefined);
+  assert.equal(config.previous_expires_at, undefined);
 });
 
 test('verifyWebhookSignature handles empty rawBody gracefully', (done) => {
-  const ts = makeTimestamp();
   const body = Buffer.alloc(0);
-  const sig = computeSignature('secret', ts, body);
-
   const req = makeReq({
     webhookSecret: 'secret',
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${sig}`,
-    },
+    headers: signedHeaders('secret', body),
     rawBody: body,
   });
   const res = makeRes();
@@ -433,25 +537,73 @@ test('verifyWebhookSignature handles empty rawBody gracefully', (done) => {
 });
 
 test('verifyWebhookSignature falls back to empty buffer when rawBody is undefined', (done) => {
-  const ts = makeTimestamp();
-  const sig = computeSignature('secret', ts, Buffer.alloc(0));
-
+  const body = Buffer.alloc(0);
   const req = makeReq({
     webhookSecret: 'secret',
-    headers: {
-      [TIMESTAMP_HEADER]: ts,
-      [SIGNATURE_HEADER]: `sha256=${sig}`,
-    },
+    headers: signedHeaders('secret', body),
     // rawBody intentionally not set
   });
   const res = makeRes();
   verifyWebhookSignature(req, res, () => { done(); });
 });
 
+test('matchesAnySecret returns true when any configured key matches', () => {
+  const body = Buffer.from('body');
+  const ts = makeTimestamp();
+  const nonce = makeNonce();
+  const received = computeSignature('previous-secret', ts, body, nonce);
+  assert.equal(
+    matchesAnySecret(['current-secret', 'previous-secret', 'stale-secret'], ts, body, received, nonce),
+    true,
+  );
+  assert.equal(
+    matchesAnySecret(['current-secret', 'stale-secret'], ts, body, received, nonce),
+    false,
+  );
+});
+
+test('verifyWebhookSignature rejects a reused nonce as a replay', () => {
+  const body = Buffer.from('{"event":"new_api_call"}');
+  const headers = signedHeaders('secret', body, { nonce: makeNonce('replay') });
+  const first = makeReq({
+    webhookSecret: 'secret',
+    headers,
+    rawBody: body,
+    params: { developerId: 'dev-replay' },
+  });
+  const second = makeReq({
+    webhookSecret: 'secret',
+    headers,
+    rawBody: body,
+    params: { developerId: 'dev-replay' },
+  });
+
+  const firstPass = collectNextError((next) => verifyWebhookSignature(first, makeRes(), next));
+  assert.equal(firstPass.error, undefined);
+
+  const replay = collectNextError((next) => verifyWebhookSignature(second, makeRes(), next));
+  assert.equal((replay.error as { name?: string }).name, 'UnauthorizedError');
+  assert.equal((replay.error as { code?: string }).code, 'WEBHOOK_NONCE_REPLAYED');
+  assert.equal((replay.error as { message?: string }).message, 'Webhook signature verification failed.');
+});
+
+test('verifyWebhookSignature does not persist a nonce when the signature is invalid', () => {
+  const body = Buffer.from('{"event":"new_api_call"}');
+  const nonce = makeNonce('unauth');
+  const headers = signedHeaders('wrong-secret', body, { nonce });
+  const req = makeReq({
+    webhookSecret: 'correct-secret',
+    headers,
+    rawBody: body,
+    params: { developerId: 'dev-unauth' },
+  });
+  collectNextError((next) => verifyWebhookSignature(req, makeRes(), next));
+  assert.equal(WebhookNonceStore.has('dev-unauth', nonce), false);
+});
+
 // ---------------------------------------------------------------------------
 // captureRawBody
 // ---------------------------------------------------------------------------
-
 test('captureRawBody attaches raw bytes to req.rawBody', (done) => {
   const req = makeReq() as Request & { rawBody?: Buffer };
   const res = makeRes();
@@ -492,4 +644,22 @@ test('captureRawBody forwards stream errors to next', (done) => {
   });
 
   req.emit('error', boom);
+});
+
+test('parseCapturedJson populates req.body from rawBody', (done) => {
+  const req = makeReq({
+    rawBody: Buffer.from('{"event":"new_api_call"}'),
+  }) as Request & { rawBody?: Buffer; body?: unknown };
+  parseCapturedJson(req, makeRes(), () => {
+    assert.deepEqual(req.body, { event: 'new_api_call' });
+    done();
+  });
+});
+
+test('parseCapturedJson rejects invalid JSON', () => {
+  const req = makeReq({
+    rawBody: Buffer.from('not-json'),
+  }) as Request & { rawBody?: Buffer };
+  const { error } = collectNextError((next) => parseCapturedJson(req, makeRes(), next));
+  assert.equal((error as { code?: string }).code, 'INVALID_BODY');
 });

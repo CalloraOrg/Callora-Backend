@@ -1540,10 +1540,13 @@ paths:
       description: >
         Receives a signed webhook event payload from an external system. The
         request must include an HMAC-SHA256 signature in the
-        `X-Callora-Signature-256` header and a Unix timestamp in the
-        `X-Callora-Timestamp` header. The signature is verified against all
-        active secrets (current and grace-period previous) before the payload
-        is processed.
+        `X-Callora-Signature-256` header, an ISO-8601 timestamp in
+        `X-Callora-Timestamp`, and a unique nonce in `X-Callora-Nonce`.
+        The signed payload is `<timestamp>.<nonce>.<rawBody>`. The signature
+        is verified against all active secrets (current and grace-period
+        previous) using constant-time comparison. Reused nonces and timestamps
+        outside the tolerance window are rejected. Failure responses never
+        identify which key matched.
       parameters:
         - name: developerId
           in: path
@@ -1560,8 +1563,10 @@ paths:
           in: header
           required: true
           description: >
-            HMAC-SHA256 signature of the raw request body, prefixed with
-            `sha256=`. Computed as `sha256=<hex(hmac-sha256(secret, body))>`.
+            HMAC-SHA256 of `<timestamp>.<nonce>.<rawBody>`, prefixed with
+            `sha256=`. Compared in constant time against the current secret
+            and any previous secret still inside the rotation grace window.
+            Failure responses never identify which key matched.
           schema:
             type: string
           examples:
@@ -1571,13 +1576,28 @@ paths:
         - name: X-Callora-Timestamp
           in: header
           required: true
-          description: Unix timestamp (seconds) of when the event was sent.
+          description: ISO-8601 timestamp of when the event was sent. Rejected when outside the configured skew window.
           schema:
             type: string
           examples:
             ts:
               summary: Example timestamp header
-              value: "1722074400"
+              value: "2026-07-27T09:30:00.000Z"
+        - name: X-Callora-Nonce
+          in: header
+          required: true
+          description: >
+            Unique request nonce (16–128 URL-safe characters). Bound into the
+            HMAC and persisted for the timestamp window so replays are rejected.
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 128
+            pattern: "^[A-Za-z0-9._-]{16,128}$"
+          examples:
+            nonce:
+              summary: Example nonce header
+              value: "nonce-7c9e6679-7425-40de"
       requestBody:
         required: true
         content:
@@ -1657,7 +1677,7 @@ paths:
                     requestId: req-webhook-deliver-400-sig
                     timestamp: "2026-07-27T09:31:00.000Z"
         "401":
-          description: HMAC signature verification failed.
+          description: HMAC signature verification failed, timestamp outside the skew window, or nonce replayed.
           content:
             application/json:
               schema:
@@ -1672,6 +1692,15 @@ paths:
                       message: Webhook signature verification failed
                     requestId: req-webhook-deliver-401-invalid
                     timestamp: "2026-07-27T09:32:00.000Z"
+                nonceReplayed:
+                  summary: Nonce was already consumed (replay)
+                  value:
+                    success: false
+                    error:
+                      code: UNAUTHORIZED
+                      message: Webhook signature verification failed
+                    requestId: req-webhook-deliver-401-replay
+                    timestamp: "2026-07-27T09:32:30.000Z"
         "404":
           description: No webhook registered for this developer.
           content:

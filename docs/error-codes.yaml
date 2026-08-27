@@ -259,6 +259,14 @@ error_codes:
     section: Webhooks
     description: Webhook signature verification failed
 
+  - code: MALFORMED_WEBHOOK_NONCE
+    section: Webhooks
+    description: Webhook nonce header is malformed
+
+  - code: WEBHOOK_NONCE_REPLAYED
+    section: Webhooks
+    description: Webhook nonce has already been used
+
   - code: INVALID_DELIVERY_ID
     section: Webhooks
     description: The delivery ID provided for webhook replay is missing or invalid

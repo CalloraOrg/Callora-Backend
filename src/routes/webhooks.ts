@@ -7,6 +7,7 @@ import { WebhookEventType, type RetryPolicy } from '../webhooks/webhook.types.js
 import {
   captureRawBody,
   verifyWebhookSignature,
+  parseCapturedJson,
 } from '../webhooks/webhook.signature.js';
 import { AppError, BadRequestError, NotFoundError } from '../errors/index.js';
 import { createRestRateLimitMiddleware } from '../middleware/restRateLimit.js';
@@ -288,7 +289,7 @@ router.post(
     next();
   },
   verifyWebhookSignature,
-  express.json(),
+  parseCapturedJson,
   (req: Request, res: Response) => {
     return res.status(200).json({ message: 'Webhook delivery accepted.', body: req.body });
   }
