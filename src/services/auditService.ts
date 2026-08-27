@@ -1,5 +1,9 @@
-import { v4 as uuidv4 } from 'uuid';
-import { writeQuery } from '../db.js';
+import { v4 as uuidv4 } from "uuid";
+import { writeQuery } from "../db.js";
+import {
+  computeAuditIntegrityHash,
+  redactPrivilegedValue,
+} from "./tamperEvidentAudit.js";
 
 export interface AuditRowInput {
   actor: string;
@@ -11,6 +15,8 @@ export interface AuditRowInput {
   clientIp?: string | null;
   userAgent?: string | null;
   bodyHash?: string | null;
+  target?: string | null;
+  outcome?: "success" | "failure";
 }
 
 export interface AuditRow extends AuditRowInput {
@@ -18,26 +24,10 @@ export interface AuditRow extends AuditRowInput {
   createdAt: string;
 }
 
-function maskSecret(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  if (value.length <= 8) return '****';
-  return value.slice(0, 4) + '****' + value.slice(-4);
-}
-
-function sanitizeWebhookConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(config)) {
-    if (key === 'secret' || key === 'secret_current' || key === 'secret_previous') {
-      sanitized[key] = maskSecret(typeof value === 'string' ? value : undefined);
-    } else if (key === 'previous_expires_at' && value instanceof Date) {
-      sanitized[key] = value.toISOString();
-    } else if (typeof value === 'function') {
-      sanitized[key] = '[Function]';
-    } else {
-      sanitized[key] = value;
-    }
-  }
-  return sanitized;
+function sanitizeWebhookConfig(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  return redactPrivilegedValue(config) as Record<string, unknown>;
 }
 
 export async function appendAuditRow(input: AuditRowInput): Promise<AuditRow> {
@@ -74,10 +64,39 @@ export async function appendAuditRow(input: AuditRowInput): Promise<AuditRow> {
     details.correlationId = input.correlationId;
   }
 
-  await writeQuery(
+  const target = input.target ?? null;
+  const outcome = input.outcome ?? "success";
+
+  const result = await writeQuery<{
+    sequence_no: number;
+    previous_hash: string;
+    integrity_hash: string;
+  }>(
     `
-      INSERT INTO audit_logs (id, event, actor, tenant_id, client_ip, user_agent, correlation_id, body_hash, details, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      WITH audit_lock AS (
+        SELECT pg_advisory_xact_lock(hashtext('callora:audit_logs'))
+      ), previous AS (
+        SELECT COALESCE(
+          (SELECT integrity_hash FROM audit_logs ORDER BY sequence_no DESC LIMIT 1),
+          'GENESIS'
+        ) AS previous_hash
+        FROM audit_lock
+      ), inserted AS (
+        INSERT INTO audit_logs (
+          id, event, actor, tenant_id, client_ip, user_agent, correlation_id,
+          body_hash, details, created_at, target, outcome, previous_hash,
+          integrity_hash
+        )
+        SELECT
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+          previous.previous_hash,
+          encode(digest(concat_ws('|', $1, $2, $3, COALESCE($4, ''),
+            COALESCE($11, ''), $12, COALESCE($7, ''), COALESCE($9, ''),
+            $10, previous.previous_hash), 'sha256'), 'hex')
+        FROM previous
+        RETURNING sequence_no, previous_hash, integrity_hash
+      )
+      SELECT sequence_no, previous_hash, integrity_hash FROM inserted
     `,
     [
       id,
@@ -90,8 +109,30 @@ export async function appendAuditRow(input: AuditRowInput): Promise<AuditRow> {
       input.bodyHash ?? null,
       JSON.stringify(details),
       now,
+      target,
+      outcome,
     ],
   );
+
+  const inserted = result.rows[0];
+  const previousHash = inserted?.previous_hash ?? "GENESIS";
+  const sequenceNo = inserted?.sequence_no ?? 0;
+  const integrityHash =
+    inserted?.integrity_hash ??
+    computeAuditIntegrityHash(
+      {
+        id,
+        event: input.action,
+        actor: input.actor,
+        tenantId: input.tenantId ?? null,
+        target,
+        outcome,
+        correlationId: input.correlationId ?? null,
+        details,
+        createdAt: now,
+      },
+      previousHash,
+    );
 
   return {
     id,
@@ -105,5 +146,10 @@ export async function appendAuditRow(input: AuditRowInput): Promise<AuditRow> {
     clientIp: input.clientIp ?? null,
     userAgent: input.userAgent ?? null,
     bodyHash: input.bodyHash ?? null,
+    target,
+    outcome,
+    sequenceNo,
+    previousHash,
+    integrityHash,
   };
 }
