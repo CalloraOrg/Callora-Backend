@@ -620,6 +620,108 @@ describe('Proxy Resilience', () => {
     expect(body.message ?? body.error).toMatch(/bad gateway/i);
     expect(body.requestId).toBeTruthy();
   });
+
+  it('retries safe methods up to 3 times and bounds retry limits', async () => {
+    let attemptCount = 0;
+    setUpstreamHandler((req, res) => {
+      attemptCount++;
+      res.socket!.destroy(); // Force an error
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/retry-safe`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    expect(res.status).toBe(502);
+    expect(attemptCount).toBe(3);
+  });
+
+  it('does not retry unsafe methods', async () => {
+    let attemptCount = 0;
+    setUpstreamHandler((req, res) => {
+      attemptCount++;
+      res.socket!.destroy(); // Force an error
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/retry-unsafe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({ test: 'data' }),
+    });
+
+    expect(res.status).toBe(502);
+    expect(attemptCount).toBe(1);
+  });
+
+  it('handles slow headers with timeout', async () => {
+    setUpstreamHandler((req, res) => {
+      // Send headers very slowly (one byte at a time) to trigger timeout
+      res.write('HTTP/1.1 200 OK\r\n');
+      setTimeout(() => res.write('Content-Type: application/json\r\n'), 1000);
+      setTimeout(() => res.write('\r\n'), 2500); // Beyond the 2000ms timeout
+    });
+
+    const startTime = Date.now();
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/slow-headers`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    const duration = Date.now() - startTime;
+    expect(duration).toBeLessThan(3500);
+    expect(res.status).toBe(504);
+  });
+
+  it('circuit-breaker recovers through a successful probe', async () => {
+    // Note: this test simulates the logic. Cooldown might be short or we mock Date.
+    const originalNow = Date.now;
+    let fakeTime = originalNow();
+    Date.now = () => fakeTime;
+    
+    let attemptCount = 0;
+    setUpstreamHandler((req, res) => {
+      attemptCount++;
+      if (attemptCount <= 5) {
+        res.socket!.destroy(); // Fail 5 times to open
+      } else {
+        res.status(200).json({ message: 'recovered' });
+      }
+    });
+
+    // Fail 5 times to trip it
+    for (let i = 0; i < 5; i++) {
+      await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+        body: JSON.stringify({}),
+      });
+    }
+
+    // 6th should fail fast
+    const resOpen = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({}),
+    });
+    expect(resOpen.status).toBe(502);
+
+    // Advance time by 31 seconds to exceed cooldown
+    fakeTime += 31000;
+
+    // 7th should be a half-open probe and succeed
+    const resRecovered = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({}),
+    });
+    
+    expect(resRecovered.status).toBe(200);
+    const bodyRecovered = await resRecovered.json();
+    expect(bodyRecovered.message).toBe('recovered');
+
+    Date.now = originalNow;
+  });
 });
 
 // ── Usage recording: finish vs close ─────────────────────────────────────────
