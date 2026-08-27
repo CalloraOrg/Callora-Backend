@@ -5,6 +5,7 @@ import { bodyValidator, validate } from '../middleware/validate.js';
 import { buildSuccessEnvelope } from '../middleware/envelope.js';
 import { etagMiddleware, generateETag } from '../middleware/etag.js';
 import { logger } from '../logger.js';
+import { NotFoundError } from '../errors/index.js';
 import {
   createTenantSchema,
   tenantParamsSchema,
@@ -26,7 +27,7 @@ export interface TenantRecord {
 }
 
 export interface TenantRepository {
-  list(): Promise<TenantRecord[]>;
+  list(actorId: string): Promise<TenantRecord[]>;
   create(input: CreateTenantInput, actorId: string): Promise<TenantRecord>;
   update(tenantId: string, input: UpdateTenantInput, actorId: string): Promise<TenantRecord>;
 }
@@ -34,8 +35,8 @@ export interface TenantRepository {
 class InMemoryTenantRepository implements TenantRepository {
   private tenants = new Map<string, TenantRecord>();
 
-  async list(): Promise<TenantRecord[]> {
-    return Array.from(this.tenants.values());
+  async list(actorId: string): Promise<TenantRecord[]> {
+    return Array.from(this.tenants.values()).filter((tenant) => tenant.createdBy === actorId);
   }
 
   async create(input: CreateTenantInput, actorId: string): Promise<TenantRecord> {
@@ -57,15 +58,13 @@ class InMemoryTenantRepository implements TenantRepository {
   }
 
   async update(tenantId: string, input: UpdateTenantInput, _actorId: string): Promise<TenantRecord> {
-    const existing = this.tenants.get(tenantId) ?? {
-      id: tenantId,
-      name: 'Existing tenant',
-      slug: slugify(tenantId),
-      plan: 'starter' as const,
-      createdBy: 'system',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    const existing = this.tenants.get(tenantId);
+    // Do not create or reveal arbitrary IDs during an update. Both unknown
+    // and cross-tenant IDs use the same not-found response to avoid existence
+    // probing.
+    if (!existing || existing.createdBy !== _actorId) {
+      throw new NotFoundError('Tenant not found');
+    }
 
     const updated: TenantRecord = {
       ...existing,
@@ -159,7 +158,8 @@ export function createTenantsRouter(deps: TenantsRouterDeps = {}): Router {
     etagMiddleware,
     async (req: Request, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
-        const tenants = await tenantRepository.list();
+        const actorId = res.locals.authenticatedUser!.id;
+        const tenants = await tenantRepository.list(actorId);
 
         logger.info('[tenants] tenants listed', {
           requestId: requestId(req),

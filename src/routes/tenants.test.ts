@@ -258,6 +258,24 @@ describe('createTenantsRouter', () => {
     );
   });
 
+  it('does not list or update another developer\'s tenant', async () => {
+    const app = buildDefaultRepositoryApp();
+    const own = await request(app).post('/api/tenants').set('x-user-id', 'dev-1').send({ name: 'Own tenant' });
+    const foreign = await request(app).post('/api/tenants').set('x-user-id', 'dev-2').send({ name: 'Foreign tenant' });
+
+    const list = await request(app).get('/api/tenants').set('x-user-id', 'dev-1');
+    expect(list.status).toBe(200);
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0].id).toBe(own.body.data.id);
+
+    const crossTenantUpdate = await request(app)
+      .patch(`/api/tenants/${foreign.body.data.id}`)
+      .set('x-user-id', 'dev-1')
+      .send({ name: 'Attempted takeover' });
+    expect(crossTenantUpdate.status).toBe(404);
+    expect(crossTenantUpdate.body.error.code).toBe('NOT_FOUND');
+  });
+
   it('routes repository errors through the error handler', async () => {
     const repository = new MockTenantRepository();
     repository.create.mockRejectedValueOnce(new Error('tenant store unavailable'));
