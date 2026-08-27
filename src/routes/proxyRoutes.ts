@@ -215,15 +215,23 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const timer = startUpstreamTimer(apiEntry.id, req.method);
 
       try {
-        const upstreamRes = await circuitBreaker.execute(breakerKey, async () => {
-          const res = await fetch(safeUpstreamTarget, {
-            method: req.method,
-            headers: forwardHeaders,
-            body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
-            signal: AbortSignal.timeout(config.timeoutMs),
-          });
-          return res;
-        });
+        const executeWithRetry = async (attempt = 1): Promise<Response> => {
+          try {
+            return await fetch(safeUpstreamTarget, {
+              method: req.method,
+              headers: forwardHeaders,
+              body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
+              signal: AbortSignal.timeout(config.timeoutMs),
+            });
+          } catch (e) {
+            if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) && attempt < 3) {
+              return executeWithRetry(attempt + 1);
+            }
+            throw e;
+          }
+        };
+
+        const upstreamRes = await circuitBreaker.execute(breakerKey, executeWithRetry);
 
         upstreamStatus = upstreamRes.status;
         timer.stop(upstreamStatus, 'success');
