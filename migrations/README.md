@@ -76,3 +76,18 @@ Roll back in **reverse** order (highest prefix first).
 4. Run `npm test -- src/migrate.runner.test.ts` to verify the runner still passes.
 5. Run `npm run db:check-migrations` to verify the checksum gate passes.
 6. Commit both migration files.
+
+### CI policy for new migrations
+
+Historical migrations through `0021` are frozen because their names and
+versions are already recorded in deployed databases. New migrations must start
+at `0022`, use a unique four-digit prefix, and continue without gaps. A new
+forward migration containing `DROP`, `TRUNCATE`, or `DELETE FROM` must include
+an explicit approval marker on its own line:
+
+```sql
+-- destructive-approved: #1148
+```
+
+The schema-versioning CI step runs this layout check even when no local
+database exists, and its result is blocking.

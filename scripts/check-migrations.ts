@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * check-migrations.ts  —  Schema Versioning CI Gate
+ * check-migrations.ts    Schema Versioning CI Gate
  *
  * Verifies that every migration file on disk matches its recorded checksum in the
  * schema_versions table.  Any mismatch means a migration was modified *after* being
@@ -20,6 +20,7 @@ import Database from 'better-sqlite3';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import path from 'path';
 import { createHash } from 'node:crypto';
+import { validateMigrationLayout } from './migrationPolicy.js';
 
 const rootDir = process.cwd();
 const dbPath = path.join(rootDir, 'database.db');
@@ -41,6 +42,12 @@ function main() {
   console.log('Schema Versioning Drift Check');
   console.log('================================');
   console.log('');
+  const layoutErrors = validateMigrationLayout(migrationDir);
+  if (layoutErrors.length > 0) {
+    console.error('Migration layout policy failed:');
+    layoutErrors.forEach(function(error) { console.error('  ' + error); });
+    process.exit(1);
+  }
   if (!existsSync(dbPath)) {
     console.log('No database file found. Skipping checksum verification.');
     console.log('(Expected on fresh checkout before running migrations.)');
