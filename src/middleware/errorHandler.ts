@@ -5,6 +5,7 @@ import type { ValidationErrorDetail } from './validate.js';
 import { ValidationError } from './validate.js';
 import { buildErrorEnvelope } from './envelope.js';
 import type { ErrorEnvelope } from '../types/ResponseEnvelope.js';
+import { normalizeError } from '../errors/errorEnvelopePolicy.js';
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -24,43 +25,6 @@ function extractValidationDetails(err: unknown): ValidationErrorDetail[] | undef
   return undefined;
 }
 
-function deriveErrorCode(statusCode: number): string {
-  switch (statusCode) {
-    case 400:
-      return "BAD_REQUEST";
-    case 401:
-      return "UNAUTHORIZED";
-    case 402:
-      return "PAYMENT_REQUIRED";
-    case 403:
-      return "FORBIDDEN";
-    case 404:
-      return "NOT_FOUND";
-    case 408:
-      return "REQUEST_TIMEOUT";
-    case 409:
-      return "CONFLICT";
-    case 413:
-      return "REQUEST_BODY_TOO_LARGE";
-    case 415:
-      return "UNSUPPORTED_MEDIA_TYPE";
-    case 422:
-      return "UNPROCESSABLE_ENTITY";
-    case 429:
-      return "TOO_MANY_REQUESTS";
-    case 500:
-      return "INTERNAL_SERVER_ERROR";
-    case 502:
-      return "BAD_GATEWAY";
-    case 503:
-      return "SERVICE_UNAVAILABLE";
-    case 504:
-      return "GATEWAY_TIMEOUT";
-    default:
-      return statusCode >= 500 ? "INTERNAL_SERVER_ERROR" : "BAD_REQUEST";
-  }
-}
-
 /**
  * Global error-handling middleware (4-arg form).
  * - Catches errors thrown in routes/services
@@ -75,10 +39,11 @@ export function errorHandler(
   res: Response<ErrorEnvelope>,
   _next: NextFunction,
 ): void {
+  const statusCarrier = err !== null && typeof err === 'object' ? err as Record<string, unknown> : undefined;
   const statusCode = isAppError(err)
     ? err.statusCode
-    : typeof (err as Record<string, unknown>).status === "number"
-      ? (err as { status: number }).status
+    : typeof statusCarrier?.status === "number"
+      ? statusCarrier.status
       : 500;
 
   const rawMessage =
@@ -88,18 +53,16 @@ export function errorHandler(
         ? err.message
         : "Internal server error";
 
-  const code = isAppError(err)
-    ? (err.code ?? deriveErrorCode(statusCode))
-    : deriveErrorCode(statusCode);
   const requestId = req.id || "unknown";
-
-  let finalMessage = rawMessage;
-  if (process.env.NODE_ENV !== "development" && !isAppError(err)) {
-    finalMessage = "Internal server error";
-  }
-
-  const details = extractValidationDetails(err);
-  const body = buildErrorEnvelope(code, finalMessage, requestId, details);
+  const normalized = normalizeError({
+    statusCode,
+    code: isAppError(err) ? err.code : undefined,
+    message: rawMessage,
+    details: extractValidationDetails(err),
+    trusted: isAppError(err),
+    development: process.env.NODE_ENV === 'development',
+  });
+  const body = buildErrorEnvelope(normalized.code, normalized.message, requestId, normalized.details, normalized.retryAfterMs);
 
   if (!res.headersSent) {
     res.status(statusCode).json(body);
