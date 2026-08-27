@@ -463,6 +463,10 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 | `RATE_LIMIT_WINDOW_MS` | No | `60000` | Token-bucket refill window for `RATE_LIMIT_MAX_REQUESTS` (ms) |
 | `RATE_LIMIT_STORE` | No | `memory` | `memory` or `postgres`. Use `postgres` to share bucket state across multiple gateway instances |
 | `RATE_LIMIT_PG_TABLE` | No | `gateway_rate_limit_buckets` | Table name used when `RATE_LIMIT_STORE=postgres` (auto-created) |
+| `RATE_LIMIT_OUTAGE_MODE` | No | `fail-closed` | Distributed-store outage policy: reject protected requests or use the bounded local fallback (`fallback`) |
+| `RATE_LIMIT_FALLBACK_MAX_REQUESTS` | No | `10` | Maximum requests per key during fallback mode; never exceeds the distributed request policy |
+| `RATE_LIMIT_FALLBACK_WINDOW_MS` | No | `60000` | Fallback window length in milliseconds |
+| `RATE_LIMIT_FALLBACK_MAX_BUCKETS` | No | `10000` | Hard cap on local fallback keys; oldest keys are evicted during an outage |
 | `QUOTA_RATE_LIMIT_CAPACITY` | No | `60` | Token-bucket burst capacity for all `/api/quotas` endpoints (per user / IP) |
 | `QUOTA_RATE_LIMIT_REFILL_RATE` | No | `1` | Tokens added per second to each `/api/quotas` bucket; governs steady-state request rate |
 | `CORS_ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed origins |

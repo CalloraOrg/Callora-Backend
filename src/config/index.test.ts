@@ -91,6 +91,10 @@ describe('config validation', () => {
               windowMs: number;
               store: 'memory' | 'postgres';
               postgresTable: string;
+              outageMode: 'fail-closed' | 'fallback';
+              fallbackMaxRequests: number;
+              fallbackWindowMs: number;
+              maxFallbackBuckets: number;
             };
           };
         }
@@ -104,6 +108,10 @@ describe('config validation', () => {
       windowMs: 60_000,
       store: 'memory',
       postgresTable: 'gateway_rate_limit_buckets',
+      outageMode: 'fail-closed',
+      fallbackMaxRequests: 10,
+      fallbackWindowMs: 60_000,
+      maxFallbackBuckets: 10_000,
     });
   });
 
@@ -125,6 +133,10 @@ describe('config validation', () => {
               windowMs: number;
               store: 'memory' | 'postgres';
               postgresTable: string;
+              outageMode: 'fail-closed' | 'fallback';
+              fallbackMaxRequests: number;
+              fallbackWindowMs: number;
+              maxFallbackBuckets: number;
             };
           };
         }
@@ -138,6 +150,10 @@ describe('config validation', () => {
       windowMs: 10_000,
       store: 'postgres',
       postgresTable: 'custom_rate_limit_buckets',
+      outageMode: 'fail-closed',
+      fallbackMaxRequests: 10,
+      fallbackWindowMs: 60_000,
+      maxFallbackBuckets: 10_000,
     });
   });
 
