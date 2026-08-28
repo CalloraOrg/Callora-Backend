@@ -39,6 +39,7 @@ export interface ObjectStorageClient {
     secretAccessKey: string;
     region: string;
     endpoint: string;
+    signal?: AbortSignal;
   }): Promise<void>;
   createSignedDownloadUrl(input: {
     bucket: string;
@@ -187,7 +188,11 @@ export class HmacObjectStorageClient implements ObjectStorageClient {
     secretAccessKey: string;
     region: string;
     endpoint: string;
+    signal?: AbortSignal;
   }): Promise<void> {
+    if (input.signal?.aborted) {
+      throw input.signal.reason;
+    }
     void input.accessKeyId;
     void input.secretAccessKey;
     void input.region;
@@ -265,13 +270,16 @@ export class ScheduledExportsService {
     return updated ? this.redactSecret(updated) : undefined;
   }
 
-  async runDueSchedules(now: Date = new Date()): Promise<ExportRunResult[]> {
+  async runDueSchedules(now: Date = new Date(), signal?: AbortSignal): Promise<ExportRunResult[]> {
     const schedules = await this.scheduleStore.list();
     const dueSchedules = schedules.filter((schedule) => schedule.enabled && schedule.nextRunAt <= now);
     const results: ExportRunResult[] = [];
 
     for (const schedule of dueSchedules) {
-      results.push(await this.runSchedule(schedule, now));
+      if (signal?.aborted) {
+        throw signal.reason;
+      }
+      results.push(await this.runSchedule(schedule, now, signal));
       await this.scheduleStore.update(schedule.id, {
         lastRunAt: now,
         nextRunAt: computeNextRunAt(schedule.cron, now),
@@ -281,7 +289,10 @@ export class ScheduledExportsService {
     return results;
   }
 
-  async runSchedule(schedule: ExportSchedule, now: Date = new Date()): Promise<ExportRunResult> {
+  async runSchedule(schedule: ExportSchedule, now: Date = new Date(), signal?: AbortSignal): Promise<ExportRunResult> {
+    if (signal?.aborted) {
+      throw signal.reason;
+    }
     const allEvents = await this.usageEventsRepository.findByApiId('', undefined, now, undefined, 0);
     const scopedEvents = allEvents.filter((event: BillingUsageEvent) => {
       if (event.developerId !== schedule.developerId) return false;
@@ -290,7 +301,7 @@ export class ScheduledExportsService {
     });
 
     const prefix = schedule.s3PathPrefix ? `${schedule.s3PathPrefix.replace(/\/$/, '')}/` : '';
-    const stamp = now.toISOString().replace(/[:.]/g, '-');
+    const stamp = schedule.nextRunAt.toISOString().replace(/[:.]/g, '-');
     const csvKey = `${prefix}usage-events-${schedule.id}-${stamp}.csv`;
     const jsonKey = `${prefix}usage-events-${schedule.id}-${stamp}.json`;
 
@@ -304,6 +315,7 @@ export class ScheduledExportsService {
         secretAccessKey: schedule.s3SecretAccessKey,
         region: schedule.s3Region,
         endpoint: schedule.s3Endpoint,
+        signal,
       }),
       this.objectStorageClient.uploadObject({
         bucket: schedule.s3Bucket,
@@ -314,6 +326,7 @@ export class ScheduledExportsService {
         secretAccessKey: schedule.s3SecretAccessKey,
         region: schedule.s3Region,
         endpoint: schedule.s3Endpoint,
+        signal,
       }),
     ]);
 
@@ -369,16 +382,23 @@ export function createScheduledExportsWorker(
   const log = options.logger ?? logger;
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<ExportRunResult[]> | null = null;
+  let abortController: AbortController | null = null;
 
   const tick = async (): Promise<void> => {
     if (running) return;
-    running = service.runDueSchedules();
+    abortController = new AbortController();
+    running = service.runDueSchedules(new Date(), abortController.signal);
     try {
       await running;
-    } catch (error) {
-      log.error('scheduled export worker failed', error);
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        log.info('scheduled export worker canceled');
+      } else {
+        log.error('scheduled export worker failed', error);
+      }
     } finally {
       running = null;
+      abortController = null;
     }
   };
 
@@ -392,6 +412,9 @@ export function createScheduledExportsWorker(
       if (!timer) return;
       clearInterval(timer);
       timer = null;
+      if (abortController) {
+        abortController.abort(new Error('AbortError'));
+      }
     },
     async awaitIdle() {
       if (running) await running.catch(() => undefined);
