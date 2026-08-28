@@ -57,8 +57,11 @@ function makeIdempotencyPool(): Pool {
     }
     if (text.includes('INSERT INTO idempotency_store')) {
       const [key, requestHash, status, expiresAt] = params as [string, string, string, string];
+      if (store.has(key)) {
+        return { rows: [], rowCount: 0 };
+      }
       store.set(key, { request_hash: requestHash, status, response_status: 0, response_body: '', expires_at: expiresAt });
-      return { rows: [] };
+      return { rows: [], rowCount: 1 };
     }
     if (text.includes('UPDATE idempotency_store')) {
       const [status, responseStatus, responseBody, key] = params as [string, number, string, string];
@@ -247,4 +250,36 @@ describe('POST /api/billing/refund', () => {
     expect(second.body.success).toBe(false);
     expect(grant).toHaveBeenCalledTimes(1);
   });
+
+  it('prevents duplicate refunds on concurrent retries with the same Idempotency-Key', async () => {
+    let grantCallCount = 0;
+    const grant = jest.fn().mockImplementation(async () => {
+      grantCallCount++;
+      // simulate slight async latency
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return makeCredit({ balance_usdc: '15.00' });
+    });
+    const pool = makeIdempotencyPool();
+    const app = buildApp({ pool, creditsRepository: { grant } as unknown as CreditsRepository });
+
+    const [res1, res2] = await Promise.all([
+      request(app)
+        .post('/api/billing/refund')
+        .set('x-admin-api-key', ADMIN_KEY)
+        .set('idempotency-key', 'refund-key-concurrent')
+        .send(validPayload),
+      request(app)
+        .post('/api/billing/refund')
+        .set('x-admin-api-key', ADMIN_KEY)
+        .set('idempotency-key', 'refund-key-concurrent')
+        .send(validPayload),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    // One request must succeed (200), and the concurrent conflicting one must be rejected (409) or replayed
+    expect(statuses).toEqual([200, 409]);
+    expect(grant).toHaveBeenCalledTimes(1);
+    expect(grantCallCount).toBe(1);
+  });
 });
+
