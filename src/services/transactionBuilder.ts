@@ -12,6 +12,8 @@ import {
   extractSimulationDetails,
   type SimulationDetails,
 } from '../lib/simulationDiagnostics.js';
+import { PostgresSequenceStore } from './postgresSequenceStore.js';
+import { SequenceAllocationError, type SequenceStore } from './sequenceManager.js';
 
 export type StellarNetwork = 'testnet' | 'mainnet';
 
@@ -137,6 +139,8 @@ interface NormalizedMemo {
 
 export interface TransactionBuilderServiceOptions {
   createServer?: (horizonUrl: string) => HorizonAccountLoader;
+  sequenceStore?: SequenceStore | false;
+  sequenceAllocationTimeoutMs?: number;
   baseFee?: string | number;
   timeoutSeconds?: number;
   /** Maximum number of retries for transient Horizon errors. Default: 3. */
@@ -210,6 +214,21 @@ export class TransactionBuilderService {
           shouldRetry: isHorizonTransientError,
         }
       );
+      const sequenceStore =
+        this.options.sequenceStore === undefined
+          ? process.env.NODE_ENV === 'test'
+            ? undefined
+            : new PostgresSequenceStore()
+          : this.options.sequenceStore || undefined;
+
+      if (sequenceStore) {
+        const accountSequence = (sourceAccount as { sequence?: unknown }).sequence;
+        const ledgerNextSequence = BigInt(String(accountSequence)) + 1n;
+        const reservedSequence = await this.withSequenceAllocationTimeout(
+          sequenceStore.allocate(sourceKey, ledgerNextSequence)
+        );
+        (sourceAccount as { sequence: string }).sequence = (reservedSequence - 1n).toString();
+      }
     } catch (error) {
       throw this.mapLoadAccountError(sourceKey, error);
     }
@@ -408,6 +427,10 @@ export class TransactionBuilderService {
   }
 
   private mapLoadAccountError(accountId: string, error: unknown): Error {
+    if (error instanceof SequenceAllocationError) {
+      return new NetworkError(error.message);
+    }
+
     const message = this.getErrorMessage(error).toLowerCase();
 
     if (
@@ -433,5 +456,34 @@ export class TransactionBuilderService {
     }
 
     return 'Unknown error';
+  }
+
+  private async withSequenceAllocationTimeout(allocation: Promise<bigint>): Promise<bigint> {
+    let timeoutId: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        allocation,
+        new Promise<bigint>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new SequenceAllocationError(
+                'Timed out while reserving a durable Stellar sequence number'
+              )
+            );
+          }, this.options.sequenceAllocationTimeoutMs ?? 5_000);
+        }),
+      ]);
+    } catch (error) {
+      if (error instanceof SequenceAllocationError) {
+        throw error;
+      }
+      throw new SequenceAllocationError(
+        `Failed to reserve a durable Stellar sequence number: ${this.getErrorMessage(error)}`
+      );
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 }

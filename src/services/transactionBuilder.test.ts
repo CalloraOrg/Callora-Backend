@@ -174,6 +174,38 @@ describe('TransactionBuilderService', () => {
     assert.equal(mockAddMemo.mock.calls.length, 0);
   });
 
+  test('uses a durable reserved sequence when a sequence store is configured', async () => {
+    const sequenceStore = {
+      allocate: jest.fn().mockResolvedValue(9n),
+    };
+    const service = new TransactionBuilderService({ sequenceStore });
+
+    await service.buildDepositTransaction({
+      userPublicKey: 'GUSERPUBLICKEY123',
+      vaultContractId: 'CVAULTTEST',
+      amountUsdc: '12.3456789',
+    });
+
+    assert.deepEqual(sequenceStore.allocate.mock.calls[0], ['GUSERPUBLICKEY123', 2n]);
+    assert.equal(mockBuild.mock.calls[0]?.[0].sourceAccount.sequence, '8');
+  });
+
+  test('returns an explicit recoverable network error when durable sequence allocation fails', async () => {
+    const service = new TransactionBuilderService({
+      sequenceStore: {
+        allocate: jest.fn().mockRejectedValue(new Error('database unavailable')),
+      },
+    });
+
+    await expect(
+      service.buildDepositTransaction({
+        userPublicKey: 'GUSERPUBLICKEY123',
+        vaultContractId: 'CVAULTTEST',
+        amountUsdc: '12.3456789',
+      })
+    ).rejects.toThrow(NetworkError);
+  });
+
   test('uses the correct network passphrase from configuration', async () => {
     const service = new TransactionBuilderService();
 
