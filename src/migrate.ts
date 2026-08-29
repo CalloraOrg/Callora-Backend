@@ -131,34 +131,64 @@ function ensureSchemaVersionsTable(db: Database.Database): void {
   `);
 }
 
+export function applyMigrations(db: Database.Database, migrationDir: string): void {
+  ensureMigrationsTable(db);
+  ensureSchemaVersionsTable(db);
+  const available = discoverMigrations(migrationDir);
+
+  for (const filename of available) {
+    const isExecuted = db.prepare('SELECT id FROM _migrations WHERE name = ?').get(filename);
+    if (isExecuted) continue;
+
+    logger.info('Running migration: ' + filename);
+    const sql = readFileSync(path.join(migrationDir, filename), 'utf8');
+    const checksum = computeChecksum(path.join(migrationDir, filename));
+    const prefix = extractPrefix(filename)!;
+
+    const run = db.transaction(() => {
+      db.exec(sql);
+      db.prepare('INSERT INTO _migrations (name, checksum) VALUES (?, ?)').run(filename, checksum);
+      db.prepare(
+        'INSERT INTO schema_versions (version, filename, checksum) VALUES (?, ?, ?)',
+      ).run(prefix, filename, checksum);
+    });
+
+    run();
+    logger.info('Finished ' + filename + ' (checksum: ' + checksum.slice(0, 12) + '...)');
+  }
+}
+
+/**
+ * Validates that all migrations present on disk have been applied to the database.
+ * Throws an error if there are pending migrations, ensuring the app does not
+ * start with an expected schema drift.
+ */
+export function validateSchemaState(db: Database.Database, migrationDir: string): void {
+  ensureMigrationsTable(db);
+  const available = discoverMigrations(migrationDir);
+  const unapplied: string[] = [];
+
+  for (const filename of available) {
+    const isExecuted = db.prepare('SELECT id FROM _migrations WHERE name = ?').get(filename);
+    if (!isExecuted) {
+      unapplied.push(filename);
+    }
+  }
+
+  if (unapplied.length > 0) {
+    throw new Error(
+      `Schema validation failed. The following migrations have not been applied:\n` +
+      unapplied.map(f => `  - ${f}`).join('\n') +
+      `\nPlease run migrations before starting the application.`
+    );
+  }
+}
+
 // Guard: only run the migration logic when executed as a script, not when imported.
 if (require.main === module) {
   const db = new Database(dbPath);
   try {
-    ensureMigrationsTable(db);
-    ensureSchemaVersionsTable(db);
-    const available = discoverMigrations(migrationDir);
-
-    for (const filename of available) {
-      const isExecuted = db.prepare('SELECT id FROM _migrations WHERE name = ?').get(filename);
-      if (isExecuted) continue;
-
-      logger.info('Running migration: ' + filename);
-      const sql = readFileSync(path.join(migrationDir, filename), 'utf8');
-      const checksum = computeChecksum(path.join(migrationDir, filename));
-      const prefix = extractPrefix(filename)!;
-
-      const run = db.transaction(() => {
-        db.exec(sql);
-        db.prepare('INSERT INTO _migrations (name, checksum) VALUES (?, ?)').run(filename, checksum);
-        db.prepare(
-          'INSERT INTO schema_versions (version, filename, checksum) VALUES (?, ?, ?)',
-        ).run(prefix, filename, checksum);
-      });
-
-      run();
-      logger.info('Finished ' + filename + ' (checksum: ' + checksum.slice(0, 12) + '...)');
-    }
+    applyMigrations(db, migrationDir);
   } catch (error) {
     logger.error('Migration runner failed:', error);
     process.exit(1);
