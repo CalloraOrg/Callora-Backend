@@ -182,13 +182,13 @@ export async function idempotencyMiddleware(
     }
     await db.query('DELETE FROM idempotency_store WHERE expires_at < $1', [new Date().toISOString()]);
 
-    const result = await db.query(
-      'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
-      [idempotencyKey]
-    );
-
-    if (result.rows.length > 0) {
-      const record = result.rows[0];
+    const handleExistingRecord = (record: {
+      request_hash: string;
+      status: string;
+      response_status: number;
+      response_body: string;
+      expires_at: string | Date;
+    }): boolean => {
       const expiresAt = new Date(record.expires_at);
 
       if (expiresAt > new Date()) {
@@ -220,7 +220,7 @@ export async function idempotencyMiddleware(
               incomingFields: incomingKeys,
             }
           );
-          return;
+          return true;
         }
 
         if (record.status === 'completed') {
@@ -233,7 +233,7 @@ export async function idempotencyMiddleware(
           });
           res.setHeader('Idempotent-Replayed', 'true');
           res.status(record.response_status).json(JSON.parse(record.response_body));
-          return;
+          return true;
         }
 
         if (record.status === 'started') {
@@ -251,19 +251,42 @@ export async function idempotencyMiddleware(
             opts?.inProgressErrorCode ?? 'IDEMPOTENCY_IN_PROGRESS',
             'Request already in progress'
           );
-          return;
+          return true;
         }
+      }
+      return false;
+    };
+
+    const result = await db.query(
+      'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
+      [idempotencyKey]
+    );
+
+    if (result.rows.length > 0) {
+      if (handleExistingRecord(result.rows[0])) {
+        return;
       }
     }
 
     const retentionSeconds = opts?.retentionSeconds ?? config.idempotency.retentionWindowSeconds;
     const expiresAtDate = new Date(Date.now() + retentionSeconds * 1000);
 
-    await db.query(
+    const insertResult = await db.query(
       `INSERT INTO idempotency_store (idempotency_key, request_hash, status, expires_at, created_at)
-       VALUES ($1, $2, $3, $4, NOW()::timestamp)`,
+       VALUES ($1, $2, $3, $4, NOW()::timestamp)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
       [idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
     );
+
+    if (insertResult && insertResult.rowCount === 0) {
+      const existing = await db.query(
+        'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
+        [idempotencyKey]
+      );
+      if (existing.rows.length > 0 && handleExistingRecord(existing.rows[0])) {
+        return;
+      }
+    }
 
     const originalSend = res.send;
     const originalJson = res.json;
