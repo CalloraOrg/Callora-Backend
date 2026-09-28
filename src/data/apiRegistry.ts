@@ -78,16 +78,17 @@ export function resolveEndpointPrice(
   endpoints: EndpointPricing[],
   path: string,
 ): EndpointPricing {
-  // Normalize: strip leading slash for comparison
-  const normalised = path.startsWith('/') ? path : `/${path}`;
+  const normalisePath = (value: string): string =>
+    value.startsWith('/') ? value : `/${value}`;
+  const normalised = normalisePath(path);
 
   // Try exact prefix match (longest first)
   const sorted = [...endpoints]
     .filter((e) => e.path !== '*')
-    .sort((a, b) => b.path.length - a.path.length);
+    .sort((a, b) => normalisePath(b.path).length - normalisePath(a.path).length);
 
   for (const ep of sorted) {
-    const epPath = ep.path.startsWith('/') ? ep.path : `/${ep.path}`;
+    const epPath = normalisePath(ep.path);
     if (normalised.startsWith(epPath)) {
       return ep;
     }
