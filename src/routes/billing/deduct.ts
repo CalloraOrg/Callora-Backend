@@ -160,6 +160,16 @@ router.post(
           return;
         }
 
+        if (result.reconciliationRequired) {
+          res.status(409).json({
+            error: "Billing deduction pending reconciliation",
+            code: "RECONCILIATION_REQUIRED",
+            reconciliationRequired: true,
+            usageEventId: result.usageEventId,
+          });
+          return;
+        }
+
         next(
           new PaymentRequiredError(
             result.error ?? "Billing deduction failed",

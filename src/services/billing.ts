@@ -569,13 +569,17 @@ export class BillingService {
 
     // Idempotent early return — event already existed
     if (phase1.alreadyExists) {
+      const hasTx = Boolean(phase1.stellarTxHash);
       return {
-        success: true,
+        success: hasTx,
         usageEventId: phase1.usageEventId!,
         stellarTxHash: phase1.stellarTxHash,
         alreadyProcessed: true,
-        deductionApplied: Boolean(phase1.stellarTxHash),
-        reconciliationRequired: phase1.stellarTxHash === undefined,
+        deductionApplied: hasTx,
+        reconciliationRequired: !hasTx,
+        error: hasTx
+          ? undefined
+          : "Previous deduction attempt pending reconciliation",
       };
     }
 
@@ -861,14 +865,18 @@ export class BillingService {
     );
 
     if (result.rows.length === 0) return null;
+    const hasTx = Boolean(result.rows[0].stellar_tx_hash);
 
     return {
-      success: true,
+      success: hasTx,
       usageEventId: result.rows[0].id.toString(),
       stellarTxHash: result.rows[0].stellar_tx_hash ?? undefined,
       alreadyProcessed: true,
-      deductionApplied: Boolean(result.rows[0].stellar_tx_hash),
-      reconciliationRequired: result.rows[0].stellar_tx_hash === null,
+      deductionApplied: hasTx,
+      reconciliationRequired: !hasTx,
+      error: hasTx
+        ? undefined
+        : "Previous deduction attempt pending reconciliation",
     };
   }
 

@@ -224,6 +224,27 @@ describe('BillingService.deduct - idempotency', () => {
     assert.equal(soroban.getDeductCount(), 0);
   });
 
+  test('returns success false and reconciliationRequired when duplicate request_id has null stellar_tx_hash', async () => {
+    const client = createMockClient([
+      makeQr(),                                                        // BEGIN
+      makeQr([{ id: 42, stellar_tx_hash: null }]),                     // SELECT FOR UPDATE
+      makeQr(),                                                        // COMMIT
+    ]);
+    const pool = createMockPool(client);
+    const soroban = createMockSorobanClient();
+    const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
+
+    const result = await svc.deduct(baseRequest);
+
+    assert.equal(result.success, false);
+    assert.equal(result.usageEventId, '42');
+    assert.equal(result.stellarTxHash, undefined);
+    assert.equal(result.alreadyProcessed, true);
+    assert.equal(result.deductionApplied, false);
+    assert.equal(result.reconciliationRequired, true);
+    assert.equal(soroban.getDeductCount(), 0);
+  });
+
   test('does not double-charge when same request_id is retried', async () => {
     const inMemory = new Map<string, { id: number; stellar_tx_hash?: string }>();
     let nextId = 1;
@@ -250,9 +271,9 @@ describe('BillingService.deduct - idempotency', () => {
       connect: async () => client,
       query: async (sql: string, params: unknown[] = []) => {
         if (sql.includes('UPDATE usage_events')) {
-          const [txHash, id] = params as [string, number];
+          const [txHash, id] = params as [string, number | string];
           for (const v of inMemory.values()) {
-            if (v.id === id) v.stellar_tx_hash = txHash;
+            if (String(v.id) === String(id)) v.stellar_tx_hash = txHash;
           }
           return makeQr();
         }
@@ -498,5 +519,22 @@ describe('BillingService.getByRequestId', () => {
     const result = await svc.getByRequestId('req_missing');
 
     assert.equal(result, null);
+  });
+
+  test('returns success false and reconciliationRequired when stellar_tx_hash is null', async () => {
+    const pool = {
+      query: async () => makeQr([{ id: 124, stellar_tx_hash: null }]),
+    } as unknown as Pool;
+
+    const soroban = createMockSorobanClient();
+    const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
+
+    const result = await svc.getByRequestId('req_failed_soroban');
+
+    assert.ok(result !== null);
+    assert.equal(result?.success, false);
+    assert.equal(result?.deductionApplied, false);
+    assert.equal(result?.reconciliationRequired, true);
+    assert.equal(result?.stellarTxHash, undefined);
   });
 });
