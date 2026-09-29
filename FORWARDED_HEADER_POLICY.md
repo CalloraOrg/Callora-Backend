@@ -42,7 +42,7 @@ All other headers not in the strip list are forwarded to upstream services, incl
 - `user-agent` - Client software identification
 - `accept-encoding` - Preferred response encodings
 - `accept-language` - Preferred response languages
-- Custom application headers (e.g. `x-custom-*`)
+- Custom application headers (e.g., `x-custom-*`)
 
 ## Response Header Handling
 
@@ -61,7 +61,7 @@ All upstream response headers are forwarded to the client **except** hop-by-hop 
 
 ## Case Sensitivity
 
-Header stripping is performed case-insensitively. All header name variations (e.g. `X-API-Key`, `x-api-key`, `X-API-KEY`) are treated identically.
+Header stripping is performed case-insensitively. All header name variations (e.g., `X-API-Key`, `x-api-key`, `X-API-KEY`) are treated identically.
 
 ## Security Considerations
 
@@ -71,29 +71,25 @@ Header stripping is performed case-insensitively. All header name variations (e.
 - Cookie headers are stripped to prevent session hijacking
 
 ### Request Tracing
-- Unique `x-request-id` Headers enable end-to-end request tracing
+- Unique `x-request-id` headers enable end-to-end request tracing
 - Request IDs are included in error responses for debugging
 - UUID v4 format ensures global uniqueness
 
-## Trusted Proxy Hops and Client IP Resolution
+## Client IP Trust Boundary
 
-When the service sits behind one or more reverse proxies, the client IP used for the admin IP-allowlist and per-IP rate limiting is resolved by `src/lib/clientIp.ts`.
+When the service sits behind one or more reverse proxies, client IP resolution follows Express's `trust proxy` semantics:
 
-The client-controlled leftmost entry of `X-Forwarded-For` is never used unless the entire chain is trusted. The configuration is controlled by the `TRUST_PROXY_HEADERS` environment variable:
+- **No trust (default)**: all forwarded headers are ignored and the direct socket address is used. This is spoof-proof.
+- **Hop count**: the client address is taken N entries from the right of the forwarded chain. With one trusted hop, `X-Forwarded-For: 1.1.1.1, 2.2.2.2` yields `2.2.2.2`. The leftmost entry is fully client-controlled and must not be trusted.
+- **Trust all** (`true`):? legacy behaviour that trusts every hop. Only use this when every proxy in the chain is controlled by the operator.
 
-| Value | Meaning |
-| --- | --- |
-| unset / `false` | No proxy headers are trusted; the direct socket address is used. |
-| `number` | Number of trusted proxy hops between the client and the app. The client IP is taken that many positions from the right of the forwarded chain. |
-| `true` | Backwards-compatible alias for a single trusted hop (`1 `). |
-| `CIDR,CIDR,`| Comma-separated trusted proxy CIDRs. The chain is walked from the right, skipping addresses inside the trusted ranges. |
+### Configuration
 
-Examples (with one trusted hop):
+- `TRUST_PROXY_HEADERS=true`: trust all hops (legacy).
+- `TRUST_PROXY_HOPS=N<number>`: trust the last N hops. Takes precedence over `TRUST_PROXY_HEADERS` when set to a positive integer.
+- Unset: no trust; the socket address is used.
 
-- `X-Forwarded-For: 1.1.1.1, 2.2.2.2` → client IP is `2.2.2.2`.
-- `X-Forwarded-For: 9.9.9.9, 2.2.2.2` → client IP is `2.2.2.2` (the spoofed leftmost entry is ignored).
-
-This aligns with Express's `trust proxy` semantics.
+The IP-allowlist middleware and the request logger both call the same `helper in `src/lib/clientIp.ts`, so the trust boundary is applied consistently across the stack.
 
 ## Implementation Details
 
@@ -112,7 +108,7 @@ const DEFAULT_STRIP_HEADERS = [
   'proxy-authorization',
   'proxy-connection',
 ];
-
+Labels: `x-forwarded-for` and `x-real-ip` are also stripped before forwarding to upstream services.
 ```
 
 Headers are processed case-insensitively using lowercase comparison:
@@ -134,5 +130,6 @@ Comprehensive tests verify:
 - Case-insensitive header stripping works
 - Response headers are filtered appropriately
 - Request ID correlation is maintained
+- Client IP resolution honours the trusted hop count and falls back to the socket address
 
-See `src/__tests__/proxy.integration.test.ts` for detailed test coverage.
+See `src/__tests__/proxy.integration.test.ts` and `src/lib/__tests__/clientIp.test.ts` for detailed test coverage.

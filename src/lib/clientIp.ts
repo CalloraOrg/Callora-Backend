@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 
-import ipRangeCheck from 'ip-range-check';
+export type TrustProxyOption = boolean | number;
 
 /**
  * Proxy headers checked when trustProxy is enabled, ordered by reliability.
@@ -25,124 +25,66 @@ export function isValidIp(ip: string): boolean {
 }
 
 /**
- * Trust proxy configuration.
- *
- * - `false` (default): no proxy headers are trusted; the socket address is used.
- * - `number`: the number of trusted proxy hops between the client and the
- *   application. The client IP selected from the forwarded chain is taken
- *   that many positions from the right.
- * - `string[]`: a list of trusted proxy CIDRs. The forwarded chain is walked
- *   from the right, skipping addresses that fall within the trusted CIDRs,
- *   until the first untrusted address is found.
- */
-export type TrustProxy = boolean | number | readonly string[];
-
-/** Normalises an IP for comparison (lowercase, no brackets/port). */
-function normalizeIp(ip: string): string {
-  let value = ip.trim().toLowerCase();
-  if (value.startsWith('[')) {
-    const end = value.indexOf(']');
-    if (end !== -1) {
-      value = value.slice(1, end);
-    }
-  } else if (/^\d+\.\d+\.\d+\.\d+:/.test(value)) {
-    // IPv4 with port
-    value = value.split(':')[0];
-  }
-  return value;
-}
-
-/** Returns true when the IP falls within any of the trusted proxy CIDRs. */
-function isTrustedProxyIp(ip: string, trustedCidrs: readonly string[]): boolean {
-  if (trustedCidrs.length === 0) return false;
-  try {
-    return ipRangeCheck(ip, trustedCidrs as string[]);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Selects the client IP from a forwarded-for chain given a trust configuration.
- *
- * The chain is the comma-separated value of a forwarded header, ordered
- * client-first. The rightmost entry is the address added by the closest
- * trusted proxy, so it is the only one that can be trusted by default.
- */
-export function selectClientIpWithTrust(
-  chain: readonly string[],
-  trustProxy: TrustProxy,
-): string | undefined {
-  if (chain.length === 0) return undefined;
-
-  if (trustProxy === true) {
-    // Backwards-compatible boolean: trust exactly one hop.
-    trustProxy = 1;
-  }
-
-  if (trustProxy === false) {
-    return undefined;
-  }
-
-  if (typeof trustProxy === 'number') {
-    if (!Number.isFinite(trustProxy) || trustProxy < 1) return undefined;
-    const index = chain.length - trustProxy;
-    if (index < 0 || index >= chain.length) return undefined;
-    return chain[index];
-  }
-
-  // CIDR list: walk from the right, skipping trusted proxies.
-  const trustedCidrs = trustProxy as readonly string[];
-  for (let i = chain.length - 1; i >= 0; i--) {
-    const candidate = chain[i];
-    if (!isTrustedProxyIp(candidate, trustedCidrs)) {
-      return candidate;
-    }
-  }
-
-  // Every hop is trusted; fall back to the leftmost entry.
-  return chain[0];
-}
-
-/**
  * Extracts the real client IP from an Express request.
  *
- * When `trustProxy` is false (the default) the direct socket address is
- * returned, making IP spoofing via headers impossible.
+ * Trust semantics follow Express' `trust proxy` model:
+ * - `false` (default): all forwarded headers are ignored and the direct
+ *   socket address is returned, making header spoofing impossible.
+ * - `true`: trust all hops (equivalent to a hop count of `Infinity`).
+ * - `number N >= 1`: trust the last N hops. The client address is taken
+ *   N entries from the right of the forwarded chain. With one trusted hop,
+ *   `'1.1.1.1, 2.2.2.2'` yields `2.2.2.2`. This prevents a client from
+ *   spoofing the leftmost entry to bypass the admin IP-allowlist or per-IP
+ *   rate limits.
  *
- * When `trustProxy` is a number or a CIDR list, the proxy headers listed in
- * `proxyHeaders` are consulted in order; the first header that yields a valid
- * client IP wins. For `x-forwarded-for` the entry is selected from the right
- * according to the trust configuration, so client-controlled leftmost entries
- * cannot be used to spoof an address.
+ * Because the client address is selected from the right of the chain,
+ * spoofed leftmost entries cannot influence the result as long as the
+ * configured hop count matches the actual number of trusted proxies.
  *
  * @param req          Express request object
- * @param trustProxy   Trust configuration (false | hop count | trusted CIDRs)
+ * @param trustProxy   False (no trust), true (trust all), or a hop count >= 1
  * @param proxyHeaders Ordered list of headers to inspect (defaults to {@link DEFAULT_PROXY_HEADERS})
  */
 export function getClientIp(
   req: Request,
-  trustProxy: TrustProxy = false,
+  trustProxy: TrustProxyOption = false,
   proxyHeaders: readonly string[] = DEFAULT_PROXY_HEADERS,
 ): string {
-  const socketIp = req.ip ?? req.socket?.remoteAddress ?? '';
+  const hops = normalizeTrustProxy(trustProxy);
 
-  if (trustProxy !== false) {
+  if (hops > 0) {
     for (const header of proxyHeaders) {
       const value = req.headers[header.toLowerCase()];
       if (typeof value !== 'string' || !value.trim()) continue;
 
-      const chain = value
+      const entries = value
         .split(',')
-        .map((entry) => normalizeIp(entry))
-        .filter((entry) => isValidIp(entry));
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
 
-      if (chain.length === 0) continue;
+      if (entries.length === 0) continue;
 
-      const selected = selectClientIpWithTrust(chain, trustProxy);
-      if (selected && isValidIp(selected)) return selected;
+      // Select the entry `hops` positions from the right. When the chain is
+      // shorter than the configured hop count, the leftmost entry is the
+      // best available candidate.
+      const index = Math.max(0, entries.length - hops);
+      const candidate = entries[index];
+      if (candidate && isValidIp(candidate)) return candidate;
     }
   }
 
-  return socketIp;
+  return req.ip ?? req.socket?.remoteAddress ?? '';
+}
+
+/**
+ * Normalises the `trustProxy` option into a non-negative hop count.
+ * `false` -> 0, `true` -> Infinity, and any number >= 1 -> that number.
+ */
+function normalizeTrustProxy(trustProxy: TrustProxyOption): number {
+  if (trustProxy === true) return Number.POSITIVE_INFINITY;
+  if (trustProxy === false) return 0;
+  if (typeof trustProxy === 'number' && Number.isFinite(trustProxy) && trustProxy >= 1) {
+    return Math.floor(trustProxy);
+  }
+  return 0;
 }
