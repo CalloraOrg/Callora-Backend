@@ -7,8 +7,6 @@
  * a DNS resolver. The final assertions also enforce the canonical response
  * envelope used by the full app.
  */
-import fs from "node:fs";
-import path from "node:path";
 import express from "express";
 import request from "supertest";
 import { z } from "zod";
@@ -38,8 +36,9 @@ type OpenApiDocument = {
   components?: { schemas?: Record<string, unknown> };
 };
 
-const specPath = path.join(process.cwd(), "docs", "openapi.json");
-const spec = JSON.parse(fs.readFileSync(specPath, "utf8")) as OpenApiDocument;
+const spec = JSON.parse(
+  require("node:fs").readFileSync("docs/openapi.json", "utf8"),
+) as OpenApiDocument;
 
 const validWallet = "G" + "A".repeat(55);
 
@@ -238,15 +237,19 @@ describe("webhook request and failure contracts at runtime", () => {
     ).rejects.toBeInstanceOf(WebhookValidationError);
   });
 
-  it("keeps documented webhook examples in the focused YAML fragment", () => {
-    const yaml = fs.readFileSync(
-      path.join(process.cwd(), "src", "openapi.yaml"),
-      "utf8",
-    );
-    expect(yaml).toContain("/api/webhooks");
-    expect(yaml).toContain("new_api_call");
-    expect(yaml).toContain("retryPolicy");
-    expect(yaml).toContain("rotate-secret");
+  it("keeps webhook examples in the canonical OpenAPI document", () => {
+    const paths = spec.paths;
+    const registration = paths["/api/webhooks"]?.post as
+      | { summary?: string; requestBody?: unknown }
+      | undefined;
+    const delivery = paths["/api/webhooks/deliver/{developerId}"]?.post as
+      | { requestBody?: unknown }
+      | undefined;
+
+    expect(registration?.summary).toBe("Register a webhook");
+    expect(JSON.stringify(registration?.requestBody)).toContain("retryPolicy");
+    expect(JSON.stringify(delivery?.requestBody)).toContain("new_api_call");
+    expect(paths["/api/webhooks/{developerId}/rotate-secret"]?.post).toBeDefined();
   });
 });
 
