@@ -17,6 +17,10 @@ const authBearer = (userId = 'dev-1') => `Bearer ${signTestToken({ userId })}`;
 const TEST_ORIGIN = 'http://localhost:5173';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
+jest.mock('express-openapi-validator', () => ({
+  __esModule: true,
+  default: { middleware: () => (_req: unknown, _res: unknown, next: () => void) => next() },
+}));
 jest.mock('./services/transactionBuilder.js', () => ({
   TransactionBuilderService: class MockTxBuilder {}
 }));
@@ -1369,7 +1373,11 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
       .filter((line) => /^\|\s*(GET|POST|PUT|PATCH|DELETE|OPTIONS|ALL|\*)\s*\|/.test(line));
     const documented = tableRows.map((line) => {
       const cells = line.split('|').map((cell) => cell.trim());
-      return { method: cells[1].toUpperCase(), path: cells[2] };
+      return {
+        method: cells[1].toUpperCase(),
+        path: cells[2].replace(/`/g, ''),
+        indexOnly: cells[3].includes('(src/index.ts only)'),
+      };
     });
 
     interface ExpressLayer {
@@ -1414,16 +1422,15 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
     };
 
     walk(app._router.stack as ExpressLayer[]);
-    const matchesDocumentedRow = (route: { method: string; path: string }) =>
-      documented.some(({ method, path }) => {
-        if (method !== '*' && method !== route.method && !(method === 'ALL')) return false;
-        const prefix = path.replace(/\/\*$/, '').replace(/\*$/, '');
-        return path.includes('*') ? route.path.startsWith(prefix) : path === route.path;
-      });
+    const mountedSet = new Set(mounted.map(({ method, path }) => `${method} ${path}`));
+    const documentedAppSet = new Set(
+      documented
+        .filter(({ indexOnly }) => !indexOnly)
+        .map(({ method, path }) => `${method} ${path}`),
+    );
 
-    expect(mounted.length).toBeGreaterThan(0);
-    for (const route of mounted) {
-      expect(matchesDocumentedRow(route)).toBe(true);
-    }
+    expect(mountedSet.size).toBeGreaterThan(0);
+    expect([...mountedSet].filter((route) => !documentedAppSet.has(route))).toEqual([]);
+    expect([...documentedAppSet].filter((route) => !mountedSet.has(route))).toEqual([]);
   });
 });
