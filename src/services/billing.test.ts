@@ -194,6 +194,8 @@ describe('BillingService.deduct - success path', () => {
     assert.equal(result.stellarTxHash, 'tx_phase3_fail');
     assert.equal(result.alreadyProcessed, false);
     assert.ok(consoleSpy.mock.calls.some((args) => String(args[0]).includes('Phase 3')));
+    assert.ok(consoleSpy.mock.calls.some((args) => String(args[0]).includes('usageEventId')));
+    assert.ok(consoleSpy.mock.calls.some((args) => String(args[0]).includes('tx_phase3_fail')));
 
     consoleSpy.mockRestore();
   });
