@@ -9,7 +9,6 @@ import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
 import { logger } from '../logger.js';
-import { getTokenRevocationService } from '../services/tokenRevocation.js';
 
 import {
   BadGatewayError,
@@ -278,13 +277,13 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         const tokenRevocationService = getTokenRevocationService();
         const apiKeyHash = sha256Hex(apiKeyHeader);
         if (tokenRevocationService.isRevoked(apiKeyHash)) {
-          next(new ForbiddenError('Forbidden: API key has been revoked'));
+          next(new UnauthorizedError('Unauthorized: API key has been revoked'));
           return;
         }
 
         // Also check persisted revoked flag
         if (keyRecord.revoked) {
-          next(new ForbiddenError('Forbidden: API key has been revoked'));
+          next(new UnauthorizedError('Unauthorized: API key has been revoked'));
           return;
         }
 
