@@ -16,16 +16,30 @@ function withMigrations(files: Record<string, string>, test: (dir: string) => vo
 
 describe('migration layout policy', () => {
   it('accepts a new contiguous migration after the frozen history', () => {
-    withMigrations({ '0022_add_limits.sql': 'CREATE TABLE limits (id INTEGER);' }, (dir) => {
+    withMigrations({
+      '0022_add_limits.sql': 'CREATE TABLE limits (id INTEGER);',
+      '0022_add_limits.down.sql': 'DROP TABLE limits;',
+    }, (dir) => {
       expect(validateMigrationLayout(dir)).toEqual([]);
+    });
+  });
+
+  it('requires a matching down migration for every new forward migration', () => {
+    withMigrations({ '0022_add_limits.sql': 'CREATE TABLE limits (id INTEGER);' }, (dir) => {
+      expect(validateMigrationLayout(dir).join('\n')).toContain(
+        'requires matching rollback file "0022_add_limits.down.sql"',
+      );
     });
   });
 
   it('rejects duplicate, gapped, and unnumbered new migrations', () => {
     withMigrations({
       '0022_first.sql': 'SELECT 1;',
+      '0022_first.down.sql': 'SELECT 1;',
       '0022_second.sql': 'SELECT 1;',
+      '0022_second.down.sql': 'SELECT 1;',
       '0024_gap.sql': 'SELECT 1;',
+      '0024_gap.down.sql': 'SELECT 1;',
       'new_feature.sql': 'SELECT 1;',
     }, (dir) => {
       const errors = validateMigrationLayout(dir).join('\n');
@@ -39,7 +53,10 @@ describe('migration layout policy', () => {
     withMigrations({ '0022_remove_legacy.sql': 'DROP TABLE legacy;' }, (dir) => {
       expect(validateMigrationLayout(dir).join('\n')).toContain('destructive-approved');
     });
-    withMigrations({ '0022_remove_legacy.sql': '-- destructive-approved: #1148\nDROP TABLE legacy;' }, (dir) => {
+    withMigrations({
+      '0022_remove_legacy.sql': '-- destructive-approved: #1148\nDROP TABLE legacy;',
+      '0022_remove_legacy.down.sql': 'CREATE TABLE legacy (id INTEGER);',
+    }, (dir) => {
       expect(validateMigrationLayout(dir)).toEqual([]);
     });
   });
