@@ -14,6 +14,7 @@
 
 import { Router, type Response } from 'express';
 import { requireAuth, type AuthenticatedLocals } from '../../middleware/requireAuth.js';
+import { adminAuth } from '../../middleware/adminAuth.js';
 import { bodyValidator } from '../../middleware/validate.js';
 import { logger } from '../../logger.js';
 import { NotFoundError } from '../../errors/index.js';
@@ -27,6 +28,16 @@ import {
 
 export interface PluginRouterDeps {
   pluginRepository?: PluginRepository;
+}
+
+function requireAuthOrAdmin(req: Parameters<typeof requireAuth>[0], res: Parameters<typeof requireAuth>[1], next: Parameters<typeof requireAuth>[2]): void {
+  adminAuth(req, res, (adminError) => {
+    if (!adminError) {
+      next();
+      return;
+    }
+    requireAuth(req, res, next);
+  });
 }
 
 export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
@@ -52,7 +63,7 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
       try {
         const actor = res.locals.authenticatedUser!.id;
         const manifest = pluginManifestSchema.parse(req.body);
-        const record = repo.register(manifest);
+        const record = repo.register(manifest, actor);
 
         logger.audit('PLUGIN_REGISTERED', actor, {
           pluginId: manifest.id,
@@ -128,11 +139,12 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
   // ── DELETE /:id  — remove plugin from registry ───────────────────────────
   router.delete(
     '/:id',
-    requireAuth,
+    requireAuthOrAdmin,
     (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
-        const actor = res.locals.authenticatedUser!.id;
-        repo.delete(req.params.id);
+        const actor = res.locals.authenticatedUser?.id ?? (res.locals as { adminActor?: string }).adminActor;
+        const isAdmin = Boolean((res.locals as { adminActor?: string }).adminActor);
+        repo.delete(req.params.id, actor!, isAdmin);
 
         logger.audit('PLUGIN_DELETED', actor, { pluginId: req.params.id });
 
