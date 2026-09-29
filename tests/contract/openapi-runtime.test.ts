@@ -31,6 +31,7 @@ import {
   validateWebhookUrl,
   WebhookValidationError,
 } from "../../src/webhooks/webhook.validator.js";
+import { openApiErrorHandler } from "../../src/middleware/openApiErrorHandler.js";
 
 type OpenApiDocument = {
   openapi: string;
@@ -298,5 +299,131 @@ describe("billing and proxy response contracts", () => {
     expect([...testedSurfaces]).toEqual(
       expect.arrayContaining(["auth", "billing", "webhook", "proxy"]),
     );
+  });
+});
+
+describe("OpenAPI error middleware contract at runtime", () => {
+  function buildOpenApiApp() {
+    const app = express();
+    app.use(express.json());
+
+    app.get("/contract-query", (_req, _res, next) => {
+      const error = Object.assign(
+        new Error("request.query should have required property 'limit'"),
+        {
+          status: 400,
+          errors: [
+            {
+              path: "/query/limit",
+              message: "must have required property 'limit'",
+              errorCode: "required.openapi.validation",
+            },
+          ],
+        },
+      );
+      next(error);
+    });
+
+    app.post("/contract-body", (_req, _res, next) => {
+      const error = Object.assign(
+        new Error("request.body.name should be string"),
+        {
+          status: 400,
+          errors: [
+            {
+              path: "/body/name",
+              message: "must be string",
+              errorCode: "type.openapi.validation",
+            },
+          ],
+        },
+      );
+      next(error);
+    });
+
+    app.post("/contract-nested", (_req, _res, next) => {
+      const error = Object.assign(
+        new Error("request.body.endpoints[0].path should be string"),
+        {
+          status: 400,
+          errors: [
+            {
+              path: "/body/endpoints/0/path",
+              message: "must be string",
+              errorCode: "type.openapi.validation",
+            },
+          ],
+        },
+      );
+      next(error);
+    });
+
+    app.post("/contract-unsupported-media", (_req, _res, next) => {
+      const error = Object.assign(
+        new Error('unsupported media type "text/plain"'),
+        {
+          status: 415,
+        },
+      );
+      next(error);
+    });
+
+    app.use(openApiErrorHandler);
+    app.use(errorHandler);
+    return app;
+  }
+
+  it("yields field 'query.limit' and matches ValidationErrorDetail shape for missing required query parameter", async () => {
+    const app = buildOpenApiApp();
+    const response = await request(app).get("/contract-query");
+
+    expect(response.status).toBe(400);
+    assertErrorEnvelope(response.body, "BAD_REQUEST");
+    expect(response.body.error.details).toEqual([
+      {
+        field: "query.limit",
+        message: "must have required property 'limit'",
+        code: "REQUIRED",
+      },
+    ]);
+  });
+
+  it("yields field 'body.name' and matches ValidationErrorDetail shape for invalid body parameter", async () => {
+    const app = buildOpenApiApp();
+    const response = await request(app).post("/contract-body");
+
+    expect(response.status).toBe(400);
+    assertErrorEnvelope(response.body, "BAD_REQUEST");
+    expect(response.body.error.details).toEqual([
+      {
+        field: "body.name",
+        message: "must be string",
+        code: "TYPE",
+      },
+    ]);
+  });
+
+  it("preserves nested array indexing path in body.endpoints[0].path", async () => {
+    const app = buildOpenApiApp();
+    const response = await request(app).post("/contract-nested");
+
+    expect(response.status).toBe(400);
+    assertErrorEnvelope(response.body, "BAD_REQUEST");
+    expect(response.body.error.details).toEqual([
+      {
+        field: "body.endpoints[0].path",
+        message: "must be string",
+        code: "TYPE",
+      },
+    ]);
+  });
+
+  it("carries an UNSUPPORTED_MEDIA_TYPE code on 415 responses", async () => {
+    const app = buildOpenApiApp();
+    const response = await request(app).post("/contract-unsupported-media");
+
+    expect(response.status).toBe(415);
+    assertErrorEnvelope(response.body, "UNSUPPORTED_MEDIA_TYPE");
+    expect(response.body.error.message).toBe('unsupported media type "text/plain"');
   });
 });

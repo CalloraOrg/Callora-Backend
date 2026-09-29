@@ -95,8 +95,8 @@ import OpenApiValidator from "express-openapi-validator";
 import {
   envelopeMiddleware,
   createResponseValidatorMiddleware,
-  buildErrorEnvelope,
 } from "./middleware/envelope.js";
+import { openApiErrorHandler } from "./middleware/openApiErrorHandler.js";
 //import * as OpenApiValidator from 'express-openapi-validator';
 
 interface AppDependencies {
@@ -733,41 +733,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
 
   // OpenAPI validation errors
-  app.use(
-    (
-      err: Error & {
-        status?: number;
-        errors?: unknown[];
-      },
-      req: express.Request,
-      res: express.Response,
-      next: express.NextFunction,
-    ) => {
-      if (!err.status) {
-        return next(err);
-      }
-
-      const requestId = req.id || "unknown";
-      const details = Array.isArray(err.errors)
-        ? err.errors.map((e, i) => ({
-            field: `body.${i}`,
-            message:
-              typeof e === "object" && e !== null && "message" in e
-                ? String((e as { message: unknown }).message)
-                : String(e),
-            code: "INVALID_BODY",
-          }))
-        : undefined;
-
-      const envelope = buildErrorEnvelope(
-        "BAD_REQUEST",
-        err.message,
-        requestId,
-        details,
-      );
-      res.status(err.status).json(envelope);
-    },
-  );
+  app.use(openApiErrorHandler);
 
   app.use(errorHandler);
 
