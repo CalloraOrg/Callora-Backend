@@ -1,1 +1,88 @@
-aW1wb3J0IHsgZGVzY3JpYmUsIGl0LCBleHBlY3QgfSBmcm9tICdAdmlydC90ZXN0JzsKaW1wb3J0IHsgZ2VuZXJhdGVJbnZvaWNlUGRmLCBJbnZvaWNlUGRmRGF0YSB9IGZyb20gJy4vaW52b2ljZVBkZic7CgpmdW5jdGlvbiBtYWtlRGF0YShvdmVycmlkZXM6IFBhcnRpYWw8SW52b2ljZVBkZkRhdGE+ID0ge30pOiBJbnZvaWNlUGRmRGF0YSB7CiAgcmV0dXJuIHsKICAgIGludm9pY2VOdW1iZXI6ICdJTlYtMDAxMjMnLAogICAgc3RhdHVzOiAncGFpZCcsCiAgICBjcmVhdGVkQXQ6IG5ldyBEYXRlKCcyMDI0LTAxLTE1VDAwOjAwOjAwLjAwMFonKSwKICAgIHBlcmlvZFN0YXJ0OiBuZXcgRGF0ZSgnMjAyNC0wMS0wMVQwMDowMDowMC4wMDBaJyksCiAgICBwZXJpb2RFbmQ6IG5ldyBEYXRlKCcyMDI0LTAxLTMxVDAwOjAwOjAwLjAwMFonKSwKICAgIHRvdGFsQW1vdW50VXNkYzogJzEyMy40NScsCiAgICBjdXJyZW5jeTogJ1VTREMnLAogICAgZGVzY3JpcHRpb246ICdNb250aGx5IGJpbGxpbmcnLAogICAgbGluZUl0ZW1zOiBbCiAgICAgIHsKICAgICAgICBkZXNjcmlwdGlvbjogJ0FQSSBjYWxscycsCiAgICAgICAgYW1vdW50VXNkYzogJzEwMC4wMCcsCiAgICAgICAgcXVhbnRpdHk6IDEwLAogICAgICAgIHVuaXRQcmljZVVzZGM6ICcxMC4wMCcsCiAgICAgICAgaXRlbVR5cGU6ICd1c2FnZScsCiAgICAgIH0sCiAgICAgIHsKICAgICAgICBkZXNjcmlwdGlvbjogJ1N1YnNjcmlwdGlvbicsCiAgICAgICAgYW1vdW50VXNkYzogJzIzLjQ1JywKICAgICAgICBxdWFudGl0eTogMSwKICAgICAgICB1bml0UHJpY2VVc2RjOiAnMjMuNDUnLAogICAgICAgIGl0ZW1UeXBlOiAncGxhbi csCiAgICAgIH0sCiAgICBdLAogICAgLi4ub3ZlcnJpZGVzLAogIH07Cn0KCmRlc2NyaWJlKCdnZW5lcmF0ZUludm9pY2VQZGYnLCAoKSA9PiB7CiAgaXQoJ3N0YXJ0cyB3aXRoIHRoZSBQREYgaGVhZGVyIGFuZCBlbmRzIHdpdGggJSVFT0YnLCAoKSA9PiB7CiAgICBjb25zdCBidWYgPSBnZW5lcmF0ZUludm9pY2VQZGYobWFrZURhdGEoKSk7CiAgICBjb25zdCB0ZXh0ID0gYnVmLnRvU3RyaW5nKCdsYXRpbjEnKTsKICAgIGV4cGVjdCh0ZXh0LnN0YXJ0c1dpdGgoJyVQREYtJykpLnRvQmUodHJ1ZSk7CiAgICBleHBlY3QodGV4dC50cmltRW5kKCkuZW5kc1dpdGgoJyUlRU9GJykpLnRvQmUodHJ1ZSk7CiAgfSk7CgogIGl0KCdjb250YWlucyB0aGUgaW52b2ljZSBudW1iZXIgYW5kIHRvdGFsJywgKCkgPT4gewogICAgY29uc3QgYnVmID0gZ2VuZXJhdGVJbnZvaWNlUGRmKG1ha2VEYXRhKCkpOwogICAgY29uc3QgdGV4dCA9IGJ1Zi50b1N0cmluZygnbGF0aW4xJyk7CiAgICBleHBlY3QodGV4dCkudG9Db250YWluKCdJTlYtMDAxMjMnKTsKICAgIGV4cGVjdCh0ZXh0KS50b0NvbnRhaW4oJzEyMy40NScpOwogIH0pOwoKICBpdCgncmVuZGVycyBsaW5lIGl0ZW0gdG90YWxzIG1hdGNoaW5nIHRoZSBpbnB1dCcsICgpID0+IHsKICAgIGNvbnN0IGJ1ZiA9IGdlbmVyYXRlSW52b2ljZVBkZihtYWtlRGF0YSgpKTsKICAgIGNvbnN0IHRleHQgPSBidWYudG9TdHJpbmcoJ2xhdGluMScpOwogICAgZXhwZWN0KHRleHQpLnRvQ29udGFpbigxMDAuMDAnKTsKICAgIGV4cGVjdCh0ZXh0KS50b0NvbnRhaW4oJzIzLjQ1Jyk7CiAgfSk7CgogIGl0KCdoYW5kbGVzIHplcm8gbGluZSBpdGVtcycsICgpID0+IHsKICAgIGNvbnN0IGJ1ZiA9IGdlbmVyYXRlSW52b2ljZVBkZihtYWtlRGF0YSggeyBsaW5lSXRlbXM6IFtdIH0pKTsKICAgIGNvbnN0IHRleHQgPSBidWYudG9TdHJpbmcoJ2xhdGluMScpOwogICAgZXhwZWN0KHRleHQuc3RhcnRzV2l0aCgnJVBERi0nKSkudG9CZSh0cnVlKTsKICAgIGV4cGVjdCh0ZXh0LnRyaW1FbmQoKS5lbmRzV2l0aCgnJSVFT0YnKSkudG9CZSh0cnVlKTsKICB9KTsKCiAgaXQoJ2VzY2FwZXMgcGFyZW50aGVzZXMgYW5kIGJhY2tzbGFzaGVzIGluIEFQSSBuYW1lcycsICgpID0+IHsKICAgIGNvbnN0IG5hbWUgPSAnQVBJIFxcICh0ZXN0KSc7CiAgICBjb25zdCBidWYgPSBnZW5lcmF0ZUludm9pY2VQZGYoCiAgICAgIG1ha2VEYXRhKHsKICAgICAgICBsaW5lSXRlbXM6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgZGVzY3JpcHRpb246IG5hbWUsCiAgICAgICAgICAgIGFtb3VudFVzZGM6ICcxLjAwJywKICAgICAgICAgICAgcXVhbnRpdHk6IDEsCiAgICAgICAgICAgIHVuaXRQcmljZVVzZGM6ICcxLjAwJywKICAgICAgICAgICAgaXRlbVR5cGU6ICd1c2FnZScsCiAgICAgICAgICB9LAogICAgICAgIF0sCiAgICAgIH0pLAogICAgKTsKICAgIGNvbnN0IHRleHQgPSBidWYudG9TdHJpbmcoJ2xhdGluMScpOwogICAgZXhwZWN0KHRleHQuc3RhcnRzV2l0aCgnJVBERi0nKSkudG9CZSh0cnVlKTsKICAgIGV4cGVjdCh0ZXh0LnRyaW1FbmQoKS5lbmRzV2l0aCgnJSVFT0YnKSkudG9CZSh0cnVlKTsKICAgIGV4cGVjdCh0ZXh0KS50b0NvbnRhaW4oJ0FQSSBcXFxcIFxcKHRlc3RcXCknKTsKICB9KTsKfSk7Cg==
+import { describe, it, expect } from '@test/globals';
+import { generateInvoicePdf, InvoicePdfData } from './invoicePdf';
+
+function makeInvoice(overrides: Partial<InvoicePdata> = {}): InvoicePdata {
+  return {
+    invoiceNumber: 'INV-0001',
+    status: 'paid',
+    createdAt: new Date('2024-01-15T00:00:00Z'),
+    periodStart: new Date('2024-01-01T00:00:00Z'),
+    periodEnd: new Date('2024-01-31T00:00:00Z'),
+    totalAmountUsdc: '123.45',
+    currency: 'USDC',
+    description: 'Monthly billing',
+    lineItems: [
+      {
+        description: 'API calls',
+        amountUsdc: '100.00',
+        quantity: 1000,
+        unitPriceUsdc: '0.10',
+        itemType: 'usage',
+      },
+      {
+        description: 'Subscription fee',
+        amountUsdc: '23.45',
+        quantity: 1,
+        unitPriceUsdc: '23.45',
+        itemType: 'fee',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function decodePdf(buf: Buffer): string {
+  return buf.toString('latin1');
+}
+
+describe('generateInvoicePdf', () => {
+  it('starts with the PDF header and ends with %%EOF', () => {
+    const buf = generateInvoicePdf(makeInvoice());
+    expect(buf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+    const tail = buf.subarray(Math.max(0, buf.length - 10)).toString('ascii');
+    expect(tail).toContain ('%%EOF');
+  });
+
+  it('contains the invoice number and total in the content stream', () => {
+    const buf = generateInvoicePdf(makeInvoice());
+    const text = decodePdf(buf);
+    expect(text).toContain('INV-0001');
+    expect(text).toContain('123.45');
+  });
+
+  it('line item totals and quantities appear in the document', () => {
+    const buf = generateInvoicePdf(makeInvoice());
+    const text = decodePdf(buf);
+    expect(text).toContain('1000.00');
+    expect(text).toContain('23.45');
+    expect(text).toContain('1000');
+  });
+
+  it('handles zero line items and still generates a valid PDF', () => {
+    const buf = generateInvoicePdf(makeInvoice({ lineItems: [], totalAmountUsdc: '0.00' }));
+    expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF');
+    const text = decodePdf(buf);
+    expect(text).toContain('%%EOF');
+    expect(text).toContain(0.00');
+  });
+
+  it('escapes parentheses and backslashes in API names', () => {
+    const buf = generateInvoicePdf(
+      makeInvoice({
+        description: 'API (beta) \\ channel',
+        lineItems: [
+          {
+            description: 'API (beta) \\ channel',
+            amountUsdc: '5.00',
+            quantity: 1,
+            unitPriceUsdc: '5.00',
+            itemType: 'usage',
+          },
+        ],
+      }),
+    );
+    const text = decodePdf(buf);
+    expect(text).toContain('API \\(beta\\) \\\\ channel');
+    expect(text).toContain('%%EOF');
+  });
+});
