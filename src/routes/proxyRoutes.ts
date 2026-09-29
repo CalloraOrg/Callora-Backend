@@ -160,7 +160,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
 
       // 3. Per-API-key rate-limit check (tier-aware; complements the per-user
       //    token-bucket check already applied by gatewayRateLimitMiddleware).
-      const rateResult = await rateLimiter.check(apiKeyHeader, res.locals.apiKeyTier as string | undefined);
+      const rateResult = await rateLimiter.check(keyRecord.id, res.locals.apiKeyTier as string | undefined);
       if (!rateResult.allowed) {
         const retryAfterSec = Math.ceil((rateResult.retryAfterMs ?? 1000) / 1000);
         res.set('Retry-After', String(retryAfterSec));
@@ -341,7 +341,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                 const recorded = await usageStore.record({
                   id: randomUUID(), // ID of the usage event itself
                   requestId,        // Idempotency key — prevents double-counts
-                  apiKey: apiKeyHeader,
+                  // apiKey field omitted to prevent storing plaintext keys
                   apiKeyId: keyRecord.id,
                   apiId: String(apiEntry.id),
                   endpointId: endpoint.endpointId,
@@ -355,7 +355,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                   defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
                     id: randomUUID(),
                     requestId,
-                    apiKey: apiKeyHeader,
+                    // apiKey field omitted to prevent broadcasting plaintext keys
                     apiKeyId: keyRecord.id,
                     apiId: String(apiEntry.id),
                     endpointId: endpoint.endpointId,

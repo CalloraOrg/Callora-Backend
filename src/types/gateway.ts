@@ -14,7 +14,7 @@ export interface ApiKey {
 export interface UsageEvent {
   id: string;
   requestId: string;
-  apiKey: string;
+  apiKey?: string;
   apiKeyId: string;
   apiId: string;
   endpointId: string;
