@@ -2,6 +2,78 @@
 
 ## System Overview
 
+## Route Map
+
+The test and library entrypoint is `createApp` in `src/app.ts`. The production
+bootstrap in `src/index.ts` creates a separate Express app, with its business
+mounts inside the `isDirectExecution` branch. The same URL can therefore be
+available through one entrypoint and absent from the other. Wildcard rows below
+identify router prefixes; see each source router for its exact subpaths.
+
+| Method | Full path | Router source file | Auth | Rate limit |
+| --- | --- | --- | --- | --- |
+| GET | `/api/health` | `src/app.ts`, `src/index.ts` | none | none |
+| GET | `/api/metrics` | `src/app.ts`, `src/index.ts` | production admin key | none |
+| * | `/api/health/dependencies/*` | `src/routes/health/dependencies.ts` | none | none |
+| * | `/api/rate-limit/*` | `src/routes/rate-limit.ts` | none | configured REST limiter |
+| * | `/api/maintenance/*` | `src/routes/maintenance.ts` | none | none |
+| * | `/api/admin/*` | `src/routes/admin.ts` | admin auth + IP allowlist | none |
+| * | `/api/admin/usage/anomalies/*` | `src/routes/admin/usage/anomalies.ts` | admin auth + IP allowlist | none |
+| * | `/api/admin/usage/by-endpoint/*` | `src/routes/admin/usage/by-endpoint.ts` | admin auth + IP allowlist | none |
+| * | `/api/admin/usage/spike/*` | `src/routes/admin/usage/spike.ts` | admin auth + IP allowlist | none |
+| * | `/api/admin/db/explain/*` | `src/routes/admin/explain.ts` | admin auth + IP allowlist | none |
+| * | `/api/quota/requests/*` | `src/routes/quota/requests.ts` | route-specific | endpoint limiter |
+| * | `/api/quotas/*` | `src/routes/quotas.ts` | route-specific | quota token bucket |
+| * | `/api/logs/*` | `src/routes/logs.ts` | route-specific | none |
+| * | `/api/apis/*` | `src/routes/apis.ts` | route-specific | none |
+| * | `/api/marketplace/plugins/*` | `src/routes/marketplace/plugins.ts` | route-specific | none |
+| * | `/api/webhooks/*` | `src/routes/webhooks.ts` | route-specific | webhook management limiter |
+| * | `/api/*` | `src/routes/index.ts` | route-specific | configured REST limiter on selected routes |
+| GET | `/api/developers/apis` | `src/app.ts` | user auth | none |
+| GET | `/api/developers/analytics` | `src/app.ts` | user auth | none |
+| POST | `/api/vault/deposit/prepare` | `src/app.ts` | user auth | none |
+| GET | `/api/vault/balance` | `src/app.ts` | user auth | none |
+| POST | `/api/developers/apis` | `src/app.ts` | user auth | none |
+| GET | `/api/developers/revenue` | `src/app.ts` | user auth | none |
+| * | `/api/developers/*` | `src/routes/developerRoutes.ts` (`src/index.ts`) | route-specific | none |
+| * | `/api/gateway/*` | `src/routes/gatewayRoutes.ts` (`src/index.ts`) | API key + IP allowlist | gateway limiter |
+| * | `/v1/call/*` | `src/routes/proxyRoutes.ts` (`src/index.ts`) | API key | gateway limiter |
+| * | `/api/refresh-token/*` | `src/routes/refresh-token.ts` (`src/index.ts`) | refresh token | none |
+| * | `/api/refunds/*` | `src/routes/refunds.ts` (`src/index.ts`) | route-specific | none |
+
+### Mounted prefixes
+
+`src/app.ts`: `/api/health/dependencies`, `/api/rate-limit`, `/api/maintenance`,
+`/api/admin/usage/anomalies`, `/api/admin/usage/by-endpoint`, `/api/admin`,
+`/api/admin/db/explain`, `/api/admin/usage/spike`, `/api/quota/requests`,
+`/api/quotas`, `/api/logs`, `/api/apis`, `/api/marketplace/plugins`,
+`/api/webhooks`, and `/api`. Direct routes are `/api/health`, `/api/metrics`,
+the developer routes, and the vault routes shown above.
+
+`src/index.ts` direct-execution bootstrap: `/api/developers`,
+`/api/admin/usage/anomalies`, `/api/admin`, `/api/refunds`, `/api/logs`,
+`/api/webhooks`, `/api/gateway`, `/v1/call`, and `/api/refresh-token`; direct
+routes are `/api/health` and `/api/metrics`.
+
+### Unmounted routers
+
+These routers remain unmounted until wired or deleted:
+
+- `src/routes/forecast.ts` — unmounted.
+- `src/routes/billing/forecast.ts` — unmounted.
+- `src/routes/tenants.ts` — unmounted.
+- `src/routes/feature-flags.ts` — unmounted.
+- `src/routes/admin/circuit-breaker.ts` — unmounted.
+- `src/routes/healthz.ts` — unmounted.
+
+### Duplicate mounts
+
+`src/app.ts` registers anomalies at lines 390 and 397, usage-by-endpoint at
+391–394 and 398, the admin router at 395 and 400, and explain at 396 and 401.
+In `src/index.ts`, anomalies are mounted at lines 268 and 272 and admin at
+269 and 277. Repeated mounts repeat route matching; if a handler calls
+`next()`, a duplicate registration can run the same route set again.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Client Application                       │
