@@ -11,6 +11,14 @@ import { createApiRouter } from './routes/index.js';
 import { createApisRouter } from './routes/apis.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createPluginsRouter } from './routes/marketplace/plugins.js';
+import { createGatewayHealthRouter } from './routes/gatewayRoutes.js';
+import {
+  HmacObjectStorageClient,
+} from './services/scheduledExports.js';
+import {
+  InMemoryExportStore,
+  ReportExporterService,
+} from './services/reportExporter.js';
 import { createLogsRouter } from './routes/logs.js';
 import { pool } from './db.js';
 import {
@@ -169,6 +177,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     dependencies?.vaultRepository ?? new InMemoryVaultRepository();
   const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
   const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
+  const reportExporterService = new ReportExporterService(
+    { getEvents: async () => [] },
+    new HmacObjectStorageClient(),
+    new InMemoryExportStore(),
+    {
+      s3Bucket: "contract-exports",
+      s3Endpoint: "http://localhost",
+      s3SecretAccessKey: "contract-test-secret",
+    },
+  );
 
   // Initialize deposit and vault controllers
   const transactionBuilder = new TransactionBuilderService();
@@ -423,6 +441,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
 
   app.use("/api/marketplace/plugins", createPluginsRouter());
+  app.use("/api/gateway", createGatewayHealthRouter());
 
 
 
@@ -439,6 +458,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       usageEventsRepository,
       apiRepository,
       developerRepository,
+      reportExporterService,
       subscriptionRepository: defaultSubscriptionRepository,
     }),
   );
