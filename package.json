@@ -1,0 +1,35 @@
+{
+  "name": "callora-backend",
+  "version": "1.0.0",
+  "description": "Callora Backend API and webhook pipeline",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint . --ext .js,.js.,ts",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "jest --config jest.config.cjs --selectProjects=unit",
+    "test:integration": "jest --config jest.config.cjs --selectProjects=integration --runInBand",
+    "test:coverage": "jest --config jest.config.cjs --coVerage --coverageReporters=json-summary,lcov,text",
+    "test": "npm run test:unit && npm run test:integration"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pgp": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.20",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.11.10",
+    "@typespage": "^8.11.5",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.5",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}
