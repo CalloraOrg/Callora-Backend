@@ -31,9 +31,13 @@ describe('restRateLimit middleware', () => {
 
   beforeEach(() => {
     process.env.JWT_SECRET = TEST_JWT_SECRET;
+    // Freeze the quota clock while keeping HTTP I/O on real timers. Exact
+    // Retry-After assertions should not depend on request execution speed.
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now());
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     if (originalSecret !== undefined) {
       process.env.JWT_SECRET = originalSecret;
     } else {
