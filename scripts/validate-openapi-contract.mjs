@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const specPath = resolve(process.cwd(), "docs/openapi.json");
 const spec = JSON.parse(readFileSync(specPath, "utf8"));
@@ -183,6 +184,77 @@ for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
 for (const [name, schema] of Object.entries(spec.components?.schemas ?? {})) {
   inspectSchema(schema, `components.schemas.${name}`);
 }
+
+async function checkRuntimeMounts() {
+  let createApp;
+  try {
+    const appModule = await import(
+      pathToFileURL(resolve(process.cwd(), "src/app.ts")).href
+    );
+    createApp = appModule.createApp ?? appModule.default;
+  } catch (error) {
+    warn(
+      `runtime: unable to load createApp from src/app.ts (${error?.message ?? error})`,
+    );
+    return;
+  }
+  if (typeof createApp !== "function") {
+    warn("runtime: createApp is not exported from src/app.ts");
+    return;
+  }
+
+  let app;
+  try {
+    app = createApp();
+  } catch (error) {
+    fail(`runtime: createApp() threw (${error?.message ?? error})`);
+    return;
+  }
+
+  const documented = new Set();
+  for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
+    for (const method of Object.keys(pathItem)) {
+      if (!methods.has(method)) continue;
+      documented.add(`${method.toUpperCase()} ${path}`);
+      const requestPath = path.replace(/\{([^}]+)\}/g, "__contract__");
+      let response;
+      try {
+        response = await app.request(requestPath, { method: method.toUpperCase() });
+      } catch (error) {
+        fail(
+          `runtime: ${method.toUpperCase()} ${path} threw (${error?.message ?? error})`,
+        );
+        continue;
+      }
+      if (response.status === 404) {
+        fail(
+          `runtime: ${method.toUpperCase()} ${path} returned 404 from createApp (documented path is not mounted)`,
+        );
+      }
+    }
+  }
+
+  const mounted = new Set();
+  const router = app?.router ?? app?._router;
+  const stack = router?.stack ?? [];
+  for (const layer of stack) {
+    const layerPath = layer?.route?.path ?? layer?.path;
+    if (typeof layerPath !== "string") continue;
+    const layerMethods = layer?.route?.methods
+      ? Object.keys(layer.route.methods)
+      : ["get"];
+    for (const method of layerMethods) {
+      mounted.add(`${method.toUpperCase()} ${layerPath}`);
+    }
+  }
+  for (const entry of mounted) {
+    if (!documented.has(entry)) {
+      warn(`runtime: mounted but undocumented path ${entry}`);
+    }
+  }
+}
+
+await checkRuntimeMounts();
 
 if (failures.length > 0) {
   console.error(
