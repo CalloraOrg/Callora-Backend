@@ -1360,3 +1360,200 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
     }
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Async Rejection Handling Tests (Issue #1278)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Async rejection handling in GET /api/developers/apis', () => {
+  test('returns 500 when apiRepository.listByDeveloper throws', async () => {
+    const throwingApiRepository: ApiRepository = {
+      ...new InMemoryApiRepository(),
+      async listByDeveloper() {
+        throw new Error('Database connection lost');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: usageEventsForApis(),
+      developerRepository: createDeveloperRepository(developerProfile),
+      apiRepository: throwingApiRepository,
+    });
+
+    const response = await request(app)
+      .get('/api/developers/apis')
+      .set('Authorization', authBearer('dev-1'));
+
+    // Should not hang; should return 500 error envelope
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('returns 500 when usageEventsRepository.aggregateByDeveloper throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async aggregateByDeveloper() {
+        throw new Error('Query timeout');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+      apiRepository: new FakeApiRepository(sampleApis),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/apis')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('does not emit unhandledRejection event when repository throws', async () => {
+    const throwingApiRepository: ApiRepository = {
+      ...new InMemoryApiRepository(),
+      async listByDeveloper() {
+        throw new Error('Repository error');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: usageEventsForApis(),
+      developerRepository: createDeveloperRepository(developerProfile),
+      apiRepository: throwingApiRepository,
+    });
+
+    let unhandledRejectionEmitted = false;
+    const handler = () => {
+      unhandledRejectionEmitted = true;
+    };
+
+    process.on('unhandledRejection', handler);
+
+    try {
+      const response = await request(app)
+        .get('/api/developers/apis')
+        .set('Authorization', authBearer('dev-1'));
+
+      assert.equal(response.status, 500);
+      // Give the event loop a chance to emit the event
+      await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(unhandledRejectionEmitted, false);
+    } finally {
+      process.removeListener('unhandledRejection', handler);
+    }
+  });
+});
+
+describe('Async rejection handling in GET /api/developers/analytics', () => {
+  test('returns 500 when usageEventsRepository.developerOwnsApi throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async developerOwnsApi() {
+        throw new Error('Permissions service unavailable');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&apiId=api-1')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('returns 500 when usageEventsRepository.findByDeveloper throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async findByDeveloper() {
+        throw new Error('Database read failed');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('does not emit unhandledRejection event when repository throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async findByDeveloper() {
+        throw new Error('Repository unavailable');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    let unhandledRejectionEmitted = false;
+    const handler = () => {
+      unhandledRejectionEmitted = true;
+    };
+
+    process.on('unhandledRejection', handler);
+
+    try {
+      const response = await request(app)
+        .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28')
+        .set('Authorization', authBearer('dev-1'));
+
+      assert.equal(response.status, 500);
+      // Give the event loop a chance to emit the event
+      await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(unhandledRejectionEmitted, false);
+    } finally {
+      process.removeListener('unhandledRejection', handler);
+    }
+  });
+
+  test('returns proper error envelope with requestId on async errors', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async findByDeveloper() {
+        throw new Error('Query execution error');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    assert.ok(response.body.requestId);
+    assert.equal(typeof response.body.requestId, 'string');
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+  });
+});
