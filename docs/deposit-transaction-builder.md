@@ -35,12 +35,15 @@ Requires authentication via `x-user-id` header.
 - `network` (optional): Stellar network identifier
   - Values: `"testnet"` or `"mainnet"`
   - Default: `"testnet"`
+  - **Network rule:** the requested network must equal `config.stellar.network` (set via `STELLAR_NETWORK` or `SOROBAN_NETWORK`). If it does not match, `DepositController` rejects the request with `400 INVALID_NETWORK` before any transaction is built. This prevents building a transaction against the wrong Horizon instance or vault contract.
 
 - `source_account` (optional): Custom source account for the transaction
   - Format: Valid Stellar public key (G... with 56 characters)
   - Default: Uses authenticated user's public key
 
 ### Response
+
+The success payload maps to `DepositPrepareResponse` in `src/controllers/depositController.ts`.
 
 #### Success (200 OK)
 
