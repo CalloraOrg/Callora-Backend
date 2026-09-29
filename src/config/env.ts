@@ -88,21 +88,35 @@ export const envSchema = z
     INTERNAL_GATEWAY_SECRET: z.string().optional(),
 
     /**
-     * TRUST_PROXY_HOPS — number of trusted reverse-proxy hops in front of the
-     * application. Used by {@link getClientIp} (src/lib/clientIp.ts) to select
-     * the correct entry from the right-hand side of `X-Forwarded-For`, matching
-     * Express `trust proxy` semantics.
+     * TRUST_PROXY_HEADERS — when true, `getClientIp` derives the client IP
+     * from the X-Forwarded-For header instead of the socket address.
      *
-     * - 0 (default): no proxy is trusted; the socket address is always used.
-     *   Client-supplied `X-Forwarded-For` headers are ignored.
-     * - N > 0: the Nth entry from the right of `X-Forwarded-For` is treated as
-     *   the client IP. Entries further left are considered attacker-controlled
-     *   and are never used for allowlisting or rate limiting.
-     *
-     * When the header contains fewer than N entries, the helper falls back to
-     * the socket address rather than trusting a partially-populated header.
+     * SECURITY: The leftmost X-Forwarded-For entry is fully client-controlled
+     * and MUST NOT be trusted. When this flag is enabled, callers must also
+     * configure TRUSTED_PROXY_HOPS (or TRUSTED_PROXY_CIDRS) so the helper can
+     * select the entry that many positions from the right, matching Express
+     * `trust proxy` semantics. Without a trusted hop count/CIDR list, enabling
+     * this flag is a no-op for security-sensitive callers.
      */
-    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+    TRUST_PROXY_HEADERS: z
+      .string()
+      .optional()
+      .transform((v) => v === "true")
+      .default(false),
+    /**
+     * TRUSTED_PROXY_HOPS — number of trusted proxy hops in front of the app.
+     * The client IP is selected that many positions from the right of the
+     * X-Forwarded-For list. 0 (default) means no proxy is trusted and the
+     * socket address is used. Aligns with Express `trust proxy` numeric form.
+     */
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().nonnegative().default(0),
+    /**
+     * TRUSTED_PROXY_CIDRS — optional comma-separated list of trusted proxy
+     * CIDRs. When set, X-Forwarded-For entries are walked from the right and
+     * the first address not contained in any trusted CIDR is returned.
+     * Takes precedence over TRUSTED_PROXY_HOPS when both are provided.
+     */
+    TRUSTED_PROXY_CIDRS: z.string().optional(),
 
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),

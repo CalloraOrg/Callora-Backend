@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { Request } from 'express';
-import { getClientIp, isValidIp, DEFAULT_PROXY_HEADERS } from '../clientIp.js';
+import { getClientIp, isValidIp, DEFAULT_PROXY_HEADERS, selectClientIpWithTrust } from '../clientIp.js';
 
 function makeReq(overrides: Partial<Request> = {}): Request {
   return {
@@ -45,21 +45,14 @@ describe('getClientIp', () => {
     assert.equal(getClientIp(req, false), '1.2.3.4');
   });
 
-  test('with one trusted hop, x-forwarded-for yields the rightmost entry', () => {
+  test('uses the rightmost entry with one trusted hop', () => {
     const req = makeReq({
       headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' },
     });
     assert.equal(getClientIp(req, 1), '2.2.2.2');
   });
 
-  test('treats true as a single trusted hop', () => {
-    const req = makeReq({
-      headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' },
-    });
-    assert.equal(getClientIp(req, true), '2.2.2.2');
-  });
-
-  test('selects the entry that many positions from the right for multiple hops', () => {
+  test('selects the correct entry for multiple trusted hops', () => {
     const req = makeReq({
       headers: { 'x-forwarded-for': '5.5.5.5, 10.0.0.1, 172.16.0.1' },
     });
@@ -67,20 +60,18 @@ describe('getClientIp', () => {
     assert.equal(getClientIp(req, 3), '5.5.5.5');
   });
 
-  test('spoofed leftmost entries cannot satisfy the resolved IP', () => {
+  test('selects the leftmost untrusted entry for trusted CIDR list', () => {
     const req = makeReq({
-      headers: { 'x-forwarded-for': '10.0.0.1, 1.1.1.1, 2.2.2.2' },
+      headers: { 'x-forwarded-for': '1.1.1.1, 10.0.0.1, 172.16.0.1' },
     });
-    // With one trusted hop the attacker-controlled leftmost entries are ignored.
-    assert.equal(getClientIp(req, 1), '2.2.2.2');
+    assert.equal(getClientIp(req, ['10.0.0.0/8', '172.16.0.0/12']), '1.1.1.1');
   });
 
-  test('falls back to socket when the chain is shorter than the hop count', () => {
+  test('spoofed leftmost entry cannot override the trusted hop selection', () => {
     const req = makeReq({
-      headers: { 'x-forwarded-for': '1.1.1.1' },
-      socket: { remoteAddress: '1.2.3.4' } as never,
+      headers: { 'x-forwarded-for': '9.9.9.9, 2.2.2.2' },
     });
-    assert.equal(getClientIp(req, 2), '1.2.3.4');
+    assert.equal(getClientIp(req, 1), '2.2.2.2');
   });
 
   test('falls back to socket when proxy header is invalid', () => {
@@ -89,6 +80,14 @@ describe('getClientIp', () => {
       socket: { remoteAddress: '1.2.3.4' } as never,
     });
     assert.equal(getClientIp(req, 1), '1.2.3.4');
+  });
+
+  test('falls back to socket when the chain is shorter than the trust count', () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '2.2.2.2' },
+      socket: { remoteAddress: '1.2.3.4' } as never,
+    });
+    assert.equal(getClientIp(req, 2), '1.2.3.4');
   });
 
   test('falls back to req.ip when socket is absent', () => {
@@ -120,5 +119,9 @@ describe('getClientIp', () => {
 
   test('DEFAULT_PROXY_HEADERS includes x-forwarded-for', () => {
     assert.equal(DEFAULT_PROXY_HEADERS.includes('x-forwarded-for'), true);
+  });
+
+  test('selectClientIpWithTrust handles empty chain', () => {
+    assert.equal(selectClientIpWithTrust([], 1), undefined);
   });
 });

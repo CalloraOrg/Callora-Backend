@@ -36,13 +36,13 @@ The proxy adds the following headers to all upstream requests:
 
 All other headers not in the strip list are forwarded to upstream services, including but not limited to:
 
--  `content-type` - Media type of the request body
--  `content-length` - Length of the request body
--  `accept` - Preferred response media types
--  `user-agent` - Client software identification
--  `accept-encoding` - Preferred response encodings
--  `accept-language` - Preferred response languages
--  Custom application headers (e.g., `x-custom-*`)
+- `content-type` - Media type of the request body
+- `content-length` - Length of the request body
+- `accept` - Preferred response media types
+- `user-agent` - Client software identification
+- `accept-encoding` - Preferred response encodings
+- `accept-language` - Preferred response languages
+- Custom application headers (e.g. `x-custom-*`)
 
 ## Response Header Handling
 
@@ -57,11 +57,11 @@ All upstream response headers are forwarded to the client **except** hop-by-hop 
 - `upgrade`
 
 ### Headers Overridden by Proxy
--  x-request-id` - Always set to the proxy's request ID for correlation
+- `x-request-id` - Always set to the proxy's request ID for correlation
 
 ## Case Sensitivity
 
-Header stripping is performed case-insensitively. All header name variations (e.g., `X-API-Key`, `x-api-key`, `X-API-KEY`) are treated identically.
+Header stripping is performed case-insensitively. All header name variations (e.g. `X-API-Key`, `x-api-key`, `X-API-KEY`) are treated identically.
 
 ## Security Considerations
 
@@ -71,23 +71,29 @@ Header stripping is performed case-insensitively. All header name variations (e.
 - Cookie headers are stripped to prevent session hijacking
 
 ### Request Tracing
-- Unique `x-request-id` headers enable end-to-end request tracing
+- Unique `x-request-id` Headers enable end-to-end request tracing
 - Request IDs are included in error responses for debugging
 - UUID v4 format ensures global uniqueness
 
-## Client IP Resolution (Trust Boundary)
+## Trusted Proxy Hops and Client IP Resolution
 
-The client IP used by the IP-allowlist middleware and the request logger is resolved in `src/lib/clientIp.ts` and follows Express' `trust proxy` semantics:
+When the service sits behind one or more reverse proxies, the client IP used for the admin IP-allowlist and per-IP rate limiting is resolved by `src/lib/clientIp.ts`.
 
-- **No trust (default)** — all forwarded headers are ignored and the direct socket address (`req.ip` / `req.socket.remoteAddress`) is used. This is spoof-proof.
-- **Trusted hop count** — the client address is the entry that many positions from the right of the `x-forwarded-for` chain. The leftmost entries are client-controlled and must not be trusted. For example, with one trusted hop, `X-Forwarded-For: 1.1.1.1, 2.2.2.2` yields `2.2.2.2`.
-- If the chain is shorter than the configured hop count, or the selected entry is not a valid IP, the resolver falls back to the socket address.
+The client-controlled leftmost entry of `X-Forwarded-For` is never used unless the entire chain is trusted. The configuration is controlled by the `TRUST_PROXY_HEADERS` environment variable:
 
-The hop count is configured via the `TRUST_PROXY_HEADERS` environment variable:
+| Value | Meaning |
+| --- | --- |
+| unset / `false` | No proxy headers are trusted; the direct socket address is used. |
+| `number` | Number of trusted proxy hops between the client and the app. The client IP is taken that many positions from the right of the forwarded chain. |
+| `true` | Backwards-compatible alias for a single trusted hop (`1 `). |
+| `CIDR,CIDR,`| Comma-separated trusted proxy CIDRs. The chain is walked from the right, skipping addresses inside the trusted ranges. |
 
-- `false` or unset — no trusted proxy hops (socket address)
-- `true` — equivalent to a hop count of 1
-- a non-negative integer (e.g. `2`) — the number of trusted proxy hops in front of the app
+Examples (with one trusted hop):
+
+- `X-Forwarded-For: 1.1.1.1, 2.2.2.2` → client IP is `2.2.2.2`.
+- `X-Forwarded-For: 9.9.9.9, 2.2.2.2` → client IP is `2.2.2.2` (the spoofed leftmost entry is ignored).
+
+This aligns with Express's `trust proxy` semantics.
 
 ## Implementation Details
 
@@ -106,6 +112,7 @@ const DEFAULT_STRIP_HEADERS = [
   'proxy-authorization',
   'proxy-connection',
 ];
+
 ```
 
 Headers are processed case-insensitively using lowercase comparison:
@@ -127,10 +134,5 @@ Comprehensive tests verify:
 - Case-insensitive header stripping works
 - Response headers are filtered appropriately
 - Request ID correlation is maintained
-- Client IP resolution honours the trusted hop count and falls back to the socket address
 
-### Client IP Tests
-
-See `src/lib/__tests__/clientIp.test.ts` for detailed coverage of the trust-boundary logic.
-
-See `src/__tests__/proxy.integration.test.ts` for detailed test coverage of header forwarding.
+See `src/__tests__/proxy.integration.test.ts` for detailed test coverage.
