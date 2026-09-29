@@ -17,10 +17,6 @@ const authBearer = (userId = 'dev-1') => `Bearer ${signTestToken({ userId })}`;
 const TEST_ORIGIN = 'http://localhost:5173';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
-jest.mock('express-openapi-validator', () => ({
-  __esModule: true,
-  default: { middleware: () => (_req: unknown, _res: unknown, next: () => void) => next() },
-}));
 jest.mock('./services/transactionBuilder.js', () => ({
   TransactionBuilderService: class MockTxBuilder {}
 }));
