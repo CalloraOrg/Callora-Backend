@@ -35,10 +35,10 @@ Requires authentication via `x-user-id` header.
 - `network` (optional): Stellar network identifier
   - Values: `"testnet"` or `"mainnet"`
   - Default: `"testnet"`
-  - Must match the configured `config.stellar.network`. If the request
-    specifies a network different from the server's active network,
-    `DepositController` rejects the request with `400 INVALID_NETWORK` before
-    any vault lookup or transaction building occurs.
+  - Must match `config.stellar.network`. `DepositController` rejects any other
+    value with `INVALID_NETWORK` before the transaction builder is invoked, so
+    a request for a network that differs from the server configuration fails
+    even if the identifier is otherwise well-formed.
 
 - `source_account` (optional): Custom source account for the transaction
   - Format: Valid Stellar public key (G... with 56 characters)

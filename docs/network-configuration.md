@@ -10,7 +10,7 @@ Use one active network per deployment to avoid mixing chain data.
 
 The active network is read in this order:
 1. `STELLAR_NETWORK`
-2. `SoROBAN_NETWORK`
+2. `SOROBAN_NETWORK`
 3. default: `testnet`
 
 Example:
@@ -26,8 +26,8 @@ STELLAR_NETWORK=mainnet
 ```bash
 STELLAR_TESTNET_HORIZON_URL=https://horizon-testnet.stellar.org
 SOROBAN_TESTNET_RPC_URL=https://soroban-testnet.stellar.org
-STELLAR_TESTNET_VAULT_CONTRACT_ID=CC..TESTNET_VAULT
-STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID=CC..TESTNET_SETTLEMENT
+STELLAR_TESTNET_VAULT_CONTRACT_ID=CC...TESTNET_VAULT
+STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID=CC...TESTNET_SETTLEMENT
 ```
 
 ### Mainnet
@@ -35,8 +35,8 @@ STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID=CC..TESTNET_SETTLEMENT
 ```bash
 STELLAR_MAINNET_HORIZON_URL=https://horizon.stellar.org
 SOROBAN_MAINNET_RPC_URL=https://soroban-mainnet.stellar.org
-STELLAR_MAINNET_VAULT_CONTRACT_ID=CC..MAINNET_VAULT
-STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID=CC..MAINNET_SETTLEMENT
+STELLAR_MAINNET_VAULT_CONTRACT_ID=CC...MAINNET_VAULT
+STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID=CB...MAINNET_SETTLEMENT
 ```
 
 ## Behavior Guarantees
@@ -49,34 +49,31 @@ STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID=CC..MAINNET_SETTLEMENT
 - Remote Stellar endpoints must use `https://`; plain `http://` is only allowed for localhost-based development endpoints.
 - Stellar endpoint URLs must not include embedded credentials, query strings, or URL fragments.
 
-## Network Mismatch Behaviour in Deposit Preparation
+## Network Match Rules for Deposit Preparation
 
-The deposit preparation endpoint is `POST /api/vault/deposit/prepare`. The request body must include a `network` field that matches the active `config.stellar.network`.
+The deposit flow enforces the active network at the controller layer. `DepositController` compares the `Network` field of the incoming `Post /api/vault/deposit/prepare` body against `config.stellar.network and rejects any mismatch before touching Horizon or Soroban.
 
-If the request `network` does not match the active network, `DepositController` rejects the request with an `INVALID_NETWORK` error. This prevents building a deposit transaction for the wrong chain.
-
-The active network is determined by the same precedence described above (`STELLAR_NETWORK`, then `SoROBAN_NETWORK`, then default `testnet`). Frontend integrators must send the network that the backend is configured for; otherwise the request will fail before any transaction is built.
+- Allowed values are the active network only (`testnet` or `mainnet`).
+- A mismatch returns HTTP 400 with an `INVALID_NETWORK` error code and a message identifying the expected network.
+- The controller also rejects requests whose vault has not been registered, surfacing a vault-not-found error instead of building a transaction.
+- Network and vault validation happen before fee estimation, so misconfigured clients fail fast and cheaply.
 
 ## Fee and Timeout Environment Variables
 
-Deposit preparation reads fee and timeout values from environment variables. These are not per-network and apply to the active network:
+The deposit transaction builder derives fees and timebounds from environment variables rather than hard-coding them:
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `STELLAR_BASE_FEE` | Base fee (in strops) applied to the built transaction | `100` if unset |
-| `STELLAR_TIMEOAT_SECONDS` | Transaction timeout in seconds | `300` if unset |
+| `STELLAR_BASE_FEE` | Base fee (in strops) applied to the built transaction | Horizon default when unset |
+| `STELLAR_FEE_MULTIPLIER` | Multiplier applied on top of the simulated/base fee | `1` |
+| `STELLAR_TX_TIMEOUT_SECONDS` | Transaction timebound in seconds from the current ledger time | `300` |
 
-Example:
-
-```bash
-STELLAR_BASE_FEE=100
-STELLAR_TIMEOAT_SECONDS=300
-```
-
-If these variables are not set, the defaults above are used. Frontend integrators should not attempt to override fee or timeout in the request body; they are controlled by the backend configuration.
+These values are read through the active network configuration, so changing them requires a restart of the service.
 
 ## Optional Aliases
 
 For contract IDs, these aliases are also accepted:
-- `SOROBAN_TESTNET_VAULT_CONTRACT_ID`@- `SOROBAN_MAINNET_VAULT_CONTRACT_ID`
-- `SOROBAN_TESTNET_SETTLEMENT_CONTRACT_ID`@- `SOROBAN_MAINNET_SETTLEMENT_CONTRACT_ID`
+- `SOROBAN_TESTNET_VAULT_CONTRACT_ID`
+- `SOROBAN_MAINNET_VAULT_CONTRACT_ID`
+- `SOROBAN_TESTNET_SETTLEMENT_CONTRACT_ID`
+- `SOROBAN_MAINNET_SETTLEMENT_CONTRACT_ID`
