@@ -14,7 +14,7 @@ interface StellarNetworkConfig {
   settlementContractId?: string;
 }
 
-const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const TESTNET_NETWORK_PASSPHRASE = "Test DF Network ; September 2015";
 const MAINNET_NETWORK_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
 
@@ -69,10 +69,10 @@ const testnetConfig: StellarNetworkConfig = {
     "SOROBAN_TESTNET_RPC_URL",
     env.SOROBAN_TESTNET_RPC_URL,
   ),
-  networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
+  networkPassphrase: TESTNET_NETWORK_PASSTHRASE,
   vaultContractId: env.STELLAR_TESTNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID,
-};
+a};
 
 const mainnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
@@ -86,7 +86,7 @@ const mainnetConfig: StellarNetworkConfig = {
   networkPassphrase: MAINNET_NETWORK_PASSTHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
-l};
+a};
 
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
@@ -255,8 +255,8 @@ export const config = {
     costFactor: env.BCRYPT_COST_FACTOR,
     /**
      * Short-lived cache for recently verified API keys, keyed by the
-     * SHA-256 hex digest of the raw key. Keeping the cache small and
-     * short-lived limits the blast radius if a key is revoked out-of-band.
+     * SHA-256 hex digest of the raw key. Bounds work on the event loop by
+     * avoiding a bcrypt compare for repeated requests with the same key.
      */
     verifyCache: {
       maxEntries: env.BCRYPT_VERIFY_CACHE_MAX_ENTRIES,
@@ -287,7 +287,7 @@ export const config = {
   bulkEndpointLimit: env.BULK_ENDPOINT_LIMIT,
 
   slowQueryAlerter: {
-    webhookUrl: env.SLOW_QUERY_ALRERT_WEBHOOK_URL,
+    webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
     p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
     pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
     dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
@@ -301,7 +301,7 @@ export const config = {
   usageAnomalyDetector: {
     enabled: env.USAGE_ANOMALY_DETECTOR_ENABLED,
     multiplier: env.USAGE_ANOMALY_MULTIPLIER,
-    pollIntervalMs: env.USAGE_ANOMALY_POLL_INTERVAL_MS,
+    pollIntervalMs: env.USAGE_ANOMALY_DETECTOR_POLL_INTERVAL_MS,
     windowMs: env.USAGE_ANOMALY_WINDOW_MS,
     baselineWindows: env.USAGE_ANOMALY_BASELINE_WINDOWS,
     dedupWindowMs:

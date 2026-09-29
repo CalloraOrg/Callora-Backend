@@ -1,1 +1,463 @@
-aW1wb3J0IHsgY3JlYXRlSGFzaCwgdGltaW5nU2FmZUVxdWFsIH0gZnJvbSAnbm9kZTpjcnlwdG8nOwppbXBvcnQgdHlwZSB7IE5leHRGdW5jdGlvbiwgUmVxdWVzdCwgUmVxdWVzdEhhbmRsZXIgfSBmcm9tICdleHByZXNzJzsKaW1wb3J0IHsgRm9yYmlkZGVuRXJyb3IsIE5vdEZvdW5kRXJyb3IsIFVuYXV0aG9yaXplZEVycm9yIH0gZnJvbSAnLi4vZXJyb3JzL2luZGV4LmpzJzsKaW1wb3J0IHsgcmVjb3JkQXBpS2V5TG9va3VwIH0gZnJvbSAnLi4vbWV0cmljcy5qcyc7CgpleHBvcnQgY29uc3QgQVBJX0tFWV9QUkVGSVhfTEVOR1RIID0gMTY7CgpleHBvcnQgaW50ZXJmYWNlIEdhdGV3YXlBcGlLZXlSZWNvcmQgewogIGlkOiBzdHJpbmc7CiAgdXNlcklkOiBzdHJpbmc7CiAgYXBpSWQ6IHN0cmluZzsKICBwcmVmaXg6IHN0cmluZzsKICBrZXlIYXNoOiBzdHJpbmc7CiAgcmV2b2tlZD86IGJvb2xlYW47CiAgc2NvcGVzPzogc3RyaW5nW107CiAgcmF0ZUxpbWl0UGVyTWludXRlPzogbnVtYmVyIHwgbnVsbDsKICBjcmVhdGVkQXQ/OiBEYXRlIHwgc3RyaW5nOwogIGxhc3RVc2VkQXQ/OiBEYXRlIHwgc3RyaW5nIHwgbnVsbDsKICB0aWVyPzogc3RyaW5nOwogIGV4cGlyZXNBdD86IERhdGUgfCBzdHJpbmcgfCBudWxsOwp9CgpleHBvcnQgaW50ZXJmYWNlIEdhdGV3YXlBdXRoQ2FuZGlkYXRlPAogIFRVc2VyID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4sCiAgVFZhdWx0ID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4gfCBudWxsLAo+IHsKICBhcGlLZXlSZWNvcmQ6IEdhdGV3YXlBcGlLZXlSZWNvcmQ7CiAgdXNlcjogVFVzZXI7CiAgdmF1bHQ6IFRWYXVsdDsKfQoKZXhwb3J0IGludGVyZmFjZSBHYXRld2F5UmVzb2x2ZWRDb250ZXh0PAogIFRBcGkgPSBSZWNvcmQ8c3RyaW5nLCB1bmtub3duPiwKICBURW5kcG9pbnQgPSBSZWNvcmQ8c3RyaW5nLCB1bmtub3duPiwKPiB7CiAgYXBpOiBUQXBpOwogIGVuZHBvaW50OiBURW5kcG9pbnQ7Cn0KCmV4cG9ydCBpbnRlcmZhY2UgR2F0ZXdheUFwaUtleUF1dGhPcHRpb25zPAogIFRBcGkgPSBSZWNvcmQ8c3RyaW5nLCB1bmtub3duPiwKICBURW5kcG9pbnQgPSBSZWNvcmQ8c3RyaW5nLCB1bmtub3duPiwKICBUVXNlciA9IFJlY29yZDxzdHJpbmcsIHVua25vd24+LAogIFRWYXVsdCA9IFJlY29yZDxzdHJpbmcsIHVua25vd24+IHwgbnVsbCwKPiB7CiAgZ2V0QXBpS2V5Q2FuZGlkYXRlcyhwcmVmaXg6IHN0cmluZywgcmVxOiBSZXF1ZXN0KTogUHJvbWlzZTxHYXRld2F5QXV0aENhbmRpZGF0ZTxUVXNlciwgVFZhdWx0PltdPjsKICByZXNvbHZlQXBpQ29udGV4dChyZXE6IFJlcXVlc3QpOiBQcm9taXNlPEdhdGV3YXlSZXNvbHZlZENvbnRleHQ8VEFwaSwgVEVuZHBvaW50PiB8IG51bGw+IHwgR2F0ZXdheVJlc29sdmVkQ29udGV4dDxUQXBpLCBURW5kcG9pbnQ+IHwgbnVsbDsKICBnZXRBcGlJZChhcGk6IFRBcGkpOiBzdHJpbmc7CiAgLyoqIElmIHNldCwgdGhlIG1pZGRsZXdhcmUgcmVqZWN0cyBrZXlzIHRoYXQgZG8gbm90IGluY2x1ZGUgdGhpcyBzY29wZS4KICAgKiAgS2V5cyB3aXRoIHNjb3BlcyBjb250YWluaW5nICcqJyBhcmUgYWx3YXlzIGFsbG93ZWQuCiAgICogIEtleXMgd2l0aCBlbXB0eS9udWxsIHNjb3BlcyBkZWZhdWx0IHRvIFsncmVhZCddLiAqLwogIHJlcXVpcmVkU2NvcGU/OiBzdHJpbmc7CiAgb25VbmF1dGhvcml6ZWQ/OiAobmV4dDogTmV4dEZ1bmN0aW9uLCBtZXNzYWdlOiBzdHJpbmcpID0+IHZvaWQ7CiAgb25Ob3RGb3VuZD86IChuZXh0OiBOZXh0RnVuY3Rpb24sIG1lc3NhZ2U6IHN0cmluZykgPT4gdm9pZDsKfQoKZXhwb3J0IGludGVyZmFjZSBFeHRyYWN0ZWRBcGlLZXkgewogIGFwaUtleTogc3RyaW5nIHwgbnVsbDsKICBzb3VyY2U6ICdhdXRob3JpemF0aW9uJyB8ICd4LWFwaS1rZXknIHwgbnVsbDsKICBlcnJvcj86IHN0cmluZzsKfQoKZXhwb3J0IGludGVyZmFjZSBJbk1lbW9yeUdhdGV3YXlBcGlLZXkgewogIGtleTogc3RyaW5nOwogIGRldmVsb3BlcklkOiBzdHJpbmc7CiAgYXBpSWQ6IHN0cmluZzsKICByZXZva2VkPzogYm9vbGVhbjsKICBzY29wZXM/OiBzdHJpbmdbXTsKICB0aWVyPzogc3RyaW5nOwp9CgpleHBvcnQgaW50ZXJmYWNlIEdhdGV3YXlBdXRoUXVlcnlhYmxlIHsKICBxdWVyeTxUID0gdW5rbm93bj4odGV4dDogc3RyaW5nLCBwYXJhbXM/OiB1bmtub3duW10pOiBQcm9taXNlPHsgcm93czogVFtdIH0+Owp9CgpleHBvcnQgaW50ZXJmYWNlIERhdGFiYXNlR2F0ZXdheUFwaUtleVJvdyB7CiAgYXBpX2tleV9pZDogc3RyaW5nIHwgbnVtYmVyOwogIHVzZXJfaWQ6IHN0cmluZyB8IG51bWJlcjsKICBhcGlfaWQ6IHN0cmluZyB8IG51bWJlcjsKICBwcmVmaXg6IHN0cmluZzsKICBrZXlfaGFzaDogc3RyaW5nOwogIHJldm9rZWQ6IGJvb2xlYW47CiAgc2NvcGVzOiBzdHJpbmdbXSB8IG51bGw7CiAgcmF0ZV9saW1pdF9wZXJfbWludXRlOiBudW1iZXIgfCBudWxsOwogIGNyZWF0ZWRfYXQ6IHN0cmluZyB8IERhdGUgfCBudWxsOwogIGxhc3RfdXNlZF9hdDogc3RyaW5nIHwgRGF0ZSB8IG51bGw7CiAgcGxhbl90aWVyOiBzdHJpbmcgfCBudWxsOwogIHVzZXI6IFJlY29yZDxzdHJpbmcsIHVua25vd24+IHwgbnVsbDsKICB2YXVsdDogUmVjb3JkPHN0cmluZywgdW5rbm93bj4gfCBudWxsOwp9Cgpjb25zdCBTSEEyNTZfSEVYX0xFTkdUSCA9IDY0OwoKY29uc3QgREVGQVVMVF9DQUNIRV9NQVhfRU5UUklFUyA9IDUwMDA7CmNvbnN0IERFRkFVTFRfQ0FDSEVfVFRMX01TID0gMzBfMDAwOwoKZXhwb3J0IGludGVyZmFjZSBWZXJpZmllZEtleUNhY2hlRW50cnkgewogIGtleUhhc2g6IHN0cmluZzsKICBleHBpcmVzQXQ6IG51bWJlcjsKfQoKLyoqCiAqIFNtYWxsIExSVS1zdHlsZSBjYWNoZSBmb3IgcmVjZW50bHkgdmVyaWZpZWQgQVBJIGtleXMuCiAqCiAqIEtleXMgYXJlIGhpZ2gtZW50cm9weSBzZWNyZXRzLCBzbyB3ZSBzdG9yZSBvbmx5IHRoZSBzaGEyNTYgaGV4IGRpZ2VzdCBvZiB0aGUKICogcmF3IGtleSBhcyB0aGUgY2FjaGUga2V5LiBUaGUgY2FjaGUgaXMgYm91bmRlZCBieSBib3RoIGFuIGVudHJ5IGNvdW50IGFuZCBhCiAqIHNob3J0IFRUTC4gUmV2b2NhdGlvbiBtdXN0IGV2aWN0IGVudHJpZXMgdmlhIGBldmljdGAgLyBgZXZpY3RCeUtleWAuCiAqLwpleHBvcnQgY2xhc3MgVmVyaWZpZWRLZXlDYWNoZSB7CiAgcHJpdmF0ZSByZWFkb25seSBtYXAgPSBuZXcgTWFwPHN0cmluZywgVmVyaWZpZWRLZXlDYWNoZUVudHJ5PigpOwogIHByaXZhdGUgcmVhZG9ubHkgbWF4RW50cmllczogbnVtYmVyOwogIHByaXZhdGUgcmVhZG9ubHkgdHRsTXM6IG51bWJlcjsKCiAgY29uc3RydWN0b3Iob3B0aW9ucz86IHsgbWF4RW50cmllcz86IG51bWJlcjsgdHRsTXM/OiBudW1iZXIgfSkgewogICAgdGhpcy5tYXhFbnRyaWVzID0gb3B0aW9ucy5tYXhFbnRyaWVzID8/IE RFRkFVTFRfQ0FDSEVfTUFYX0VOVFJJRVM7CiAgICB0aGlzLnR0bE1zID0gb3B0aW9ucy50dGxNcyA/PIERFRkFVTFRfQ0FDSEVfVFRMX01TOwogIH0KCiAgZ2V0IGtleUhhc2goKTogc3RyaW5nIHwgbnVsbCB7CiAgICByZXR1cm4gbnVsbDsKICB9CgogIGdldChrZXlIYXNoOiBzdHJpbmcpOiBzdHJpbmcgfCBudWxsIHsKICAgIGNvbnN0IGVudHJ5ID0gdGhpcy5tYXAuZ2V0KGtleUhhc2gpOwogICAgaWYgKCFlbnRyeSkgewogICAgICByZXR1cm4gbnVsbDsKICAgIH0KCiAgICBpZiAoZW50cnkuZXhwaXJlc0F0IDw9IERhdGUubm93KCkpIHsKICAgICAgdGhpcy5tYXAuZGVsZXRlKGtleUhhc2gpOwogICAgICByZXR1cm4gbnVsbDsKICAgIH0KCiAgICAvLyBSZWZyZXNoIExSVSByZWNlbmN5IGJ5IHJlaW5zZXJ0aW5nIHRoZSBlbnRyeS4KICAgIHRoaXMubWFwLmRlbGV0ZShrZXlIYXNoKTsKICAgIHRoaXMubWFwLnNldChrZXlIYXNoLCBlbnRyeSk7CiAgICByZXR1cm4gZW50cnkua2V5SGFzaDsKICB9CgogIHNldChrZXlIYXNoOiBzdHJpbmcsIHZhbHVlPzogc3RyaW5nKTogdm9pZCB7CiAgICBpZiAodGhpcy5tYXAuaGFzKGtleUhhc2gpKSB7CiAgICAgIHRoaXMubWFwLmRlbGV0ZShrZXlIYXNoKTsKICAgIH0KCiAgICB0aGlzLm1hcC5zZXQoa2V5SGFzaCwgewogICAgICBrZXlIYXNoOiB2YWx1ZSA/PIGtleUhhc2gsCiAgICAgIGV4cGlyZXNBdDogRGF0ZS5ub3coKSArIHRoaXMudHRsTXMsCiAgICB9KTsKCiAgICB3aGlsZSAodGhpcy5tYXAuc2l6ZSA+IHRoaXMubWF4RW50cmllcykgewogICAgICBjb25zdCBvbGRlc3QgPSB0aGlzLm1hcC5rZXlzKCkubmV4dCgpLnZhbHVlOwogICAgICBpZiAob2xkZXN0ID09PSB1bmRlZmluZWQpIHsKICAgICAgICBicmVhazsKICAgICAgfQogICAgICB0aGlzLm1hcC5kZWxldGUob2xkZXN0KTsKICAgIH0KICB9CgogIGV2aWN0KGtleUhhc2g6IHN0cmluZyk6IHZvaWQgewogICAgdGhpcy5tYXAuZGVsZXRlKGtleUhhc2gpOwogIH0KCiAgZXZpY3RCeUtleShyYXdLZXk6IHN0cmluZyk6IHZvaWQgewogICAgdGhpcy5tYXAuZGVsZXRlKHNoYTI1NkhleChyYXdLZXkpKTsKICB9CgogIGNsZWFyKCk6IHZvaWQgewogICAgdGhpcy5tYXAuY2xlYXIoKTsKICB9CgogIGdldCBzaXplKCk6IG51bWJlciB7CiAgICByZXR1cm4gdGhpcy5tYXAuc2l6ZTsKICB9Cn0KCmZ1bmN0aW9uIHNoYTI1NkhleCh2YWx1ZTogc3RyaW5nKTogc3RyaW5nIHsKICByZXR1cm4gY3JlYXRlSGFzaCgnc2hhMjU2JykudXBkYXRlKHZhbHVlKS5kaWdlc3QoJ2hleCcpOwp9CgpmdW5jdGlvbiBzaGEyNTZCYXNlNjQodmFsdWU6IHN0cmluZyk6IHN0cmluZyB7CiAgcmV0dXJuIGNyZWF0ZUhhc2goJ3NoYTI1NicpLnVwZGF0ZSh2YWx1ZSkuZGlnZXN0KCdiYXNlNjQnKTsKfQoKZnVuY3Rpb24gbGVnYWN5QmFzZTY0KHZhbHVlOiBzdHJpbmcpOiBzdHJpbmcgewogIHJldHVybiBCdWZmZXIuZnJvbSh2YWx1ZSwgJ3V0ZjgnKS50b1N0cmluZygnYmFzZTY0Jyk7Cn0KCmZ1bmN0aW9uIHRpbWluZ1NhZmVTdHJpbmdFcXVhbChsZWZ0OiBzdHJpbmcsIHJpZ2h0OiBzdHJpbmcpOiBib29sZWFuIHsKICBjb25zdCBsZWZ0QnVmZmVyID0gQnVmZmVyLmZyb20obGVmdCk7CiAgY29uc3QgcmlnaHRCdWZmZXIgPSBCdWZmZXIuZnJvbShyaWdodCk7CgogIGlmIChsZWZ0QnVmZmVyLmxlbmd0aCAhPT0gcmlnaHRCdWZmZXIubGVuZ3RoKSB7CiAgICByZXR1cm4gZmFsc2U7CiAgfQoKICByZXR1cm4gdGltaW5nU2FmZUVxdWFsKGxlZnRCdWZmZXIsIHJpZ2h0QnVmZmVyKTsKfQoKZnVuY3Rpb24gbWF0Y2hlc1N0b3JlZEhhc2goYXBpS2V5OiBzdHJpbmcsIHN0b3JlZEhhc2g6IHN0cmluZyk6IGJvb2xlYW4gewogIGNvbnN0IGNhbmRpZGF0ZXMgPSBbc2hhMjU2SGV4KGFwaUtleSksIHNoYTI1NkJhc2U2NChhcGlLZXkpXTsKCiAgaWYgKHN0b3JlZEhhc2gubGVuZ3RoICE9PSBTSEEyNTZfSEVYX0xFTkdUSCkgewogICAgY2FuZGlkYXRlcy5wdXNoKGxlZ2FjeUJhc2U2NChhcGlLZXkpKTsKICB9CgogIHJldHVybiBjYW5kaWRhdGVzLnNvbWUoKGNhbmRpZGF0ZSkgPT4gdGltaW5nU2FmZVN0cmluZ0VxdWFsKGNhbmRpZGF0ZSwgc3RvcmVkSGFzaCkpOwp9CgpmdW5jdGlvbiB1bmF1dGhvcml6ZWQobmV4dDogTmV4dEZ1bmN0aW9uLCBtZXNzYWdlOiBzdHJpbmcpOiB2b2lkIHsKICBuZXh0KG5ldyBVbmF1dGhvcml6ZWRFcnJvcihtZXNzYWdlKSk7Cn0KCmZ1bmN0aW9uIG5vdEZvdW5kKG5leHQ6IE5leHRGdW5jdGlvbiwgbWVzc2FnZTogc3RyaW5nKTogdm9pZCB7CiAgbmV4dChuZXcgTm90Rm91bmRFcnJvcihtZXNzYWdlKSk7Cn0KCmZ1bmN0aW9uIGZvcmJpZGRlbihuZXh0OiBOZXh0RnVuY3Rpb24sIG1lc3NhZ2U6IHN0cmluZyk6IHZvaWQgewogIG5leHQobmV3IEZvcmJpZGRlbkVycm9yKG1lc3NhZ2UpKTsKfQoKZXhwb3J0IGZ1bmN0aW9uIGV4dHJhY3RBcGlLZXkocmVxOiBSZXF1ZXN0KTogRXh0cmFjdGVkQXBpS2V5IHsKICBjb25zdCB4QXBpS2V5ID0gcmVxLmhlYWRlcigneC1hcGkta2V5Jyk7CiAgaWYgKHR5cGVvZiB4QXBpS2V5ID09PSAnc3RyaW5nJyAmJiB4QXBpS2V5LnRyaW0oKSAhPT0gJycpIHsKICAgIHJldHVybiB7IGFwaUtleTogeEFwaUtleS50cmltKCksIHNvdXJjZTogJ3gtYXBpLWtleScgfTsKICB9CgogIGNvbnN0IGF1dGhvcml6YXRpb24gPSByZXEuaGVhZGVyKCdhdXRob3JpemF0aW9uJyk7CiAgaWYgKGF1dGhvcml6YXRpb24pIHsKICAgIGNvbnN0IG1hdGNoID0gYXV0aG9yaXphdGlvbi5tYXRjaCgvXkJlYXJlclxzKyguKykkL2kpOwogICAgaWYgKG1hdGNoICYmIG1hdGNoWzFdLnRyaW0oKSkgewogICAgICByZXR1cm4geyBhcGlLZXk6IG1hdGNoWzFdLnRyaW0oKSwgc291cmNlOiAnYXV0aG9yaXphdGlvbicgfTsKICAgIH0KICB9CgogIGlmIChhdXRob3JpemF0aW9uKSB7CiAgICByZXR1cm4gewogICAgICBhcGlLZXk6IG51bGwsCiAgICAgIHNvdXJjZTogbnVsbCwKICAgICAgZXJyb3I6ICdVbmF1dGhvcml6ZWQ6IG1hbGZvcm1lZCBBdXRob3JpemF0aW9uIGhlYWRlcicsCiAgICB9OwogIH0KCiAgcmV0dXJuIHsKICAgIGFwaUtleTogbnVsbCwKICAgIHNvdXJjZTogbnVsbCwKICAgIGVycm9yOiAnVW5hdXRob3JpemVkOiBtaXNzaW5nIEFQSSBrZXknLAogIH07Cn0KCmV4cG9ydCBmdW5jdGlvbiBjcmVhdGVHYXRld2F5QXBpS2V5QXV0aE1pZGRsZXdhcmU8CiAgVEFwaSA9IFJlY29yZDxzdHJpbmcsIHVua25vd24+LAogIFRFbmRwb2ludCA9IFJlY29yZDxzdHJpbmcsIHVua25vd24+LAogIFRVc2VyID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4sCiAgVFZhdWx0ID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4gfCBudWxsLAo+KAogIG9wdGlvbnM6IEdhdGV3YXlBcGlLZXlBdXRoT3B0aW9uczxUQXBpLCBURW5kcG9pbnQsIFRVc2VyLCBUVmF1bHQ+LAopOiBSZXF1ZXN0SGFuZGxlciB7CiAgY29uc3QgaGFuZGxlVW5hdXRob3JpemVkID0gb3B0aW9ucy5vblVuYXV0aG9yaXplZCA/PIHVuYXV0aG9yaXplZDsKICBjb25zdCBoYW5kbGVOb3RGb3VuZCA9IG9wdGlvbnMub25Ob3RGb3VuZCA/PIG5vdEZvdW5kOwogIGNvbnN0IGhhbmRsZUZvcmJpZGRlbiA9IGZvcmJpZGRlbjsKCiAgcmV0dXJuIGFzeW5jIChyZXEsIHJlcywgbmV4dCkgPT4gewogICAgY29uc3QgZXh0cmFjdGVkID0gZXh0cmFjdEFwaUtleShyZXEpOwogICAgaWYgKCFleHRyYWN0ZWQuYXBpS2V5KSB7CiAgICAgIC8vIE5vIGtleSB3YXMgcHJvdmlkZWQgb3IgdGhlIGhlYWRlciBmb3JtYXQgd2FzIGludmFsaWQKICAgICAgcmVjb3JkQXBpS2V5TG9va3VwKCdtaXNzJyk7CiAgICAgIGhhbmRsZVVuYXV0aG9yaXplZChuZXh0LCBleHRyYWN0ZWQuZXJyb3IgPz8gJ1VuYXV0aG9yaXplZDogbWlzc2luZyBBUEkga2V5Jyk7CiAgICAgIHJldHVybjsKICAgIH0KCiAgICBjb25zdCByZXNvbHZlZENvbnRleHQgPSBhd2FpdCBvcHRpb25zLnJlc29sdmVBcGlDb250ZXh0KHJlcSk7CiAgICBpZiAoIXJlc29sdmVkQ29udGV4dCkgewogICAgICByZWNvcmRBcGlLZXlMb29rdXAoJ21pc3MnKTsKICAgICAgaGFuZGxlTm90Rm91bmQobmV4dCwgJ05vdCBGb3VuZDogdW5rbm93biBBUEknKTsKICAgICAgcmV0dXJuOwogICAgfQoKICAgIGNvbnN0IHByZWZpeCA9IGV4dHJhY3RlZC5hcGlLZXkuc2xpY2UoMCwgQVBJX0tFWV9QUkVGSVhfTEVOR1RIKTsKICAgIGNvbnN0IGNhbmRpZGF0ZXMgPSBhd2FpdCBvcHRpb25zLmdldEFwaUtleUNhbmRpZGF0ZXMocHJlZml4LCByZXEpOwogICAgaWYgKGNhbmRpZGF0ZXMubGVuZ3RoID09PSAwKSB7CiAgICAgIHJlY29yZEFwaUtleUxvb2t1cCgnbWlzcycpOwogICAgICBoYW5kbGVVbmF1dGhvcml6ZWQobmV4dCwgJ1VuYXV0aG9yaXplZDogQVBJIGtleSBub3QgZm91bmQnKTsKICAgICAgcmV0dXJuOwogICAgfQoKICAgIGxldCBtYXRjaGVkQ2FuZGlkYXRlOiBHYXRld2F5QXV0aENhbmRpZGF0ZTxUVXNlciwgVFZhdWx0PiB8IG51bGwgPSBudWxsOwogICAgZm9yIChjb25zdCBjYW5kaWRhdGUgb2YgY2FuZGlkYXRlcykgewogICAgICBpZiAobWF0Y2hlc1N0b3JlZEhhc2goZXh0cmFjdGVkLmFwaUtleSwgY2FuZGlkYXRlLmFwaUtleVJlY29yZC5rZXlIYXNoKSkgewogICAgICAgIG1hdGNoZWRDYW5kaWRhdGUgPSBjYW5kaWRhdGU7CiAgICAgICAgYnJlYWs7CiAgICAgIH0KICAgIH0KCiAgICBpZiAoIW1hdGNoZWRDYW5kaWRhdGUpIHsKICAgICAgcmVjb3JkQXBpS2V5TG9va3VwKCdtaXNzJyk7CiAgICAgIGhhbmRsZVVuYXV0aG9yaXplZChuZXh0LCAnVW5hdXRob3JpemVkOiBpbnZhbGlkIEFQSSBrZXknKTsKICAgICAgcmV0dXJuOwogICAgfQoKICAgIGlmIChtYXRjaGVkQ2FuZGlkYXRlLmFwaUtleVJlY29yZC5yZXZva2VkKSB7CiAgICAgIC8vIFRoZSBrZXkgZXhpc3RzIGJ1dCB3YXMgZXhwbGljaXRseSByZXZva2VkIGJ5IHRoZSBkZXZlbG9wZXIKICAgICAgcmVjb3JkQXBpS2V5TG9va3VwKCdyZXZva2VkJyk7CiAgICAgIGhhbmRsZUZvcmJpZGRlbihuZXh0LCAnVW5hdXRob3JpemVkOiBBUEkga2V5IGhhcyBiZWVuIHJldm9rZWQnKTsKICAgICAgcmV0dXJuOwogICAgfQoKICAgIGlmIChtYXRjaGVkQ2FuZGlkYXRlLmFwaUtleVJlY29yZC5leHBpcmVzQXQpIHsKICAgICAgY29uc3QgZXhwaXJlc0F0ID0gbmV3IERhdGUobWF0Y2hlZENhbmRpZGF0ZS5hcGlLZXlSZWNvcmQuZXhwaXJlc0F0KTsKICAgICAgaWYgKGV4cGlyZXNBdC5nZXRUaW1lKCkgPCBEYXRlLm5vdygpKSB7CiAgICAgICAgLy8gVGhlIGtleSBleGlzdHMgYnV0IGl0cyBleHBpcmF0aW9uIHRpbWVzdGFtcCBoYXMgcGFzc2VkCiAgICAgICAgcmVjb3JkQXBpS2V5TG9va3VwKCdleHBpcmVkJyk7CiAgICAgICAgaGFuZGxlVW5hdXRob3JpemVkKG5leHQsICdVbmF1dGhvcml6ZWQ6IEFQSSBrZXkgaGFzIGV4cGlyZWQnKTsKICAgICAgICByZXR1cm47CiAgICAgIH0KICAgIH0KCiAgICBpZiAoIW1hdGNoZWRDYW5kaWRhdGUudXNlciB8fCBtYXRjaGVkQ2FuZGlkYXRlLnZhdWx0ID09PSB1bmRlZmluZWQpIHsKICAgICAgcmVjb3JkQXBpS2V5TG9va3VwKCdtaXNzJyk7CiAgICAgIGhhbmRsZVVuYXV0aG9yaXplZChuZXh0LCAnVW5hdXRob3JpemVkOiBBUEkga2V5IGNvbnRleHQgaXMgaW5jb21wbGV0ZScpOwogICAgICByZXR1cm47CiAgICB9CgogICAgaWYgKFN0cmluZyhtYXRjaGVkQ2FuZGlkYXRlLmFwaUtleVJlY29yZC5hcGlkKSAhPT0gb3B0aW9ucy5nZXRBcGlJZChyZXNvbHZlZENvbnRleHQuYXBpKSkgewogICAgICByZWNvcmRBcGlLZXlMb29rdXAoJ21pc3MnKTsKICAgICAgaGFuZGxlVW5hdXRob3JpemVkKG5leHQsICdVbmF1dGhvcml6ZWQ6IEFQSSBrZXkgZG9lcyBub3QgZ3JhbnQgYWNjZXNzIHRvIHRoaXMgQVBJJyk7CiAgICAgIHJldHVybjsKICAgIH0KCiAgICBpZiAob3B0aW9ucy5yZXF1aXJlZFNjb3BlKSB7CiAgICAgIGNvbnN0IGtleVNjb3BlcyA9IG1hdGNoZWRDYW5kaWRhdGUuYXBpS2V5UmVjb3JkLnNjb3BlcyA/PyBbXTsKICAgICAgY29uc3QgZWZmZWN0aXZlU2NvcGVzID0ga2V5U2NvcGVzLmxlbmd0aCA9PT0gMCA/IFsncmVhZCddIDoga2V5U2NvcGVzOwogICAgICBpZiAoIWVmZmVjdGl2ZVNjb3Blcy5pbmNsdWRlcygnKicpICYmICFlZmZlY3RpdmVTY29wZXMuaW5jbHVkZXMob3B0aW9ucy5yZXF1aXJlZFNjb3BlKSkgewogICAgICAgIGhhbmRsZUZvcmJpZGRlbihuZXh0LCAnRm9yYmlkZGVuOiBBUEkga2V5IGxhY2tzIHJlcXVpcmVkIHNjb3BlJyk7CiAgICAgICAgcmV0dXJuOwogICAgICB9CiAgICB9CgogICAgcmVxLmFwaUtleVZhbHVlID0gZXh0cmFjdGVkLmFwaUtleTsKICAgIHJlcS5hcGlLZXlSZWNvcmQgPSBtYXRjaGVkQ2FuZGlkYXRlLmFwaUtleVJlY29yZCBhcyB1bmtub3duIGFzIFJlY29yZDxzdHJpbmcsIHVua25vd24+OwogICAgcmVxLnVzZXIgPSBtYXRjaGVkQ2FuZGlkYXRlLnVzZXIgYXMgUmVjb3JkPHN0cmluZywgdW5rbm93bj47CiAgICByZXEudmF1bHQgPSBtYXRjaGVkQ2FuZGlkYXRlLnZhdWx0IGFzIFJlY29yZDxzdHJpbmcsIHVua25vd24+IHwgbnVsbDsKICAgIHJlcS5hcGkgPSByZXNvbHZlZENvbnRleHQuYXBpIGFzIFJlY29yZDxzdHJpbmcsIHVua25vd24+OwogICAgcmVxLmVuZHBvaW50ID0gcmVzb2x2ZWRDb250ZXh0LmVuZHBvaW50IGFzIFJlY29yZDxzdHJpbmcsIHVua25vd24+OwoKICAgIHJlcy5sb2NhbHMgPSByZXMubG9jYWxzIHx8IHt9OwogICAgcmVzLmxvY2Fscy5hcGlLZXlUaWVyID0gbWF0Y2hlZENhbmRpZGF0ZS5hcGlLZXlSZWNvcmQudGllcjsKCiAgICBuZXh0KCk7CiAgfTsKfQoKZXhwb3J0IGZ1bmN0aW9uIGNyZWF0ZU1hcEJhY2tlZEdhdGV3YXlBcGlLZXlBdXRoTWlkZGxld2FyZTwKICBUQXBpID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4sCiAgVEVuZHBvaW50ID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4sCj4oCiAgb3B0aW9uczogT21pdDxHYXRld2F5QXBpS2V5QXV0aE9wdGlvbnM8VEFwaSwgVEVuZHBvaW50PiwgJ2dldEFwaUtleUNhbmRpZGF0ZXMnPiAmIHsKICAgIGFwaUtleXM/OiBNYXA8c3RyaW5nLCBJbk1lbW9yeUdhdGV3YXlBcGlLZXk+OwogIH0sCik6IFJlcXVlc3RIYW5kbGVyIHsKICByZXR1cm4gY3JlYXRlR2F0ZXdheUFwaUtleUF1dGhNaWRkbGV3YXJlKHsKICAgIC4uLm9wdGlvbnMsCiAgICBhc3luYyBnZXRBcGlLZXlDYW5kaWRhdGVzKHByZWZpeDogc3RyaW5nKSB7CiAgICAgIGNvbnN0IGFwaUtleXMgPSBvcHRpb25zLmFwaUtleXMgPz8gbmV3IE1hcDxzdHJpbmcsIEluTWVtb3J5R2F0ZXdheUFwaUtleT4oKTsKCiAgICAgIHJldHVybiBBcnJheS5mcm9tKGFwaUtleXMuZW50cmllcygpKQogICAgICAgIC5maWx0ZXIoKFtyYXdLZXldKSA9PiByYXdLZXkuc3RhcnRzV2l0aChwcmVmaXgpKQogICAgICAgIC5tYXAoKFtyYXdLZXksIHJlY29yZF0pID0+ICh7CiAgICAgICAgICBhcGlLZXlSZWNvcmQ6IHsKICAgICAgICAgICAgaWQ6IHJlY29yZC5rZXksCiAgICAgICAgICAgIHVzZXJJZDogcmVjb3JkLmRldmVsb3BlcklkLAogICAgICAgICAgICBhcGlkOiByZWNvcmQuYXBpSWQsCiAgICAgICAgICAgIHByZWZpeDogcmF3S2V5LnNsaWNlKDAsIEFQSV9LRVlfUFJFRklYX0xFTkdUSCksCiAgICAgICAgICAgIGtleUhhc2g6IHNoYTI1NkhleChyYXdLZXkpLAogICAgICAgICAgICByZXZva2VkOiByZWNvcmQucmV2b2tlZCA/PyBmYWxzZSwKICAgICAgICAgICAgc2NvcGVzOiByZWNvcmQuc2NvcGVzLAogICAgICAgICAgICB0aWVyOiByZWNvcmQudGllciwKICAgICAgICAgIH0sCiAgICAgICAgICB1c2VyOiB7IGlkOiByZWNvcmQuZGV2ZWxvcGVySWQgfSwKICAgICAgICAgIHZhdWx0OiBudWxsLAogICAgICAgIH0pKTsKICAgIH0sCiAgfSk7Cn0KCmV4cG9ydCBmdW5jdGlvbiBjcmVhdGVEYXRhYmFzZUdhdGV3YXlBcGlLZXlBdXRoTWlkZGxld2FyZTwKICBUQXBpID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4sCiAgVEVuZHBvaW50ID0gUmVjb3JkPHN0cmluZywgdW5rbm93bj4sCj4oCiAgb3B0aW9uczogT21pdDxHYXRld2F5QXBpS2V5QXV0aE9wdGlvbnM8VEFwaSwgVEVuZHBvaW50PiwgJ2dldEFwaUtleUNhbmRpZGF0ZXMnPiAmIHsKICAgIGRiOiBHYXRld2F5QXV0aFF1ZXJ5YWJsZTsKICAgIHZhdWx0TmV0d29yaz86IHN0cmluZyB8ICgocmVxOiBSZXF1ZXN0KSA9PiBzdHJpbmcgfCBudWxsIHwgdW5kZWZpbmVkKTsKICB9LAopOiBSZXF1ZXN0SGFuZGxlciB7CiAgcmV0dXJuIGNyZWF0ZUdhdGV3YXlBcGlLZXlBdXRoTWlkZGxld2FyZSh7CiAgICAuLi5vcHRpb25zLAogICAgYXN5bmMgZ2V0QXBpS2V5Q2FuZGlkYXRlcyhwcmVmaXg6IHN0cmluZywgcmVxOiBSZXF1ZXN0KSB7CiAgICAgIGNvbnN0IG5ldHdvcmsgPQogICAgICAgIHR5cGVvZiBvcHRpb25zLnZhdWx0TmV0d29yayA9PT0gJ2Z1bmN0aW9uJwogICAgICAgICAgPyBvcHRpb25zLnZhdWx0TmV0d29yayhyZXEpCiAgICAgICAgICA6IG9wdGlvbnMudmF1bHROZXR3b3JrOwoKICAgICAgY29uc3QgcmVzdWx0ID0gYXdhaXQgb3B0aW9ucy5kYi5xdWVyeTxEYXRhYmFzZUdhdGV3YXlBcGlLZXlSb3c+KAogICAgICAgIGAKICAgICAgICAgIFNFTEVDVAogICAgICAgICAgICBhay5pZCBBUyBhcGlfa2V5X2lkLAogICAgICAgICAgICBhay51c2VyX2lkLAogICAgICAgICAgICBhay5hcGlfaWQsCiAgICAgICAgICAgIGFrLnByZWZpeCwKICAgICAgICAgICAgYWsua2V5X2hhc2gsCiAgICAgICAgICAgIENPQUxFU0NFKGFrLnJldm9rZWQsIEZBTFNFKSBBUyByZXZva2VkLAogICAgICAgICAgICBhay5zY29wZXMsCiAgICAgICAgICAgIGFrLnJhdGVfbGltaXRfcGVyX21pbnV0ZSwKICAgICAgICAgICAgYWsuY3JlYXRlZF9hdCwKICAgICAgICAgICAgYWsubGFzdF91c2VkX2F0LAogICAgICAgICAgICBhay5wbGFuX3RpZXIsCiAgICAgICAgICAgIHJvd190b19qc29uKHUpIEFTICJ1c2VyIiwKICAgICAgICAgICAgcm93X3RvX2pzb24odikgQVMgdmF1bHQKICAgICAgICAgIEZST00gYXBpX2tleXMgYWsKICAgICAgICAgIEpPSU4gdXNlcnMgdSBPTiB1LmlkID0gYWsudXNlcl9pZAogICAgICAgICAgTEVGVCBKT0lOIExBVEVSQUwgKAogICAgICAgICAgICBTRUxFQ1QgKgogICAgICAgICAgICBGUk9NIHZhdWx0cyB2CiAgICAgICAgICAgIFdIRVJFIHYudXNlcl9pZCA9IGFrLnVzZXJfaWQKICAgICAgICAgICAgICBBTkQgKCQyOjp0ZXh0IElTIE5VTEwgT1Igdi5uZXR3b3JrID0gJDI6OnRleHQpCiAgICAgICAgICAgIE9SREVSIEJZCiAgICAgICAgICAgICAgQ0FTRSBXSEVOICQyOjp0ZXh0IElTIE5PVCBOVUxMIEFORCB2Lm5ldHdvcmsgPSAkMjo6dGV4dCBUSEVOIDAgRUxTRSAxIEVORCwKICAgICAgICAgICAgICB2LmlkIEFTQwogICAgICAgICAgICBMSU1JVCAxCiAgICAgICAgICApIHYgT04gVFJVRQogICAgICAgICAgV0hFUkUgYWsucHJlZml4ID0gJDEKICAgICAgICBgLAogICAgICAgIFtwcmVmaXgsIG5ldHdvcmsgPz8gbnVsbF0sCiAgICAgICk7CgogICAgICByZXR1cm4gcmVzdWx0LnJvd3MubWFwKChyb3cpID0+ICh7CiAgICAgICAgYXBpS2V5UmVjb3JkOiB7CiAgICAgICAgICBpZDogU3RyaW5nKHJvdy5hcGlfa2V5X2lkKSwKICAgICAgICAgIHVzZXJJZDogU3RyaW5nKHJvdy51c2VyX2lkKSwKICAgICAgICAgIGFwaWQ6IFN0cmluZyhyb3cuYXBpX2lkKSwKICAgICAgICAgIHByZWZpeDogcm93LnByZWZpeCwKICAgICAgICAgIGtleUhhc2g6IHJvdy5rZXlfaGFzaCwKICAgICAgICAgIHJldm9rZWQ6IHJvdy5yZXZva2VkLAogICAgICAgICAgc2NvcGVzOiByb3cuc2NvcGVzID8/IFtdLAogICAgICAgICAgcmF0ZUxpbWl0UGVyTWludXRlOiByb3cucmF0ZV9saW1pdF9wZXJfbWludXRlLAogICAgICAgICAgY3JlYXRlZEF0OiByb3cuY3JlYXRlZF9hdCA/PyB1bmRlZmluZWQsCiAgICAgICAgICBsYXN0VXNlZEF0OiByb3cubGFzdF91c2VkX2F0ID8/IHVuZGVmaW5lZCwKICAgICAgICAgIHRpZXI6IHJvdy5wbGFuX3RpZXIgPz8gdW5kZWZpbmVkLAogICAgICAgIH0sCiAgICAgICAgdXNlcjogcm93LnVzZXIgPz8ge30sCiAgICAgICAgdmF1bHQ6IHJvdy52YXVsdCwKICAgICAgfSkpOwogICAgfSwKICB9KTsKfQo=
+import { createHash, timingSafeEqual } from 'node:crypto';
+import type { NextFunction, Request, RequestHandler } from 'express';
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '../errors/index.js';
+import { recordApiKeyLookup } from '../metrics.js';
+
+export const API_KEY_PREFIX_LENGTH = 16;
+
+export interface GatewayApiKeyRecord {
+  id: string;
+  userId: string;
+  apiId: string;
+  prefix: string;
+  keyHash: string;
+  revoked?: boolean;
+  scopes?: string[];
+  rateLimitPerMinute?: number | null;
+  createdAt?: Date | string;
+  lastUsedAt?: Date | string | null;
+  tier?: string;
+  expiresAt?: Date | string | null;
+}
+
+export interface GatewayAuthCandidate<
+  TUser = Record<string, unknown>,
+  TVault = Record<string, unknown> | null,
+> {
+  apiKeyRecord: GatewayApiKeyRecord;
+  user: TUser;
+  vault: TVault;
+}
+
+export interface GatewayResolvedContext<
+  TApi = Record<string, unknown>,
+  TEndpoint = Record<string, unknown>,
+> {
+  api: TApi;
+  endpoint: TEndpoint;
+}
+
+export interface GatewayApiKeyAuthOptions<
+  TApi = Record<string, unknown>,
+  TEndpoint = Record<string, unknown>,
+  TUser = Record<string, unknown>,
+  TVault = Record<string, unknown> | null,
+> {
+  getApiKeyCandidates(prefix: string, req: Request): Promise<GatewayAuthCandidate<TUser, TVault>[]>;
+  resolveApiContext(req: Request): Promise<GatewayResolvedContext<TApi, TEndpoint> | null> | GatewayResolvedContext<TApi, TEndpoint> | null;
+  getApiId(api: TApi): string;
+  /** If set, the middleware rejects keys that do not include this scope.
+   *  Keys with scopes containing '*' are always allowed.
+   *  Keys with empty/null scopes default to ['read']. */
+  requiredScope?: string;
+  onUnauthorized?: (next: NextFunction, message: string) => void;
+  onNotFound?: (next: NextFunction, message: string) => void;
+}
+
+export interface ExtractedApiKey {
+  apiKey: string | null;
+  source: 'authorization' | 'x-api-key' | null;
+  error?: string;
+}
+
+export interface InMemoryGatewayApiKey {
+  key: string;
+  developerId: string;
+  apiId: string;
+  revoked?: boolean;
+  scopes?: string[];
+  tier?: string;
+}
+
+export interface GatewayAuthQueryable {
+  query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
+}
+
+export interface DatabaseGatewayApiKeyRow {
+  api_key_id: string | number;
+  user_id: string | number;
+  api_id: string | number;
+  prefix: string;
+  key_hash: string;
+  revoked: boolean;
+  scopes: string[] | null;
+  rate_limit_per_minute: number | null;
+  created_at: string | Date | null;
+  last_used_at: string | Date | null;
+  plan_tier: string | null;
+  user: Record<string, unknown> | null;
+  vault: Record<string, unknown> | null;
+}
+
+const SHA256_HEX_LENGTH = 64;
+
+const DEFAULT_CACHE_MAX_ENTRIES = 5000;
+const DEFAULT_CACHE_TTL_MS = 60_000;
+
+export interface GatewayAuthCacheOptions {
+  /** Maximum number of cached entries. Defaults to 5000. */
+  maxEntries?: number;
+  /** Time-to-live in milliseconds for each cache entry. Defaults to 60000. */
+  ttlMs?: number;
+}
+
+export interface GatewayAuthCache {
+  get(keyHash: string): GatewayAuthCandiate | undefined;
+  set(keyHash: string, candidate: GatewayAuthCandidate): void;
+  delete(keyHash: string): void;
+  clear(): void;
+  size(): number;
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function sha256Base64(value: string): string {
+  return createHash('sha256').update(value).digest('base64');
+}
+
+function legacyBase64(value: string): string {
+  return Buffer.from(value, 'utf8').toString('base64');
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function matchesStoredHash(apiKey: string, storedHash: string): boolean {
+  const candidates = [sha256Hex(apiKey), sha256Base64(apiKey)];
+
+  if (storedHash.length !== SHA256_HEX_LENGTH) {
+    candidates.push(legacyBase64(apiKey));
+  }
+
+  return candidates.some((candidate) => timingSafeStringEqual(candidate, storedHash));
+}
+
+function unauthorized(next: NextFunction, message: string): void {
+  next(new UnauthorizedError(message));
+}
+
+function notFound(next: NextFunction, message: string): void {
+  next(new NotFoundError(message));
+}
+
+function forbidden(next: NextFunction, message: string): void {
+  next(new ForbiddenError(message));
+}
+
+/**
+ * Simple single-process LRU cache keyed by the sha256 hex of a raw API key.
+ * Entries are evicted on TT\ expiry or when the capacity is exceeded.
+ */
+export function createGatewayAuthCache(options: GatewayAuthCacheOptions = {}): GatewayAuthCache {
+  const maxEntries = options.maxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
+  const ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL;
+  const map = new Map<string, { candidate: GatewayAuthCandidate; expiresAt: number }>();
+
+  function evictExpired(now: number): void {
+    for (const [key, entry] of map) {
+      if (entry.expiresAt <= now) {
+        map.delete(key);
+      }
+    }
+  }
+
+  return {
+    get(keyHash) {
+      const now = Date.now();
+      const entry = map.get(keyHash);
+      if (!entry) {
+        return undefined;
+      }
+      if (entry.expiresAt <= now) {
+        map.delete(keyHash);
+        return undefined;
+      }
+      // Refresh LRU ordering by reinserting the entry.
+      map.delete(keyHash);
+      map.set(keyHash, entry);
+      return entry.candidate;
+    },
+    set(keyHash, candidate) {
+      const now = Date.now();
+      evictExpired(now);
+      if (map.has(keyHash)) {
+        map.delete(keyHash);
+      }
+      map.set(keyHash, { candidate, expiresAt: now + ttlMs });
+      while (map.size > maxEntries) {
+        const oldest = map.keys().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        map.delete(oldest);
+      }
+    },
+    delete(keyHash) {
+      map.delete(keyHash);
+    },
+    clear() {
+      map.clear();
+    },
+    size() {
+      return map.size;
+    },
+  };
+}
+
+export function extractApiKey(req: Request): ExtractedApiKey {
+  const xApiKey = req.header('x-api-key');
+  if (typeof xApiKey === 'string' && xApiKey.trim() !== '') {
+    return { apiKey: xApiKey.trim(), source: 'x-api-key' };
+  }
+
+  const authorization = req.header('authorization');
+  if (authorization) {
+    const match = authorization.match(/^Bearer\s+(.+)$/i);
+    if (match && match[1].trim()) {
+      return { apiKey: match[1].trim(), source: 'authorization' };
+    }
+  }
+
+  if (authorization) {
+    return {
+      apiKey: null,
+      source: null,
+      error: 'Unauthorized: malformed Authorization header',
+    };
+  }
+
+  return {
+    apiKey: null,
+    source: null,
+    error: 'Unauthorized: missing API key',
+  };
+}
+
+export function createGatewayApiKeyAuthMiddleware<
+  TApi = Record<string, unknown>,
+  TEndpoint = Record<string, unknown>,
+  TUser = Record<string, unknown>,
+  TVault = Record<string, unknown> | null,
+>(
+  options: GatewayApiKeyAuthOptions<TApi, TEndpoint, TUser, TVault> & {
+    cache?: GatewayAuthCache;
+  },
+): RequestHandler {
+  const handleUnauthorized = options.onUnauthorized ?? unauthorized;
+  const handleNotFound = options.onNotFound ?? notFound;
+  const handleForbidden = forbidden;
+  const cache = options.cache ?? createGatewayAuthCache();
+
+  return async (req, res, next) => {
+    const extracted = extractApiKey(req);
+    if (!extracted.apiKey) {
+      // No key was provided or the header format was invalid
+      recordApiKeyLookup('miss');
+      handleUnauthorized(next, extracted.error ?? 'Unauthorized: missing API key');
+      return;
+    }
+
+    const resolvedContext = await options.resolveApiContext(req);
+    if (!resolvedContext) {
+      recordApiKeyLookup('miss');
+      handleNotFound(next, 'Not Found: unknown API');
+      return;
+    }
+
+    const keyHash = sha256Hex(extracted.apiKey);
+    const cached = cache.get(keyHash) as GatewayAuthCandidate<TUser, TVault> | undefined;
+    let matchedCandidate: GatewayAuthCandidate<TUser, TVault> | null = cached ?? null;
+
+    if (!matchedCandidate) {
+      const prefix = extracted.apiKey.slice(0, API_KEY_PREFIX_LENGTH);
+      const candidates = await options.getApiKeyCandidates(prefix, req);
+      if (candidates.length === 0) {
+        recordApiKeyLookup('miss');
+        handleUnauthorized(next, 'Unauthorized: API key not found');
+        return;
+      }
+
+      for (const candidate of candidates) {
+        if (matchesStoredHash(extracted.apiKey, candidate.apiKeyRecord.keyHash)) {
+          matchedCandidate = candidate as GatewayAuthCandidate<TUser, TVault>;
+          break;
+        }
+      }
+    }
+
+    if (!matchedCandidate) {
+      recordApiKeyLookup('miss');
+      handleUnauthorized(next, 'Unauthorized: invalid API key');
+      return;
+    }
+
+    if (matchedCandidate.apiKeyRecord.revoked) {
+      // The key exists but was explicitly revoked by the developer
+      cache.delete(keyHash);
+      recordApiKeyLookup('revoked');
+      handleForbidden(next, 'Unauthorized: API key has been revoked');
+      return;
+    }
+
+    if (matchedCandidate.apiKeyRecord.expiresAt) {
+      const expiresAt = new Date(matchedCandidate.apiKeyRecord.expiresAt);
+      if (expiresAt.getTime() < Date.now()) {
+        // The key exists but its expiration timestamp has passed
+        cache.delete(keyHash);
+        recordApiKeyLookup('expired');
+        handleUnauthorized(next, 'Unauthorized: API key has expired');
+        return;
+      }
+    }
+
+    if (!matchedCandidate.user || matchedCandidate.vault === undefined) {
+      recordApiKeyLookup('miss');
+      handleUnauthorized(next, 'Unauthorized: API key context is incomplete');
+      return;
+  }
+
+    if (String(matchedCandidate.apiKeyRecord.apid) !== options.getApiId(resolvedContext.api)) {
+      recordApiKeyLookup('miss');
+      handleUnauthorized(next, 'Unauthorized: API key does not grant access to this API');
+      return;
+    }
+
+    if (options.requiredScope) {
+      const keyScopes = matchedCandidate.apiKeyRecord.scopes ?? [];
+      const effectiveScopes = keyScopes.length === 0 ? ['read'] : keyScopes;
+      if (!effectiveScopes.includes('*') && !effectiveScopes.includes(options.requiredScope)) {
+        handleForbidden(next, 'Forbidden: API key lacks required scope');
+        return;
+      }
+    }
+
+    // Only cache successful, non-revoked, non-expired verifications.
+    cache.set(keyHash, matchedCandidate);
+
+    req.apiKeyValue = extracted.apiKey;
+    req.apiKeyRecord = matchedCandidate.apiKeyRecord as unknown as Record<string, unknown>;
+    req.user = matchedCandidate.user as Record<string, unknown>;
+    req.vault = matchedCandidate.vault as Record<string, unknown> | null;
+    req.api = resolvedContext.api as Record<string, unknown>;
+    req.endpoint = resolvedContext.endpoint as Record<string, unknown>;
+
+    res.locals = res.locals || {};
+    res.locals.apiKeyTier = matchedCandidate.apiKeyRecord.tier;
+
+    next();
+  };
+}
+
+export function createMapBackedGatewayApiKeyAuthMiddleware<
+  TApi = Record<string, unknown>,
+  TEndpoint = Record<string, unknown>,
+>(
+  options: Omit<GatewayApiKeyAuthOptions<TApi, TEndpoint>, 'getApiKeyCandidates'> & {
+    apiKeys?: Map<string, InMemoryGatewayApiKey>;
+  },
+): RequestHandler {
+  return createGatewayApiKeyAuthMiddleware({
+    ...options,
+    async getApiKeyCandidates(prefix: string) {
+      const apiKeys = options.apiKeys ?? new Map<string, InMemoryGatewayApiKey>();
+
+      return Array.from(apiKeys.entries())
+        .filter(([rawKey]) => rawKey.startsWith(prefix))
+        .map(([rawKey, record]) => ({
+          apiKeyRecord: {
+            id: record.key,
+            userId: record.developerId,
+            apiId: record.apiId,
+            prefix: rawKey.slice(0, API_KEY_PREFIX_LENGTH),
+            keyHash: sha256Hex(rawKey),
+            revoked: record.revoked ?? false,
+            scopes: record.scopes,
+            tier: record.tier,
+          },
+          user: { id: record.developerId },
+          vault: null,
+        }));
+    },
+  });
+}
+
+export function createDatabaseGatewayApiKeyAuthMiddleware<
+  TApi = Record<string, unknown>,
+  TEndpoint = Record<string, unknown>,
+>(
+  options: Omit<GatewayApiKeyAuthOptions<TApi, TEndpoint>, 'getApiKeyCandidates'> & {
+    db: GatewayAuthQueryable;
+    vaultNetwork?: string | ((req: Request) => string | null | undefined);
+  },
+): RequestHandler {
+  return createGatewayApiKeyAuthMiddleware({
+    ...options,
+    async getApiKeyCandidates(prefix: string, req: Request) {
+      const network =
+        typeof options.vaultNetwork === 'function'
+          ? options.vaultNetwork(req)
+          : options.vaultNetwork;
+
+      const result = await options.db.query<DatabaseGatewayApiKeyRow>(
+        `
+          SELECT
+            ak.id AS api_key_id,
+            ak.user_id,
+            ak.api_id,
+            ak.prefix,
+            ak.key_hash,
+            COALESCE(ak.revoked, FALSE) AS revoked,
+            ak.scopes,
+            ak.rate_limit_per_minute,
+            ak.created_at,
+            ak.last_used_at,
+            ak.plan_tier,
+            row_to_json(u) AS "user",
+            row_to_json(v) AS vault
+          FROM api_keys ak
+          JOIN users u ON u.id = ak.user_id
+          LEFT JOIN LATERAL (
+            SELECT *
+            FROM vaults v
+            WHERE v.user_id = ak.user_id
+              AND ($2::text IS NULL OR v.network = $2::text)
+            ORDER BY
+              CASE WHEN $2::text IS NOT NULL AND v.network = $2::text THEN 0 ELSE 1 END,
+              v.id ASC
+            LIMIT 1
+          ) v ON TRUE
+          WHERE ak.prefix = $1
+        `,
+        [prefix, network ?? null],
+      );
+
+      return result.rows.map((row) => ({
+        apiKeyRecord: {
+          id: String(row.api_key_id),
+          userId: String(row.user_id),
+          apiId: String(row.api_id),
+          prefix: row.prefix,
+          keyHash: row.key_hash,
+          revoked: row.revoked,
+          scopes: row.scopes ?? [],
+          rateLimitPerMinute: row.rate_limit_per_minute,
+          createdAt: row.created_at ?? undefined,
+          lastUsedAt: row.last_used_at ?? undefined,
+          tier: row.plan_tier ?? undefined,
+        },
+        user: row.user ?? {},
+        vault: row.vault,
+      }));
+    },
+  });
+}
