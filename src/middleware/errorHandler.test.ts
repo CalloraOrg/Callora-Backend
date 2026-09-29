@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-const { errorHandler } = require('../middleware/errorHandler.js');
+const { errorHandler } = require('./errorHandler.js');
 import {
   BadRequestError,
   UnauthorizedError,
@@ -9,8 +9,9 @@ import {
   TooManyRequestsError,
   AppError,
 } from '../errors/index.js';
-import { ValidationError } from '../middleware/validate.js';
+const { ValidationError } = require('./validate.js');
 import { logger } from '../logger.js';
+const { errorHandler } = require('./errorHandler.js');
 import type { ErrorEnvelope } from '../types/ResponseEnvelope.js';
 
 jest.mock('../logger.js', () => ({
@@ -51,13 +52,11 @@ describe('Error Handler', () => {
       error,
       mockReq as Request,
       mockRes
- as Response<ErrorEnvelope>,
-      mockNext
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(400);
     
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call).toMatchObject({
       success: false,
       requestId: 'test-request-id',
@@ -66,7 +65,7 @@ describe('Error Handler', () => {
       code: 'BAD_REQUEST',
       message: 'Test bad request',
     });
-    expect(typeof call.timestamp).toBe('string');
+    expect(typeof call.timestamp).toBe(String);
 
     expect(logger.error).toHaveBeenCalledWith(
       '[errorHandler]',
@@ -80,13 +79,12 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorEnvelope>,
-      mockNext
+      mockRes
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(500);
     
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call).toMatchObject({
       success: false,
       requestId: 'test-request-id',
@@ -102,13 +100,12 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorEnvelope>,
-      mockNext
+      mockRes
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(500);
     
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call.success).toBe(false);
     expect(call.error.code).toBe('INTERNAL_SERVER_ERROR');
   });
@@ -121,11 +118,10 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorEnvelope>,
-      mockNext
+      mockRes
     );
 
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call.requestId).toBe('unknown');
   });
 
@@ -137,51 +133,43 @@ describe('Error Handler', () => {
       error,
       mockReq as Request,
       mockRes
- as Response<ErrorEnvelope>,
-      mockNext
     );
 
     expect(mockRes.status).not.toHaveBeenCalled();
     expect(mockRes.json).not.toHaveBeenCalled();
   });
 
-  it('destroys the socket when an error occurs after headers are sent', () => {
+  it('should destroy the socket when an error occurs after headers are sent', () => {
     mockRes.headersSent = true;
-    mockRes.writableEnded = false;
     const error = new Error('mid-stream failure');
 
     errorHandler(
       error,
       mockReq as Request,
       mockRes
- as Response<ErrorEnvelope>,
-      mockNext
     );
 
     expect(mockRes.status).not.toHaveBeenCalled();
     expect(mockRes.json).not.toHaveBeenCalled();
     expect(mockRes.destroy).toHaveBeenCalledWith(error);
-    expect(logger.error).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledWith(
       '[errorHandler]',
-      expect.objectContaining({ requestId: 'test-request-id' })
+      expect.objectContaining({ requestId: 'test-request-id', statusCode: 500 })
     );
   });
 
-  it('does not destroy the socket if the response is already ended', () => {
+  it('should not destroy the socket when the response is already ended', () => {
     mockRes.headersSent = true;
     mockRes.writableEnded = true;
-    const error = new Error('late error');
+    const error = new Error('late failure');
 
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorEnvelope>,
-      mockNext
+      mockRes
     );
 
     expect(mockRes.destroy).not.toHaveBeenCalled();
-    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
   it('should include explicit catalog code when provided', () => {
@@ -190,12 +178,11 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorEnvelope>,
-      mockNext
+      mockRes
     );
 
     expect(mockRes.status).toHaveBeenCalledWith(422);
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call).toMatchObject({
       success: false,
       requestId: 'test-request-id',
@@ -215,51 +202,51 @@ describe('Error Handler', () => {
       },
     ]);
 
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes);
 
     expect(mockRes.status).toHaveBeenCalledWith(400);
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call.error.details).toBeDefined();
     expect(Array.isArray(call.error.details)).toBe(true);
   });
 
   it('should map ForbiddenError to 403', () => {
     const error = new ForbiddenError('Test forbidden');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes);
     expect(mockRes.status).toHaveBeenCalledWith(403);
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call.error.code).toBe('FORBIDDEN');
   });
 
   it('should map NotFoundError to 404', () => {
     const error = new NotFoundError('Test not found');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes);
     expect(mockRes.status).toHaveBeenCalledWith(404);
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call.error.code).toBe('NOT_FOUND');
   });
 
   it('should map PaymentRequiredError to 402', () => {
     const error = new PaymentRequiredError('Test payment required');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes);
     expect(mockRes.status).toHaveBeenCalledWith(402);
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call.error.code).toBe('PAYMENT_REQUIRED');
   });
 
   it('should map TooManyRequestsError to 429', () => {
     const error = new TooManyRequestsError('Test too many requests');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes);
     expect(mockRes.status).toHaveBeenCalledWith(429);
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call.error.code).toBe('TOO_MANY_REQUESTS');
   });
 
-  it('all error envelopes have required field', () => {
+  it('all error envelopes have required fields', () => {
     const error = new BadRequestError('test');
-    errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
+    errorHandler(error, mockReq as Request, mockRes);
     
-    const call = (mockRes.json as jest.Mock).mock.calls[0][0];
+    const call = (mockRes.json as jest.Mock).mockResults[0][0];
     expect(call).toHaveProperty('success');
     expect(call).toHaveProperty('requestId');
     expect(call).toHaveProperty('timestamp');

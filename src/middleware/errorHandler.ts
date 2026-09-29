@@ -1,11 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
-import { isAppError } from '../errors/index.js';
-import { logger } from '../logger.js';
+import { isAppError } from '../errors/index.js';import { logger } from '../logger.js';
 import type { ValidationErrorDetail } from './validate.js';
-import { ValidationError } from './validate.js';
-import { buildErrorEnvelope } from './envelope.js';
-import type { ErrorEnvelope } from '../types/ResponseEnvelope.js';
-import { normalizeError } from '../errors/errorEnvelopePolicy.js';
+import { ValidationError } from './validate.js';import { buildErrorEnvelope } from './envelope.js';import type { ErrorEnvelope } from '../types/ResponseEnvelope.js';import { normalizeError } from '../errors/errorEnvelopePolicy.js';
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -32,7 +28,7 @@ function extractValidationDetails(err: unknown): ValidationErrorDetail[] | undef
  * - Returns consistent JSON envelope: { success: false, error: { code, message }, requestId, timestamp }
  * - Never sends stack traces to the client in production
  * - Logs full error server-side
- * - If headers are already sent, destroys the socket so the client sees a terminated stream
+ * - When headers are already sent, destroys the socket so clients see a terminated stream
  */
 export function errorHandler(
   err: unknown,
@@ -87,10 +83,10 @@ export function errorHandler(
   }
 
   if (res.headersSent) {
-    // Headers are already on the wire; we cannot write an error envelope.
+    // Headers are already on the wire; we can't write a JSON error envelope.
     // Terminate the connection so the client observes a truncated stream instead of hanging.
     if (!res.writableEnded) {
-      res.destroy(err instance of Error ? err : undefined);
+      res.destroy(err instanceof Error ? err : undefined);
     }
   }
 }
