@@ -70,7 +70,7 @@ Returns paginated billing requests for the authenticated developer.
 Structured logs include `correlationId` (from request context/headers)
 and `indexHint: "idx_billing_requests_lookup_hot"`.
 
-## Related documentation
+## Related docs
 
 - [Billing idempotency and three-phase deduct lifecycle](./billing-idempotency.md)
 - [SDK: POST /api/billing/deduct idempotency contract](./sdk/billing-deduct.md)

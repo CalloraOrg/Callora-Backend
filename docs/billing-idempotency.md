@@ -1,1 +1,601 @@
-IyBCaWxsaW5nIElkZW1wb3RlbmN5CgojIyBPdmVydmlldwoKVGhlIGJpbGxpbmcgc3lzdGVtIGltcGxlbWVudHMgaWRlbXBvdGVudCBkZWR1Y3Rpb25zIHRvIHByZXZlbnQgZG91YmxlIGNoYXJnZXMgd2hlbiByZXF1ZXN0cyBhcmUgcmV0cmllZC4gVGhpcyBpcyBjcml0aWNhbCBmb3IgZmluYW5jaWFsIG9wZXJhdGlvbnMgd2hlcmUgZHVwbGljYXRlIGNoYXJnZXMgY2FuIGNhdXNlIHNlcmlvdXMgaXNzdWVzLgoKIyMgSG93IEl0IFdvcmtzCgojIyMgSWRlbXBvdGVuY3kgS2V5CgpFdmVyeSBiaWxsaW5nIGRlZHVjdGlvbiByZXF1ZXN0IG11c3QgaW5jbHVkZSBhIHVuaXF1ZSBgcmVxdWVzdF9pZGAKKGlkZW1wb3RlbmN5IGtleSkuIFRoaXMga2V5IGlzIHVzZWQgdG8gaWRlbnRpZnkgZHVwbGljYXRlIHJlcXVlc3RzLgoKYGBgdHlwZXNjcmlwdAppbnRlcmZhY2UgQmlsbGluZ0RlZHVjdFJlcXVlc3QgewogIHJlcXVlc3RJZDogc3RyaW5nOyAgICAgIC8vIFVuaXF1ZSBpZGVtcG90ZW5jeSBrZXkKICB1c2VySWQ6IHN0cmluZzsKICBhcGlJZDogc3RyaW5nOwogIGVuZHBvaW50SWQ6IHN0cmluZzsKICBhcGlLZXlJZDogc3RyaW5nOwogIGFtb3VudFVzZGM6IHN0cmluZzsKfQpgYGAKCiMjIyBUaHJlZS1QaGFzZSBEZWR1Y3QgTGlmZWN5Y2xlCgpgc3JjL3NlcnZpY2VzL2JpbGxpbmcudHNgIGltcGxlbWVudHMgdGhlIGRlZHVjdGlvbiBhcyB0aHJlZSBkaXN0aW5jdApwaGFzZXMuIEVhY2ggcGhhc2UgbGVhdmVzIHRoZSBgdXNhZ2VfZXZlbnRzYCByb3cgaW4gYSB3ZWxsLWRlZmluZWQgc3RhdGUKc28gdGhhdCBjbGllbnRzIGFuZCBvcGVyYXRvcnMgY2FuIHJlYXNvbiBhYm91dCByZXRyaWVzIGFuZCByZWNvbmNpbGlhdGlvbi4KCnwgUGhhc2UgfCBOYW1lIHwgV2hhdCBoYXBwZW5zIHwgUm93IHN0YXRlIGFmdGVyIHBoYXNlIHwKfC0tLS0tLS18LS0tLS0tfC0tLS0tLS0tLS0tLS0tfC0tLS0tLS0tLS0tLS0tLS0tLS0tfAp8IDEgfCBJbnNlcnQgcGVuZGluZyByb3cgfCBJbnNlcnQgYHVzYWdlX2V2ZW50c2Agcm93IHdpdGggYHN0YXR1cyA9ICdwZW5kaW5nJ2AgYW5kIGBzdGVsbGFyX3R4X2hhc2ggPSBOVUxMYCBpbnNpZGUgdGhlIERCKHR4KS4gVGhlIFVOSVFVRSBjb25zdHJhaW50IG9uIGByZXF1ZXN0X2lkYCBpcyB0aGUgaWRlbXBvdGVuY3kgZ3VhcmQuIHwgYHBuZWRpbmdgIHwKfCAyIHwgU29yb2JhbiBkZWR1Y3Qgd2l0aCByZXRyaWVzIHwgQ2FsbCBTb3JvYmFuIHRvIGRlZHVjdCB0aGUgYW1vdW50LiBUcmFuc2llbnQgZmFpbHVyZXMgYXJlIHJldHJpZWQgd2l0aCBiYWNrb2ZmLiBPbiBleGhhdXN0aW9uIHRoZSByb3cgaXMgbWFya2VkIGBmYWlsZWRgIGFuZCBgcmVjb25jaWxpYXRpb25SZXF1aXJlZCA9IHRydWVgLiB8IGBwZW5kaW5nYCBvciBgZmFpbGVkYCB8CnwgMyB8IFBlcnNpc3QgdHggaGFzaCB8IE9uIHN1Y2Nlc3MsIHdyaXRlIGBzdGVsbGFyX3R4X2hhc2hgIGFuZCBmbGlwIGBzdGF0dXNgIHRvIGBhcHBsaWVkYCBpbiB0aGUgc2FtZSB0cmFuc2FjdGlvbi4gfCBgYXBwbGllZGAgfAoKIyMjIFJvdyBzdGF0ZXMKCnwgU3RhdGUgfCBgc3RhdHVzYCB2YWx1ZSB8IGBzdGVsbGFyX3R4X2hhc2hgIHwgTWVhbmluZyB8IE9wZXJhdG9yIGFjdGlvbiB8CnwtLS0tLS0tfC0tLS0tLS0tLS0tLS0tfC0tLS0tLS0tLS0tLS0tLS0tfC0tLS0tLS0tLXwtLS0tLS0tLS0tLS0tLS0tLXwKfCBQZW5kaW5nIHwgYHBuZWRpbmdgIHwgTlVMTCB8IFJvdyBpbnNlcnRlZDsgU29yb2JhbiBkZWR1Y3QgaGFzIG5vdCB5ZXQgY29tbWl0dGVkLiB8IE5vIGFjdGlvbiB1bmxlc3MgdGhlIHJvdyBpcyBvbGRlciB0aGFuIHRoZSByZWNvbmNpbGlhdGlvbiB3aW5kb3cuIHwKfCBBcHBsaWVkIHwgYGFwcGxpZWRgIHwgTm9uLW51bGwgfCBPbi1jaGFpbiBkZWR1Y3Rpb24gc3VjY2VlZGVkIGFuZCB0aGUgdHggaGFzaCBpcyBwZXJzaXN0ZWQuIHwgTm8gYWN0aW9uLiB8CnwgRmFpbGVkIHwgYGZhaWxlZGAgfCBOVUxMIHwgU29yb2JhbiBkZWR1Y3Rpb24gZmFpbGVkIGFmdGVyIHJldHJpZXMuIFJvdyBpcyB0ZXJtaW5hbCBmb3IgdGhpcyBhdHRlbXB0LiB8IFJlY29uY2lsaWF0aW9uIG11c3QgcmVzb2x2ZSB0aGUgcm93IChyZXRyeSBvciByZWZ1bmQpLiB8CgojIyMgU2VxdWVuY2UgZGlhZ3JhbQoKYGBgbWVybWFpZApzZXF1ZW5jZURpYWdyYW0KICAgIHBhcnRpY2lwYW50IEMgYXMgQ2xpZW50CiAgICBwYXJ0aWNpcGFudCBBIGFzIEFQSSBSb3V0ZQogICAgcGFydGljaXBhbnQgQiBhcyBCaWxsaW5nU2VydmljZQogICAgcGFydGljaXBhbnQgRCBhcyB1c2FnZV9ldmVudHMgKERCKQogICAgcGFydGljaXBhbnQgUyBhcyBTb3JvYmFuCgogICAgQy0+PkE6IFBPU1QgL2FwaS9iaWxsaW5nL2RlZHVjdCAocmVxdWVzdElkKQogICAgQS0+PkI6IGRlZHVjdChyZXF1ZXN0KQogICAgQi0+PkQ6IFNFTEVDVCBieSByZXF1ZXN0X2lkCiAgICBhbHQgcm93IGFscmVhZHkgZXhpc3RzCiAgICAgICAgRC0tPj5COiBleGlzdGluZyByb3cKICAgICAgICBCLS0+PkE6IHsgYWxyZWFkeVByb2Nlc3NlZDogdHJ1ZSB9CiAgICAgICAgQS0tPj5DOiAyMDAgKyBleGlzdGluZyByZXN1bHQKICAgIGVsc2Ugbm8gcm93CiAgICAgICAgQi0+PkQ6IElOU0VSVCAoc3RhdHVzID0gJ3BlbmRpbmcnKSAgLy8gUGhhc2UgMQogICAgICAgIEItPj5TOiBkZWR1Y3QoYW1vdW50KSAgICAgICAgICAgICAgICAvLyBQaGFzZSAyCiAgICAgICAgYWx0IFNvcm9iYW4gc3VjY2VzcwogICAgICAgICAgICBTLS0+PkI6IHR4IGhhc2gKICAgICAgICAgICAgQi0+PkQ6IFVQREFURSBzdGF0dXMgPSAnYXBwbGllZCcsIHR4X2hhc2ggIC8vIFBoYXNlIDMKICAgICAgICAgICAgQi0tPj5BOiB7IGRlZHVjdGlvbkFwcGxpZWQ6IHRydWUsIHJlY29uY2lsaWF0aW9uUmVxdWlyZWQ6IGZhbHNlIH0KICAgICAgICAgICAgQS0tPj5DOiAyMDAgKyBzdWNjZXNzCiAgICAgICAgZWxzZSBTb3JvYmFuIGZhaWx1cmUKICAgICAgICAgICAgUy0tPj5COiBlcnJvcgogICAgICAgICAgICBCLT4+RDogVVBEQVRFIHN0YXR1cyA9ICdmYWlsZWQnCiAgICAgICAgICAgIEItLT4+QTogeyBkZWR1Y3Rpb25BcHBsaWVkOiBmYWxzZSwgcmVjb25jaWxpYXRpb25SZXF1aXJlZDogdHJ1ZSB9CiAgICAgICAgICAgIEEtLT4+QzogNTAyIC8gNTA0CiAgICAgICAgZW5kCiAgICBlbmQKYGBgCgojIyMgUmVzcG9uc2UgZmxhZ3MKCkV2ZXJ5IGRlZHVjdCByZXNwb25zZSBjYXJyaWVzIHRocmVlIGJvb2xlYW4gZmxhZ3MuIFRoZSBjb21iaW5hdGlvbiBmdWxseQpkZXNjcmliZXMgd2hhdCBoYXBwZW5lZCBhbmQgd2hhdCB0aGUgY2xpZW50IHNob3VsZCBkbyBuZXh0LgoKfCBgYWxyZWFkeVByb2Nlc3NlZGAgfCBgZGVkdWN0aW9uQXBwbGllZGAgfCBgcmVjb25jaWxpYXRpb25SZXF1aXJlZGAgfCBNZWFuaW5nIHwgQ2xpZW50IGFjdGlvbiB8CnwtLS0tLS0tLS0tLS0tLS0tLS0tfC0tLS0tLS0tLS0tLS0tLS0tLXwtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLXwtLS0tLS0tLS18LS0tLS0tLS0tLS0tLS18CnwgYGZhbHNlYCB8IGB0cnVlYCB8IGBmYWxzZWAgfCBGcmVzaCBkZWR1Y3Rpb24gdGhhdCBjb21wbGV0ZWQgb24gdGhpcyByZXF1ZXN0LiB8IFN1Y2Nlc3MuIFJlY29yZCBgdXNhZ2VFdmVudElkYCBhbmQgYHN0ZWxsYXJUeEhhc2hgLiB8CnwgYHRydWVgIHwgYHRydWVgIHwgYGZhbHNlYCB8IFJlcGxheSBvZiBhIHByZXZpb3VzbHkgYXBwbGllZCByZXF1ZXN0LiBObyBzZWNvbmQgY2hhcmdlLiB8IFN1Y2Nlc3MuIFNhZmUgdG8gc3RvcCByZXRyeWluZy4gfAp8IGBmYWxzZWAgfCBgZmFsc2VgIHwgYHRydWVgIHwgU29yb2JhbiBkZWR1Y3Rpb24gZmFpbGVkIGFmdGVyIHJldHJpZXM7IHJvdyBpcyBgZmFpbGVkYC4gfCBEbyBub3QgYmxpbmRseSByZXRyeS4gU3VyZmFjZSB0byBvcGVyYXRvcnMgZm9yIHJlY29uY2lsaWF0aW9uLiB8CnwgYHRydWVgIHwgYGZhbHNlYCB8IGB0cnVlYCB8IFJlcGxheSBvZiBhIGZhaWxlZCByb3cgdGhhdCBzdGlsbCBuZWVkcyByZWNvbmNpbGlhdGlvbi4gfCBXYWl0IGZvciByZWNvbmNpbGlhdGlvbiBvciBjb250YWN0IHN1cHBvcnQuIHwKCiMjIyBEZWR1Y3Rpb24gRmxvdwoKMS4gKipDaGVjayBmb3IgRXhpc3RpbmcgUmVxdWVzdCoqOiBRdWVyeSBgdXNhZ2VfZXZlbnRzYCB0YWJsZSBmb3IgZXhpc3RpbmcgcmVjb3JkIHdpdGggc2FtZSBgcmVxdWVzdF9pZGAKMi4gKipSZXR1cm4gRXhpc3RpbmcgUmVzdWx0Kio6IElmIGZvdW5kLCByZXR1cm4gdGhlIGV4aXN0aW5nIHJlc3VsdCB3aXRob3V0IGNhbGxpbmcgU29yb2JhbgouKiAqSW5zZXJ0IFVzYWdlIEV2ZW50KiogKFBoa2FzZSAxKTogSWYgbm90IGZvdW5kLCBpbnNlcnQgbmV3IHJlY29yZCBpbnRvIGB1c2FnZV9ldmVudHNgIHRhYmxlIHdpdGggYHN0YXR1cyA9ICdwZW5kaW5nJ2AKNC4gKipDYWxsIFNvcm9iYW4qKiAoUGhhc2UgMik6IERlZHVjdCBiYWxhbmNlIGZyb20gdXNlcidzIGFjY291bnQgb24gU3RlbGxhciB3aXRoIHJldHJpZXMgb24gdHJhbnNpZW50IGZhaWx1cmVzCjUuICoqUGVyc2lzdCBUeCBIYXNoKiogKFBoa2FzZSAzKTogU3RvcmUgU3RlbGxhciB0cmFuc2FjdGlvbiBoYXNoIGFuZCBmbGlwIGBzdGF0dXNgIHRvIGBhcHBsaWVkYAo2LiAqKkNvbW1pdCBUcmFuc2FjdGlvbioqOiBDb21taXQgZGF0YWJhc2UgdHJhbnNhY3Rpb24KCiMjIyBEYXRhYmFzZSBTY2hlbWEKCmBgYHNxbApDUkVBVEUgVEFCTEUgdXNhZ2VfZXZlbnRzICgKICBpZCBCSUdTRVJJQUwgUFJJTUFSWSBLRVksCiAgdXNlcl9pZCBWQVJDSEFSKDI1NSkgTk9UIE5VTEwsCiAgYXBpX2lkIFZBUkNIQVIoMjU1KSBOT1QgTlVMTCwKICBlbmRwb2ludF9pZCBWQVJDSEFSKDI1NSkgTk9UIE5VTEwsCiAgYXBpX2tleV9pZCBWQVJDSEFSKDI1NSkgTk9UIE5VTEwsCiAgYW1vdW50X3VzZGMgREVDSU1BTCgyMCwgNykgTk9UIE5VTEwsCiAgcmVxdWVzdF9pZCBWQVJDSEFSKDI1NSkgTk9UIE5VTEwgVU5JUVVFLCAgLS0gSWRlbXBvdGVuY3kga2V5CiAgc3RlbGxhcl90eF9oYXNoIFZBUkNIQVIoNjQpLAogIHN0YXR1cyBWQVJDSEFSKDE2KSBOT1QgTlVMTCBERUZBVUxUICdwZW5kaW5nJywgIC0tICdwZW5kaW5nJyB8ICdhcHBsaWVkJyB8ICdmYWlsZWQnCiAgY3JlYXRlZF9hdCBUSU1FU1RBTVAgTk9UIE5VTEwgREVGQVVMVCBOT1coKQopOwoKLS0gVW5pcXVlIGNvbnN0cmFpbnQgZW5zdXJlcyBubyBkdXBsaWNhdGUgcmVxdWVzdF9pZHMKQ1JFQVRFIFVOSVFVRSBJTkRFWCBpZHhfdXNhZ2VfZXZlbnRzX3JlcXVlc3RfaWQgT04gdXNhZ2VfZXZlbnRzKHJlcXVlc3RfaWQpOwpgYGAKCiMjIFVzYWdlIEV4YW1wbGVzCgojIyMgQmFzaWMgVXNhZ2UKCmBgYHR5cGVzY3JpcHQKaW1wb3J0IHsgQmlsbGluZ1NlcnZpY2UgfSBmcm9tICcuL3NlcnZpY2VzL2JpbGxpbmcuanMnO2ltcG9ydCB7IFBvb2wgfSBmcm9tICdwZyc7Cgpjb25zdCBwb29sID0gbmV3IFBvb2woeyAvKiBjb25maWcgKi8gfSk7CmNvbnN0IHNvcm9iYW5DbGllbnQgPSBuZXcgU29yb2JhbkNsaWVudCgpOwpjb25zdCBiaWxsaW5nU2VydmljZSA9IG5ldyBCaWxsaW5nU2VydmljZShwb29sLCBzb3JvYmFuQ2xpZW50KTsKCi8vIEZpcnN0IHJlcXVlc3QgLSBwcm9jZXNzZXMgbm9ybWFsbHkKY29uc3QgcmVzdWx0MSA9IGF3YWl0IGJpbGxpbmdTZXJ2aWNlLmRlZHVjdCh7CiAgcmVxdWVzdElkOiAncmVxX2FiYzEyMycsCiAgdXNlcklkOiAndXNlcl9hbGljZScsCiAgYXBpSWQ6ICdhcGlfd2VhdGhlcicsCiAgZW5kcG9pbnRJZDogJ2VuZHBvaW50X2ZvcmVjYXN0JywKICBhcGlLZXlJZDogJ2tleV94eXo3ODknLAogIGFtb3VudFVzZGM6ICcwLjAxJwp9KTsKCmNvbnNvbGUubG9nKHJlc3VsdDEpOwovLyB7Ci8vICAgc3VjY2VzczogdHJ1ZSwKLy8gICB1c2FnZUV2ZW50SWQ6ICcxJywKLy8gICBzdGVsbGFyVHhIYXNoOiAndHhfc3RlbGxhcl9hYmMuLi4nLAovLyAgIGFscmVhZHlQcm9jZXNzZWQ6IGZhbHNlLAovLyAgIGRlZHVjdGlvbkFwcGxpZWQ6IHRydWUsCi8vICAgcmVjb25jaWxpYXRpb25SZXF1aXJlZDogZmFsc2UKLy8gfQoKLy8gUmV0cnkgd2l0aCBzYW1lIHJlcXVlc3RfaWQgLSByZXR1cm5zIGV4aXN0aW5nIHJlc3VsdApjb25zdCByZXN1bHQyID0gYXdhaXQgYmlsbGluZ1NlcnZpY2UuZGVkdWN0KHsKICByZXF1ZXN0SWQ6ICdyZXFfYWJjMTIzJywgIC8vIFNhbWUgcmVxdWVzdF9pZAogIHVzZXJJZDogJ3VzZXJfYWxpY2UnLAogIGFwaUlkOiAnYXBpX3dlYXRoZXInLAogIGVuZHBvaW50SWQ6ICdlbmRwb2ludF9mb3JlY2FzdCcsCiAgYXBpS2V5SWQ6ICdrZXlfeHl6Nzg5JywKICBhbW91bnRVc2RjOiAnMC4wMScKfSk7Cgpjb25zb2xlLmxvZyhyZXN1bHQyKTsKLy8gewovLyAgIHN1Y2Nlc3M6IHRydWUsCi8vICAgdXNhZ2VFdmVudElkOiAnMScsICAgICAgICAgICAvLyBTYW1lIElECi8vICAgc3RlbGxhclR4SGFzaDogJ3R4X3N0ZWxsYXJfYWJjLi4uJywgIC8vIFNhbWUgaGFzaAovLyAgIGFscmVhZHlQcm9jZXNzZWQ6IHRydWUsICAgICAgIC8vIEluZGljYXRlcyBkdXBsaWNhdGUKLy8gICBkZWR1Y3Rpb25BcHBsaWVkOiB0cnVlLAovLyAgIHJlY29uY2lsaWF0aW9uUmVxdWlyZWQ6IGZhbHNlCi8vIH0KYGBgCgojIyMgR2VuZXJhdGluZyBJZGVtcG90ZW5jeSBLZXlzCgpVc2UgYSBjb21iaW5hdGlvbiBvZiByZXF1ZXN0LXNwZWNpZmljIGRhdGEgdG8gZ2VuZXJhdGUgdW5pcXVlIGtleXM6CgpgYGB0eXBlc2NyaXB0CmltcG9ydCB7IGNyZWF0ZUhhc2ggfSBmcm9tICdjcnlwdG8nOwoKZnVuY3Rpb24gZ2VuZXJhdGVSZXF1ZXN0SWQoCiAgdXNlcklkOiBzdHJpbmcsCiAgYXBpSWQ6IHN0cmluZywKICBlbmRwb2ludElkOiBzdHJpbmcsCiAgdGltZXN0YW1wOiBudW1iZXIKKTogc3RyaW5nIHsKICBjb25zdCBkYXRhID0gYCR7dXNlcklkfToke2FwaUlkfToke2VuZHBvaW50SWR9OiR7dGltZXN0YW1wfWA7CiAgY29uc3QgaGFzaCA9IGNyZWF0ZUhhc2goJ3NoYTI1NicpLnVwZGF0ZShkYXRhKS5kaWdlc3QoJ2hleCcpLnN1YnN0cmluZygwLCAxNik7CiAgcmV0dXJuIGByZXFfJHtoYXNofWA7Cn0KCi8vIFVzYWdlCmNvbnN0IHJlcXVlc3RJZCA9IGdlbmVyYXRlUmVxdWVzdElkKAogICd1c2VyX2FsaWNlJywKICAnYXBpX3dlYXRoZXInLAogICdlbmRwb2ludF9mb3JlY2FzdCcsCiAgRGF0ZS5ub3coKQopOwpgYGAKCk9yIHVzZSBVVUlEczoKCmBgYHR5cGVzY3JpcHQKaW1wb3J0IHsgdjQgYXMgdXVpZHY0IH0gZnJvbSAndXVpZCc7Cgpjb25zdCByZXF1ZXN0SWQgPSBgcmVxXyR7dXVpZHY0KCl9YDsKYGBgCgojIyMgQ2hlY2tpbmcgUmVxdWVzdCBTdGF0dXMKCmBgYHR5cGVzY3JpcHQKLy8gQ2hlY2sgaWYgYSByZXF1ZXN0IHdhcyBhbHJlYWR5IHByb2Nlc3NlZApjb25zdCBleGlzdGluZyA9IGF3YWl0IGJpbGxpbmdTZXJ2aWNlLmdldEJ5UmVxdWVzdElkKCdyZXFfYWJjMTIzJyk7CgppZiAoZXhpc3RpbmcpIHsKICBjb25zb2xlLmxvZygnUmVxdWVzdCBhbHJlYWR5IHByb2Nlc3NlZCcpOwogIGNvbnNvbGUubG9nKCdVc2FnZSBFdmVudCBJRDonLCBleGlzdGluZy51c2FnZUV2ZW50SWQpOwogIGNvbnNvbGUubG9nKCdTdGVsbGFyIFRYOicsIGV4aXN0aW5nLnN0ZWxsYXJUeEhhc2gpOwp9IGVsc2UgewogIGNvbnNvbGUubG9nKCdSZXF1ZXN0IG5vdCBmb3VuZCcpOwp9CmBgYAoKIyMgQVBJIEludGVncmF0aW9uCgojIyMgUkVTVCBBUEkgRW5kcG9pbnQKCmBgYHR5cGVzY3JpcHQKYXBwLnBvc3QoJy9hcGkvYmlsbGluZy9kZWR1Y3QnLCBhc3luYyAocmVxLCByZXMpID0+IHsKICBjb25zdCB7IHJlcXVlc3RJZCwgdXNlcklkLCBhcGlJZCwgZW5kcG9pbnRJZCwgYXBpS2V5SWQsIGFtb3VudFVzZGMgfSA9IHJlcS5ib2R5OwoKICAvLyBWYWxpZGF0ZSByZXF1ZXN0X2lkIGlzIHByb3ZpZGVkCiAgaWYgKCFyZXF1ZXN0SWQpIHsKICAgIHJldHVybiByZXMuc3RhdHVzKDQwMCkuanNvbih7CiAgICAgIGVycm9yOiAncmVxdWVzdF9pZCBpcyByZXF1aXJlZCBmb3IgaWRlbXBvdGVuY3knCiAgICB9KTsKICB9CgogIHRyeSB7CiAgICBjb25zdCByZXN1bHQgPSBhd2FpdCBiaWxsaW5nU2VydmljZS5kZWR1Y3QoewogICAgICByZXF1ZXN0SWQsCiAgICAgIHVzZXJJZCwKICAgICAgYXBpSWQsCiAgICAgIGVuZHBvaW50SWQsCiAgICAgIGFwaUtleUlkLAogICAgICBhbW91bnRVc2RjCiAgICB9KTsKCiAgICBpZiAoIXJlc3VsdC5zdWNjZXNzKSB7CiAgICAgIHJldHVybiByZXMuc3RhdHVzKDUwMCkuanNvbih7CiAgICAgICAgZXJyb3I6IHJlc3VsdC5lcnJvciwKICAgICAgICByZWNvbmNpbGlhdGlvblJlcXVpcmVkOiByZXN1bHQucmVjb25jaWxpYXRpb25SZXF1aXJlZCA/PyBmYWxzZQogICAgICB9KTsKICAgIH0KCiAgICByZXR1cm4gcmVzLnN0YXR1cyhyZXN1bHQuYWxyZWFkeVByb2Nlc3NlZCA/IDIwMCA6IDIwMSkuanNvbih7CiAgICAgIHVzYWdlRXZlbnRJZDogcmVzdWx0LnVzYWdlRXZlbnRJZCwKICAgICAgc3RlbGxhclR4SGFzaDogcmVzdWx0LnN0ZWxsYXJUeEhhc2gsCiAgICAgIGFscmVhZHlQcm9jZXNzZWQ6IHJlc3VsdC5hbHJlYWR5UHJvY2Vzc2VkLAogICAgICBkZWR1Y3Rpb25BcHBsaWVkOiByZXN1bHQuZGVkdWN0aW9uQXBwbGllZCwKICAgICAgcmVjb25jaWxpYXRpb25SZXF1aXJlZDogcmVzdWx0LnJlY29uY2lsaWF0aW9uUmVxdWlyZWQKICAgIH0pOwogIH0gY2F0Y2ggKGVycm9yKSB7CiAgICByZXR1cm4gcmVzLnN0YXR1cyg1MDApLmpzb24oewogICAgICBlcnJvcjogJ0ludGVybmFsIHNlcnZlciBlcnJvcicKICAgIH0pOwogIH0KfSk7CmBgYAoKIyMjIENsaWVudCBVc2FnZQoKYGBgYmFzaAojIEZpcnN0IHJlcXVlc3QKY3VybCAtWCBQT1NUIGh0dHA6Ly9sb2NhbGhvc3Q6MzAwMC9hcGkvYmlsbGluZy9kZWR1Y3QgXAogIC1IICJDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24iIFwKICAtZCAnewogICAgInJlcXVlc3RJZCI6ICJyZXFfYWJjMTIzIiwKICAgICJ1c2VySWQiOiAidXNlcl9hbGljZSIsCiAgICAiYXBpSWQiOiAiYXBpX3dlYXRoZXIiLAogICAgImVuZHBvaW50SWQiOiAiZW5kcG9pbnRfZm9yZWNhc3QiLAogICAgImFwaUtleUlkIjogImtleV94eXo3ODkiLAogICAgImFtb3VudFVzZGMiOiAiMC4wMSIKICB9JwoKIyBSZXNwb25zZSAoMjAxIENyZWF0ZWQpCnsKICAidXNhZ2VFdmVudElkIjogIjEiLAogICJzdGVsbGFyVHhIYXNoIjogInR4X3N0ZWxsYXJfYWJjLi4uIiwKICAiYWxyZWFkeVByb2Nlc3NlZCI6IGZhbHNlLAogICJkZWR1Y3Rpb25BcHBsaWVkIjogdHJ1ZSwKICAicmVjb25jaWxpYXRpb25SZXF1aXJlZCI6IGZhbHNlCn0KCiMgUmV0cnkgd2l0aCBzYW1lIHJlcXVlc3RfaWQKY3VybCAtWCBQT1NUIGh0dHA6Ly9sb2NhbGhvc3Q6MzAwMC9hcGkvYmlsbGluZy9kZWR1Y3QgXAogIC1IICJDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24iIFwKICAtZCAnewogICAgInJlcXVlc3RJZCI6ICJyZXFfYWJjMTIzIiwKICAgICJ1c2VySWQiOiAidXNlcl9hbGljZSIsCiAgICAiYXBpSWQiOiAiYXBpX3dlYXRoZXIiLAogICAgImVuZHBvaW50SWQiOiAiZW5kcG9pbnRfZm9yZWNhc3QiLAogICAgImFwaUtleUlkIjogImtleV94eXo3ODkiLAogICAgImFtb3VudFVzZGMiOiAiMC4wMSIKICB9JwoKIyBSZXNwb25zZSAoMjAwIE9LKQp7CiAgInVzYWdlRXZlbnRJZCI6ICIxIiwKICAic3RlbGxhclR4SGFzaCI6ICJ0eF9zdGVsbGFyX2FiYy4uLiIsCiAgImFscmVhZHlQcm9jZXNzZWQiOiB0cnVlLAogICJkZWR1Y3Rpb25BcHBsaWVkIjogdHJ1ZSwKICAicmVjb25jaWxpYXRpb25SZXF1aXJlZCI6IGZhbHNlCn0KYGBgCgojIyBSZXRyeSBndWlkYW5jZSBwZXIgSFRUUCBzdGF0dXMKCnwgU3RhdHVzIHwgTWVhbmluZyB8IFJlY29tbWVuZGVkIGNsaWVudCBiZWhhdmlvdXIgfAp8LS0tLS0tLS18LS0tLS0tLS0tfC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLXwKfCAyMDAgfCBTdWNjZXNzIChmcmVzaCBvciByZXBsYXkpLiB8IFN0b3AuIElmIGBhbHJlYWR5UHJvY2Vzc2VkID0gdHJ1ZWAsIGRvIG5vdCByZXBvcnQgYSBzZWNvbmQgY2hhcmdlLiB8CnwgMjAxIHwgRnJlc2ggZGVkdWN0aW9uIGNyZWF0ZWQuIHwgU3RvcC4gUmVjb3JkIGB1c2FnZUV2ZW50SWRgIGFuZCBgc3RlbGxhclR4SGFzaGAuIHwKfCA0MDAgfCBWYWxpZGF0aW9uIGVycm9yLiB8IERvIG5vdCByZXRyeSB1bmNoYW5nZWQuIEZpeCB0aGUgcmVxdWVzdCBib2R5LiB8CnwgNDAxIHwgQXV0aGVudGljYXRpb24gZXJyb3IuIHwgUmVmcmVzaCB0aGUgSldUIG9uY2UsIHRoZW4gcmV0cnkgd2l0aCB0aGUgc2FtZSBgcmVxdWVzdElkYC4gfAp8IDQwMiB8IEluc3VmZmljaWVudCBiYWxhbmNlLiB8IERvIG5vdCByZXRyeS4gVG9wIHVwIHRoZSBhY2NvdW50IGFuZCB1c2UgYSBuZXcgYHJlcXVlc3RJZGAuIHwKfCA0MDkgKGBJREVNUE9URU5DWV9JTl9QUk9HUkVTU2ApIHwgSW4tZmxpZ2h0IGR1cGxpY2F0ZS4gfCBSZXRyeSB3aXRoIGV4cG9uZW50aWFsIGJhY2tvZmYgdXNpbmcgdGhlIHNhbWUgYHJlcXVlc3RJZGAuIHwKfCA0MDkgKGBJREVNUE9URU5DWV9DT05GTElDVGApIHwgUGF5bG9hZCBtaXNtYXRjaCBmb3IgdGhlIHNhbWUga2V5LiB8IERvIG5vdCByZXRyeSB1bmNoYW5nZWQuIFVzZSBhIG5ldyBgaWRlbXBvdGVuY3lLZXlgIG9yIG1ha2UgdGhlIGJvZHkgaWRlbnRpY2FsLiB8CnwgNTAwIHwgREIgb3IgZ2VuZXJpYyBiaWxsaW5nIGZhaWx1cmUuIHwgUmV0cnkgd2l0aCB0aGUgc2FtZSBgcmVxdWVzdElkYCBhbmQgZXhwb25lbnRpYWwgYmFja29mZi4gSWYgYHJlY29uY2lsaWF0aW9uUmVxdWlyZWQgPSB0cnVlYCwgc3RvcCBhbmQgZXNjYWxhdGUuIHwKfCA1MDIgfCBTb3JvYmFuIFJQQyBlcnJvci4gfCBSZXRyeSB3aXRoIHRoZSBzYW1lIGByZXF1ZXN0SWRgLiBJZiBgcmVjb25jaWxpYXRpb25SZXF1aXJlZCA9IHRydWVgLCBzdG9wIGFuZCBlc2NhbGF0ZS4gfAp8IDUwNCB8IFNvcm9iYW4gdGltZW91dC4gfCBSZXRyeSB3aXRoIHRoZSBzYW1lIGByZXF1ZXN0SWRgLiBJZiBgcmVjb25jaWxpYXRpb25SZXF1aXJlZCA9IHRydWVgLCBzdG9wIGFuZCBlc2NhbGF0ZS4gfAoKIyMjIFNpbmdsZS1wcm9jZXNzIHNlbWFwaG9yZSBsaW1pdGF0aW9uCgpUaGUgcGVyLXVzZXIgc2VtYXBob3JlIHRoYXQgc2VyaWFsaXplcyBjb25jdXJyZW50IGRlZHVjdGlvbnMgZm9yIHRoZSBzYW1lCnVzZXIgaXMgaGVsZCBpbiBwcm9jZXNzIG1lbW9yeS4gSXQgb25seSBndWFyYW50ZWVzIG11dHVhbCBleGNsdXNpb24gd2l0aGluIGEKc2luZ2xlIG5vZGUuIFdoZW4gdGhlIHNlcnZpY2UgaXMgcnVuIGFzIG11bHRpcGxlIGluc3RhbmNlcyAoZS5nLiBob3Jpem9udGFsCnNjYWxpbmcgb3IgYSBtdWx0aS1yZWdpb24gZGVwbG95bWVudCksIHR3byBpbnN0YW5jZXMgY2FuIGF0dGVtcHQgdGhlIHNhbWUKZGVkdWN0aW9uIGNvbmN1cnJlbnRseS4gVGhlIGRhdGFiYXNlIFVOSVFVRSBjb25zdHJhaW50IG9uIGB1c2FnZV9ldmVudHMucmVxdWVzdF9pZGAKcmVtYWlucyB0aGUgYXV0aG9yaXRhdGl2ZSBndWFyZCBhZ2FpbnN0IGRvdWJsZSBjaGFyZ2VzIGluIHRoYXQgY2FzZSwgYnV0IG9uZQppbnN0YW5jZSB3aWxsIG9ic2VydmUgYSB1bmlxdWUtdmlvbGF0aW9uIGFuZCBtdXN0IGZhbGwgYmFjayB0byByZWFkaW5nIHRoZQpleGlzdGluZyByb3cuIE9wZXJhdG9ycyBtdXN0IG5vdCBhc3N1bWUgdGhlIHNlbWFwaG9yZSBwcmV2ZW50cyBjb25jdXJyZW50IFNvcm9iYW4KY2FsbHMgYWNyb3NzIGluc3RhbmNlcy4KCiMjIEVycm9yIEhhbmRsaW5nCgojIyMgU29yb2JhbiBGYWlsdXJlCgpJZiBTb3JvYmFuIGRlZHVjdGlvbiBmYWlscyBhZnRlciByZXRyaWVzLCB0aGUgcm93IGlzIG1hcmtlZCBgZmFpbGVkYCBhbmQgdGhlCnJlc3BvbnNlIGNhcnJpZXMgYHJlY29uY2lsaWF0aW9uUmVxdWlyZWQ6IHRydWVgLiBUaGUgY2xpZW50IG11c3Qgbm90IGJsaW5kbHkKcmV0cnkgdW50aWwgb3BlcmF0b3JzIGhhdmUgcmVjb25jaWxlZCB0aGUgcm93LgoKYGBgdHlwZXNjcmlwdApjb25zdCByZXN1bHQgPSBhd2FpdCBiaWxsaW5nU2VydmljZS5kZWR1Y3QocmVxdWVzdCk7CgppZiAoIXJlc3VsdC5zdWNjZXNzKSB7CiAgY29uc29sZS5lcnJvcignQmlsbGluZyBmYWlsZWQ6JywgcmVzdWx0LmVycm9yKTsKICBpZiAocmVzdWx0LnJlY29uY2lsaWF0aW9uUmVxdWlyZWQpIHsKICAgIC8vIFJvdyBpcyBpbiB0aGUgYGZhaWxlZGAgc3RhdGUuIE9wZXJhdG9ycyBtdXN0IHJlY29uY2lsZS4KICB9Cn0KYGBgCgojIyMgUmFjZSBDb25kaXRpb25zCgpUaGUgc3lzdGVtIGhhbmRsZXMgY29uY3VycmVudCByZXF1ZXN0cyB3aXRoIHRoZSBzYW1lIGByZXF1ZXN0X2lkYCB3aXRoaW4gYQpzaW5nbGUgcHJvY2VzcyB2aWEgdGhlIHBlci11c2VyIHNlbWFwaG9yZSwgYW5kIGFjcm9zcyBwcm9jZXNzZXMgdmlhIHRoZQpVTklRVUUgY29uc3RyYWludCBvbiBgdXNhZ2VfZXZlbnRzLnJlcXVlc3RfaWRgLgoKYGBgdHlwZXNjcmlwdAovLyBNdWx0aXBsZSBjb25jdXJyZW50IHJlcXVlc3RzIHdpdGggc2FtZSByZXF1ZXN0X2lkCmNvbnN0IFtyZXN1bHQxLCByZXN1bHQyLCByZXN1bHQzXSA9IGF3YWl0IFByb21pc2UuYWxsKFsKICBiaWxsaW5nU2VydmljZS5kZWR1Y3QocmVxdWVzdCksCiAgYmlsbGluZ1NlcnZpY2UuZGVkdWN0KHJlcXVlc3QpLAogIGJpbGxpbmdTZXJ2aWNlLmRlZHVjdChyZXF1ZXN0KQpdKTsKCi8vIE9ubHkgb25lIHdpbGwgcHJvY2Vzcywgb3RoZXJzIHdpbGwgcmV0dXJuIGV4aXN0aW5nIHJlc3VsdAovLyBBbGwgd2lsbCBoYXZlIHRoZSBzYW1lIHVzYWdlRXZlbnRJZAovLyBTb3JvYmFuIGlzIG9ubHkgY2FsbGVkIG9uY2UKYGBgCgojIyBCZXN0IFByYWN0aWNlcwoKIyMjIDEuIEFsd2F5cyBQcm92aWRlIHJlcXVlc3RfaWQKCmBgYHR5cGVzY3JpcHQKLy8g4p2MIEJhZCAtIE5vIGlkZW1wb3RlbmN5IHByb3RlY3Rpb24KYXdhaXQgYmlsbGluZ1NlcnZpY2UuZGVkdWN0KHsKICByZXF1ZXN0SWQ6IHVuZGVmaW5lZCwgIC8vIFdpbGwgZmFpbAogIHVzZXJJZDogJ3VzZXJfYWxpY2UnLAogIC8vIC4uLgp9KTsKCi8vIOKchSBHb29kIC0gSWRlbXBvdGVuY3kgcHJvdGVjdGVkCmF3YWl0IGJpbGxpbmdTZXJ2aWNlLmRlZHVjdCh7CiAgcmVxdWVzdElkOiAncmVxX2FiYzEyMycsCiAgdXNlcklkOiAndXNlcl9hbGljZScsCiAgLy8gLi4uCn0pOwpgYGAKCiMjIyAyLiBVc2UgRGV0ZXJtaW5pc3RpYyBLZXlzIGZvciBSZXRyaWVzCgpgYGB0eXBlc2NyaXB0Ci8vIOKdjCBCYWQgLSBOZXcgVVVJRCBvbiBlYWNoIHJldHJ5CmNvbnN0IHJlcXVlc3RJZCA9IGByZXFfJHt1dWlkdjQoKX1gOyAgLy8gRGlmZmVyZW50IGV2ZXJ5IHRpbWUKCi8vIOKchSBHb29kIC0gU2FtZSBrZXkgZm9yIHNhbWUgbG9naWNhbCByZXF1ZXN0CmNvbnN0IHJlcXVlc3RJZCA9IGdlbmVyYXRlUmVxdWVzdElkKHVzZXJJZCwgYXBpSWQsIGVuZHBvaW50SWQsIHRpbWVzdGFtcCk7CmBgYAoKIyMjIDMuIFN0b3JlIHJlcXVlc3RfaWQgb24gQ2xpZW50IFNpZGUKCmBgYHR5cGVzY3JpcHQKLy8gQ2xpZW50LXNpZGUgY29kZQpjbGFzcyBCaWxsaW5nQ2xpZW50IHsKICBhc3luYyBkZWR1Y3RXaXRoUmV0cnkocmVxdWVzdDogQmlsbGluZ1JlcXVlc3QsIG1heFJldHJpZXMgPSAzKSB7CiAgICAvLyBHZW5lcmF0ZSByZXF1ZXN0X2lkIG9uY2UKICAgIGNvbnN0IHJlcXVlc3RJZCA9IGByZXFfJHt1dWlkdjQoKX1gOwogICAgCiAgICBmb3IgKGxldCBpID0gMDsgaSA8IG1heFJldHJpZXM7IGkrKykgewogICAgICB0cnkgewogICAgICAgIHJldHVybiBhd2FpdCB0aGlzLmRlZHVjdCh7IC4uLnJlcXVlc3QsIHJlcXVlc3RJZCB9KTsKICAgICAgfSBjYXRjaCAoZXJyb3IpIHsKICAgICAgICBpZiAoaSA9PT0gbWF4UmV0cmllcyAtIDEpIHRocm93IGVycm9yOwogICAgICAgIGF3YWl0IHRoaXMuc2xlZXAoMTAwMCAqIE1hdGgucG93KDIsIGkpKTsgIC8vIEV4cG9uZW50aWFsIGJhY2tvZmYKICAgICAgfQogICAgfQogIH0KfQpgYGAKCiMjIyA0LiBDaGVjayBhbHJlYWR5UHJvY2Vzc2VkIEZsYWcKCmBgYHR5cGVzY3JpcHQKY29uc3QgcmVzdWx0ID0gYXdhaXQgYmlsbGluZ1NlcnZpY2UuZGVkdWN0KHJlcXVlc3QpOwoKaWYgKHJlc3VsdC5hbHJlYWR5UHJvY2Vzc2VkKSB7CiAgY29uc29sZS5sb2coJ1JlcXVlc3Qgd2FzIGFscmVhZHkgcHJvY2Vzc2VkIC0gbm8gZG91YmxlIGNoYXJnZScpOwogIC8vIExvZyBmb3IgbW9uaXRvcmluZwogIGxvZ2dlci5pbmZvKCdEdXBsaWNhdGUgYmlsbGluZyByZXF1ZXN0IGRldGVjdGVkJywgewogICAgcmVxdWVzdElkOiByZXF1ZXN0LnJlcXVlc3RJZCwKICAgIHVzYWdlRXZlbnRJZDogcmVzdWx0LnVzYWdlRXZlbnRJZAogIH0pOwp9CmBgYAoKIyMjIDUuIFNldCBBcHByb3ByaWF0ZSBUaW1lb3V0cwoKYGBgdHlwZXNjcmlwdAovLyBDb25maWd1cmUgZGF0YWJhc2UgY29ubmVjdGlvbiBwb29sCmNvbnN0IHBvb2wgPSBuZXcgUG9vbCh7CiAgY29ubmVjdGlvblRpbWVvdXRNaWxsaXM6IDUwMDAsCiAgaWRsZVRpbWVvdXRNaWxsaXM6IDMwMDAwLAogIG1heDogMjAKfSk7CgovLyBDb25maWd1cmUgU29yb2JhbiBjbGllbnQgd2l0aCB0aW1lb3V0CmNvbnN0IHNvcm9iYW5DbGllbnQgPSBuZXcgU29yb2JhbkNsaWVudCh7CiAgdGltZW91dDogMTAwMDAgIC8vIDEwIHNlY29uZCB0aW1lb3V0Cn0pOwpgYGAKCiMjIE1vbml0b3JpbmcKCiMjIyBNZXRyaWNzIHRvIFRyYWNrCgoxLiAqKkR1cGxpY2F0ZSBSZXF1ZXN0IFJhdGUqKjogUGVyY2VudGFnZSBvZiByZXF1ZXN0cyB3aXRoIGBhbHJlYWR5UHJvY2Vzc2VkOiB0cnVlYAoyLiAqKlNvcm9iYW4gQ2FsbCBDb3VudCoqOiBTaG91bGQgbWF0Y2ggbnVtYmVyIG9mIHVuaXF1ZSBgcmVxdWVzdF9pZGAgdmFsdWVzCjMuICoqVHJhbnNhY3Rpb24gUm9sbGJhY2sgUmF0ZSoqOiBGYWlsZWQgU29yb2JhbiBjYWxscwo0LiAqKlJhY2UgQ29uZGl0aW9uIFJhdGUqKjogVW5pcXVlIGNvbnN0cmFpbnQgdmlvbGF0aW9ucwo1LiAqKlJlY29uY2lsaWF0aW9uIEJhY2tsb2cqKjogQ291bnQgb2Ygcm93cyB3aXRoIGBzdGF0dXMgPSAnZmFpbGVkJ2Agb3Igc3RhbGUgYHBuZWRpbmdgIHJvd3MKCiMjIyBFeGFtcGxlIE1vbml0b3JpbmcKCmBgYHR5cGVzY3JpcHQKY2xhc3MgTW9uaXRvcmVkQmlsbGluZ1NlcnZpY2UgZXh0ZW5kcyBCaWxsaW5nU2VydmljZSB7CiAgYXN5bmMgZGVkdWN0KHJlcXVlc3Q6IEJpbGxpbmdEZWR1Y3RSZXF1ZXN0KTogUHJvbWlzZTxCaWxsaW5nRGVkdWN0UmVzdWx0PiB7CiAgICBjb25zdCBzdGFydFRpbWUgPSBEYXRlLm5vdygpOwogICAgY29uc3QgcmVzdWx0ID0gYXdhaXQgc3VwZXIuZGVkdWN0KHJlcXVlc3QpOwogICAgY29uc3QgZHVyYXRpb24gPSBEYXRlLm5vdygpIC0gc3RhcnRUaW1lOwoKICAgIC8vIFRyYWNrIG1ldHJpY3MKICAgIG1ldHJpY3MuaW5jcmVtZW50KCdiaWxsaW5nLmRlZHVjdC50b3RhbCcpOwogICAgbWV0cmljcy5oaXN0b2dyYW0oJ2JpbGxpbmcuZGVkdWN0LmR1cmF0aW9uJywgZHVyYXRpb24pOwogICAgCiAgICBpZiAocmVzdWx0LmFscmVhZHlQcm9jZXNzZWQpIHsKICAgICAgbWV0cmljcy5pbmNyZW1lbnQoJ2JpbGxpbmcuZGVkdWN0LmR1cGxpY2F0ZScpOwogICAgfQogICAgCiAgICBpZiAoIXJlc3VsdC5zdWNjZXNzKSB7CiAgICAgIG1ldHJpY3MuaW5jcmVtZW50KCdiaWxsaW5nLmRlZHVjdC5mYWlsZWQnKTsKICAgIH0KCiAgICBpZiAocmVzdWx0LnJlY29uY2lsaWF0aW9uUmVxdWlyZWQpIHsKICAgICAgbWV0cmljcy5pbmNyZW1lbnQoJ2JpbGxpbmcuZGVkdWN0LnJlY29uY2lsaWF0aW9uUmVxdWlyZWQnKTsKICAgIH0KCiAgICByZXR1cm4gcmVzdWx0OwogIH0KfQpgYGAKCiMjIFRlc3RpbmcKCiMjIyBVbml0IFRlc3RzCgpgYGBiYXNoCm5wbSBydW4gdGVzdDp1bml0CmBgYAoKVGVzdHMgY292ZXI6Ci0gU3VjY2Vzc2Z1bCBkZWR1Y3Rpb24gKGBhbHJlYWR5UHJvY2Vzc2VkOiBmYWxzZWAsIGBkZWR1Y3Rpb25BcHBsaWVkOiB0cnVlYCwgYHJlY29uY2lsaWF0aW9uUmVxdWlyZWQ6IGZhbHNlYCkKLSBEdXBsaWNhdGUgcmVxdWVzdCBoYW5kbGluZyAoYGFscmVhZHlQcm9jZXNzZWQ6IHRydWVgKQotIFNvcm9iYW4gZmFpbHVyZSAoYGRlZHVjdGlvbkFwcGxpZWQ6IGZhbHNlYCwgYHJlY29uY2lsaWF0aW9uUmVxdWlyZWQ6IHRydWVgKQotIFJhY2UgY29uZGl0aW9uIGhhbmRsaW5nCi0gRGF0YWJhc2UgZXJyb3JzCgpUaGUgYXV0aG9yaXRhdGl2ZSBzdWl0ZSBpcyBgc3JjL3NlcnZpY2VzL2JpbGxpbmcudGVzdC50c2A7IGV2ZXJ5IHJvdyBzdGF0ZSBhbmQKZmxhZyBjb21iaW5hdGlvbiBkb2N1bWVudGVkIGFib3ZlIGlzIGV4ZXJjaXNlZCB0aGVyZS4gUnVuIGl0IHdpdGg6CgpgYGBiYXNoCm5wbSB0ZXN0IC0tIHNyYy9zZXJ2aWNlcy9iaWxsaW5nLnRlc3QudHMKYGBgCgojIyMgSW50ZWdyYXRpb24gVGVzdHMKCmBgYGJhc2gKbnBtIHJ1biB0ZXN0OmludGVncmF0aW9uCmBgYAoKVGVzdHMgY292ZXI6Ci0gUmVhbCBkYXRhYmFzZSB0cmFuc2FjdGlvbnMKLSBDb25jdXJyZW50IHJlcXVlc3QgaGFuZGxpbmcKLSBUcmFuc2FjdGlvbiByb2xsYmFjayB2ZXJpZmljYXRpb24KLSBVbmlxdWUgY29uc3RyYWludCBlbmZvcmNlbWVudAoKIyMgVHJvdWJsZXNob290aW5nCgojIyMgSXNzdWU6IER1cGxpY2F0ZSBDaGFyZ2VzCgoqKlN5bXB0b20qKjogVXNlciBjaGFyZ2VkIHR3aWNlIGZvciBzYW1lIHJlcXVlc3QKCioqRGlhZ25vc2lzKio6CmBgYHNxbApTRUxFQ1QgcmVxdWVzdF9pZCwgQ09VTlQoKikgCkZST00gdXNhZ2VfZXZlbnRzIApHUk9VUCBCWSByZXF1ZXN0X2lkIApIQVZJTkcgQ09VTlQoKikgPiAxOwpgYGAKCioqU29sdXRpb24qKjogRW5zdXJlIHVuaXF1ZSBjb25zdHJhaW50IGV4aXN0czoKYGBgc3FsCkNSRUFURSBVTklRVUUgSU5ERVggSUYgTk9UIEVYSVNUUyBpZHhfdXNhZ2VfZXZlbnRzX3JlcXVlc3RfaWQgCk9OIHVzYWdlX2V2ZW50cyhyZXF1ZXN0X2lkKTsKYGBgCgojIyMgSXNzdWU6IE9ycGhhbmVkIFVzYWdlIEV2ZW50cwoKKipTeW1wdG9tKio6IFVzYWdlIGV2ZW50cyB3aXRoIGBzdGF0dXMgPSAncGVuZGluZydgIGFuZCBubyBTdGVsbGFyIHRyYW5zYWN0aW9uIGhhc2gKCioqRGlhZ25vc2lzKio6CmBgYHNxbApTRUxFQ1QgKiBGUk9NIHVzYWdlX2V2ZW50cyAKV0hFUkUgc3RhdHVzID0gJ3BlbmRpbmcnIApBTkQgY3JlYXRlZF9hdCA8IE5PVygpIC0gSU5URVJWQUwgJzEgaG91cic7CmBgYAoKKipTb2x1dGlvbioqOiBUaGVzZSBhcmUgaW4tZmxpZ2h0IG9yIGNyYXNoZWQgZGVkdWN0aW9ucy4gUmVjb25jaWxpYXRpb24gbXVzdApkZWNpZGUgd2hldGhlciB0aGUgU29yb2JhbiBjYWxsIGNvbW1pdHRlZCBhbmQgdGhlbiBlaXRoZXIgZmxpcCB0aGUgcm93IHRvCmBhcHBsaWVkYCBvciBgZmFpbGVkYC4KCiMjIyBJc3N1ZTogSGlnaCBEdXBsaWNhdGUgUmF0ZQoKKipTeW1wdG9tKio6IE1hbnkgcmVxdWVzdHMgd2l0aCBgYWxyZWFkeVByb2Nlc3NlZDogdHJ1ZWAuCgoqKkRpYWdub3NpcyoqOiBDaGVjayBjbGllbnQgcmV0cnkgbG9naWMuCgoqKlNvbHV0aW9uKio6IEVuc3VyZSBjbGllbnRzIHVzZSBleHBvbmVudGlhbCBiYWNrb2ZmIGFuZCBkb24ndCByZXRyeSB1bm5lY2Vzc2FyaWx5LgoKIyMjIElzc3VlOiBSZWNvbmNpbGlhdGlvbiBCYWNrbG9nCgoqKlN5bXB0b20qKjogUm93cyBzdHVjayBpbiBgZmFpbGVkYCBvciBzdGFsZSBgcGVuZGluZ2AuCgoqKkRpYWdub3NpcyoqOgpgYGBzcWwKU0VMRUNUIHN0YXR1cywgQ09VTlQoKikgRlJPTSB1c2FnZV9ldmVudHMgR1JPVVAgQlkgaGF2aW5nIHN0YXR1cyA9ICdmYWlsZWQnOwpTRUxFQ1QgKiBGUk9NIHVzYWdlX2V2ZW50cyBXSEVSRSBzdGF0dXMgPSAncGVuZGluZycgQU5EIGNyZWF0ZWRfYXQgPCBOT1coKSAtIElOVEVSVkFMICcxIGhvdXInOwpgYGAKCioqU29sdXRpb24qKjogUnVuIHRoZSByZWNvbmNpbGlhdGlvbiBqb2IgdG8gcmVzb2x2ZSBlYWNoIHJvdyBhbmQgYWxlcnQgb24gYW55CnJvdyBvbGRlciB0aGFuIHRoZSByZWNvbmNpbGlhdGlvbiB3aW5kb3cuCgojIyBTZWN1cml0eSBDb25zaWRlcmF0aW9ucwoKMS4gKipyZXF1ZXN0X2lkIFZhbGlkYXRpb24qKjogVmFsaWRhdGUgZm9ybWF0IGFuZCBsZW5ndGggdG8gcHJldmVudCBpbmplY3Rpb24KMi4gKipSYXRlIExpbWl0aW5nKio6IExpbWl0IHJlcXVlc3RzIHBlciB1c2VyIHRvIHByZXZlbnQgYWJ1c2UKMy4gKipBbW91bnQgVmFsaWRhdGlvbioqOiBWYWxpZGF0ZSBhbW91bnQgaXMgcG9zaXRpdmUgYW5kIHdpdGhpbiBsaW1pdHMKNC4gKipVc2VyIEF1dGhvcml6YXRpb24qKjogVmVyaWZ5IHVzZXIgb3ducyB0aGUgQVBJIGtleSBiZWZvcmUgZGVkdWN0aW5nCjUuICoqUmVjb25jaWxpYXRpb24gQXVkaXQqKjogRXZlcnkgYGZhaWxlZGAgcm93IG11c3QgYmUgcmVzb2x2ZWQgYnkgaHVtYW4gb3IKYXV0b21hdGVkIHJlY29uY2lsaWF0aW9uIGFuZCB0aGUgcmVzb2x1dGlvbiByZWNvcmRlZC4KCiMjIE1pZ3JhdGlvbiBHdWlkZQoKIyMjIEFkZGluZyBJZGVtcG90ZW5jeSB0byBFeGlzdGluZyBTeXN0ZW0KCjEuICoqQWRkIHJlcXVlc3RfaWQgY29sdW1uKio6CmBgYHNxbApBTFRFUiBUQUJMRSB1c2FnZV9ldmVudHMgCkFERCBDT0xVTU4gcmVxdWVzdF9pZCBWQVJDSEFSKDI1NSk7CmBgYAoKMi4gKipCYWNrZmlsbCBleGlzdGluZyByZWNvcmRzKio6CmBgYHNxbApVUERBVEUgdXNhZ2VfZXZlbnRzIApTRVQgcmVxdWVzdF9pZCA9IENPTkNBVCgncmVxX2xlZ2FjeV8nLCBpZDo6dGV4dCkKV0hFUkUgcmVxdWVzdF9pZCBJUyBOVUxMOwpgYGAKCjMuICoqQWRkIHVuaXF1ZSBjb25zdHJhaW50Kio6CmBgYHNxbApBTFRFUiBUQUJMRSB1c2FnZV9ldmVudHMgCkFMVEVS Q09MVU1OIHJlcXVlc3RfaWQgU0VUIE5PVCBOVUxMOwoKQ1JFQVRFIFVOSVFVRSBJTkRFWCBpZHhfdXNhZ2VfZXZlbnRzX3JlcXVlc3RfaWQgCk9OIHVzYWdlX2V2ZW50cyhyZXF1ZXN0X2lkKTsKYGBgCgo0LiAqKkFkZCBzdGF0dXMgY29sdW1uKio6CmBgYHNxbApBTFRFUiBUQUJMRSB1c2FnZV9ldmVudHMgCkFERCBDT0xVTU4gc3RhdHVzIFZBUkNIQVIoMTYpIE5PVCBOVUxMIERFRkFVTFQgJ3BlbmRpbmcnOwoKLS0gQmFja2ZpbGwgcm93cyB0aGF0IGFscmVhZHkgaGF2ZSBhIHR4IGhhc2gKVVBEQVRFIHVzYWdlX2V2ZW50cyBTRVQgc3RhdHVzID0gJ2FwcGxpZWQnIFdIRVJFIHN0ZWxsYXJfdHhfaGFzaCBJUyBOT1QgTlVMTDsKYGBgCgo1LiAqKlVwZGF0ZSBhcHBsaWNhdGlvbiBjb2RlKiogdG8gdXNlIGBCaWxsaW5nU2VydmljZWAuCgo2LiAqKkRlcGxveSBhbmQgbW9uaXRvcioqIGZvciBkdXBsaWNhdGUgcmVxdWVzdCByYXRlIGFuZCByZWNvbmNpbGlhdGlvbiBiYWNrbG9nLgoKIyMgUmVmZXJlbmNlcwoKLSBbSWRlbXBvdGVuY3kgS2V5cyAtIFN0cmlwZSBEb2N1bWVudGF0aW9uXShodHRwczovL3N0cmlwZS5jb20vZG9jcy9hcGkvaWRlbXBvdGVudF9yZXF1ZXN0cykKLSBbUG9zdGdyZVNRTCBVbmlxdWUgQ29uc3RyYWludHNdKGh0dHBzOi8vd3d3LnBvc3RncmVzcWwub3JnL2RvY3MvY3VycmVudC9kZGwvY29uc3RyYWludHMuaHRtbCNEREwtQ09OU1RSQUlOVFMtVU5JUVVFLUNPTlNUUkFJTlRTKQotIFtEYXRhYmFzZSBUcmFuc2FjdGlvbiBJc29sYXRpb25dKGh0dHBzOi8vd3d3LnBvc3RncmVzcWwub3JnL2RvY3MvY3VycmVudC90cmFuc2FjdGlvbi1pc28uaHRtbCkK
+# Billing Idempotency
+
+## Overview
+
+The billing system implements idempotent deductions to prevent double charges when requests are retried. This is critical for financial operations where duplicate charges can cause serious issues.
+
+## How It Works
+
+### Idempotency Key
+
+Every billing deduction request must include a unique `request_id` idempotency key). This key is used to identify duplicate requests.
+
+```typescript
+interface BillingDeductRequest {
+  requestId: string;      // Unique idempotency key
+  userId: string;
+  apiId: string;
+  endpointId: string;
+  apiKeyId: string;
+  amountUsdc: string;
+}
+```
+
+### Three-Phase Deduct Lifecycle
+
+The service executes every deduction in three distinct phases. Understanding these phases is essential for clients to retry correctly and for operators to know which rows need reconciliation.
+
+| Phase | Name | What happens | Database state after phase |
+|-------|------|-------------|-------------------------|
+| **1** | Insert pending row | INSERT into `usage_events` with `status = 'pending'` and `stellar_tx_hash = NULL` | Row exists, `status = 'pending'`, no tx hash |
+| **2** | Soroban deduct with retries | Call Soroban `deduct`, subject to the per-user semaphore and retry policy | Row still `status = 'pending'` until phase 3 commits |
+| **3** | Persist tx hash | UPDATE `cusage_events` SET `status = 'applied'`, `stellar_tx_hash = $<` | Row is applied and reconciliation is not required |
+
+If phase 2 fails after the pending row is inserted, `phhase 3` is skipped and the row is marked `status = 'failed'` with `reconciliationRequired = true`. The row is then repaired by the reconciliation job.
+
+### Row State Table
+
+The `usage_events` row moves through three terminal states. The combination of `status`, `alreadyProcessed`, `deductionApplied` and `reconciliationRequired` tells clients exactly what happened.
+
+| Row status | `success` | `alreadyProcessed` | `deductionApplied` | `reconciliationRequired` | `stellarTxHash` | Meaning | Client action |
+|------------|---------|------------------|------------------|------------------------|---------------|---------|--------------|
+| `pending` (in-flight) | — | — | — | — | NULL | Row inserted, Soroban call in flight or awaiting retry | Retry with the same `requestId`; do not generate a new key |
+| `applied` | `true` | `false` | `true` | `false` | Present | First successful deduction; on-chain charge happened once | Store the `usageEventId` and tx hash; do not retry with a new key |
+| `applied` | `true` | `true` | `true` | `false` | Present | Retry of an already-applied request; no second charge | Treat as success; stop retrying |
+| `failed` | `false` | `false` | `false` | `true` | NULL | Soroban deduction failed after the pending row was inserted | Do not retry blindly; wait for reconciliation or contact support with the `usageEventId` |
+| `failed` | `false` | `false` | `false` | `false` | NULL | Validation or pre-persistence failure; no row was written | Safe to retry with the same `requestId` after fixing the request |
+
+Every combination of the response flags has exactly one meaning:
+
+- `alreadyProcessed = true` + `deductionApplied = true` + `reconciliationRequired = false` — the request was already applied; the client is seeing a replay.
+- `alreadyProcessed = false` + `deductionApplied = true` + `reconciliationRequired = false` — the deduction was applied for the first time.
+- `alreadyProcessed = false` + `deductionApplied = false` + `reconciliationRequired = true` — the deduction failed after a pending row was written; reconciliation must repair the row.
+- `alreadyProcessed = false` + `deductionApplied = false` + `reconciliationRequired = false` — the request failed before any row was written; safe to retry.
+
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as Billing API
+    participant Svc as BillingService
+    participant DB as usage_events
+    participant Soroban as Soroban RPC:
+
+    Client->>API: POST deduct (requestId)
+    API->>Svc: deduct(request)
+    Svc->>DB: SELECT BY request_id
+    alt row exists and status = applied
+        DB-->>Svc: existing row
+        Svc-->>API: alreadyProcessed=true, deductionApplied=true
+    else row exists and status = failed
+        DB-->>Svc: failed row
+        Svc-->>API: reconciliationRequired=true
+    else no row
+        Svc->>DB: INSERT pending row
+        Svc->>Soroban: deduct() with retries
+        alt Soroban succeeds
+            Soroban-->>Svc: tx hash
+            Svc->>DB: UPDATE status=applied, tx_hash
+            Svc-->>API: deductionApplied=true
+        else Soroban fails after retries
+            Svc->>DB: UPDATE status=failed
+            Svc-->>API: reconciliationRequired=true
+        end
+    end
+    API-->>Client: JSON response
+
+```
+
+### Deduction Flow
+
+1. **Check for Existing Request**: Query `usage_events` table for existing record with same `request_id`
+2. **Return Existing Result**: If found and applied, return the existing result without calling Soroban
+.3. **Insert Pending Row**: If not found, insert new record into `usage_events` table with `status = 'pending'`
+4. **Call Soroban**: Deduct balance from user's account on Stellar, subject to the per-user semaphore
+5. **Update Transaction Hash**: Store Stellar transaction hash and set `status = 'applied'`
+6. **Commit Transaction**: Commit database transaction
+
+### Database Schema
+
+```sql
+CREATE TABLE usage_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  api_id VARCHAR(255) NOT NULL,
+  endpoint_id VARCHAR(255) NOT NULL,
+  api_key_id VARCHAR(255) NOT NULL,
+  amount_usdc DECIMAL(20, 7) NOT NULL,
+  request_id VARCHAR(255) NOT UNIQUE,  -- Idempotency key
+  status VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending | applied | failed
+  stellar_tx_hash VARCHAR(64),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Unique constraint ensures no duplicate request_ids
+CREATE UNIQUE INDEX idx_usage_events_request_id ON usage_events(request_id);
+```
+
+## Usage Examples
+
+### Basic Usage
+
+```typescript
+import { BillingService } from './services/billing.js';
+import { Pool } from 'pg';
+
+const pool = new Pool({ /* config */ });
+const sorobanClient = new SorobanClient();
+const billingService = new BillingService(pool, sorobanClient);
+
+// First request - processes normally
+const result1 = await billingService.deduct({
+  requestId: 'req_abc123',
+  userId: 'user_alice',
+  apiId: 'api_weather',
+  endpointId: 'endpoint_forecast',
+  apiKeyId: 'key_xyz789',
+  amountUsdc: '0.01'
+});
+
+console.log(result1);
+// {
+//   success: true,
+//   usageEventId: '1',
+//   stellarTxHash: 'tx_stellar_abc...',
+//   alreadyProcessed: false,
+//   deductionApplied: true,
+//   reconciliationRequired: false
+// }
+
+// Retry with same request_id - returns existing result
+const result2 = await billingService.deduct({
+  requestId: 'req_abc123',  // Same request_id
+  userId: 'user_alice',
+  apiId: 'api_weather',
+  endpointId: 'endpoint_forecast',
+  apiKeyId: 'key_xyz789',
+  amountUsdc: '0.01'
+});
+
+console.log(result2);
+// {
+//   success: true,
+//   usageEventId: '1',           // Same ID
+//   stellarTxHash: 'tx_stellar_abc...',  // Same hash
+//   alreadyProcessed: true,       // Indicates duplicate
+//   deductionApplied: true,
+//   reconciliationRequired: false
+// }
+```
+
+### Generating Idempotency Keys
+
+### Per-User Semaphore Limitation
+
+The service guarantees that only one Soroban deduction runs at a time for a given user using an in-process semaphore. This is a **single-process** guarantee:
+
+- **Within one instance**: concurrent requests for the same user are serialized. The second request waits for the first to finish and then observes the applied row.
+- **Across instances**: the semaphore is not shared. Two instances can call Soroban concurrently for the same user. The `usage_events.request_id` UNIQUE constraint is the final guard against double charges; the losing instance receives a unique-violation and returns the existing row.
+
+Operators running multiple instances must treat the semaphore as a local optimization, not a global lock, and rely on the database constraint for correctness.
+
+Use a combination of request-specific data to generate unique keys:
+
+```typescript
+import { createHash } from 'crypto';
+
+function generateRequestId(
+  userId: string,
+  apiId: string,
+  endpointId: string,
+  timestamp: number
+): string {
+  const data = `${userId}:${apiId}:${endpointId}:${timestamp}`;
+  const hash = createHash('sha256').update(data).digest('hex').substring(0, 16);
+  return `req_${hash}`;
+}
+
+// Usage
+const requestId = generateRequestId(
+  'user_alice',
+  'api_weather',
+  'endpoint_forecast',
+  Date.now()
+);
+```
+
+Or use UUIDs:
+
+```typescript
+import { v4 as uuidv4 } from 'uuid';
+
+const requestId = `req_${uuidv4()}`;
+```
+
+### Checking Request Status
+
+```typescript
+// Check if a request was already processed
+const existing = await billingService.getByRequestId('req_abc123');
+
+if (existing) {
+  console.log('Request already processed');
+  console.log('Usage Event ID:', existing.usageEventId);
+  console.log('Stellar TX:', existing.stellarTxHash);
+} else {
+  console.log('Request not found');
+}
+```
+
+## API Integration
+
+### REST API Endpoint
+
+```typescript
+app.post('/api/billing/deduct', async (req, res) => {
+  const { requestId, userId, apiId, endpointId, apiKeyId, amountUsdc } = req.body;
+
+  // Validate request_id is provided
+  if (!requestId) {
+    return res.status(400).json({
+      error: 'request_id is required for idempotency'
+    });
+  }
+
+  try {
+    const result = await billingService.deduct({
+      requestId,
+      userId,
+      apiId,
+      endpointId,
+      apiKeyId,
+      amountUsdc
+    });
+
+    if (!result.success) {
+      return res.status(500).json({
+        error: result.error,
+        usageEventId: result.usageEventId,
+        reconciliationRequired: result.reconciliationRequired
+      });
+    }
+
+    return res.status(result.alreadyProcessed ? 200 : 201).json({
+      usageEventId: result.usageEventId,
+      stellarTxHash: result.stellarTxHash,
+      alreadyProcessed: result.alreadyProcessed,
+      deductionApplied: result.deductionApplied,
+      reconciliationRequired: result.reconciliationRequired
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Internal server error'
+    });
+  }
+});
+```
+
+### Client Usage
+
+```bash
+# First request
+curl -X POST http://localhost:3000/api/billing/deduct \
+  -H "Content-Type: application/json" \
+  -d {
+    "requestId": "req_abc123",
+    "userId": "user_alice",
+    "apiId": "api_weather",
+    "endpointId": "endpoint_forecast",
+    "apiKeyId": "key_xyz789",
+    "amountUsdc": "0.01"
+  }'
+
+# Response (201 Created)
+{
+  "usageEventId": "1",
+  "stellarTxHash": "tx_stellar_abc...",
+  "alreadyProcessed": false,
+  "deductionApplied": true,
+  "reconciliationRequired": false
+}
+
+# Retry with same request_id
+curl -X POST http://localhost:3000/api/billing/deduct \
+  -H "Content-Type: application/json" \
+  -d {
+    "requestId": "req_abc123",
+    "userId": "user_alice",
+    "apiId": "api_weather",
+    "endpointId": "endpoint_forecast",
+    "apiKeyId": "key_xyz789",
+    "amountUsdc": "0.01"
+  }'
+
+# Response (200 OK)
+{
+  "usageEventId": "1",
+  "stellarTxHash": "tx_stellar_abc...",
+  "alreadyProcessed": true,
+  "deductionApplied": true,
+  "reconciliationRequired": false
+}
+```
+
+## Error Handling
+
+### Soroban Failure
+
+If Soroban deduction fails after the pending row is inserted, the row is marked `status = 'failed'` and the response carries `reconciliationRequired = true`. The reconciliation job repairs the row later.
+
+```typescript
+const result = await billingService.deduct(request);
+
+if (!result.success) {
+  console.error('Billing failed:', result.error);
+  if (result.reconciliationRequired) {
+    // A pending row exists and will be repaired by reconciliation.
+    // Do not retry blindly; surface the usageEventId to operators.
+  } else {
+    // No row was written; safe to retry with the same requestId.
+  }
+}
+```
+
+### Race Conditions
+
+The system handles concurrent requests with the same `request_id`:
+
+```typescript
+// Multiple concurrent requests with same request_id
+const [result1, result2, result3] = await Promise.all([
+  billingService.deduct(request),
+  billingService.deduct(request),
+  billingService.deduct(request)
+);
+
+// Only one will process, others will return existing result
+// All will have the same usageEventId
+// Soroban is only called once
+```
+
+## Best Practices
+
+### 1. Always Provide request_id
+
+```typescript
+// ❌ Bad - No idempotency protection
+await billingService.deduct({
+  requestId: undefined,  // Will fail
+  userId: 'user_alice',
+  // ...
+});
+
+// ✅ Good - Idempotency protected
+await billingService.deduct({
+  requestId: 'req_abc123',
+  userId: 'user_alice',
+  // ...
+});
+```
+
+### 2. Use Deterministic Keys for Retries
+
+```typescript
+// ❌ Bad - New UUID on each retry
+const requestId = `req_${uuidv4()}`;  // Different every time
+
+// ✅ Good - Same key for same logical request
+const requestId = generateRequestId(userId, apiId, endpointId, timestamp);
+```
+
+### 3. Store request_id on Client Side
+
+```typescript
+// Client-side code
+class BillingClient {
+  async deductWithRetry(request: BillingRequest, maxRetries = 3) {
+    // Generate request_id once
+    const requestId = `req_${uuidv4()}`;
+    
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await this.deduct({ ...request, requestId });
+      } catch (error) {
+        if (i === maxRetries - 1) throw error;
+        await this.sleep(1000 * Math.pow(2, i));  // Exponential backoff
+      }
+    }
+  }
+}
+```
+
+### 4. Check alreadyProcessed Flag
+
+```typescript
+const result = await billingService.deduct(request);
+
+if (result.alreadyProcessed) {
+  console.log('Request was already processed - no double charge');
+  // Log for monitoring
+  logger.info('Duplicate billing request detected', {
+    requestId: request.requestId,
+    usageEventId: result.usageEventId
+  });
+}
+```
+
+### 5. Set Appropriate Timeouts
+
+```typescript
+// Configure database connection pool
+const pool = new Pool({
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000,
+  max: 20
+});
+
+// Configure Soroban client with timeout
+const sorobanClient = new SorobanClient({
+  timeout: 10000  // 10 second timeout
+});
+```
+
+## Monitoring
+
+### Metrics to Track
+
+1. **Duplicate Request Rate**: Percentage of requests with `alreadyProcessed: true`
+2. **Soroban Call Count**: Should match number of unique `request_id` values
+3. **Transaction Rollback Rate**: Failed Soroban calls
+4. **Race Condition Rate**: Unique constraint violations
+5. **Reconciliation Backlog**: Count of rows with `status = 'failed'` or `status = 'pending'` older than the expected Soroban latency
+
+### Example Monitoring
+
+```typescript
+class MonitoredBillingService extends BillingService {
+  async deduct(request: BillingDeductRequest): Promise<BillingDeductResult> {
+    const startTime = Date.now();
+    const result = await super.deduct(request);
+    const duration = Date.now() - startTime;
+
+    // Track metrics
+    metrics.increment('billing.deduct.total');
+    metrics.histogram('billing.deduct.duration', duration);
+    
+    if (result.alreadyProcessed) {
+      metrics.increment('billing.deduct.duplicate');
+    }
+    
+    if (!result.success) {
+      metrics.increment('billing.deduct.failed');
+    }
+
+    if (result.reconciliationRequired) {
+      metrics.increment('billing.deduct.reconciliation_required');
+    }
+
+    return result;
+  }
+}
+```
+
+## Testing
+
+### Unit Tests
+
+```bash
+npm run test:unit
+```
+
+Tests cover:
+- Successful deduction (`deductionApplied: true`, `reconciliationRequired: false`)
+- Duplicate request handling (`alreadyProcessed: true`)
+- Soroban failure after pending insert (`reconciliationRequired: true`)
+- Race condition handling
+- Database errors
+
+### Integration Tests
+
+```bash
+npm run test:integration
+```
+
+Tests cover:
+- Real database transactions
+- Concurrent request handling
+- Transaction rollback verification
+- Unique constraint enforcement
+
+## Troubleshooting
+
+### Issue: Duplicate Charges
+
+**Symptom**: User charged twice for same request
+
+**Diagnosis**:
+```sql
+SELECT request_id, COUNT(*) 
+FROM usage_events 
+GROUP BY request_id 
+HAVING COUNT(*) > 1;
+```
+
+**Solution**: Ensure unique constraint exists:
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_request_id 
+ON usage_events(request_id);
+```
+
+### Issue: Orphaned Usage Events
+
+**Symptom**: Usage events with `status = 'pending'` or `status = 'failed'` and no Stellar transaction hash
+
+**Diagnosis**:
+```sql
+SELECT * FROM usage_events 
+WHERE status <> 'applied'
+AND created_at < NOW() - INTERVAL '1 hour';
+```
+
+**Solution**: These are rows waiting for reconciliation. Run the reconciliation job to repair them and investigate Soroban connectivity if the backlog grows.
+
+### Issue: High Duplicate Rate
+
+**Symptom**: Many requests with `alreadyProcessed: true`
+
+**Diagnosis**: Check client retry logic
+
+**Solution**: Ensure clients use exponential backoff and don't retry unnecessarily.
+
+## Security Considerations
+
+1. **request_id Validation**: Validate format and length to prevent injection
+2. **Rate Limiting**: Limit requests per user to prevent abuse
+3. **Amount Validation**: Validate amount is positive and within limits
+4. **User Authorization**: Verify user owns the API key before deducting
+
+## Migration Guide
+
+### Adding Idempotency to Existing System
+
+1. **Add request_id column**:
+```sql
+ALTER TABLE usage_events 
+ADD COLUMN request_id VARCHAR(255);
+```
+
+2. **Backfill existing records**:
+```sql
+UPDATE usage_events 
+SET request_id = CONCAT('req_legacy_', id::text)
+WHERE request_id IS NULL;
+```
+
+3. **Add unique constraint**:
+```sql
+ALTER TABLE usage_events 
+ALTER column request_id SET NOT NULL;
+
+CREATE UNIQUE INDEX idx_usage_events_request_id 
+ON usage_events(request_id);
+```
+
+4. **Add status column**:
+```sql
+ALTER TABLE usage_events 
+ADDCOLUMN status VARCHAR(16) NOT NULL DEFAULT 'pending';
+
+UPDATE usage_events SET status = 'applied' WHERE stellar_tx_hash IS NOT NULL;
+```
+
+5. **Update application code** to use `BillingService`
+
+6. **Deploy and monitor** for duplicate request rate
+
+## References
+
+- [Idempotency Keys - Stripe Documentation](https://stripe.com/docs/api/idempotent_requests)
+- [PostgreSQL Unique Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS)
+- (Database Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
