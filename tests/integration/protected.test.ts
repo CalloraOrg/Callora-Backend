@@ -256,10 +256,11 @@ function buildRealApp() {
 /** Standard assertion for an unauthenticated response from the errorHandler */
 function expectUnauthorizedShape(res: request.Response) {
   expect(res.status).toBe(401);
-  expect(res.body).toHaveProperty('message');
-  expect(typeof res.body.message).toBe('string');
-  expect(res.body).toHaveProperty('code');
-  expect(typeof res.body.code).toBe('string');
+  expect(res.body.success).toBe(false);
+  expect(res.body.error).toHaveProperty('message');
+  expect(typeof res.body.error.message).toBe('string');
+  expect(res.body.error).toHaveProperty('code');
+  expect(typeof res.body.error.code).toBe('string');
   expect(res.body).toHaveProperty('requestId');
   expect(typeof res.body.requestId).toBe('string');
 }
@@ -300,8 +301,8 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.message).toBe('Unauthorized');
-        expect(res.body.code).toBe('UNAUTHORIZED');
+        expect(res.body.error.message).toBe('Unauthorized');
+        expect(res.body.error.code).toBe('UNAUTHORIZED');
       });
 
       it('returns 401 when Bearer token is empty whitespace', async () => {
@@ -309,8 +310,8 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.message).toBe('Invalid authorization header');
-        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
+        expect(res.body.error.message).toBe('Invalid authorization header');
+        expect(res.body.error.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 with non-Bearer scheme (Basic)', async () => {
@@ -318,8 +319,8 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.message).toBe('Invalid authorization header');
-        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
+        expect(res.body.error.message).toBe('Invalid authorization header');
+        expect(res.body.error.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 with lowercase bearer prefix', async () => {
@@ -327,8 +328,8 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.message).toBe('Invalid authorization header');
-        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
+        expect(res.body.error.message).toBe('Invalid authorization header');
+        expect(res.body.error.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 when space is missing after Bearer', async () => {
@@ -336,8 +337,8 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.message).toBe('Invalid authorization header');
-        expect(res.body.code).toBe('INVALID_AUTH_HEADER');
+        expect(res.body.error.message).toBe('Invalid authorization header');
+        expect(res.body.error.code).toBe('INVALID_AUTH_HEADER');
       });
 
       it('returns 401 with empty x-user-id', async () => {
@@ -345,8 +346,8 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.message).toBe('Unauthorized');
-        expect(res.body.code).toBe('UNAUTHORIZED');
+        expect(res.body.error.message).toBe('Unauthorized');
+        expect(res.body.error.code).toBe('UNAUTHORIZED');
       });
 
       it('returns 401 with whitespace-only x-user-id', async () => {
@@ -354,8 +355,17 @@ describe('requireAuth – rejects unauthenticated requests on all protected rout
         if (body) req.send(body);
         const res = await req;
         expectUnauthorizedShape(res);
-        expect(res.body.message).toBe('Unauthorized');
-        expect(res.body.code).toBe('UNAUTHORIZED');
+        expect(res.body.error.message).toBe('Unauthorized');
+        expect(res.body.error.code).toBe('UNAUTHORIZED');
+      });
+
+      it('returns 401 when only untrusted x-user-id is present', async () => {
+        const req = request(app)[method](path).set('x-user-id', 'user-42');
+        if (body) req.send(body);
+        const res = await req;
+        expectUnauthorizedShape(res);
+        expect(res.body.error.message).toBe('Unauthorized');
+        expect(res.body.error.code).toBe('UNAUTHORIZED');
       });
     },
   );
@@ -389,12 +399,12 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
     expect(res.status).not.toBe(401);
   });
 
-  it('authenticates via x-user-id header on GET /api/developers/apis', async () => {
+  it('rejects x-user-id header alone on GET /api/developers/apis', async () => {
     const res = await request(app)
       .get('/api/developers/apis')
       .set('x-user-id', 'user-42');
  
-    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(401);
   });
 
   it('authenticates when extra spaces are present after Bearer', async () => {
@@ -407,56 +417,66 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
   });
 
   it('authenticates via Bearer token on GET /api/developers/analytics', async () => {
-    // Use x-user-id instead of invalid JWT
+    const token = bearerToken();
     const res = await request(app)
       .get('/api/developers/analytics?from=2026-01-01&to=2026-01-31')
-      .set('x-user-id', 'user-42');
+      .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).not.toBe(401);
   });
 
-  it('authenticates via x-user-id header on GET /api/developers/analytics', async () => {
+  it('rejects x-user-id header alone on GET /api/developers/analytics', async () => {
     const res = await request(app)
       .get('/api/developers/analytics?from=2026-01-01&to=2026-01-31')
       .set('x-user-id', 'user-42');
 
-    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(401);
   });
 
   it('authenticates via Bearer token on POST /api/vault/deposit/prepare', async () => {
-    // Use x-user-id instead of invalid JWT
+    const token = bearerToken();
     const res = await request(app)
       .post('/api/vault/deposit/prepare')
-      .set('x-user-id', 'user-42')
+      .set('Authorization', `Bearer ${token}`)
       .send({ amount_usdc: '10.00' });
 
     // 404 (no vault) is acceptable — not 401
     expect(res.status).not.toBe(401);
   });
 
-  it('authenticates via x-user-id header on GET /api/vault/balance', async () => {
+  it('rejects x-user-id header alone on GET /api/vault/balance', async () => {
     const res = await request(app)
       .get('/api/vault/balance')
       .set('x-user-id', 'user-42');
+
+    expect(res.status).toBe(401);
+  });
+
+  it('authenticates via Bearer token on GET /api/vault/balance', async () => {
+    const token = bearerToken();
+    const res = await request(app)
+      .get('/api/vault/balance')
+      .set('Authorization', `Bearer ${token}`);
 
     // 404 (no vault) is acceptable — not 401
     expect(res.status).not.toBe(401);
   });
 
   it('authenticates via Bearer token on DELETE /api/keys/:id', async () => {
-    // Use x-user-id instead of invalid JWT
+    const token = bearerToken();
     const res = await request(app)
       .delete('/api/keys/nonexistent-id')
-      .set('x-user-id', 'user-42');
+      .set('Authorization', `Bearer ${token}`);
 
     // 204 (not_found falls through to 204 in current impl) — not 401
     expect(res.status).not.toBe(401);
   });
 
-  it('authenticates via x-user-id header on POST /api/developers/apis', async () => {
+  it('authenticates via Bearer token on POST /api/developers/apis', async () => {
+    const token = bearerToken();
     const res = await request(app)
       .post('/api/developers/apis')
-      .set('x-user-id', 'user-42')
+      .set('Authorization', `Bearer ${token}`)
       .send({ name: 'My API', base_url: 'https://example.com', endpoints: [] });
 
     expect(res.status).not.toBe(401);
@@ -469,8 +489,8 @@ describe('requireAuth – accepts valid credentials on protected routes', () => 
       .set('x-user-id', 'user-42');
 
     expect(res.status).toBe(401);
-    expect(res.body.message).toBe('Invalid authorization header');
-    expect(res.body.code).toBe('INVALID_AUTH_HEADER');
+    expect(res.body.error.message).toBe('Invalid authorization header');
+    expect(res.body.error.code).toBe('INVALID_AUTH_HEADER');
   });
 });
 
@@ -496,8 +516,8 @@ describe('requireAuth – error body consistency', () => {
     expect(res.body).not.toHaveProperty('statusCode');
     // Only expected keys
     const keys = Object.keys(res.body);
-    expect(keys).toEqual(expect.arrayContaining(['message', 'code', 'requestId']));
-    expect(keys.length).toBe(3);
+    expect(keys).toEqual(expect.arrayContaining(['success', 'error', 'requestId', 'timestamp']));
+    expect(keys.length).toBe(4);
   });
 
   it('produces identical error shape across different protected routes', async () => {
@@ -508,10 +528,15 @@ describe('requireAuth – error body consistency', () => {
     for (const res of [res1, res2, res3]) {
       expect(res.status).toBe(401);
       expect(res.body).toEqual({
-        message: 'Unauthorized',
-        code: 'UNAUTHORIZED',
+        success: false,
+        error: {
+          message: 'Unauthorized',
+          code: 'UNAUTHORIZED',
+        },
         requestId: 'mock-uuid-1234',
+        timestamp: expect.any(String),
       });
     }
   });
 });
+

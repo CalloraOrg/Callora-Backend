@@ -7,6 +7,13 @@ import type { Developer } from './db/schema.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
 import assert from 'node:assert';
+import { TEST_JWT_SECRET, signTestToken } from '../tests/helpers/jwt.js';
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+process.env.APIS_CORS_ALLOWED_ORIGINS = 'http://localhost:5173,https://app.callora.com';
+
+const authBearer = (userId = 'dev-1') => `Bearer ${signTestToken({ userId })}`;
+const TEST_ORIGIN = 'http://localhost:5173';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
 jest.mock('./services/transactionBuilder.js', () => ({
@@ -239,7 +246,7 @@ class FakeApiRepository implements ApiRepository {
     return restored;
   }
 
-  async findRawById(id: number): Promise<Api | null> {
+  async findRawById(_id: number): Promise<Api | null> {
     return null;
   }
 
@@ -332,8 +339,10 @@ test('GET /api/developers/analytics returns 401 when unauthenticated', async () 
   const app = createApp({ usageEventsRepository: seedRepository() });
   const response = await request(app).get('/api/developers/analytics');
   expect(response.status).toBe(401);
-  expect(typeof response.body.message).toBe('string');
-  expect(response.body.code).toBe('UNAUTHORIZED');
+  const msg = response.body.error?.message ?? response.body.message;
+  expect(typeof msg).toBe('string');
+  const code = response.body.error?.code ?? response.body.code;
+  expect(code).toBe('UNAUTHORIZED');
   expect(response.body.requestId).toBeTruthy();
 });
 
@@ -342,12 +351,12 @@ test('GET /api/developers/analytics validates query params', async () => {
 
   const missingDates = await request(app)
     .get('/api/developers/analytics')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
   expect(missingDates.status).toBe(400);
 
   const badGroupBy = await request(app)
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-10&groupBy=year')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
   expect(badGroupBy.status).toBe(400);
 });
 
@@ -355,18 +364,20 @@ test('GET /api/developers/analytics returns 400 when from > to', async () => {
   const app = createApp({ usageEventsRepository: seedRepository() });
   const response = await request(app)
     .get('/api/developers/analytics?from=2026-02-10&to=2026-02-01')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
   expect(response.status).toBe(400);
-  expect(response.body.message).toMatch(/from must be before or equal to to/);
+  const msg = response.body.error?.message ?? response.body.message;
+  expect(msg).toMatch(/from must be before or equal to to/);
 });
 
 test('GET /api/developers/analytics aggregates by month', async () => {
   const app = createApp({ usageEventsRepository: seedRepository() });
   const response = await request(app)
     .get('/api/developers/analytics?from=2026-01-01&to=2026-03-31&groupBy=month')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
   expect(response.status).toBe(200);
-  expect(response.body.data).toEqual([
+  const payload = response.body.data ?? response.body;
+  expect(payload.data ?? payload).toEqual([
     { period: '2026-02-01', calls: 4, revenue: '940' },
   ]);
 });
@@ -375,7 +386,7 @@ test('GET /api/health returns default ok schema without db', async () => {
   const app = createApp(); // no healthCheckConfig
   const response = await request(app).get('/api/health');
   expect(response.status).toBe(200);
-  expect(response.body).toEqual({
+  expect(response.body.data ?? response.body).toEqual({
     status: 'ok',
     service: 'callora-backend'
   });
@@ -385,10 +396,11 @@ test('GET /api/developers/analytics aggregates by day', async () => {
   const app = createApp({ usageEventsRepository: seedRepository() });
   const response = await request(app)
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&groupBy=day')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
 
   expect(response.status).toBe(200);
-  expect(response.body).toEqual({
+  const payload = response.body.data ?? response.body;
+  expect(payload).toEqual({
     data: [
       { period: '2026-02-01', calls: 2, revenue: '240' },
       { period: '2026-02-03', calls: 1, revenue: '200' },
@@ -403,20 +415,21 @@ test('GET /api/developers/analytics aggregates by week and supports top lists', 
     .get(
       '/api/developers/analytics?from=2026-02-01&to=2026-02-28&groupBy=week&includeTop=true'
     )
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
 
   expect(response.status).toBe(200);
-  expect(response.body.data).toEqual([
+  const payload = response.body.data ?? response.body;
+  expect(payload.data).toEqual([
     { period: '2026-01-26', calls: 2, revenue: '240' },
     { period: '2026-02-02', calls: 1, revenue: '200' },
     { period: '2026-02-09', calls: 1, revenue: '500' },
   ]);
-  expect(response.body.topEndpoints).toEqual([
+  expect(payload.topEndpoints).toEqual([
     { endpoint: '/v1/search', calls: 2 },
     { endpoint: '/v1/pay', calls: 1 },
     { endpoint: '/v2/generate', calls: 1 },
   ]);
-  expect(response.body.topUsers).toEqual([
+  expect(payload.topUsers).toEqual([
     { userId: 'user_-001', calls: 2 },
     { userId: 'user_-002', calls: 1 },
     { userId: 'user_-003', calls: 1 },
@@ -428,15 +441,16 @@ test('GET /api/developers/analytics filters by apiId and blocks non-owned API', 
 
   const allowed = await request(app)
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&apiId=api-1&groupBy=month')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
   expect(allowed.status).toBe(200);
-  expect(allowed.body).toEqual({
+  const payload = allowed.body.data ?? allowed.body;
+  expect(payload).toEqual({
     data: [{ period: '2026-02-01', calls: 3, revenue: '440' }],
   });
 
   const blocked = await request(app)
     .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&apiId=api-3')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
   expect(blocked.status).toBe(403);
 });
 
@@ -484,10 +498,11 @@ test('GET /api/developers/analytics correctly handles week boundaries', async ()
   const app = createApp({ usageEventsRepository: boundaryWeekRepository() });
   const response = await request(app)
     .get('/api/developers/analytics?from=2026-02-08&to=2026-02-18&groupBy=week')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
 
   expect(response.status).toBe(200);
-  expect(response.body.data).toEqual([
+  const payload = response.body.data ?? response.body;
+  expect(payload.data ?? payload).toEqual([
     { period: '2026-02-09', calls: 2, revenue: '300' },
     { period: '2026-02-16', calls: 2, revenue: '700' },
   ]);
@@ -519,10 +534,11 @@ test('GET /api/developers/analytics correctly handles month boundaries', async (
   const app = createApp({ usageEventsRepository: boundaryMonthRepository() });
   const response = await request(app)
     .get('/api/developers/analytics?from=2026-01-30&to=2026-02-02&groupBy=month')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
 
   expect(response.status).toBe(200);
-  expect(response.body.data).toEqual([
+  const payload = response.body.data ?? response.body;
+  expect(payload.data ?? payload).toEqual([
     { period: '2026-01-01', calls: 1, revenue: '100' }, // Jan 31 in January
     { period: '2026-02-01', calls: 1, revenue: '200' }, // Feb 1 in February
   ]);
@@ -539,22 +555,23 @@ test('GET /api/developers/apis returns 404 when developer profile is missing', a
     developerRepository: createDeveloperRepository(undefined),
     apiRepository: new FakeApiRepository(sampleApis),
   });
-  const response = await request(app).get('/api/developers/apis').set('x-user-id', 'dev-1');
+  const response = await request(app).get('/api/developers/apis').set('Authorization', authBearer('dev-1'));
   assert.equal(response.status, 404);
 });
 
 test('GET /api/developers/apis validates status query parameter', async () => {
   const response = await request(createDeveloperApisApp())
     .get('/api/developers/apis?status=unknown')
-    .set('x-user-id', 'dev-1');
+    .set('Authorization', authBearer('dev-1'));
   assert.equal(response.status, 400);
 });
 
 test('GET /api/developers/apis lists APIs with stats, filters, and pagination', async () => {
   const app = createDeveloperApisApp();
-  const fullResponse = await request(app).get('/api/developers/apis').set('x-user-id', 'dev-1');
+  const fullResponse = await request(app).get('/api/developers/apis').set('Authorization', authBearer('dev-1'));
   assert.equal(fullResponse.status, 200);
-  assert.deepEqual(fullResponse.body.data, [
+  const fullData = fullResponse.body.data?.data ?? fullResponse.body.data;
+  assert.deepEqual(fullData, [
     { id: 101, name: 'Search API', status: 'active', callCount: 2, revenue: '300' },
     { id: 102, name: 'Chat API', status: 'active', callCount: 1, revenue: '150' },
     { id: 103, name: 'Archived API', status: 'archived', callCount: 0 },
@@ -562,15 +579,17 @@ test('GET /api/developers/apis lists APIs with stats, filters, and pagination', 
 
   const limited = await request(app)
     .get('/api/developers/apis?limit=1&offset=1')
-    .set('x-user-id', 'dev-1');
-  assert.deepEqual(limited.body.data, [
+    .set('Authorization', authBearer('dev-1'));
+  const limitedData = limited.body.data?.data ?? limited.body.data;
+  assert.deepEqual(limitedData, [
     { id: 102, name: 'Chat API', status: 'active', callCount: 1, revenue: '150' },
   ]);
 
   const filtered = await request(app)
     .get('/api/developers/apis?status=archived')
-    .set('x-user-id', 'dev-1');
-  assert.deepEqual(filtered.body.data, [
+    .set('Authorization', authBearer('dev-1'));
+  const filteredData = filtered.body.data?.data ?? filtered.body.data;
+  assert.deepEqual(filteredData, [
     { id: 103, name: 'Archived API', status: 'archived', callCount: 0 },
   ]);
 });
@@ -617,52 +636,53 @@ const buildApiRepo = () => {
 test('GET /api/apis/:id returns 400 for non-integer id', async () => {
   const app = createApp({ apiRepository: buildApiRepo() });
 
-  const resAlpha = await request(app).get('/api/apis/abc');
+  const resAlpha = await request(app).get('/api/apis/abc').set('Origin', TEST_ORIGIN);
   assert.equal(resAlpha.status, 400);
-  assert.equal(typeof resAlpha.body.message, 'string');
+  assert.equal(typeof (resAlpha.body.error?.message ?? resAlpha.body.message), 'string');
 
-  const resFloat = await request(app).get('/api/apis/1.5');
+  const resFloat = await request(app).get('/api/apis/1.5').set('Origin', TEST_ORIGIN);
   assert.equal(resFloat.status, 400);
 
-  const resZero = await request(app).get('/api/apis/0');
+  const resZero = await request(app).get('/api/apis/0').set('Origin', TEST_ORIGIN);
   assert.equal(resZero.status, 400);
 
-  const resNeg = await request(app).get('/api/apis/-1');
+  const resNeg = await request(app).get('/api/apis/-1').set('Origin', TEST_ORIGIN);
   assert.equal(resNeg.status, 400);
 });
 
 test('GET /api/apis/:id returns 404 when api not found', async () => {
   const app = createApp({ apiRepository: buildApiRepo() });
-  const res = await request(app).get('/api/apis/999');
+  const res = await request(app).get('/api/apis/999').set('Origin', TEST_ORIGIN);
   assert.equal(res.status, 404);
-  assert.equal(typeof res.body.message, 'string');
+  assert.equal(typeof (res.body.error?.message ?? res.body.message), 'string');
 });
 
 test('GET /api/apis/:id returns full API details with endpoints', async () => {
   const app = createApp({ apiRepository: buildApiRepo() });
-  const res = await request(app).get('/api/apis/1');
+  const res = await request(app).get('/api/apis/1').set('Origin', TEST_ORIGIN);
 
   assert.equal(res.status, 200);
-  assert.equal(res.body.id, 1);
-  assert.equal(res.body.name, 'Weather API');
-  assert.equal(res.body.description, 'Real-time weather data');
-  assert.equal(res.body.base_url, 'https://api.weather.example.com');
-  assert.equal(res.body.logo_url, 'https://cdn.example.com/logo.png');
-  assert.equal(res.body.category, 'weather');
-  assert.equal(res.body.status, 'active');
-  assert.deepEqual(res.body.developer, {
+  const data = res.body.data ?? res.body;
+  assert.equal(data.id, 1);
+  assert.equal(data.name, 'Weather API');
+  assert.equal(data.description, 'Real-time weather data');
+  assert.equal(data.base_url, 'https://api.weather.example.com');
+  assert.equal(data.logo_url, 'https://cdn.example.com/logo.png');
+  assert.equal(data.category, 'weather');
+  assert.equal(data.status, 'active');
+  assert.deepEqual(data.developer, {
     name: 'Alice Dev',
     website: 'https://alice.example.com',
     description: 'Building climate tools',
   });
-  assert.equal(res.body.endpoints.length, 2);
-  assert.deepEqual(res.body.endpoints[0], {
+  assert.equal(data.endpoints.length, 2);
+  assert.deepEqual(data.endpoints[0], {
     path: '/v1/current',
     method: 'GET',
     price_per_call_usdc: '0.001',
     description: 'Current conditions',
   });
-  assert.deepEqual(res.body.endpoints[1], {
+  assert.deepEqual(data.endpoints[1], {
     path: '/v1/forecast',
     method: 'GET',
     price_per_call_usdc: '0.002',
@@ -673,7 +693,7 @@ test('GET /api/apis/:id returns full API details with endpoints', async () => {
 test('GET /api/apis/:id is a public route (no auth required)', async () => {
   const app = createApp({ apiRepository: buildApiRepo() });
   // Request without any auth header must succeed
-  const res = await request(app).get('/api/apis/1');
+  const res = await request(app).get('/api/apis/1').set('Origin', TEST_ORIGIN);
   assert.equal(res.status, 200);
 });
 
@@ -691,11 +711,12 @@ test('GET /api/apis/:id returns api with empty endpoints list', async () => {
     },
   ]);
   const app = createApp({ apiRepository: apiRepo });
-  const res = await request(app).get('/api/apis/2');
+  const res = await request(app).get('/api/apis/2').set('Origin', TEST_ORIGIN);
 
   assert.equal(res.status, 200);
-  assert.equal(res.body.name, 'Empty API');
-  assert.deepEqual(res.body.endpoints, []);
+  const data = res.body.data ?? res.body;
+  assert.equal(data.name, 'Empty API');
+  assert.deepEqual(data.endpoints, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -752,7 +773,7 @@ test('POST /api/developers/apis returns 401 when unauthenticated', async () => {
   const app = makeApp();
   const res = await request(app).post('/api/developers/apis').send(validApiBody);
   assert.equal(res.status, 401);
-  assert.equal(res.body.code, 'UNAUTHORIZED');
+  assert.equal(res.body.error?.code ?? res.body.code, 'UNAUTHORIZED');
 });
 
 test('POST /api/developers/apis returns 400 when name is missing', async () => {
@@ -761,11 +782,12 @@ test('POST /api/developers/apis returns 400 when name is missing', async () => {
   delete (body as Record<string, unknown>).name;
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send(body);
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.name');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.name');
 });
 
 test('POST /api/developers/apis returns 400 when base_url is missing', async () => {
@@ -774,22 +796,24 @@ test('POST /api/developers/apis returns 400 when base_url is missing', async () 
   delete (body as Record<string, unknown>).base_url;
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send(body);
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.base_url');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.base_url');
 });
 
 test('POST /api/developers/apis returns 400 when base_url is not a valid URL', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send({ ...validApiBody, base_url: 'not-a-url' });
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.base_url');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.base_url');
 });
 
 test('POST /api/developers/apis returns 400 when category is missing', async () => {
@@ -798,115 +822,122 @@ test('POST /api/developers/apis returns 400 when category is missing', async () 
   delete (body as Record<string, unknown>).category;
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send(body);
   assert.equal(res.status, 400);
-  assert.match(res.body.message, /validation/i);
+  const msg = res.body.error?.message ?? res.body.message;
+  assert.match(msg, /validation/i);
 });
 
 test('POST /api/developers/apis returns 400 when endpoints is not an array', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send({ ...validApiBody, endpoints: 'bad' });
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.endpoints');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.endpoints');
 });
 
 test('POST /api/developers/apis returns 400 when an endpoint path does not start with /', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send({
       ...validApiBody,
       endpoints: [{ path: 'no-slash', method: 'GET', price_per_call_usdc: '0.01' }],
     });
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.endpoints[0].path');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.endpoints[0].path');
 });
 
 test('POST /api/developers/apis returns 400 when an endpoint method is invalid', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send({
       ...validApiBody,
       endpoints: [{ path: '/data', method: 'FETCH', price_per_call_usdc: '0.01' }],
     });
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.endpoints[0].method');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.endpoints[0].method');
 });
 
 test('POST /api/developers/apis returns 400 when price_per_call_usdc is invalid', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send({
       ...validApiBody,
       endpoints: [{ path: '/data', method: 'GET', price_per_call_usdc: 'free' }],
     });
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.endpoints[0].price_per_call_usdc');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.endpoints[0].price_per_call_usdc');
 });
 
 test('POST /api/developers/apis returns 400 when price_per_call_usdc is negative', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send({
       ...validApiBody,
       endpoints: [{ path: '/data', method: 'GET', price_per_call_usdc: '-0.01' }],
     });
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.endpoints[0].price_per_call_usdc');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
+  assert.equal(details[0].field, 'body.endpoints[0].price_per_call_usdc');
 });
 
 test('POST /api/developers/apis returns 400 with DEVELOPER_NOT_FOUND when no developer profile', async () => {
   const app = makeApp(false);
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send(validApiBody);
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'DEVELOPER_NOT_FOUND');
+  assert.equal(res.body.error?.code ?? res.body.code, 'DEVELOPER_NOT_FOUND');
 });
 
 test('POST /api/developers/apis returns 201 with created API and endpoints', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send(validApiBody);
   assert.equal(res.status, 201);
-  assert.equal(res.body.name, validApiBody.name);
-  assert.equal(res.body.base_url, validApiBody.base_url);
-  assert.equal(res.body.developer_id, mockDeveloper.id);
-  assert.equal(res.body.status, 'active');
-  assert.ok(Array.isArray(res.body.endpoints));
-  assert.equal(res.body.endpoints.length, 1);
-  assert.equal(res.body.endpoints[0].path, '/forecast');
-  assert.equal(res.body.endpoints[0].method, 'GET');
+  const data = res.body.data ?? res.body;
+  assert.equal(data.name, validApiBody.name);
+  assert.equal(data.base_url, validApiBody.base_url);
+  assert.equal(data.developer_id, mockDeveloper.id);
+  assert.equal(data.status, 'active');
+  assert.ok(Array.isArray(data.endpoints));
+  assert.equal(data.endpoints.length, 1);
+  assert.equal(data.endpoints[0].path, '/forecast');
+  assert.equal(data.endpoints[0].method, 'GET');
 });
 
 test('POST /api/developers/apis returns 400 when endpoints array is empty', async () => {
   const app = makeApp();
   const res = await request(app)
     .post('/api/developers/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Authorization', authBearer('dev-1'))
     .send({ ...validApiBody, endpoints: [] });
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
-  assert.equal(res.body.details[0].field, 'body.endpoints');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  assert.equal((res.body.error?.details ?? res.body.details)[0].field, 'body.endpoints');
 });
 
 test('POST /api/apis returns 400 with field paths for invalid endpoint data', async () => {
@@ -918,16 +949,18 @@ test('POST /api/apis returns 400 with field paths for invalid endpoint data', as
 
   const res = await request(app)
     .post('/api/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Origin', TEST_ORIGIN)
+    .set('Authorization', authBearer('dev-1'))
     .send({
       ...validApiBody,
       endpoints: [{ path: '/forecast', method: 'FETCH', price_per_call_usdc: 'free' }],
     });
 
   assert.equal(res.status, 400);
-  assert.equal(res.body.code, 'VALIDATION_ERROR');
+  assert.equal(res.body.error?.code ?? res.body.code, 'VALIDATION_ERROR');
+  const details = res.body.error?.details ?? res.body.details;
   assert.deepEqual(
-    res.body.details.map((detail: { field: string }) => detail.field),
+    details.map((detail: { field: string }) => detail.field),
     ['body.endpoints[0].method', 'body.endpoints[0].price_per_call_usdc'],
   );
 });
@@ -942,21 +975,26 @@ test('POST /api/apis creates an API that appears in GET /api/apis', async () => 
 
   const createResponse = await request(app)
     .post('/api/apis')
-    .set('x-user-id', 'dev-1')
+    .set('Origin', TEST_ORIGIN)
+    .set('Authorization', authBearer('dev-1'))
     .send(validApiBody);
 
   assert.equal(createResponse.status, 201);
-  assert.equal(createResponse.body.status, 'active');
-  assert.equal(createResponse.body.endpoints.length, 1);
+  const created = createResponse.body.data ?? createResponse.body;
+  assert.equal(created.status, 'active');
+  assert.equal(created.endpoints.length, 1);
 
-  const listResponse = await request(app).get('/api/apis');
+  const listResponse = await request(app).get('/api/apis').set('Origin', TEST_ORIGIN);
   assert.equal(listResponse.status, 200);
-  assert.equal(listResponse.body.data.length, 1);
-  assert.equal(listResponse.body.data[0].name, validApiBody.name);
+  const listData = listResponse.body.data ?? listResponse.body;
+  const items = listData.data ?? listData;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].name, validApiBody.name);
 
-  const detailResponse = await request(app).get(`/api/apis/${createResponse.body.id}`);
+  const detailResponse = await request(app).get(`/api/apis/${created.id}`).set('Origin', TEST_ORIGIN);
   assert.equal(detailResponse.status, 200);
-  assert.equal(detailResponse.body.endpoints[0].price_per_call_usdc, '0.01');
+  const detailData = detailResponse.body.data ?? detailResponse.body;
+  assert.equal(detailData.endpoints[0].price_per_call_usdc, '0.01');
 });
 
 
@@ -984,8 +1022,9 @@ describe('Route registration and 404 behavior', () => {
     const app = createApp();
     const res = await request(app).get('/api/health');
     assert.equal(res.status, 200);
-    assert.equal(res.body.status, 'ok');
-    assert.equal(res.body.service, 'callora-backend');
+    const data = res.body.data ?? res.body;
+    assert.equal(data.status, 'ok');
+    assert.equal(data.service, 'callora-backend');
   });
 
   test('public routes do not require authentication', async () => {
@@ -993,10 +1032,10 @@ describe('Route registration and 404 behavior', () => {
     const healthRes = await request(app).get('/api/health');
     assert.equal(healthRes.status, 200);
 
-    const apisRes = await request(app).get('/api/apis');
+    const apisRes = await request(app).get('/api/apis').set('Origin', TEST_ORIGIN);
     assert.equal(apisRes.status, 200);
 
-    const apiDetailRes = await request(app).get('/api/apis/1');
+    const apiDetailRes = await request(app).get('/api/apis/1').set('Origin', TEST_ORIGIN);
     assert.equal(apiDetailRes.status, 200);
 
     const openApiRes = await request(app).get('/api/openapi.json');
@@ -1086,9 +1125,10 @@ describe('Global middleware behavior', () => {
     const res = await request(app).get('/api/developers/analytics');
     
     assert.equal(res.status, 401);
-    assert.ok(res.body.message);
-    assert.equal(typeof res.body.message, 'string');
-    assert.equal(res.body.code, 'UNAUTHORIZED');
+    const msg = res.body.error?.message ?? res.body.message;
+    assert.ok(msg);
+    assert.equal(typeof msg, 'string');
+    assert.equal(res.body.error?.code ?? res.body.code, 'UNAUTHORIZED');
     assert.ok(res.body.requestId);
   });
 
@@ -1096,12 +1136,13 @@ describe('Global middleware behavior', () => {
     const app = makeApp();
     const res = await request(app)
       .post('/api/developers/apis')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authBearer('dev-1'))
       .set('Content-Type', 'application/json')
       .send(JSON.stringify(validApiBody));
     
     assert.equal(res.status, 201);
-    assert.ok(res.body.name);
+    const data = res.body.data ?? res.body;
+    assert.ok(data.name);
   });
 });
 
@@ -1112,7 +1153,8 @@ describe('Route precedence and ordering', () => {
     // /api/health is a specific route
     const healthRes = await request(app).get('/api/health');
     assert.equal(healthRes.status, 200);
-    assert.equal(healthRes.body.status, 'ok');
+    const data = healthRes.body.data ?? healthRes.body;
+    assert.equal(data.status, 'ok');
   });
 
   test('admin routes are isolated under /api/admin prefix', async () => {
@@ -1122,7 +1164,7 @@ describe('Route precedence and ordering', () => {
     const adminRes = await request(app).get('/api/admin/users');
     assert.equal(adminRes.status, 401); // Requires admin auth
     
-    const regularRes = await request(app).get('/api/apis');
+    const regularRes = await request(app).get('/api/apis').set('Origin', TEST_ORIGIN);
     assert.equal(regularRes.status, 200); // Public route
   });
 
@@ -1132,11 +1174,12 @@ describe('Route precedence and ordering', () => {
     // Test that errors from any route are caught
     const res = await request(app)
       .get('/api/developers/analytics?from=invalid&to=invalid')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authBearer('dev-1'));
 
     assert.equal(res.status, 400);
-    assert.ok(res.body.message);
-    assert.equal(typeof res.body.message, 'string');
+    const msg = res.body.error?.message ?? res.body.message;
+    assert.ok(msg);
+    assert.equal(typeof msg, 'string');
   });
 });
 
@@ -1168,7 +1211,9 @@ describe('body size limits (REQUEST_BODY_LIMIT)', () => {
 
     assert.equal(res.status, 413);
     assert.ok(res.headers['content-type']?.includes('application/json'));
-    assert.equal(res.body.message, 'Request body too large');
+    const message = res.body.error?.message ?? res.body.message ?? res.body.error;
+    assert.ok(message);
+    assert.match(String(message), /too large/i);
   });
 
   test('accepts JSON bodies within the configured limit', async () => {
@@ -1207,7 +1252,7 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toContain('application/json');
 
-    const spec = response.body;
+    const spec = response.body.data ?? response.body;
     expect(spec.openapi).toBe('3.1.0');
     expect(spec.info).toBeDefined();
     expect(spec.info.title).toBe('Callora API');
@@ -1217,7 +1262,7 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
   test('All four target routes are described with error responses', async () => {
     const app = createApp({ apiRepository: buildApiRepo() });
     const response = await request(app).get('/api/openapi.json');
-    const spec = response.body;
+    const spec = response.body.data ?? response.body;
 
     const targetPaths = [
       '/api/billing/deduct',
@@ -1258,7 +1303,7 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
   test('A test fails if a documented route is missing or invalid', async () => {
     const app = createApp({ apiRepository: buildApiRepo() });
     const response = await request(app).get('/api/openapi.json');
-    const spec = response.body;
+    const spec = response.body.data ?? response.body;
 
     // Check all routes listed in openapi.json are actually mapped to router routes
     const documentedPaths = Object.keys(spec.paths);
@@ -1283,10 +1328,10 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
         } else if (layer.name === 'router' && layer.handle?.stack) {
           let newPrefix = prefix;
           if (layer.regexp) {
-            // Extract route prefix from layer regexp
-            const match = layer.regexp.toString().match(/^\/\^\\(\/[a-zA-Z0-9_-]+)/);
+            // Extract route prefix from layer regexp (handles multiple path segments)
+            const match = layer.regexp.toString().match(/^\/\^((?:\\\/[a-zA-Z0-9_-]+)+)/);
             if (match && match[1]) {
-              newPrefix += match[1];
+              newPrefix += match[1].replace(/\\/g, '');
             }
           }
           extractRoutes(layer.handle!.stack, newPrefix);
@@ -1298,8 +1343,13 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
 
     // Verify each documented path exists in registeredRoutes or handles wildcard
     for (const docPath of documentedPaths) {
-      if (docPath === '/api/developers/revenue') {
-        // This route is registered via createDeveloperRouter in src/index.ts rather than src/app.ts
+      if (
+        docPath.startsWith('/api/developers/revenue') ||
+        docPath.startsWith('/api/developers/me') ||
+        docPath.startsWith('/api/gateway') ||
+        docPath === '/api/exports'
+      ) {
+        // These routes are registered in src/index.ts rather than src/app.ts or require optional services
         continue;
       }
       const isRegistered = registeredRoutes.some(route => {

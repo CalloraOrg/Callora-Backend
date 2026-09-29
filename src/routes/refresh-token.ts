@@ -40,7 +40,7 @@ export interface CreateRefreshTokenRouterOptions {
   /**
    * Controller that handles the token-refresh business logic.
    */
-  authController: AuthController;
+  authController?: AuthController;
 
   /**
    * Express middleware produced by createInFlightDrainTracker('refresh-token').
@@ -52,7 +52,7 @@ export interface CreateRefreshTokenRouterOptions {
    * progress so that keep-alive clients reconnect to the new process after
    * the rolling restart completes.
    */
-  drainMiddleware: RequestHandler;
+  drainMiddleware?: RequestHandler;
 }
 
 /**
@@ -76,38 +76,23 @@ export interface CreateRefreshTokenRouterOptions {
  * shutdownSubsystems.push(refreshTokenDrainTracker.subsystem);
  * ```
  */
-export function createRefreshTokenRouter({
-  authController,
-  drainMiddleware,
-}: CreateRefreshTokenRouterOptions): Router {
+export function createRefreshTokenRouter(
+  options: CreateRefreshTokenRouterOptions = {},
+): Router {
   const router = Router();
+  const { authController, drainMiddleware } = options;
 
-  /**
-   * POST /api/refresh-token
-   *
-   * Exchange a valid refresh token for a new access token.
-   *
-   * Request body:
-   *   { "refreshToken": "<jwt>" }
-   *
-   * Success response (200):
-   *   { "accessToken": "<jwt>", "tokenType": "Bearer" }
-   *
-   * Error responses follow the standard envelope:
-   *   { "code": "...", "message": "...", "requestId": "..." }
-   *
-   * During graceful shutdown the `Connection: close` response header is set
-   * so that keep-alive clients do not reuse the connection after the current
-   * request completes.
-   */
-  router.post(
-    '/',
-    // Track this request so the shutdown handler can wait for it to finish.
-    drainMiddleware,
-    // Validate the request body before touching the controller.
-    bodyValidator(refreshTokenBodySchema),
-    (req, res, next) => authController.refreshToken(req, res, next),
-  );
+  if (drainMiddleware) {
+    router.use(drainMiddleware);
+  }
+
+  if (authController) {
+    router.post(
+      '/',
+      bodyValidator(refreshTokenBodySchema),
+      (req, res, next) => authController.refreshToken(req, res, next),
+    );
+  }
 
   return router;
 }

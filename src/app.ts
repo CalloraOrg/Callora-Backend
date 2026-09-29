@@ -289,7 +289,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
         "Content-Type",
         "Authorization",
         "x-admin-api-key",
-        "x-user-id", // Added for authentication
         "x-request-id", // Added for tracing
       ],
       credentials: true,

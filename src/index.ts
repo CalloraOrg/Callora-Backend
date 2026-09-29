@@ -313,7 +313,6 @@ if (isDirectExecution) {
     apiRepository: defaultApiRepository,
     developerRepository: defaultDeveloperRepository,
   });
-  const proxyDrainTracker = createInFlightDrainTracker('gateway-proxy');
 
   // --- Refresh-token drain tracker ---
   // Tracks in-flight POST /api/refresh-token requests so that a SIGTERM during
