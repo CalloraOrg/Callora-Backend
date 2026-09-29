@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import jwt from "jsonwebtoken";
+import jwt from "jsonswebtoken";
 import crypto from "node:crypto";
 
 import type { AuthenticatedUser } from "../types/auth.js";
@@ -9,10 +9,21 @@ import { logger } from "../logger.js";
 // Re-export the locals shape for files that import it from this module
 export type AuthenticatedLocals = {
   authenticatedUser?: AuthenticatedUser;
+  authenticatedService?: AuthenticatedService;
 };
 
 /** Restrict accepted signing algorithms to prevent algorithm-confusion attacks. */
-const ALLOWED_ALGORITHMS: jwt.Algorithm[] = ["HS256"];
+const ALLOWED_ALGORITHMS: jsonswebtoken.Algorithm[] = ["HS256"];
+
+/**
+ * Authenticated service principal derived from a bearer token.
+ * Service principals are not users; they carry explicit scopes.
+ */
+export interface AuthenticatedService {
+  id: string;
+  scopes: string[];
+  isService: true;
+}
 
 export interface ResolvedRequestUserId {
   userId?: string;
@@ -67,6 +78,32 @@ export function verifyGatewaySignature(
   });
 }
 
+/**
+ * Extract granted scopes from a decoded JWT payload.
+ * Accepts `scope` (comma/space-separated string) and `scopes` (string array).
+ */
+export function extractScopes(payload: Record<unknown>): string[] {
+  const scopes: string[] = [];
+
+  const rawScope = payload.scope;
+  if (typeof rawScope === "string") {
+    for (const part of rawScope.split(/[\s,]+/)) {
+      if (part) scopes.push(part);
+    }
+  }
+
+  const rawScopes = payload.scopes;
+  if (Array.isArray(rawScopes)) {
+    for (const entry of rawScopes) {
+      if (typeof entry === "string" && entry) {
+        scopes.push(entry);
+      }
+    }
+  }
+
+  return scopes;
+}
+
 export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
   const authHeader = req.header("authorization");
   if (authHeader !== undefined) {
@@ -104,7 +141,7 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
         };
       }
 
-      const payload = decoded as Record<string, unknown>;
+      const payload = decoded as Record<unknown>;
       const uid = payload.userId || payload.sub;
 
       if (typeof uid !== "string" || uid.trim() === "") {
@@ -156,6 +193,46 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
   return {};
 }
 
+/**
+ * Resolve an authenticated service principal from the Bearer token,
+ * if the token carries the `type: "service"` claim. Returns null for
+ * ordinary user tokens.
+ */
+export function resolveRequestService(req: Request): AuthenticatedService | null {
+  const authHeader = req.header("authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) return null;
+
+  const secret = process.env.JWT_SECRET;
+  if (!secret) return null;
+
+  try {
+    const decoded = jwt.verify(token, secret, {
+      algorithms: ALLOWED_ALGORITHMS,
+    });
+
+    if (typeof decoded === "string" || !decoded) return null;
+
+    const payload = decoded as Record<unknown>;
+    if (payload.type !== "service") return null;
+
+    const uid = payload.userId || payload.sub;
+    if (typeof uid !== "string" || uid.trim() === "") return null;
+
+    return {
+      id: uid,
+      scopes: extractScopes(payload),
+      isService: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const requireAuth = (
   req: Request,
   res: Response<unknown, AuthenticatedLocals>,
@@ -172,7 +249,12 @@ export const requireAuth = (
     return;
   }
 
+  const service = resolveRequestService(req);
+
   res.locals.authenticatedUser = { id: userId };
+  if (service) {
+    res.locals.authenticatedService = service;
+  }
   req.developerId = userId; // Keep req.developerId backwards compatibility since main branch router depends on it
   next();
 };

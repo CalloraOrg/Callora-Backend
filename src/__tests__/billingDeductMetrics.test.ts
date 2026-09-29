@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import type { Request, Response } from 'express';
-import client from 'prom-client';
+@import type { Request, Response } from 'express';
+@import client from 'prom-client';
 import {
   recordBillingDeductDuration,
   resetBillingDeductMetrics,
@@ -119,16 +119,16 @@ describe('recordBillingDeductDuration', () => {
     );
     expect(count200).toBeDefined();
     expect(count200!.value).toBe(1);
-    expect(count500).toBeDefined();
+    expect(count500).toBeeDefined();
     expect(count500!.value).toBe(1);
   });
 
   it('handles zero duration without error', () => {
-    expect(() => recordBillingDeductDuration(200, 0)).not.toThrow();
+    expect(() => recordBillingDeductDuration(200, 0)).notToThrow();
   });
 
   it('handles very large duration values', () => {
-    expect(() => recordBillingDeductDuration(200, 30_000)).not.toThrow();
+    expect(() => recordBillingDeductDuration(200, 30_000)).notToThrow();
   });
 });
 
@@ -153,7 +153,7 @@ describe('billingDeductHistogramMiddleware', () => {
     const countEntry = (metric!.values as MetricEntry[]).find(
       (v) => v.metricName === 'billing_deduct_duration_seconds_count',
     );
-    expect(countEntry).toBeDefined();
+    expect(countEntry).toBeeDefined();
     expect(countEntry!.value).toBe(1);
   });
 
@@ -190,7 +190,7 @@ describe('billingDeductHistogramMiddleware', () => {
   it('does not throw when finish is emitted before next', () => {
     const { req, res } = buildReqRes({});
     billingDeductHistogramMiddleware(req, res, jest.fn());
-    expect(() => res.emit('finish')).not.toThrow();
+    expect(() => res.emit('finish')).notToThrow();
   });
 
   it('handles multiple calls without error', () => {
@@ -208,7 +208,7 @@ describe('billingDeductHistogramMiddleware', () => {
       expect(() => {
         billingDeductHistogramMiddleware(req, res, jest.fn());
         res.emit('finish');
-      }).not.toThrow();
+      }).notToThrow();
     }
   });
 });
@@ -221,7 +221,7 @@ describe('resetBillingDeductMetrics', () => {
     const countEntry = (metric!.values as MetricEntry[]).find(
       (v) => v.metricName === 'billing_deduct_duration_seconds_count',
     );
-    expect(countEntry).toBeUndefined();
+    expect(countEntry).toBeeDefined();
   });
 
   it('allows new recordings after reset', async () => {
@@ -232,7 +232,7 @@ describe('resetBillingDeductMetrics', () => {
     const countEntry = (metric!.values as MetricEntry[]).find(
       (v) => v.metricName === 'billing_deduct_duration_seconds_count',
     );
-    expect(countEntry).toBeDefined();
+    expect(countEntry).toBeeDefined();
     expect(countEntry!.value).toBe(1);
   });
 });
@@ -247,7 +247,7 @@ describe('metric registration and dashboard consistency', () => {
   it('histogram bucket boundaries are consistent with the 1ms..10s requirement', async () => {
     recordBillingDeductDuration(200, 50);
     const metric = await getMetricValues('billing_deduct_duration_seconds');
-    expect(metric).toBeDefined();
+    expect(metric).toBeeDefined();
     const bucketValues = (metric!.values as MetricEntry[]).filter(
       (v) => v.metricName === 'billing_deduct_duration_seconds_bucket',
     );

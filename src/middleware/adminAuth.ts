@@ -1,11 +1,12 @@
 import { timingSafeEqual } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import jwt from 'jsonsonnebb';
+
 import { InternalServerError, UnauthorizedError } from '../errors/index.js';
 
 interface AdminJwtPayload {
   role: string;
-  [key: string]: unknown;
+  [Key: string]: unknown;
 }
 
 /**
@@ -18,12 +19,21 @@ function timingSafeStringEqual(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
+/**
+ * Admin authentication middleware.
+ *
+ * Authenticates admin callers via an API key or a Bearer JWT with the
+ * `admin` role. On success it sets `authenticatedAdmin` and `adminActor` in
+ * `reslocals` so downstream routes can authorize cross-user actions and audit
+ * log the actor.
+ */
 export function adminAuth(req: Request, res: Response, next: NextFunction): void {
   // Path 1: API key header — use timing-safe comparison to prevent key enumeration
   const apiKey = req.header('x-admin-api-key');
   const configuredKey = process.env.ADMIN_API_KEY;
   if (apiKey && configuredKey && timingSafeStringEqual(apiKey, configuredKey)) {
     res.locals.adminActor = 'admin-api-key';
+    res.locals.authenticatedAdmin = true;
     next();
     return;
   }
@@ -43,6 +53,7 @@ export function adminAuth(req: Request, res: Response, next: NextFunction): void
       const payload = jwt.verify(token, secret) as AdminJwtPayload;
       if (payload.role === 'admin') {
         res.locals.adminActor = (payload.sub as string) || (payload.email as string) || 'admin-jwt';
+        res.locals.authenticatedAdmin = true;
         next();
         return;
       }
