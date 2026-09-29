@@ -142,6 +142,47 @@ describe('adminAuth middleware — unit', () => {
       }));
       expect(res.status).not.toHaveBeenCalled();
     });
+    it('returns 401 when the JWT is signed with an algorithm other than HS256', () => {
+      // Need a key pair for RS256
+      const { generateKeyPairSync } = require('crypto');
+      const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, privateKey, { expiresIn: '1h', algorithm: 'RS256' });
+      const res = makeRes();
+      adminAuth(makeReq({ authorization: `Bearer ${token}` }), res, next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401 }));
+    });
+
+    it('returns 401 when the JWT lacks an exp claim', () => {
+      // No expiresIn provided
+      const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, TEST_JWT_SECRET);
+      const res = makeRes();
+      adminAuth(makeReq({ authorization: `Bearer ${token}` }), res, next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401 }));
+    });
+
+    it('returns 401 when the JWT has the wrong audience', () => {
+      const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, TEST_JWT_SECRET, { expiresIn: '1h', audience: 'not-admin' });
+      const res = makeRes();
+      adminAuth(makeReq({ authorization: `Bearer ${token}` }), res, next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401 }));
+    });
+
+    it('returns 401 when the JWT is revoked', async () => {
+      const { getTokenRevocationService, resetTokenRevocationService } = await import('../services/tokenRevocation.js');
+      const { createHash } = await import('crypto');
+      const tokenRevocation = getTokenRevocationService();
+      
+      const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, TEST_JWT_SECRET, { expiresIn: '1h' });
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+      tokenRevocation.revoke(tokenHash);
+
+      const res = makeRes();
+      adminAuth(makeReq({ authorization: `Bearer ${token}` }), res, next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401 }));
+      
+      resetTokenRevocationService();
+    });
+
   });
 
   // ── No credentials ──────────────────────────────────────────────────────────

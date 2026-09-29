@@ -11,7 +11,7 @@ export type AuthenticatedLocals = {
 };
 
 /** Restrict accepted signing algorithms to prevent algorithm-confusion attacks. */
-const ALLOWED_ALGORITHMS: jwt.Algorithm[] = ["HS256"];
+export const ALLOWED_ALGORITHMS: jwt.Algorithm[] = ["HS256"];
 
 export interface ResolvedRequestUserId {
   userId?: string;
