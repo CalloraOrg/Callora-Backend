@@ -1,0 +1,11 @@
+{
+  "name": "callora-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "error-codes:generate": "node scripts/generate-error-codes.mjs",
+    "error-codes:check": "node scripts/generate-error-codes.mjs --check",
+    "test": "node --test scripts/*.test.mjs"
+  }
+}
