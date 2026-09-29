@@ -1,5 +1,9 @@
 import { logger } from '../logger.js';
 
+export interface MailerTransport {
+  sendMail(options: { from: string; to: string; subject: string; text: string }): Promise<unknown>;
+}
+
 export interface MailerOptions {
   enabled: boolean;
   from: string;
@@ -24,6 +28,12 @@ let mailerOptions: MailerOptions = {
   transport: (process.env.MAILER_TRANSPORT as 'console' | 'smtp') ?? 'console',
 };
 
+let transportFactory: ((options: MailerOptions) => MailerTransport) | undefined;
+
+export function setTransportFactory(factory: ((options: MailerOptions) => MailerTransport) | undefined): void {
+  transportFactory = factory;
+}
+
 export function configureMailer(options: Partial<MailerOptions>): void {
   mailerOptions = { ...mailerOptions, ...options };
 }
@@ -41,6 +51,17 @@ export async function sendMail(payload: MailPayload): Promise<void> {
   });
 
   if (mailerOptions.transport === 'smtp') {
+    if (transportFactory) {
+      const transporter = transportFactory(mailerOptions);
+      await transporter.sendMail({
+        from: mailerOptions.from,
+        to: payload.to,
+        subject: payload.subject,
+        text: payload.text,
+      });
+      return;
+    }
+
     let nodemailer: any;
     try {
       nodemailer = await import('nodemailer');
