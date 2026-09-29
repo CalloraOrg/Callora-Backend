@@ -7,6 +7,7 @@ import type { Developer } from './db/schema.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { TEST_JWT_SECRET, signTestToken } from '../tests/helpers/jwt.js';
 
 process.env.JWT_SECRET = TEST_JWT_SECRET;
@@ -1357,6 +1358,72 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
         return route === docPath || route.startsWith(docPath);
       });
       expect(isRegistered).toBe(true);
+    }
+  });
+
+  test('every createApp route is represented in the ARCHITECTURE route map', () => {
+    const app = createApp({ apiRepository: buildApiRepo() });
+    const architecture = readFileSync('ARCHITECTURE.md', 'utf8');
+    const tableRows = architecture
+      .split(/\r?\n/)
+      .filter((line) => /^\|\s*(GET|POST|PUT|PATCH|DELETE|OPTIONS|ALL|\*)\s*\|/.test(line));
+    const documented = tableRows.map((line) => {
+      const cells = line.split('|').map((cell) => cell.trim());
+      return { method: cells[1].toUpperCase(), path: cells[2] };
+    });
+
+    interface ExpressLayer {
+      route?: { path: string | string[]; methods: Record<string, boolean> };
+      name?: string;
+      handle?: { stack?: ExpressLayer[] };
+      regexp?: RegExp;
+      matchers?: Array<(path: string) => unknown>;
+    }
+
+    const mounted: Array<{ method: string; path: string }> = [];
+    const normalize = (path: string) => path.replace(/\/{2,}/g, '/');
+    const mountPath = (layer: ExpressLayer) => {
+      if (layer.matchers?.length) {
+        const matcher = layer.matchers[0] as unknown as { source?: string };
+        if (matcher.source) return matcher.source;
+      }
+      const source = layer.regexp?.source;
+      if (!source) return '';
+      return source
+        .replace(/^\^/, '')
+        .replace(/\\\//g, '/')
+        .replace(/\\\/?\(\?=\/\|\$\).*$/, '')
+        .replace(/\\\/?\$$/, '')
+        .replace(/\$$/, '');
+    };
+    const walk = (stack: ExpressLayer[], prefix = '') => {
+      for (const layer of stack) {
+        if (layer.route) {
+          const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
+          for (const routePath of paths) {
+            for (const [method, enabled] of Object.entries(layer.route.methods)) {
+              if (enabled) mounted.push({ method: method.toUpperCase(), path: normalize(`${prefix}/${routePath}`) });
+            }
+          }
+        } else if (layer.name === 'router' && layer.handle?.stack) {
+          const mount = mountPath(layer);
+          const literal = mount.match(/^(?:\/[\w.-]+)*/)?.[0] ?? '';
+          walk(layer.handle.stack, normalize(`${prefix}/${literal}`));
+        }
+      }
+    };
+
+    walk(app._router.stack as ExpressLayer[]);
+    const matchesDocumentedRow = (route: { method: string; path: string }) =>
+      documented.some(({ method, path }) => {
+        if (method !== '*' && method !== route.method && !(method === 'ALL')) return false;
+        const prefix = path.replace(/\/\*$/, '').replace(/\*$/, '');
+        return path.includes('*') ? route.path.startsWith(prefix) : path === route.path;
+      });
+
+    expect(mounted.length).toBeGreaterThan(0);
+    for (const route of mounted) {
+      expect(matchesDocumentedRow(route)).toBe(true);
     }
   });
 });
