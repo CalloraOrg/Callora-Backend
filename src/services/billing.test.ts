@@ -22,6 +22,21 @@ import { SorobanRpcError } from './sorobanBilling.js';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Deterministic seeded PRNG (mulberry32) so jitter assertions are reproducible
+ * without stubbing globals.
+ */
+function createSeededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function makeQr(rows: Record<string, unknown>[] = []): QueryResult {
   return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] } as QueryResult;
 }
@@ -361,6 +376,81 @@ describe('BillingService.deduct - balance and Soroban failures', () => {
     assert.equal(result.success, true);
     assert.equal(result.stellarTxHash, 'tx_after_retry');
     assert.equal(soroban.getDeductCount(), 2);
+  });
+
+  test('jitters Soroban retry delays without exceeding the configured backoff', async () => {
+    const delays: number[] = [];
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+
+    const client = createMockClient([
+      makeQr(), makeQr(), makeQr(), makeQr([{ id: 11 }]), makeQr(),
+    ]);
+    const pool = createMockPool(client, [makeQr()]);
+    const soroban = createMockSorobanClient({
+      balance: '500000',
+      txHash: 'tx_jittered',
+      deductFailures: [
+        new Error('socket hang up'),
+        new Error('request timeout'),
+        new Error('503 service unavailable'),
+      ],
+    });
+
+    const svc = new BillingService(pool, soroban.client, {
+      retryDelaysMs: [4, 4, 4],
+      random: createSeededRandom(1276),
+    });
+
+    const result = await svc.deduct(baseRequest);
+    const scheduled = setTimeoutSpy.mock.calls
+      .map((call) => Number(call[1]) || 0)
+      .filter((ms) => ms <= 4);
+    setTimeoutSpy.mockRestore();
+    delays.push(...scheduled);
+
+    assert.equal(result.success, true);
+    assert.equal(soroban.getDeductCount(), 4);
+    assert.equal(scheduled.length, 3);
+    for (const delay of scheduled) {
+      // Full jitter stays within [0, configured delay].
+      assert.ok(delay >= 0, `delay ${delay} must not be negative`);
+      assert.ok(delay <= 4, `delay ${delay} must not exceed the configured 4ms`);
+    }
+    // Seeded randomness makes the schedule vary between attempts.
+    assert.equal(new Set(scheduled).size > 1, true);
+  });
+
+  test('is deterministic for a given seed and varies across callers', async () => {
+    const runWithSeed = async (seed: number): Promise<number[]> => {
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+      const client = createMockClient([
+        makeQr(), makeQr(), makeQr(), makeQr([{ id: 12 }]), makeQr(),
+      ]);
+      const pool = createMockPool(client, [makeQr()]);
+      const soroban = createMockSorobanClient({
+        balance: '500000',
+        txHash: 'tx_seed',
+        deductFailures: [new Error('socket hang up'), new Error('socket hang up')],
+      });
+      const svc = new BillingService(pool, soroban.client, {
+        retryDelaysMs: [4, 4],
+        random: createSeededRandom(seed),
+      });
+
+      await svc.deduct(baseRequest);
+      const delays = setTimeoutSpy.mock.calls
+        .map((call) => Number(call[1]) || 0)
+        .filter((ms) => ms <= 4);
+      setTimeoutSpy.mockRestore();
+      return delays;
+    };
+
+    const callerA = await runWithSeed(4242);
+    const callerASameSeed = await runWithSeed(4242);
+    const callerB = await runWithSeed(9001);
+
+    assert.deepEqual(callerA, callerASameSeed);
+    assert.notDeepEqual(callerA, callerB);
   });
 
   test('returns failure with usageEventId when Soroban deduct fails permanently', async () => {

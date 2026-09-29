@@ -32,6 +32,7 @@
 import { createHash } from "crypto";
 import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
+import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
 
 const USDC_7_DECIMAL_FACTOR = 10_000_000n;
@@ -108,7 +109,17 @@ export interface SorobanClient {
 }
 
 export interface BillingServiceOptions {
+  /**
+   * Per-attempt backoff schedule. Each entry is an upper bound: the actual
+   * sleep is jittered within `[0, entry]` so concurrent callers do not retry
+   * against Soroban in lockstep.
+   */
   retryDelaysMs?: number[];
+  /**
+   * Random source in [0, 1) used to jitter retry delays.
+   * Inject a seeded generator in tests for deterministic delays.
+   */
+  random?: RandomSource;
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +418,7 @@ async function runPhase1Bulk(
 
 export class BillingService {
   private readonly retryDelaysMs: number[];
+  private readonly random: RandomSource;
 
   constructor(
     private readonly pool: Pool,
@@ -414,6 +426,7 @@ export class BillingService {
     options: BillingServiceOptions = {},
   ) {
     this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    this.random = options.random ?? Math.random;
   }
 
   async deduct(request: BillingDeductRequest): Promise<BillingDeductResult> {
@@ -896,7 +909,16 @@ export class BillingService {
           break;
         }
 
-        await sleep(this.retryDelaysMs[attempt]);
+        // Full jitter bounded by the scheduled delay: retries stay spread out
+        // across callers but never wait longer than the configured backoff.
+        const scheduledDelay = this.retryDelaysMs[attempt];
+        await sleep(
+          computeJitteredDelay(scheduledDelay, {
+            strategy: "full",
+            random: this.random,
+            maxDelayMs: scheduledDelay,
+          }),
+        );
       }
     }
 

@@ -1,6 +1,22 @@
-import { dispatchWebhook, dispatchToAll, resetWebhookDispatcherForTests, stopWebhookDispatching } from './webhook.dispatcher.js';
+import { dispatchWebhook, dispatchToAll, resetWebhookDispatcherForTests, setWebhookJitterRandom, stopWebhookDispatching } from './webhook.dispatcher.js';
 import { WebhookStore } from './webhook.store.js';
 import type { WebhookConfig, WebhookPayload } from './webhook.types.js';
+import type { RandomSource } from '../lib/retry.js';
+
+/**
+ * Deterministic seeded PRNG (mulberry32) so retry-jitter assertions are
+ * reproducible without stubbing globals.
+ */
+function createSeededRandom(seed: number): RandomSource {
+    let state = seed >>> 0;
+    return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let t = state;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
 
 describe('Webhook Dispatcher', () => {
     let originalFetch: typeof global.fetch;
@@ -350,6 +366,63 @@ describe('Webhook Dispatcher', () => {
 
             // Default should be 5 retries but succeed on first attempt
             expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe('retry jitter', () => {
+        const jitterConfig: WebhookConfig = {
+            ...config,
+            retryPolicy: { maxRetries: 4, baseDelayMs: 1_000 },
+        };
+
+        /** Runs a dispatch that always fails and records the backoff delays. */
+        async function collectRetryDelays(random: RandomSource): Promise<number[]> {
+            setWebhookJitterRandom(random);
+            const fetchMock = jest.fn().mockResolvedValue({
+                ok: false,
+                status: 503,
+                statusText: 'Service Unavailable',
+            } as Response);
+            global.fetch = fetchMock as unknown as typeof fetch;
+
+            const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+            const promise = dispatchWebhook(jitterConfig, payload);
+
+            for (let i = 0; i < 8; i++) {
+                await Promise.resolve();
+                await Promise.resolve();
+                await Promise.resolve();
+                jest.runOnlyPendingTimers();
+            }
+            await promise;
+
+            const delays = setTimeoutSpy.mock.calls.map((call) => Number(call[1]) || 0);
+            setTimeoutSpy.mockRestore();
+            return delays;
+        }
+
+        it('jitters backoff delays and never exceeds the exponential schedule', async () => {
+            const delays = await collectRetryDelays(createSeededRandom(1276));
+
+            // 3 backoffs for 4 attempts, each capped at its exponential
+            // ceiling: baseDelayMs * 2^attempt = 1000 / 2000 / 4000.
+            expect(delays.length).toBe(3);
+            const ceilings = [1_000, 2_000, 4_000];
+            delays.forEach((delay, index) => {
+                expect(delay).toBeGreaterThanOrEqual(0);
+                expect(delay).toBeLessThanOrEqual(ceilings[index]);
+            });
+            // Jitter de-synchronises retries: the delays are not all identical.
+            expect(new Set(delays).size).toBeGreaterThan(1);
+        });
+
+        it('is deterministic for the same seed and differs across callers', async () => {
+            const callerA = await collectRetryDelays(createSeededRandom(31337));
+            const callerASameSeed = await collectRetryDelays(createSeededRandom(31337));
+            const callerB = await collectRetryDelays(createSeededRandom(9001));
+
+            expect(callerA).toEqual(callerASameSeed);
+            expect(callerA).not.toEqual(callerB);
         });
     });
 });
