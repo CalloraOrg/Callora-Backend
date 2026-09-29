@@ -174,6 +174,11 @@ export async function idempotencyMiddleware(
   }
 
   const userId = res.locals.authenticatedUser?.id;
+  // Namespace keys per authenticated principal so the same key chosen by two
+  // different users (or admin actors) cannot collide, mismatch, or replay
+  // across tenants. Unauthenticated callers share the explicit 'anonymous'
+  // scope.
+  const scope = userId ?? (res.locals as { adminActor?: string }).adminActor ?? 'anonymous';
   const requestHash = calculateRequestHash(userId, req.body, req.method, req.path, bodyExcludingKeys);
 
   try {
@@ -182,13 +187,13 @@ export async function idempotencyMiddleware(
     }
     await db.query('DELETE FROM idempotency_store WHERE expires_at < $1', [new Date().toISOString()]);
 
-    const result = await db.query(
-      'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
-      [idempotencyKey]
-    );
-
-    if (result.rows.length > 0) {
-      const record = result.rows[0];
+    const handleExistingRecord = (record: {
+      request_hash: string;
+      status: string;
+      response_status: number;
+      response_body: string;
+      expires_at: string | Date;
+    }): boolean => {
       const expiresAt = new Date(record.expires_at);
 
       if (expiresAt > new Date()) {
@@ -220,7 +225,7 @@ export async function idempotencyMiddleware(
               incomingFields: incomingKeys,
             }
           );
-          return;
+          return true;
         }
 
         if (record.status === 'completed') {
@@ -233,7 +238,7 @@ export async function idempotencyMiddleware(
           });
           res.setHeader('Idempotent-Replayed', 'true');
           res.status(record.response_status).json(JSON.parse(record.response_body));
-          return;
+          return true;
         }
 
         if (record.status === 'started') {
@@ -251,19 +256,42 @@ export async function idempotencyMiddleware(
             opts?.inProgressErrorCode ?? 'IDEMPOTENCY_IN_PROGRESS',
             'Request already in progress'
           );
-          return;
+          return true;
         }
+      }
+      return false;
+    };
+
+    const result = await db.query(
+      'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2',
+      [scope, idempotencyKey]
+    );
+
+    if (result.rows.length > 0) {
+      if (handleExistingRecord(result.rows[0])) {
+        return;
       }
     }
 
     const retentionSeconds = opts?.retentionSeconds ?? config.idempotency.retentionWindowSeconds;
     const expiresAtDate = new Date(Date.now() + retentionSeconds * 1000);
 
-    await db.query(
-      `INSERT INTO idempotency_store (idempotency_key, request_hash, status, expires_at, created_at)
-       VALUES ($1, $2, $3, $4, NOW()::timestamp)`,
-      [idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
+    const insertResult = await db.query(
+      `INSERT INTO idempotency_store (scope, idempotency_key, request_hash, status, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW()::timestamp)
+       ON CONFLICT (scope, idempotency_key) DO NOTHING`,
+      [scope, idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
     );
+
+    if (insertResult && insertResult.rowCount === 0) {
+      const existing = await db.query(
+        'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
+        [idempotencyKey]
+      );
+      if (existing.rows.length > 0 && handleExistingRecord(existing.rows[0])) {
+        return;
+      }
+    }
 
     const originalSend = res.send;
     const originalJson = res.json;
@@ -275,7 +303,10 @@ export async function idempotencyMiddleware(
 
       try {
         if (status >= 500) {
-          await db.query('DELETE FROM idempotency_store WHERE idempotency_key = $1', [idempotencyKey]);
+          await db.query('DELETE FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2', [
+            scope,
+            idempotencyKey,
+          ]);
           return;
         }
 
@@ -295,8 +326,8 @@ export async function idempotencyMiddleware(
         await db.query(
           `UPDATE idempotency_store
            SET status = $1, response_status = $2, response_body = $3
-           WHERE idempotency_key = $4`,
-          ['completed', status, bodyStr, idempotencyKey]
+           WHERE scope = $4 AND idempotency_key = $5`,
+          ['completed', status, bodyStr, scope, idempotencyKey]
         );
       } catch (err) {
         logger.error('[idempotency] failed to save response', {

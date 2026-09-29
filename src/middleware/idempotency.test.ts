@@ -212,13 +212,14 @@ describe('idempotencyMiddleware — unit', () => {
     expect(mockDb.query).toHaveBeenNthCalledWith(
       3,
       expect.stringContaining('SELECT request_hash'),
-      ['test-key-123']
+      ['user-1', 'test-key-123']
     );
     expect(mockDb.query).toHaveBeenNthCalledWith(
       4,
       expect.stringContaining('INSERT INTO idempotency_store'),
-      ['test-key-123', expect.any(String), 'started', expect.any(String)]
+      ['user-1', 'test-key-123', expect.any(String), 'started', expect.any(String)]
     );
+    expect(mockDb.query.mock.calls[3][0]).toContain('ON CONFLICT (scope, idempotency_key)');
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -440,7 +441,7 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
 
     expect(mockDb.query).toHaveBeenLastCalledWith(
       expect.stringContaining('UPDATE idempotency_store'),
-      ['completed', 200, JSON.stringify({ success: true, data: 42 }), 'test-key-123']
+      ['completed', 200, JSON.stringify({ success: true, data: 42 }), 'user-1', 'test-key-123']
     );
   });
 
@@ -459,8 +460,8 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
     await new Promise(resolve => process.nextTick(resolve));
 
     expect(mockDb.query).toHaveBeenLastCalledWith(
-      expect.stringContaining('DELETE FROM idempotency_store WHERE idempotency_key'),
-      ['test-key-123']
+      expect.stringContaining('DELETE FROM idempotency_store WHERE scope'),
+      ['user-1', 'test-key-123']
     );
   });
 
@@ -480,7 +481,7 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
 
     expect(mockDb.query).toHaveBeenLastCalledWith(
       expect.stringContaining('UPDATE idempotency_store'),
-      ['completed', 200, JSON.stringify({ success: true }), 'test-key-123']
+      ['completed', 200, JSON.stringify({ success: true }), 'user-1', 'test-key-123']
     );
   });
 
@@ -505,6 +506,132 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
 
     await new Promise(resolve => process.nextTick(resolve));
     // Should not throw - error is caught and logged
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-user scoping — issue #1273
+// ---------------------------------------------------------------------------
+
+interface ScopedRow {
+  request_hash: string;
+  status: string;
+  response_status: number;
+  response_body: string;
+  expires_at: string;
+}
+
+/** Stateful in-memory idempotency_store keyed by (scope, key). */
+function makeScopedPool() {
+  const store = new Map<string, ScopedRow>();
+  const composite = (scope: string, key: string) => `${scope}::${key}`;
+
+  const query = jest.fn(async (text: string, params: unknown[] = []) => {
+    if (text.includes('DELETE FROM idempotency_store WHERE expires_at')) {
+      return { rows: [] };
+    }
+    if (text.includes('SELECT request_hash')) {
+      const [scope, key] = params as [string, string];
+      const row = store.get(composite(scope, key));
+      return { rows: row ? [row] : [] };
+    }
+    if (text.includes('INSERT INTO idempotency_store')) {
+      const [scope, key, requestHash, status, expiresAt] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
+      if (store.has(composite(scope, key))) {
+        return { rows: [], rowCount: 0 };
+      }
+      store.set(composite(scope, key), {
+        request_hash: requestHash,
+        status,
+        response_status: 0,
+        response_body: '',
+        expires_at: expiresAt,
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (text.includes('UPDATE idempotency_store')) {
+      const [status, responseStatus, responseBody, scope, key] = params as [
+        string,
+        number,
+        string,
+        string,
+        string,
+      ];
+      const row = store.get(composite(scope, key));
+      if (row) {
+        store.set(composite(scope, key), {
+          ...row,
+          status,
+          response_status: responseStatus,
+          response_body: responseBody,
+        });
+      }
+      return { rows: [] };
+    }
+    if (text.includes('DELETE FROM idempotency_store WHERE scope')) {
+      const [scope, key] = params as [string, string];
+      store.delete(composite(scope, key));
+      return { rows: [] };
+    }
+    return { rows: [] };
+  });
+
+  return { query, store, composite } as unknown as {
+    query: jest.Mock;
+    store: Map<string, ScopedRow>;
+    composite: (scope: string, key: string) => string;
+  };
+}
+
+describe('idempotencyMiddleware — per-user key scoping (issue #1273)', () => {
+  async function invoke(userId: string, db: unknown, req = makeReq() as Request) {
+    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = {
+      locals: { dbPool: db },
+    };
+    const res = makeRes(userId);
+    const next = jest.fn();
+    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
+    return { req, res, next };
+  }
+
+  it('lets two users use the same key independently', async () => {
+    const db = makeScopedPool();
+
+    const first = await invoke('user-a', db);
+    expect(first.next).toHaveBeenCalledTimes(1);
+
+    const second = await invoke('user-b', db);
+    // No cross-tenant mismatch/replay: user-b gets its own record.
+    expect(second.next).toHaveBeenCalledTimes(1);
+    expect(second.res.status).not.toHaveBeenCalledWith(409);
+
+    expect(db.store.has(db.composite('user-a', 'test-key-123'))).toBe(true);
+    expect(db.store.has(db.composite('user-b', 'test-key-123'))).toBe(true);
+  });
+
+  it('replays the stored response only for the owning user', async () => {
+    const db = makeScopedPool();
+
+    const first = await invoke('user-a', db);
+    first.res.statusCode = 200;
+    first.res.json({ success: true, txHash: 'tx-a' });
+    await new Promise(resolve => process.nextTick(resolve));
+
+    // Same user retries the same key → replay.
+    const retry = await invoke('user-a', db);
+    expect(retry.res.setHeader).toHaveBeenCalledWith('Idempotent-Replayed', 'true');
+    expect(retry.res.json).toHaveBeenCalledWith({ success: true, txHash: 'tx-a' });
+    expect(retry.next).not.toHaveBeenCalled();
+
+    // A different user with the same key is unaffected by the replay.
+    const other = await invoke('user-b', db);
+    expect(other.next).toHaveBeenCalledTimes(1);
   });
 });
 

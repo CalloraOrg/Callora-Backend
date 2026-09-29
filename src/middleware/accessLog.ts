@@ -389,3 +389,4 @@ export function createPlansAccessLogMiddleware(): (
 }
 
 export const plansAccessLog = createPlansAccessLogMiddleware();
+export { billingAccessLogMiddleware } from './billingAccessLog.js';

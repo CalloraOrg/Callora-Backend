@@ -11,7 +11,7 @@ const LEGACY_UNNUMBERED = new Set([
 ]);
 
 function prefix(filename: string): number | null {
-  const match = filename.match(/^(\d{4})_/);
+  const match = filename.match(/^(\d{3,4})_/);
   return match ? Number(match[1]) : null;
 }
 
@@ -44,13 +44,19 @@ export function validateMigrationLayout(migrationDir: string): string[] {
   }
 
   const numbers = future.map(prefix).filter((number): number is number => number !== null).sort((a, b) => a - b);
-  for (let index = 0; index < numbers.length; index += 1) {
+  for (let index = 1; index < numbers.length; index += 1) {
+    if (numbers[index] === numbers[index - 1]) {
+      violations.push(`Duplicate new migration prefix ${numbers[index]}.`);
+    }
+  }
+
+  const uniqueNumbers = Array.from(new Set(numbers));
+  for (let index = 0; index < uniqueNumbers.length; index += 1) {
     const expected = LEGACY_MAX_PREFIX + 1 + index;
-    if (numbers[index] !== expected) {
-      violations.push(`Migration sequence must continue at ${String(expected).padStart(4, '0')}; found ${String(numbers[index]).padStart(4, '0')}.`);
+    if (uniqueNumbers[index] !== expected) {
+      violations.push(`Migration sequence must continue at ${String(expected).padStart(4, '0')}; found ${String(uniqueNumbers[index]).padStart(4, '0')}.`);
       break;
     }
-    if (index > 0 && numbers[index] === numbers[index - 1]) violations.push(`Duplicate new migration prefix ${numbers[index]}.`);
   }
   return violations;
 }

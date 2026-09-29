@@ -85,3 +85,10 @@ jobs:
         run: npx tsx scripts/check-migrations.ts
         env:
           CHECKSUM_CI_SKIP_MISSING: "1"
+
+      - name: Check OpenAPI backward compatibility
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          npx --yes @useoptic/optic diff docs/openapi.json --base origin/${{ github.base_ref }} --check
+

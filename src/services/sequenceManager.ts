@@ -58,6 +58,21 @@ export interface HorizonAccountLoader {
 export interface SequenceManagerOptions {
   /** Horizon loader used to fetch account objects. */
   loader: HorizonAccountLoader;
+  /** Optional durable allocator used to make allocations survive restarts. */
+  store?: SequenceStore;
+  /** Timeout for the durable allocation step. Defaults to 5 seconds. */
+  allocationTimeoutMs?: number;
+}
+
+export interface SequenceStore {
+  allocate(accountId: string, ledgerNextSequence: bigint): Promise<bigint>;
+}
+
+export class SequenceAllocationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SequenceAllocationError';
+  }
 }
 
 // ── SequenceManager ────────────────────────────────────────────────────────────
@@ -88,9 +103,13 @@ export class SequenceManager {
 
   /** Horizon loader injected at construction time. */
   private readonly loader: HorizonAccountLoader;
+  private readonly store?: SequenceStore;
+  private readonly allocationTimeoutMs: number;
 
   constructor(options: SequenceManagerOptions) {
     this.loader = options.loader;
+    this.store = options.store;
+    this.allocationTimeoutMs = options.allocationTimeoutMs ?? 5_000;
   }
 
   /**
@@ -135,8 +154,14 @@ export class SequenceManager {
       // Horizon returns sequence as a decimal string; parse to bigint for
       // exact arithmetic (sequence numbers can exceed Number.MAX_SAFE_INTEGER
       // on very active accounts).
-      const sequence = BigInt(account.sequence) + 1n;
-      return sequence;
+      const ledgerNextSequence = BigInt(account.sequence) + 1n;
+      if (!this.store) {
+        return ledgerNextSequence;
+      }
+
+      return await this.withAllocationTimeout(
+        this.store.allocate(accountId, ledgerNextSequence)
+      );
     } finally {
       // Always release the lock, even if loadAccount() threw.
       resolveSlot();
@@ -160,5 +185,36 @@ export class SequenceManager {
    */
   hasLock(accountId: string): boolean {
     return this.locks.has(accountId);
+  }
+
+  private async withAllocationTimeout(allocation: Promise<bigint>): Promise<bigint> {
+    let timeoutId: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        allocation,
+        new Promise<bigint>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new SequenceAllocationError(
+                'Timed out while reserving a durable Stellar sequence number'
+              )
+            );
+          }, this.allocationTimeoutMs);
+        }),
+      ]);
+    } catch (error) {
+      if (error instanceof SequenceAllocationError) {
+        throw error;
+      }
+      throw new SequenceAllocationError(
+        `Failed to reserve a durable Stellar sequence number: ${
+          error instanceof Error && error.message.trim() ? error.message : 'Unknown error'
+        }`
+      );
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 }

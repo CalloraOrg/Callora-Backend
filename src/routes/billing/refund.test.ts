@@ -45,32 +45,59 @@ function makeIdempotencyPool(): Pool {
     string,
     { request_hash: string; status: string; response_status: number; response_body: string; expires_at: string }
   >();
+  const composite = (scope: string, key: string) => `${scope}::${key}`;
 
   const query = jest.fn(async (text: string, params: unknown[] = []) => {
     if (text.includes('DELETE FROM idempotency_store WHERE expires_at')) {
       return { rows: [] };
     }
     if (text.includes('SELECT request_hash')) {
-      const key = params[0] as string;
-      const record = store.get(key);
+      const [scope, key] = params as [string, string];
+      const record = store.get(composite(scope, key));
       return { rows: record ? [record] : [] };
     }
     if (text.includes('INSERT INTO idempotency_store')) {
-      const [key, requestHash, status, expiresAt] = params as [string, string, string, string];
-      store.set(key, { request_hash: requestHash, status, response_status: 0, response_body: '', expires_at: expiresAt });
-      return { rows: [] };
+      const [scope, key, requestHash, status, expiresAt] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
+      if (store.has(composite(scope, key))) {
+        return { rows: [], rowCount: 0 };
+      }
+      store.set(composite(scope, key), {
+        request_hash: requestHash,
+        status,
+        response_status: 0,
+        response_body: '',
+        expires_at: expiresAt,
+      });
+      return { rows: [], rowCount: 1 };
     }
     if (text.includes('UPDATE idempotency_store')) {
-      const [status, responseStatus, responseBody, key] = params as [string, number, string, string];
-      const existing = store.get(key);
+      const [status, responseStatus, responseBody, scope, key] = params as [
+        string,
+        number,
+        string,
+        string,
+        string,
+      ];
+      const existing = store.get(composite(scope, key));
       if (existing) {
-        store.set(key, { ...existing, status, response_status: responseStatus, response_body: responseBody });
+        store.set(composite(scope, key), {
+          ...existing,
+          status,
+          response_status: responseStatus,
+          response_body: responseBody,
+        });
       }
       return { rows: [] };
     }
-    if (text.includes('DELETE FROM idempotency_store WHERE idempotency_key')) {
-      const key = params[0] as string;
-      store.delete(key);
+    if (text.includes('DELETE FROM idempotency_store WHERE scope')) {
+      const [scope, key] = params as [string, string];
+      store.delete(composite(scope, key));
       return { rows: [] };
     }
     return { rows: [] };
@@ -247,4 +274,36 @@ describe('POST /api/billing/refund', () => {
     expect(second.body.success).toBe(false);
     expect(grant).toHaveBeenCalledTimes(1);
   });
+
+  it('prevents duplicate refunds on concurrent retries with the same Idempotency-Key', async () => {
+    let grantCallCount = 0;
+    const grant = jest.fn().mockImplementation(async () => {
+      grantCallCount++;
+      // simulate slight async latency
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return makeCredit({ balance_usdc: '15.00' });
+    });
+    const pool = makeIdempotencyPool();
+    const app = buildApp({ pool, creditsRepository: { grant } as unknown as CreditsRepository });
+
+    const [res1, res2] = await Promise.all([
+      request(app)
+        .post('/api/billing/refund')
+        .set('x-admin-api-key', ADMIN_KEY)
+        .set('idempotency-key', 'refund-key-concurrent')
+        .send(validPayload),
+      request(app)
+        .post('/api/billing/refund')
+        .set('x-admin-api-key', ADMIN_KEY)
+        .set('idempotency-key', 'refund-key-concurrent')
+        .send(validPayload),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    // One request must succeed (200), and the concurrent conflicting one must be rejected (409) or replayed
+    expect(statuses).toEqual([200, 409]);
+    expect(grant).toHaveBeenCalledTimes(1);
+    expect(grantCallCount).toBe(1);
+  });
 });
+

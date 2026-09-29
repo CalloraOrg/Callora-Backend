@@ -121,3 +121,49 @@ test('worker starts, processes due schedules, and idles cleanly', async () => {
     await pool.end();
   }
 });
+
+test('worker handles cancellation cooperatively and preserves idempotency on restart', async () => {
+  const { repository, pool } = createUsageRepository();
+  try {
+    await repository.create({ userId: 'u1', apiId: 'api-1', endpointId: 'ep-1', apiKeyId: 'key-1', developerId: 'dev-1', amount: 15n, requestId: 'req-1', createdAt: new Date('2026-06-01T00:00:00.000Z') });
+    
+    const store = new InMemoryScheduleStore();
+    const objectStorage = new HmacObjectStorageClient();
+    
+    let uploadsStarted = 0;
+    const originalUpload = objectStorage.uploadObject.bind(objectStorage);
+    objectStorage.uploadObject = async (input) => {
+      uploadsStarted++;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      if (input.signal?.aborted) {
+        throw new Error('AbortError');
+      }
+      return originalUpload(input);
+    };
+
+    const service = new ScheduledExportsService({ findByApiId: async () => listAllEvents(pool) }, store, objectStorage);
+    const schedule = await service.createSchedule({ developerId: 'dev-1', name: 'Minute export', cron: '* * * * *', s3Bucket: 'exports', s3Region: 'us-east-1', s3Endpoint: 'https://s3.example.com', s3AccessKeyId: 'akid', s3SecretAccessKey: 'secret', enabled: true });
+    
+    await store.update(schedule.id, { nextRunAt: new Date(0) });
+    const expectedStamp = new Date(0).toISOString().replace(/[:.]/g, '-');
+
+    const worker = createScheduledExportsWorker(service, { intervalMs: 25 });
+    worker.start();
+    
+    await new Promise(resolve => setTimeout(resolve, 10));
+    worker.stop();
+    await worker.awaitIdle();
+    
+    assert.equal(objectStorage.uploads.length, 0);
+    
+    worker.start();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    worker.stop();
+    await worker.awaitIdle();
+    
+    assert.equal(objectStorage.uploads.length >= 2, true);
+    assert.match(objectStorage.uploads[0].key, new RegExp(`-${expectedStamp}.csv`));
+  } finally {
+    await pool.end();
+  }
+});

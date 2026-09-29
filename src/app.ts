@@ -288,9 +288,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       allowedHeaders: [
         "Content-Type",
         "Authorization",
-        "Idempotency-Key",
-        "If-None-Match",
-        "X-Correlation-Id",
+        "x-admin-api-key",
         "x-request-id", // Added for tracing
       ],
       credentials: true,

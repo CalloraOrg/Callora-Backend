@@ -79,6 +79,13 @@ export const envSchema = z
     JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
     ADMIN_API_KEY: z.string().min(1, "ADMIN_API_KEY is required"),
     METRICS_API_KEY: z.string().min(1, "METRICS_API_KEY is required"),
+    TRUST_FORWARDED_USER_ID: z
+      .string()
+      .optional()
+      .transform((v) => v === "true")
+      .default(false),
+    FORWARDED_USER_ID_SECRET: z.string().optional(),
+    INTERNAL_GATEWAY_SECRET: z.string().optional(),
 
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
