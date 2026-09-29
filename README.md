@@ -194,6 +194,8 @@ Gateway proxy routes accept API keys through either:
 The gateway auth middleware performs prefix-based lookup, timing-safe full-key hash verification, revoked-key checks, and request context loading for the authenticated `user`, `vault`, `api`, `endpoint`, and `apiKeyRecord`.
 
 See [docs/gateway-api-key-auth.md](./docs/gateway-api-key-auth.md) for the full flow, attached request fields, and failure responses.
+For the complete map of route prefixes to accepted credentials — Bearer JWTs, `x-user-id`, `x-admin-api-key`, admin-role JWTs, gateway `x-api-key`, and `METRICS_API_KEY` — including required JWT claims, algorithms, expiry, and revocation behaviour, see [Authentication modes and trust boundaries](./docs/auth-api.md#authentication-modes-and-trust-boundaries).
+
 
 ## API Registration
 
