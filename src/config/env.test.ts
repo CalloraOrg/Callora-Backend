@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as fc from "fast-check";
 import { envSchema } from "./env.js";
 
@@ -248,5 +250,40 @@ describe('env schema — revenue ledger indexer config', () => {
       REVENUE_LEDGER_INDEXER_BATCH_SIZE: '-10',
     });
     expect(result.success).toBe(false);
+  });
+});
+
+
+describe("environment template parity", () => {
+  const sourceRoot = path.resolve(process.cwd(), "src");
+  const templatePath = path.resolve(process.cwd(), ".env.example");
+
+  function sourceFiles(directory: string): string[] {
+    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const filePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return sourceFiles(filePath);
+      return entry.isFile() && /\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)
+        ? [filePath]
+        : [];
+    });
+  }
+
+  it("documents every process.env key read by application source", () => {
+    const referencedKeys = new Set<string>();
+    const processEnvKey = /process\.env\.([A-Z][A-Z0-9_]*)/g;
+
+    for (const filePath of sourceFiles(sourceRoot)) {
+      const source = fs.readFileSync(filePath, "utf8");
+      for (const match of source.matchAll(processEnvKey)) referencedKeys.add(match[1]);
+    }
+
+    const documentedKeys = new Set(
+      [...fs.readFileSync(templatePath, "utf8").matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map(
+        (match) => match[1],
+      ),
+    );
+    const missingKeys = [...referencedKeys].filter((key) => !documentedKeys.has(key));
+
+    expect(missingKeys).toEqual([]);
   });
 });
