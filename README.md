@@ -355,7 +355,7 @@ callora-backend/
 | `RETRY_MAX_ATTEMPTS` | Maximum retry attempts | `3` |
 | `RETRY_BASE_DELAY_MS` | Initial retry delay (ms) | `1000` |
 
-See `.env.example` for complete configuration options.
+See the documented [`.env.example`](./.env.example) template for complete configuration options.
 
 ## Testing
 
