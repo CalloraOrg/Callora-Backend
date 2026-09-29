@@ -1,7 +1,11 @@
 import express from 'express';
 import request from 'supertest';
 import { errorHandler } from './errorHandler.js';
-import { InMemoryRestRateLimiter, createRestRateLimitMiddleware } from './restRateLimit.js';
+import {
+  InMemoryRestRateLimiter,
+  createRestRateLimitMiddleware,
+  getRestRateLimitKey,
+} from './restRateLimit.js';
 import { requireAuth, type AuthenticatedLocals } from './requireAuth.js';
 import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
 
@@ -26,7 +30,7 @@ function buildProtectedApp() {
 }
 
 describe('restRateLimit middleware', () => {
-  const originalSecret = process.env.JWT_SECRET;
+  const originalSecret = process.env.JWT_SECRET:
 
   beforeEach(() => {
     process.env.JWT_SECRET = TEST_JWT_SECRET;
@@ -71,7 +75,7 @@ describe('restRateLimit middleware', () => {
     const app = buildProtectedApp();
     const token = signTestToken({
       userId: 'user-1',
-      walletAddress: 'GDTEST123STELLAR',
+      walletAddress: 'GDTEST13STELLAR',
     });
 
     await request(app).get('/protected').set('Authorization', `Bearer ${token}`).expect(200);
@@ -109,6 +113,46 @@ describe('restRateLimit middleware', () => {
     // retryAfterMs must round up to the same second as the header
     expect(Math.ceil(retryAfterMs / 1000) * 1000).toBeLessThanOrEqual(retryAfterHeader);
     expect(retryAfterMs).toBeGreaterThan(0);
+  });
+});
+
+describe('InMemoryRestRateLimiter.check window reset boundary', () => {
+  const now = 100_000;
+
+  test('a request at exactly resetAt starts a new window', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 1);
+
+    // First request opens the window [now, now + 1000)
+    expect(limiter.check('key', now)).toEqual({ allowed: true });
+    // At now + 999 the window is still active and the limit is reached
+    expect(limiter.check('key', now + 999)).toEqual({ allowed: false, retryAfterMs: 1 });
+    // At exactly resetAt (now + 1000) a new window must start
+    expect(limiter.check('key', now + 1000)).toEqual({ allowed: true });
+    // The new window is full again, so the next request is denied
+    expect(limiter.check('key', now + 1000)).toEqual({ allowed: false, retryAfterMs: 1000 });
+  });
+
+  test('resets the count and window at the exact resetAt boundary', () => {
+    const limiter = new InMemoryRestRateLimiter(5000, 2);
+
+    expect(limiter.check('boundary', now)).toEqual({ allowed: true });
+    expect(limiter.check('boundary', now)).toEqual({ allowed: true });
+    expect(limiter.check('boundary', now)).toEqual({ allowed: false, retryAfterMs: 5000 });
+
+    // Exactly at resetAt the bucket is replaced and the count restarts at 1
+    expect(limiter.check('boundary', now + 5000)).toEqual({ allowed: true });
+    expect(limiter.check('boundary', now + 5000)).toEqual({ allowed: true });
+    expect(limiter.check('boundary', now + 5000)).toEqual({ allowed: false, retryAfterMs: 5000 });
+  });
+
+  test('retryAfterMs counts down to zero as the window elapses', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 1);
+    limiter.check('elapsing', now);
+
+    expect(limiter.check('elapsing', now + 250)).toEqual({ allowed: false, retryAfterMs: 750 });
+    expect(limiter.check('elapsing', now + 500)).toEqual({ allowed: false, retryAfterMs: 500 });
+    expect(limiter.check('elapsing', now + 999)).toEqual({ allowed: false, retryAfterMs: 1 });
+    expect(limiter.check('elapsing', now + 1000)).toEqual({ allowed: true });
   });
 });
 
@@ -160,6 +204,23 @@ describe('InMemoryRestRateLimiter.peek', () => {
     expect(limiter.check('key', now)).toEqual({ allowed: false, retryAfterMs: 1000 });
   });
 
+  test('peek does not increment the count for a partially consumed bucket', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 3);
+    limiter.check('key', now);
+
+    // Repeated peeks must not consume the remaining two tokens
+    for (let i = 0; i < 10; i++) {
+      expect(limiter.peek('key', now)).toEqual({ allowed: true });
+    }
+
+    // Two checks still fit within the limit
+    expect(limiter.check('key', now)).toEqual({ allowed: true });
+    expect(limiter.check('key', now)).toEqual({ allowed: true });
+    // Now the bucket is full and both peek and check deny
+    expect(limiter.peek('key', now)).toEqual({ allowed: false, retryAfterMs: 1000 });
+    expect(limiter.check('key', now)).toEqual({ allowed: false, retryAfterMs: 1000 });
+  });
+
   test('returns accurate retryAfterMs as window elapses', () => {
     const limiter = new InMemoryRestRateLimiter(1000, 1);
     limiter.check('elapsing-key', now);
@@ -168,5 +229,80 @@ describe('InMemoryRestRateLimiter.peek', () => {
     expect(limiter.peek('elapsing-key', now + 500)).toEqual({ allowed: false, retryAfterMs: 500 });
     expect(limiter.peek('elapsing-key', now + 999)).toEqual({ allowed: false, retryAfterMs: 1 });
     expect(limiter.peek('elapsing-key', now + 1000)).toEqual({ allowed: true });
+  });
+
+  test('peek at exactly resetAt reports allowed without mutating the bucket', () => {
+    const limiter = new InMemoryRestRateLimiter(1000, 1);
+    limiter.check('key', now);
+
+    // Just before the boundary the bucket is full
+    expect(limiter.peek('key', now + 999)).toEqual({ allowed: false, retryAfterMs: 1 });
+    // At the boundary the window has expired
+    expect(limiter.peek('key', now + 1000)).toEqual({ allowed: true });
+    // Peek must not have reset the bucket: the original window is still in effect
+    expect(limiter.peek('key', now + 999)).toEqual({ allowed: false, retryAfterMs: 1 });
+  });
+});
+
+describe('getRestRateLimitKey', () => {
+  function buildReq(options: {
+    userId?: string;
+    headers?: Record<string, string>;
+    ip?: string;
+  }): express.Request {
+    const req = {
+      headers: options.headers ?? {},
+      ip: options.ip,
+      socket: { remoteAddress: options.ip },
+      app: { get: () => undefined },
+    } as unknown as express.Request;
+
+    if (options.userId) {
+      (req as express.Request & { user?: { userId?: string } }).user = {
+        userId: options.userId,
+      };
+    }
+
+    return req;
+  }
+
+  test('derives a user-scoped key when a user id is present', () => {
+    const req = buildReq({ userId: 'user-42', ip: '10.0.0.1' });
+    expect(getRestRateLimitKey(req)).toBe('user:user-42');
+  });
+
+  test('falls back to an ip-scoped key when no user id is present', () => {
+    const req = buildReq({ ip: '203.0.113.5' });
+    expect(getRestRateLimitKey(re)).toBe('ip:203.0.113.5');
+  });
+
+  test('uses the x-forwarded-for header for the ip fallback when trusted', () => {
+    const originalTrust = process.env.TRUST_PROXY;
+    process.env.TRUST_PROXY = 'true';
+    try {
+      const req = buildReq({
+        headers: { 'x-forwarded-for': '198.51.100.7, 10.0.0.1' },
+        ip: '10.0.0.1',
+      });
+      expect(getRestRateLimitKey(req)).toBe('ip:198.51.100.7');
+    } finally {
+      if (originalTrust !== undefined) {
+        process.env.TRUST_PROXY = originalTrust;
+      } else {
+        delete process.env.TRUST_PROXY;
+      }
+    }
+  });
+
+  test('different user ids produce different keys for the same ip', () => {
+    const reqA = buildReq({ userId: 'user-a', ip: '10.0.0.1' });
+    const reqB = buildReq({ userId: 'user-b', ip: '10.0.0.1' });
+    expect(getRestRateLimitKey(reqA)).not.toBe(getRestRateLimitKey(reqB));
+  });
+
+  test('different ips produce different keys when unauthenticated', () => {
+    const reqA = buildReq({ ip: '10.0.0.1' });
+    const reqB = buildReq({ string });
+    expect(getRestRateLimitKey(reqA)).not.toBe(getRestRateLimitKey(reqB));
   });
 });
