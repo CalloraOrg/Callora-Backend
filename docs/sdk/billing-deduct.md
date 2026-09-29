@@ -25,73 +25,73 @@ route handler never executes.
 
 ## Three-phase deduct lifecycle
 
-The service layer executes the deduction in three phases. The row in `usage_events`
-transitions through `pending`, `applied`, and `failed` states. SDK authors must
-map response flags to these states rather than inferring from HTTP status alone.
+The service layer executes every deduction in three phases. The combination of
+response flags (`alreadyProcessed`, `deductionApplied`, `reconciliationRequired`)
+tells SDKs exactly which phase completed and what to do next.
 
-| State | `stellar_tx_hash` | `reconciliation_required` | Meaning | Operator action |
-|-------|------------------|--------------------------|---------|----------------|
-| **pending** | `NULL` | `false` | Phase 1 completed. Row inserted, Soroban deduct not yet confirmed. Only visible if the process crashed mid-Phase 2. | Reconciliation must query Soroban by `usage_event_id` / `request_id` to determine whether the deduct landed. |
-| **applied** | non-NULL tx hash | `false` | Phase 3 completed. Soroban deduct confirmed and the tx hash persisted. Terminal success state. | None. Rows in this state are audit-truth. |
-| **failed** | `NULL` | `true` | Phase 2 exhausted all retries or returned a non-retryable error. The row is kept (not rolled back) so the `unique` `usage_event_id` is stable and the client can safely retry with the same `requestId`. | Reconciliation must either confirm the deduct never landed (then manually apply or mark as aborted) or discover a late landing tx and backfill `stellar_tx_hash`. |
+### Row states
 
-The `reconciliationRequired` flag on the response is `true` exactly when the row is in the
-**failed** state (Phase 2 failed after Phase 1 committed). It is false for both **pending** and **applied**.
+| State | `status` | `stellar_tx_hash` | When it occurs |
+|-------|----------|-----------------|--------------|
+| Pending | `pending` | `NULL` | Phase 1 committed, Phase 2 not yet confirmed |
+| Applied | `applied` | Non-null tx hash | Phase 3 committed |
+| Failed | `failed` | `NULL` | Phase 2 exhausted retries and the row was marked failed in the same transaction |
 
 ### Sequence diagram
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant A as API Route
-    participant B as BillingService
-    participant D as usage_events DB
-    participant S as Soroban RPC
+    participant A as API / BillingService
+    participant D as usage_events (DB)
+    participant S as Soroban (Stellar)
 
     C->>A: POST /api/billing/deduct (requestId)
-    A->>B: deduct(request)
-    B->>D: SELECT BY request_id
-    alt row exists
-        D-->>B: existing row
-        B-->>A: {alreadyProcessed: true, deductionApplied: <txHash != null>}
-    else new request
-        B->>D: Phase 1 - INSERT (stellar_tx_hash NULL, reconciliation_required false)
-        D-->>B: usage_event_id
-        B->>S: Phase 2 - Soroban deduct (with retries)
-        alt deduct confirmed
-          S-->>B: txHash
-          B->>D: Phase 3 - UPDATE stellar_tx_hash
-          B-->>A: {alreadyProcessed: false, deductionApplied: true, reconciliationRequired: false}
-        else deduct failed after retries
-          B->>D: mark reconciliation_required = true
-          B-->>A: {alreadyProcessed: false, deductionApplied: false, reconciliationRequired: true}
+    A->>D: SELECT BY request_id
+    alt row exists and status = 'applied'
+        A->>C: 200 { alreadyProcessed: true, deductionApplied: true, reconciliationRequired: false }
+    else row exists and status = 'pending'
+        A->>C: 209 { alreadyProcessed: true, deductionApplied: false, reconciliationRequired: true }
+    else row exists and status = 'failed'
+        A->>C: 409 { alreadyProcessed: true, deductionApplied: false, reconciliationRequired: false }
+    else no row
+        Note over A,D: Phase 1 — insert pending row
+        A->>D: INSERT (status = 'pending', stellar_tx_hash = NULL)
+        Note over A,S: Phase 2 — Soroban deduct with retries
+        A->>S: deduct()
+        alt Soroban succeeds
+            S->>A: tx hash
+            Note over A,D: Phase 3 — persist tx hash
+            A->>D: UPDATE status = 'applied', stellar_tx_hash = <tx>
+            A->>C: 201 { alreadyProcessed: false, deductionApplied: true, reconciliationRequired: false }
+        else Soroban fails after retries
+            A->>D: UPDATE status = 'failed'
+            A->>C: 502/504 { alreadyProcessed: false, deductionApplied: false, reconciliationRequired: false }
         end
     end
-    A-->>C: HTTP response
-
 ```
 
-### Response flag matrix
+### Response flag semantics
 
-Every combination of `alreadyProcessed`, `deductionApplied`, and `reconciliationRequired` maps to a documented meaning. SDKs must not infer state from HTTP status alone.
+Every combination of the three response flags has a specific meaning:
 
-| `alreadyProcessed` | `deductionApplied` | `reconciliationRequired` | Row state | Meaning for SDKs |
-|------------------|------------------|-------------------------|----------|---------------------|
-| `false` | `true` | `false` | applied | Fresh deduction confirmed on-chain. The charge happened exactly once. Store `stellarTxHash` and `createdAt`. No retry needed. |
-| `true` | `true` | `false` | applied | This `requestId` was already applied by a prior call. The charge happened exactly once. Do not report a new charge; treat as a successful duplicate. |
-| `false` | `false` | `true` | failed | Phase 1 committed but the Soroban deduct did not confirm. The charge may or may not have landed. Retry with the same `requestId`; the service will resolve the row. Operators must investigate the row. |
-| `true` | `false` | `true` | failed | A failed row was retried and the service still could not confirm the deduct. Same SDK guidance as the failed row above; operators must reconcile. |
-| `false` | `true` | `true` | applied | Reserved for future use. The deduct landed but the tx hash could not be persisted in the same call. Treat as applied and let operators backfill the hash. |
-| `true` | `true` | `true` | applied | Reserved for future use. Same as above but the request was a retry. |
-| `false` | `false` | `false` | pending | The row was inserted but the process crashed before Phase 2 completed. Retry with the same `requestId`; operators must reconcile if the client never returns. |
-| `true` | `false` | `false` | pending | Reserved for future use. A pending row was returned to a retry before Phase 2 completed. Retry again. |
+| `alreadyProcessed` | `deductionApplied` | `reconciliationRequired` | Meaning | SDK action |
+|------------------|------------------|----------------------|---------|----------|
+| `false` | `true` | `false` | New deduction confirmed on chain and persisted. | Success. Stop. |
+| `true` | `true` | `false` | Replay of an already-applied deduction. | Success. Treat as original response. |
+| `true` | `false` | `true` | Pending row exists; on-chain deduction not confirmed. | Retry with the same `requestId`. Operators must reconcile if the client never retries. |
+| `true` | `false` | `false` | Previous attempt failed; row is marked `failed`. | Retry with the same `requestId`. |
+| `false` | `false` | `false` | Reserved for validation or infrastructure failures before Phase 1. | Fix the request and retry. |
 
-In practice the service only emits the following three combinations today:
+### Single-process semaphore limitation
 
-- `successful, fresh`: `alreadyProcessed: false`, `deductionApplied: true`, `reconciliationRequired: false`
-- `successful, duplicate`: `alreadyProcessed: true`, `deductionApplied` matches the existing row, `reconciliationRequired` matches the existing row
+The service guards concurrent deductions for the same user with an in-memory
+semaphore. This semaphore is **per-process only**. It does not provide cross-instance
+mutual exclusion:
 
-Any other combination indicates a bug or a manual reconciliation outcome and should be treated as an operational incident.
+- Two instances of the backend running behind a load balancer can enter Phase 2 for the same user simultaneously.
+- The database `UNIQUE` constraint on `usage_events.request_id` is the authoritative guard against double charges across instances.
+- Operators must treat `reconciliationRequired: true` rows as the signal that a cross-instance race may have occurred and needs manual repair.
 
 ---
 
@@ -106,7 +106,7 @@ Authorization: Bearer <jwt>
 ### Body fields
 
 | Field | Type | Required | Description |
-|---|---|---|---|
+|-------|------|---------|-------------|
 | `requestId` | `string` | **Yes** | Unique idempotency key for this billing event. Must be a non-empty string. Reusing the same value returns the existing result with `alreadyProcessed: true`. |
 | `developerId` | `string` | No | The developer/account being billed. If omitted entirely, defaults to the authenticated user's ID. If provided, it must be a non-empty string — `null`, an empty string, or a non-string value are all rejected with `400 BAD_REQUEST` rather than being passed through to the billing service. |
 | `apiId` | `string` | **Yes** | The API being called. Non-empty string. |
@@ -122,15 +122,15 @@ Authorization: Bearer <jwt>
 - When both are present, the middleware computes a hash over the entire body
   **excluding** the `idempotencyKey` field itself, but **including** `requestId`.
 - Two requests with the same `Idempotency-Key` but different `requestId` values
-  will produce different hashes and receive a `409 IDEMPLOTENCY_CONFLICT`.
-- If only `requestId` is provided (no `idempotencyKey`/`Idempotency-Key` Header),
+  will produce different hashes and receive a `409 IDEMPOTENCY_CONFLICT`.
+- If only `requestId` is provided (no `idempotencyKey`/`Idempotency-Key` header),
   only the service-layer idempotency applies.
 
 ---
 
 ## Success response
 
-HTTP `200`
+HTTP 200
 
 ```json
 {
@@ -144,13 +144,13 @@ HTTP `200`
 ```
 
 | Field | Type | Meaning |
-|---|---|---|
+|-------|------|---------|
 | `success` | `boolean` | Always `true` for 200 responses. |
 | `usageEventId` | `string` | Database ID of the usage event record. Stable across retries for the same `requestId`. |
-| `stellarTxHash` | `string | null` | Soroban transaction hash. Present when the on-chain deduction succeeded. Omitted or `null` when the row is in the **pending** or **failed** state. |
+| `stellarTxHash` | `string` | Soroban transaction hash. Present when the on-chain deduction succeeded. Omitted or `null` when the row is still `pending` or `failed`. |
 | `alreadyProcessed` | `boolean` | `true` when this `requestId` was already recorded in `usage_events`. The charge only happened once — this is the key signal for SDKs to avoid double-reporting. |
-| `deductionApplied` | `boolean` | `true` when the Soroban deduction is confirmed for this row (either fresh or from a prior call). |
-| `reconciliationRequired` | `boolean` | `true` when the row is in the **failed** state and operators must reconcile it. |
+| `deductionApplied` | `boolean` | `true` when the on-chain deduction has been confirmed and the tx hash is persisted. |
+| `reconciliationRequired` | `boolean` | `true` when a `pending` row exists but the on-chain deduction has not been confirmed. Operators must repair these rows if the client never retries. |
 
 ### `alreadyProcessed: true` (retry scenario)
 
@@ -181,7 +181,7 @@ Idempotent-Replayed: true
 ```
 
 The body is identical to the original response (including its original HTTP
-300). SDKs should treat a replayed response the same as the original.
+status). SDKs should treat a replayed response the same as the original.
 Checking the `Idempotent-Replayed` header is optional but useful for telemetry.
 
 ---
@@ -200,11 +200,7 @@ Errors that reach the shared Express error handler have this shape:
 {
   "code": "INSUFFICIENT_BALANCE",
   "message": "Insufficient balance: required 1000000 units, available 0",
-  "requestId": "req_abc123",
-  "usageEventId": "42",
-  "alreadyProcessed": false,
-  "deductionApplied": false,
-  "reconciliationRequired": true
+  "requestId": "req_abc123"
 }
 ```
 
@@ -214,7 +210,7 @@ the billing `requestId` body field.
 ### Route validation errors (400)
 
 | Condition | HTTP | `code` | Message |
-|---|---|---|---|
+|-----------|------|--------|---------|
 | Missing or empty `requestId` | 400 | `BAD_REQUEST` | `requestId is required and must be a non-empty string` |
 | `developerId` present but `null`, empty, or non-string | 400 | `BAD_REQUEST` | `developerId is required` |
 | Missing or empty `apiId` | 400 | `BAD_REQUEST` | `apiId is required and must be a non-empty string` |
@@ -227,14 +223,14 @@ the billing `requestId` body field.
 ### Authentication errors (401)
 
 | Condition | HTTP | `code` |
-|---|---|---|
+|-----------|------|--------|
 | Missing or invalid JWT | 401 | `UNAUTHORIZED`, `INVALID_AUTH_HEADER`, `MISSING_TOKEN`, `INVALID_TOKEN`, `MISSING_CLAIMS`, `TOKEN_EXPIRED`, or `TOKEN_NOT_ACTIVE` |
 | Authenticated user unexpectedly missing | 401 | `UNAUTHORIZED` |
 
 ### Insufficient balance (402)
 
 | Condition | HTTP | `code` |
-|---|---|---|
+|-----------|------|--------|
 | On-chain balance too low | 402 | `INSUFFICIENT_BALANCE` |
 
 The `message` field contains Soroban-level details, e.g. `"Insufficient balance: required 1000000 units, available 0"`.
@@ -242,12 +238,11 @@ The `message` field contains Soroban-level details, e.g. `"Insufficient balance:
 ### Idempotency middleware errors (409) — direct responses
 
 These are written directly by the middleware and do **not** use the standard
-error envelope. The body shape is `{
-
-"code", "message", "error" }` — note `"error` instead of `"message"` at the top level, and no `requestId` field.
+error envelope. The body shape is `{ "error", "message", "code" }` — note
+`"error"` instead of `"message"` at the top level, and no `requestId` field.
 
 | Condition | HTTP | Body `code` | Meaning |
-|---|---|---|---|
+|-----------|------|------------|---------|
 | Same `Idempotency-Key` but different request hash | 409 | `IDEMPOTENCY_CONFLICT` | The payload changed between calls. Use a different key or ensure the request body is identical. |
 | Same `Idempotency-Key` with an in-flight request | 409 | `IDEMPOTENCY_IN_PROGRESS` | Another request with this key is still processing. Wait and retry. |
 
@@ -255,7 +250,7 @@ error envelope. The body shape is `{
 {
   "error": "Conflict",
   "message": "Idempotency key conflict: payload mismatch",
-  "code": "IDEMPLOTENCY_CONFLICT"
+  "code": "IDEMPOTENCY_CONFLICT"
 }
 ```
 
@@ -270,7 +265,7 @@ error envelope. The body shape is `{
 ### Infrastructure errors (500, 502, 504)
 
 | Condition | HTTP | `code` |
-|---|---|---|
+|-----------|------|--------|
 | Database pool unavailable | 500 | `DATABASE_NOT_AVAILABLE` |
 | Generic billing deduction failure | 500 | `BILLING_DEDUCTION_FAILED` |
 | Soroban balance-check, contract, or network failure | 502 | `SOROBAN_RPC_ERROR` |
@@ -280,19 +275,21 @@ error envelope. The body shape is `{
 
 ## Retry guidance for SDK authors
 
-### Retry matrix by HTTP status
+### Retry by HTTP status
 
-| Status | Code | Retry? | Guidance |
-|--------|------|--------|----------|
-| 200 | — | No | Success. If `alreadyProcessed` is `true`, the charge already happened. If `reconciliationRequired` `is `true`, surface the `requestId` in your operational dashboard and do not auto-retry forever. |
-| 400 | `BAD_REQUEST` | No | Fix the request body. Retrying unchanged will fail again. |
-| 401 | `UPAUTHORIZED` and friends | No | Refresh the token or fix the Authorization header. |
-| 402 | `INSUFFICIENT_BALANCE` | No | Top up the account. Retrying without a balance change will fail again. |
-| 409 | `IDEMPOTENCY_CONFLICT` | No | The payload changed between calls. Use a fresh `Idempotency-Key` or make the body identical. |
-| 409 | `IDEMPLOTENCY_IN_PROGRESS` | Yes, with backoff | Wait and retry with the same `Idempotency-Key`. Exponential backoff starting at ~200ms. |
-| 500 | `DATABASE_NOT_AVAILABLE`, `BILLING_DEDUCTION_FAILED` | Yes, with backoff | Retry with the same `requestId`. The middleware deletes the `Idempotency-Key` on 5xx, so the retry is treated as a fresh request. |
-| 502 | `SOROBAN_RPC_ERROR` | Yes, with backoff | Soroban contract or network failure. Retry with the same `requestId`. |
-| 504 | `SOROBAN_RPC_TIMEOUT` | Yes, with backoff | Soroban timeout. Retry with the same `requestId`. |
+| HTTP status | Code | Retry? | Guidance |
+|-------------|------|--------|----------|
+| 200 | — | No | Success. The deduction is applied (`deductionApplied: true`). Stop. |
+| 201 | — | No | Success. The deduction was applied for the first time. Stop. |
+| 209 | — | Yes, with the same `requestId` | Phase 2 is still in flight or the row is pending. Retry with exponential backoff until you receive 200/201 or 409. |
+| 400 | `BAD_REQUEST` | No | The request is malformed. Fix the body before retrying. Reusing the same `requestId` is safe once the body is valid. |
+| 401 | `UNAUTHORIZED`, `INVALID_AUTH_HEADER`, `MISSING_TOKEN`, `INVALID_TOKEN`, `MISSING_CLAIMS`, `TOKEN_EXPIRED`, `TOKEN_NOT_ACTIVE` | No | Refresh the token and retry with the same `requestId`. |
+| 402 | `INSUFFICIENT_BALANCE` | No | Top up the account before retrying. Reusing the same `requestId` is safe. |
+| 409 | `IDEMPOTENCY_CONFLICT` | No | The `Idempotency-Key` was reused with a different body. Use a different key or make the body identical. |
+| 409 | `IDEMPOTENCY_IN_PROGRESS` | Yes, after a brief delay | Another request with the same `Idempotency-Key` is still processing. Wait and retry with the same key. |
+| 500 | `DATABASE_NOT_AVAILABLE`, `BILLING_DEDUCTION_FAILED` | Yes, with exponential backoff | Transient infrastructure failure. Retry with the same `requestId`. |
+| 502 | `SOROBAN_RPC_ERROR` | Yes, with exponential backoff | Soroban failed after retries. Retry with the same `requestId`. |
+| 504 | `SOROBAN_RPC_TIMEOUT` | Yes, with exponential backoff | Soroban timed out. Retry with the same `requestId`. |
 
 ### Safe retry: same `requestId`
 
@@ -318,9 +315,6 @@ const response = await fetch("https://api.callora.io/api/billing/deduct", {
 const data = await response.json();
 if (data.alreadyProcessed) {
   console.log("Already processed — no double charge");
-}
-if (data.reconciliationRequired) {
-  console.warn("Rough row requires reconciliation", data.usageEventId);
 }
 ```
 
@@ -410,7 +404,6 @@ if (response.status >= 500) {
 ### Avoid: different body with same Idempotency-Key
 
 ```js
-
 // DO NOT do this — the middleware will reject it with 409 IDEMPOTENCY_CONFLICT
 await fetch("/api/billing/deduct", {
   headers: { "Idempotency-Key": "ik_abc" },
@@ -421,31 +414,8 @@ await fetch("/api/billing/deduct", {
   headers: { "Idempotency-Key": "ik_abc" }, // same key
   body: JSON.stringify({ requestId: "req_002", ... }), // different body
 });
-// → 409 IDEMPLOTENCY_CONFLICT
+// → 409 IDEMPOTENCY_CONFLICT
 ```
-
----
-
-## Single-process semaphore limitation
-
-The billing service guards concurrent deductions for the same user with an
-in-memory semaphore (map of `userId → Promise`). This guarantee is **per process
-instance only**. It does not coordinate across multiple API instances, containers, or
-replicas.
-
-Consequences for SDK authors and operators:
-
-- Two requests for the same user that land on different instances may both proceed
-  to Soroban in parallel. The `usage_events.request_id` UNIQUE constraint is the
-  authoritative guarantee against double charges; the semaphore is an optimization
-  that reduces contention within a single process.
-- Operators must not rely on the semaphore to enforce a global per-user rate limit.
-  Use a distributed lock or a database-level advisory lock if a global guarantee
-  is required.
-- Scaling to multiple instances is safe for correctness because of the UNIQUE
-  constraint, but it increases the number of concurrent Soroban calls and the
-  chance of a constraint violation that the service must translate into an
-  `alreadyProcessed` response.
 
 ---
 
@@ -454,7 +424,7 @@ Consequences for SDK authors and operators:
 ### First deduction
 
 ```bash
-curl -s -X POST "http://localhost:3000/api/billing/deduct" \
+curl -s -X POST"http://localhost:3000/api/billing/deduct" \
   -H "Authorization: Bearer <jwt>" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: ik_yxz789" \

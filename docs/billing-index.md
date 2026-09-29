@@ -70,10 +70,10 @@ Returns paginated billing requests for the authenticated developer.
 Structured logs include `correlationId` (from request context/headers)
 and `indexHint: "idx_billing_requests_lookup_hot"`.
 
-## Related docs
+## Related documentation
 
-- [Billing Idempotency](./billing-idempotency.md) — three-phase deduct lifecycle, row states, and retry guidance.
-- [SDK: POST /api/billing/deduct](./sdk/billing-deduct.md) — client-facing idempotency contract and retry matrix.
+- **Three-phase deduct lifecycle** — see [Billing Idempotency → Three-Phase Deduct Lifecycle](billing-idempotency.md#three-phase-deduct-lifecycle) for the `usage_events` row states (`pending`, `applied`, `failed`), the response flag semantics (`alreadyProcessed`, `deductionApplied`, `reconciliationRequired`), and the per-process semaphore limitation.
+- **SDK contract** — see [SDK: POST /api/billing/deduct Idempotency Contract](sdk/billing-deduct.md) for the client-facing retry guidance per HTTP status.
 
 ## Rollback
 
