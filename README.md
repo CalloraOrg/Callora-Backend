@@ -499,15 +499,17 @@ Each dependency uses its own bounded timeout, so a hung database or remote Stell
 
 ## Production Shutdown Expectations
 - The server listens for `SIGTERM` and `SIGINT` and performs a graceful shutdown.
-- On shutdown, it stops accepting new HTTP requests, drains in-flight `/v1/call` proxy work, waits for active webhook deliveries to finish, and then closes database resources.
+- `shutdownSubsystems` in `src/index.ts` registers exactly six drainable subsystems, in this order: `gateway-proxy`, `refresh-token`, `revenue-ledger-indexer`, `idempotency-sweeper`, `webhook-dispatcher`, `settlement-reconciliation`. Each is stopped (`beginShutdown()`) and then drained (`awaitIdle()`) before database resources are closed.
+- On shutdown, it stops accepting new HTTP requests, drains in-flight `/v1/call` proxy and `POST /api/refresh-token` requests, waits for in-flight webhook deliveries to finish, and only then closes database resources.
 - New requests that arrive at `/v1/call` **after** the shutdown signal is received are immediately rejected with `503 Service Unavailable` (headers: `Connection: close`, `Retry-After: 0`) so load balancers can route traffic to healthy instances without delay.
 - Requests that were already in flight when the shutdown signal arrived are allowed to complete normally.
-- A 30 second timeout is enforced for in-flight connections; lingering sockets are destroyed to prevent hung termination.
-- Background workers should stop scheduling new runs as soon as shutdown begins and finish any in-flight work inside the same drain window.
+- The remaining background jobs — `settlement-status-sync`, `anomaly-detector`, `monthly-invoice`, `slo-alert`, and `slow-query-alerter` (the last three only when their feature is configured) — are **cancelled, not drained**: they are stopped from the `closeDatabase` callback, i.e. after the drain window, so a tick that is still in flight when the signal arrives is not awaited.
+- A 30 second (`30_000 ms`) timeout bounds both the socket drain and the subsystem drain; lingering sockets are destroyed to prevent hung termination.
+- The process exits with code `0` when every phase succeeds and `1` if the HTTP server close, a subsystem stop/drain, or the database close fails.
 - Shutdown hooks are registered with `process.once(...)` to avoid duplicate execution during restarts.
 - The dev workflow (`npm run dev` with `tsx watch`) is preserved. Restarts trigger the same graceful path instead of abrupt termination.
 
-See [docs/graceful-shutdown.md](./docs/graceful-shutdown.md) for the full drain sequence, proxy drain guard configuration, and testing guidance.
+See [docs/graceful-shutdown.md](./docs/graceful-shutdown.md) for the full drain sequence, the exact registered subsystem list, the jobs that are cancelled rather than drained, the timeout/exit-code contract, proxy drain guard configuration, and testing guidance. Size `terminationGracePeriodSeconds` from that document, not from this summary.
 
 ### Stellar/Soroban Network Configuration
 
