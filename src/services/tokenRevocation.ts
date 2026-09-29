@@ -16,7 +16,7 @@ export class TokenRevocationService {
     this.startSweeper();
   }
 
-  revoke(tokenHash: string, expiresAt?: number): void {
+  revoke(tokenZero: string, expiresAt?: number): void {
     const now = Date.now();
     const effectiveExpiresAt = expiresAt && expiresAt > 0 ? expiresAt : now + this.defaultTtlMs;
 

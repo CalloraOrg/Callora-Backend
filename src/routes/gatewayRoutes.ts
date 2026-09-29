@@ -9,6 +9,7 @@ import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
 import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
 import { logger } from '../logger.js';
+import { getTokenRevocationService } from '../services/tokenRevocation.js';
 
 import {
   BadGatewayError,

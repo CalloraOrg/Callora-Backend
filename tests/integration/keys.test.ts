@@ -30,6 +30,8 @@ import jwt from 'jsonwebtoken';
 import { createApp } from '../../src/app.js';
 import { defaultApiRepository } from '../../src/repositories/apiRepository.js';
 import { defaultDeveloperRepository } from '../../src/repositories/developerRepository.js';
+import { getTokenRevocationService } from '../../src/services/tokenRevocation.js';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -159,6 +161,7 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
   let testUser: TestUser;
   let otherUser: TestUser;
   let testApiId: number;
+  let upstreamRequestCount = 0;
 
   /**
    * Setup: Start PostgreSQL container, run migrations, seed test data
@@ -257,6 +260,7 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
         [testUser.developerId]
       );
     }
+    upstreamRequestCount = 0;
   });
 
   // ========================================================================
@@ -366,6 +370,59 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('error');
+    });
+  });
+
+  // ========================================================================
+  // Test: Revocation - DELETE /apis/:apiId/keys/:keyId then gateway call
+  // ========================================================================
+
+  describe('Revocation end-to-end (DELETE then gateway)', () => {
+    it('should reject a revoked key at the gateway with 401 and not contact upstream', async () => {
+      const token = signTestToken(testUser.userId, testUser.walletAddress);
+
+      // 1. Create a key via the API key router
+      const createResponse = await request(app)
+        .post(`/apis/${testApiId}/keys`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send({ scopes: ['read'] });
+
+      expect(createResponse.status).toBe(201);
+      const rawKey: string = createResponse.body.key;
+      const keyId: string = createResponse.body.id;
+      expect(rawKey).toMatch(/^ck_live_/);
+
+      // 2. Call the gateway successfully before revocation
+      const beforeResponse = await request(app)
+        .get(`/gateway/${testApiId}/some/path`)
+        .set('Authorization', `Bearer ${rawKey}`);
+
+      expect(beforeResponse.status).not.toBe(401);
+      expect(upstreamRequestCount).toBe(1);
+
+      // 3. Delete (revoke) the key
+      const deleteResponse = await request(app)
+        .delete(`/apis/${testApiId}/keys/${keyId}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect([200, 204]).toContain(deleteResponse.status);
+
+      // 4. The revocation service entry must be keyed by sha256 hash, not plaintext
+      const expectedHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+      const revocationService = getTokenRevocationService();
+      expect(revocationService.isRevoked(expectedHash)).toBe(true);
+      expect(revocationService.isRevoked(rawKey)).toBe(false);
+
+      // 5. Next gateway call with the revoked key must return 401
+      const afterResponse = await request(app)
+        .get(`/gateway/${testApiId}/some/path`)
+        .set('Authorization', `Bearer ${rawKey}`);
+
+      expect(afterResponse.status).toBe(401);
+
+      // 6. The upstream stub must not have recorded any request after revocation
+      expect(upstreamRequestCount).toBe(1);
     });
   });
 

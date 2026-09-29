@@ -2,8 +2,7 @@ import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
-import { idempotencyMiddleware } from '../middleware/idempotency.js';
-import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
@@ -32,7 +31,7 @@ const createApiKeyBodySchema = z.object({
 });
 
 function maskKey(prefix: string): string {
-  return `${prefix}****************`;
+  return `${prefix}******************`;
 }
 
 async function assertDeveloperOwnsApi(
@@ -72,7 +71,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
     requireAuth,
     validate({ params: apiIdParamsSchema, body: createApiKeyBodySchema }),
     keyIdempotency,
-    async (req, res: import('express').Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: type Express.Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const user = res.locals.authenticatedUser;
         if (!user) {
@@ -112,7 +111,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
     '/apis/:apiId/keys',
     requireAuth,
     validate({ params: apiIdParamsSchema }),
-    async (req, res: import('express').Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: type Express.Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const user = res.locals.authenticatedUser;
         if (!user) {
@@ -145,7 +144,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
     '/keys/:id',
     requireAuth,
     validate({ params: keyIdParamsSchema }),
-    (req, res: import('express').Response<unknown, AuthenticatedLocals>, next) => {
+    (req, res: type Express.Response<unknown, AuthenticatedLocals>, next) => {
       const user = res.locals.authenticatedUser;
       if (!user) {
         next(new UnauthorizedError());
@@ -170,6 +169,8 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       }
 
       // Add to in-memory revocation list for immediate invalidation
+      // The revocation service is keyed by the sha256 hash of the key,
+      // never the plaintext key value.
       if (sha256Hash) {
         getTokenRevocationService().revoke(sha256Hash);
       }
