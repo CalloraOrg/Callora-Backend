@@ -11,8 +11,8 @@ export interface UsageSseDeps {
 export interface UsageSseEventPayload {
   id: string;
   requestId: string;
-  apiKey: string;
   apiKeyId: string;
+  apiKeyPrefix?: string;
   apiId: string;
   endpointId: string;
   userId: string;

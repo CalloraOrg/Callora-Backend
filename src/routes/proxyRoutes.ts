@@ -62,6 +62,17 @@ const DEFAULT_STRIP_HEADERS = [
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Mask a plaintext API key for safe inclusion in SSE payloads.
+ * Keeps only a short prefix so operators can correlate events without
+ * exposing the full secret.
+ */
+function maskApiKey(apiKey: string): string {
+  if (!apiKey) return '';
+  const prefix = apiKey.slice(0, 8);
+  return `${prefix}…`;
+}
+
 function resolveConfig(partial?: Partial<ProxyConfig>): ProxyConfig {
   return {
     timeoutMs: partial?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -341,7 +352,6 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                 const recorded = await usageStore.record({
                   id: randomUUID(), // ID of the usage event itself
                   requestId,        // Idempotency key — prevents double-counts
-                  // apiKey field omitted to prevent storing plaintext keys
                   apiKeyId: keyRecord.id,
                   apiId: String(apiEntry.id),
                   endpointId: endpoint.endpointId,
@@ -355,8 +365,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                   defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
                     id: randomUUID(),
                     requestId,
-                    // apiKey field omitted to prevent broadcasting plaintext keys
                     apiKeyId: keyRecord.id,
+                    apiKeyPrefix: maskApiKey(apiKeyHeader),
                     apiId: String(apiEntry.id),
                     endpointId: endpoint.endpointId,
                     userId: keyRecord.userId,
