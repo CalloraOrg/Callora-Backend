@@ -109,7 +109,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
     '/apis/:apiId/keys',
     requireAuth,
     validate({ params: apiIdParamsSchema }),
-    async (req, res:  import('express').Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: import('express').Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const user = res.locals.authenticatedUser;
         if (!user) {
@@ -142,7 +142,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
     '/keys/:id',
     requireAuth,
     validate({ params: keyIdParamsSchema }),
-    (req, res:  import('express').Response<unknown, AuthenticatedLocals>, next) => {
+    (req, res: import('express').Response<unknown, AuthenticatedLocals>, next) => {
       const user = res.locals.authenticatedUser;
       if (!user) {
         next(new UnauthorizedError());
@@ -151,7 +151,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
 
       const { id } = keyIdParamsSchema.parse(req.params);
       
-      // Get the SHA-256 hash BEFORE revoking (while key still exists)
+      // Get the SHA-256 hash BEFORE(revoking (while key still exists)
       const sha256Hash = apiKeyRepository.getSha256Hash(id);
       
       const result = apiKeyRepository.revoke(id, user.id);
