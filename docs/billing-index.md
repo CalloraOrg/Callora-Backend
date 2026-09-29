@@ -72,8 +72,8 @@ and `indexHint: "idx_billing_requests_lookup_hot"`.
 
 ## Related documentation
 
-- **Three-phase deduct lifecycle** — see [Billing Idempotency → Three-Phase Deduct Lifecycle](billing-idempotency.md#three-phase-deduct-lifecycle) for the `usage_events` row states (`pending`, `applied`, `failed`), the response flag semantics (`alreadyProcessed`, `deductionApplied`, `reconciliationRequired`), and the per-process semaphore limitation.
-- **SDK contract** — see [SDK: POST /api/billing/deduct Idempotency Contract](sdk/billing-deduct.md) for the client-facing retry guidance per HTTP status.
+- [Billing idempotency and three-phase deduct lifecycle](./billing-idempotency.md)
+- [SDK: POST /api/billing/deduct idempotency contract](./sdk/billing-deduct.md)
 
 ## Rollback
 
