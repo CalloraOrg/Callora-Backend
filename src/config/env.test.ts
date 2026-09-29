@@ -245,7 +245,78 @@ describe('env schema — revenue ledger indexer config', () => {
     const result = envSchema.safeParse({
       ...baseEnv,
       REVENUE_LEDGER_INDEXER_INTERVAL_MS: '0',
-      REVENUE_LEDGER_INDEXER_BATCH_SIZE: '-10',
+      REVENEE_LEDGER_INDEXER_BATCH_SIZE: '-10',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('env schema — upstream host allowlist', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('defaults to an empty allowlist in production', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires UPSTREAM_ALLOWED_HOSTS in production', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      UPSTREAM_ALLOWED_HOSTS: 'api.example.com',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toBe('api.example.com');
+    }
+  });
+
+  it('defaults to loopback hosts in development', () => {
+    process.env.NODE_ENV = 'development';
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('127.0.0.1');
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('::1');
+    }
+  });
+
+  it('defaults to loopback hosts in test', () => {
+    process.env.NODE_ENV = 'test';
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
+    }
+  });
+
+  it('parses a comma-separated allowlist into an array', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      UPSTREAM_ALLOWED_HOSTS: 'api.example.com, api2.example.com',
+    });
+    expect(result.success).toBe((true));
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toEqual(['api.example.com', 'api2.example.com']);
+    }
+  });
+
+  it('rejects an empty UPSTREAM_ALLOWED_HOSTS in production', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      UPSTREAM_ALLOWED_HOSTS : '',
     });
     expect(result.success).toBe(false);
   });

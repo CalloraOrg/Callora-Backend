@@ -541,6 +541,22 @@ export const envSchema = z
         message: "HORIZON_URL is required when HORIZON_ENABLED=true",
       });
     }
+
+    // In production the upstream host allowlist must be explicitly configured.
+    // The default empty allowlist rejects all upstream hosts, so operators
+    // must set UPSTREAM_ALLOWED_HOSTS to a non-empty value to proxy traffic.
+    if (
+      values.NODE_ENV === "production" &&
+      (!values.UPSTREAM_HOST_ALLOWLIST ||
+        values.UPSTREAM_HOST_ALLOWLIST.trim() === "")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["UPSTREAM_HOST_ALLOWLIST"],
+        message:
+          "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
+      });
+    }
   });
 
 const parsed = envSchema.safeParse(process.env);

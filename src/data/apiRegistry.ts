@@ -103,7 +103,7 @@ export function resolveEndpointPrice(
 
 // ── Mock data for development / testing ─────────────────────────────────────
 
-const SEED_ENTRIES: ApiRegistryEntry[] = [
+const DEV_SEED_ENTRIES: ApiRegistryEntry[] = [
   {
     id: 'api_001',
     slug: 'weather-api',
@@ -126,6 +126,14 @@ const SEED_ENTRIES: ApiRegistryEntry[] = [
     ],
   },
 ];
+
+/**
+ * Seed entries are only used outside of production. In production the
+ * registry must be populated from a trusted source, and the upstream
+ * allowlist must be provided explicitly via UPSTREAM_ALLOWED_HOSTS.
+ */
+const SEED_ENTRIES: ApiRegistryEntry[] =
+  process.env.NODE_ENV === 'production' ? [] : DEV_SEED_ENTRIES;
 
 export function createApiRegistry(
   entries: ApiRegistryEntry[] = SEED_ENTRIES,
