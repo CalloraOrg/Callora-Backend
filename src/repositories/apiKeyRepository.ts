@@ -39,64 +39,6 @@ export interface ApiKeyRecord {
 
 const apiKeys: ApiKeyRecord[] = [];
 
-/**
- * Short-lived cache of recently verified keys, keyed by the SHA-256 hex
- * of the raw key. Because API keys are high-entropy random values, a
- * constant-time exact match on the SHA-256 digest is as strong as a bcrypt
- * compare for the purpose of authentication, while being O(1) and non-blocking.
- */
-interface VerifyCacheEntry {
-  record: ApiKeyRecord;
-  expiresAt: number;
-}
-
-const VERIFY_CACHE_MAX_ENTRIES = 1000;
-const VERIFY_CACHE_TTL_MS = 60_000;
-
-const verifyCache = new Map<string, VerifyCacheEntry>();
-
-function cacheGet(sha256Hash: string): ApiKeyRecord | null {
-  const entry = verifyCache.get(sha256Hash);
-  if (!entry) return null;
-  if (entry.expiresAt <= Date.now()) {
-    verifyCache.delete(sha256Hash);
-    return null;
-  }
-  // LRU refresh: re-insert to mark as most-recently used.
-  verifyCache.delete(sha256Hash);
-  verifyCache.set(sha256Hash, entry);
-  return entry.record;
-}
-
-function cacheSet(sha256Hash: string, record: ApiKeyRecord): void {
-  verifyCache.delete(sha256Hash);
-  verifyCache.set(sha256Hash, {
-    record,
-    expiresAt: Date.now() + VERIFY_CACHE_TTL_MS,
-  });
-  while (verifyCache.size > VERIFY_CACHE_MAX_ENTRIES) {
-    const oldest = verifyCache.keys().next().value;
-    if (oldest === undefined) break;
-    verifyCache.delete(oldest);
-  }
-}
-
-function cacheEvict(sha256Hash: string): void {
-  verifyCache.delete(sha256Hash);
-}
-
-function cacheEvictById(id: string): void {
-  for (const [hash, entry] of verifyCache) {
-    if (entry.record.id === id) {
-      verifyCache.delete(hash);
-    }
-  }
-}
-
-function cacheClear(): void {
-  verifyCache.clear();
-}
-
 export interface ApiKeyCreateResult {
   id: string;
   key: string;
@@ -109,9 +51,8 @@ function generatePlainKey(): string {
 }
 
 async function toHash(value: string): Promise<string> {
-  // Use bcrypt with configurable cost factor for proper password hashing.
-  // Async API keeps the event loop free during the CPU-bound hash computation.
-  return bcrypt.hash(value, config.bcrypt.costFactor);
+  // Use the async bcrypt API so the event loop is not blocked during hashing.
+  return bcrypt.hash(value, config.bcrypt.rounds);
 }
 
 async function verifyHash(value: string, hash: string): Promise<boolean> {
@@ -130,8 +71,70 @@ function constantTimeCompare(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-function redactedCopy(record: ApiKeyRecord): ApiKeyRecord {
-  // Return a copy without the raw hash so callers never see the secret.
+/**
+ * Short-lived LRU cache keyed by the sha256 of the raw API key. Only
+ * successful verifications are cached. Entries are invalidated on revocation
+ * and rotation so a revoked key never returns a cached hit.
+ */
+interface VerifyCacheEntry {
+  record: ApiKeyRecord;
+  expiresAt: number;
+}
+
+const VERIFY_CACHE_MAX_ENTRIES = 500;
+const VERIFY_CACHE_TTL_MS = 5_000;
+
+class LruVerifyCache {
+  private readonly map = new Map<string, VerifyCacheEntry>();
+
+  constructor(
+    private readonly maxEntries: number,
+    private readonly ttlMs: number,
+  ) {}
+
+  get(key: string): ApiKeyRecord | null {
+    const entry = this.map.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+      this.map.delete(key);
+      return null;
+    }
+    // Refresh recency for LRU ordering.
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry.record;
+  }
+
+  set(key: string, record: ApiKeyRecord): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, { record, expiresAt: Date.now() + this.ttlMs });
+    while (this.map.size > this.maxEntries) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+  }
+
+  delete(key: string): void {
+    this.map.delete(key);
+  }
+
+  deleteByRecordId(id: string): void {
+    for (const [cacheKey, entry] of this.map) {
+      if (entry.record.id === id) {
+        this.map.delete(cacheKey);
+      }
+    }
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+}
+
+const verifyCache = new LruVerifyCache(VERIFY_CACHE_MAX_ENTRIES, VERIFY_CACHE_TTL_MS);
+
+function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
   return {
     id: record.id,
     apiId: record.apiId,
@@ -202,7 +205,7 @@ export const apiKeyRepository = {
       const timeA = a.createdAt.getTime();
       const timeB = b.createdAt.getTime();
       if (timeB !== timeA) {
-        return timeB - timeA;
+        return timeB - time A;
       }
       return b.id.localeCompare(a.id);
     });
@@ -246,8 +249,9 @@ export const apiKeyRepository = {
 
     key.revoked = true;
     key.revokedAt = new Date();
-    // Evict immediately so a revoked key cannot be authenticated from cache.
-    cacheEvictById(id);
+    // Evict any cached verification for this key so a revoked key cannot
+    // continue to authenticate from the cache.
+    verifyCache.deleteByRecordId(id);
     return 'success';
   },
   getSha256Hash(id: string): string | null {
@@ -257,20 +261,17 @@ export const apiKeyRepository = {
   async verify(key: string): Promise<ApiKeyRecord | null> {
     if (typeof key !== 'string') return null;
 
-    // Fast path: exact match on the SHA-256 digest. API keys are high-entropy
-    // random values, so a constant-time exact match here is sufficient and
-    // avoids the expensive bcrypt compare entirely on the hot path.
-    const sha256Hash = sha256Hex(key);
+    const keySha256 = sha256Hex(key);
 
-    const cached = cacheGet(sha256Hash);
+    // Fast path: a recently verified key is served from the LRU cache
+    // without touching bcrypt. Revoked keys are evicted on revoke.
+    const cached = verifyCache.get(keySha256);
     if (cached) {
       if (cached.revoked) {
-        // Defensive: a revoked record should never be cached, but if it is,
-        // treat it like an unknown key and evict.
-        cacheEvict(sha256Hash);
+        verifyCache.delete(keySha256);
         return null;
       }
-      return redactedCopy(cached);
+      return redactRecord(cached);
     }
 
     // Find potential matches by prefix first for efficiency
@@ -282,33 +283,35 @@ export const apiKeyRepository = {
     // No records share this prefix — key does not exist at all.
     if (candidates.length === 0) return null;
 
-    // Exact SHA-256 match is the primary authentication path. It is O(1),
-    // non-blocking, and constant-time because the digest length is fixed.
+    // High-entropy keys are exact-matched by their sha256 digest using a
+    // constant-time comparison. This avoids the costly bcrypt path for the
+    // common case while still falling back to bcrypt for legacy records.
     for (const candidate of candidates) {
-      if (constantTimeCompare(candidate.sha256Hash, sha256Hash)) {
+      if (constantTimeCompare(candidate.sha256Hash, keySha256)) {
         if (candidate.revoked) {
           // A revoked key is not valid — treat it exactly like an unknown key
           // so callers cannot distinguish "revoked" from "never existed".
-          cacheEvict(sha256Hash);
           return null;
         }
-        cacheSet(sha256Hash, candidate);
-        return redactedCopy(candidate);
+        verifyCache.set(keySha256, candidate);
+        return redactRecord(candidate);
       }
     }
 
-    // Legacy fallback: records created before the sha256 column existed may
-    // only have a bcrypt hash. Use the async bcrypt API so the event loop
-    // is not blocked during the compare.
     for (const candidate of candidates) {
-      if (!candidate.keyHash) continue;
       if (await verifyHash(key, candidate.keyHash)) {
         if (candidate.revoked) {
-          cacheEvict(sha256Hash);
+          // A revoked key is not valid — treat it exactly like an unknown key
+          // so callers cannot distinguish "revoked" from "never existed".
           return null;
         }
-        cacheSet(sha256Hash, candidate);
-        return redactedCopy(candidate);
+        // Backfill the sha256 digest for legacy records so future calls can
+        // use the constant-time exact-match fast path.
+        if (!candidate.sha256Hash) {
+          candidate.sha256Hash = keySha256;
+        }
+        verifyCache.set(keySha256, candidate);
+        return redactRecord(candidate);
       }
     }
 
@@ -329,13 +332,13 @@ export const apiKeyRepository = {
     const newSha256Hash = sha256Hex(newKey);
     const newKeyHash = await toHash(newKey);
 
-    // Evict any cached entries for this record before mutating it.
-    cacheEvictById(id);
-
     // Update existing record
     apiKeys[index].keyHash = newKeyHash;
     apiKeys[index].prefix = newPrefix;
     apiKeys[index].sha256Hash = newSha256Hash;
+
+    // Invalidate any cached entry for the rotated key.
+    verifyCache.deleteByRecordId(id);
 
     return { success: true, newKey, prefix: newPrefix };
   },
@@ -345,6 +348,6 @@ export const apiKeyRepository = {
   // Clear method for testing
   clear(): void {
     apiKeys.length = 0;
-    cacheClear();
+    verifyCache.clear();
   },
 };

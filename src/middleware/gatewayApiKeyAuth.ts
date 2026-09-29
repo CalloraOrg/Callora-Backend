@@ -91,23 +91,7 @@ export interface DatabaseGatewayApiKeyRow {
 
 const SHA256_HEX_LENGTH = 64;
 
-const DEFAULT_CACHE_MAX_ENTRIES = 5000;
-const DEFAULT_CACHE_TTL_MS = 60_000;
-
-export interface GatewayAuthCacheOptions {
-  /** Maximum number of cached entries. Defaults to 5000. */
-  maxEntries?: number;
-  /** Time-to-live in milliseconds for each cache entry. Defaults to 60000. */
-  ttlMs?: number;
-}
-
-export interface GatewayAuthCache {
-  get(keyHash: string): GatewayAuthCandiate | undefined;
-  set(keyHash: string, candidate: GatewayAuthCandidate): void;
-  delete(keyHash: string): void;
-  clear(): void;
-  size(): number;
-}
+const VERIFICATION_CACHE_MAX_ENTRIES = 1000;
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -142,6 +126,50 @@ function matchesStoredHash(apiKey: string, storedHash: string): boolean {
   return candidates.some((candidate) => timingSafeStringEqual(candidate, storedHash));
 }
 
+interface VerificationCacheEntry {
+  keyHash: string;
+  expiresAt: number;
+}
+
+const verificationCache = new Map<string, VerificationCacheEntry>();
+const VERIFICATION_CACHE_TTL_MS = 30_000;
+
+function getCachedVerification(apiKey: string): string | null {
+  const cacheKey = sha256Hex(apiKey);
+  const entry = verificationCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAt <= Date.now()) {
+    verificationCache.delete(cacheKey);
+    return null;
+  }
+  // refresh LRU ordering
+  verificationCache.delete(cacheKey);
+  verificationCache.set(cacheKey, entry);
+  return entry.keyHash;
+}
+
+function setCachedVerification(apiKey: string, keyHash: string): void {
+  const cacheKey = sha256Hex(apiKey);
+  verificationCache.delete(cacheKey);
+  verificationCache.set(cacheKey, {
+    keyHash,
+    expiresAt: Date.now() + VERIFICATION_CACHE_TTL_MS,
+  });
+  while (verificationCache.size > VERIFICATION_CACHE_MAX_ENTRIES) {
+    const oldest = verificationCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    verificationCache.delete(oldest);
+  }
+}
+
+export function evictCachedVerification(apiKey: string): void {
+  verificationCache.delete(sha256Hex(apiKey));
+}
+
 function unauthorized(next: NextFunction, message: string): void {
   next(new UnauthorizedError(message));
 }
@@ -152,66 +180,6 @@ function notFound(next: NextFunction, message: string): void {
 
 function forbidden(next: NextFunction, message: string): void {
   next(new ForbiddenError(message));
-}
-
-/**
- * Simple single-process LRU cache keyed by the sha256 hex of a raw API key.
- * Entries are evicted on TT\ expiry or when the capacity is exceeded.
- */
-export function createGatewayAuthCache(options: GatewayAuthCacheOptions = {}): GatewayAuthCache {
-  const maxEntries = options.maxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
-  const ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL;
-  const map = new Map<string, { candidate: GatewayAuthCandidate; expiresAt: number }>();
-
-  function evictExpired(now: number): void {
-    for (const [key, entry] of map) {
-      if (entry.expiresAt <= now) {
-        map.delete(key);
-      }
-    }
-  }
-
-  return {
-    get(keyHash) {
-      const now = Date.now();
-      const entry = map.get(keyHash);
-      if (!entry) {
-        return undefined;
-      }
-      if (entry.expiresAt <= now) {
-        map.delete(keyHash);
-        return undefined;
-      }
-      // Refresh LRU ordering by reinserting the entry.
-      map.delete(keyHash);
-      map.set(keyHash, entry);
-      return entry.candidate;
-    },
-    set(keyHash, candidate) {
-      const now = Date.now();
-      evictExpired(now);
-      if (map.has(keyHash)) {
-        map.delete(keyHash);
-      }
-      map.set(keyHash, { candidate, expiresAt: now + ttlMs });
-      while (map.size > maxEntries) {
-        const oldest = map.keys().next().value;
-        if (oldest === undefined) {
-          break;
-        }
-        map.delete(oldest);
-      }
-    },
-    delete(keyHash) {
-      map.delete(keyHash);
-    },
-    clear() {
-      map.clear();
-    },
-    size() {
-      return map.size;
-    },
-  };
 }
 
 export function extractApiKey(req: Request): ExtractedApiKey {
@@ -249,14 +217,11 @@ export function createGatewayApiKeyAuthMiddleware<
   TUser = Record<string, unknown>,
   TVault = Record<string, unknown> | null,
 >(
-  options: GatewayApiKeyAuthOptions<TApi, TEndpoint, TUser, TVault> & {
-    cache?: GatewayAuthCache;
-  },
+  options: GatewayApiKeyAuthOptions<TApi, TEndpoint, TUser, TVault>,
 ): RequestHandler {
   const handleUnauthorized = options.onUnauthorized ?? unauthorized;
   const handleNotFound = options.onNotFound ?? notFound;
   const handleForbidden = forbidden;
-  const cache = options.cache ?? createGatewayAuthCache();
 
   return async (req, res, next) => {
     const extracted = extractApiKey(req);
@@ -274,22 +239,28 @@ export function createGatewayApiKeyAuthMiddleware<
       return;
     }
 
-    const keyHash = sha256Hex(extracted.apiKey);
-    const cached = cache.get(keyHash) as GatewayAuthCandidate<TUser, TVault> | undefined;
-    let matchedCandidate: GatewayAuthCandidate<TUser, TVault> | null = cached ?? null;
+    const prefix = extracted.apiKey.slice(0, API_KEY_PREFIX_LENGTH);
+    const candidates = await options.getApiKeyCandidates(prefix, req);
+    if (candidates.length === 0) {
+      recordApiKeyLookup('miss');
+      handleUnauthorized(next, 'Unauthorized: API key not found');
+      return;
+    }
 
+    let matchedCandidate: GatewayAuthCandidate<TUser, TVault> | null = null;
+    const cachedKeyHash = getCachedVerification(extracted.apiKey);
+    if (cachedKeyHash) {
+      matchedCandidate =
+        candidates.find(
+          (candidate) =>
+            !candidate.apiKeyRecord.revoked &&
+            timingSafeStringEqual(candidate.apiKeyRecord.keyHash, cachedKeyHash),
+        ) ?? null;
+    }
     if (!matchedCandidate) {
-      const prefix = extracted.apiKey.slice(0, API_KEY_PREFIX_LENGTH);
-      const candidates = await options.getApiKeyCandidates(prefix, req);
-      if (candidates.length === 0) {
-        recordApiKeyLookup('miss');
-        handleUnauthorized(next, 'Unauthorized: API key not found');
-        return;
-      }
-
       for (const candidate of candidates) {
         if (matchesStoredHash(extracted.apiKey, candidate.apiKeyRecord.keyHash)) {
-          matchedCandidate = candidate as GatewayAuthCandidate<TUser, TVault>;
+          matchedCandidate = candidate;
           break;
         }
       }
@@ -303,17 +274,19 @@ export function createGatewayApiKeyAuthMiddleware<
 
     if (matchedCandidate.apiKeyRecord.revoked) {
       // The key exists but was explicitly revoked by the developer
-      cache.delete(keyHash);
+      evictCachedVerification(extracted.apiKey);
       recordApiKeyLookup('revoked');
       handleForbidden(next, 'Unauthorized: API key has been revoked');
       return;
     }
 
+    setCachedVerification(extracted.apiKey, matchedCandidate.apiKeyRecord.keyHash);
+
     if (matchedCandidate.apiKeyRecord.expiresAt) {
       const expiresAt = new Date(matchedCandidate.apiKeyRecord.expiresAt);
       if (expiresAt.getTime() < Date.now()) {
         // The key exists but its expiration timestamp has passed
-        cache.delete(keyHash);
+        evictCachedVerification(extracted.apiKey);
         recordApiKeyLookup('expired');
         handleUnauthorized(next, 'Unauthorized: API key has expired');
         return;
@@ -324,9 +297,9 @@ export function createGatewayApiKeyAuthMiddleware<
       recordApiKeyLookup('miss');
       handleUnauthorized(next, 'Unauthorized: API key context is incomplete');
       return;
-  }
+    }
 
-    if (String(matchedCandidate.apiKeyRecord.apid) !== options.getApiId(resolvedContext.api)) {
+    if (String(matchedCandidate.apiKeyRecord.apiId) !== options.getApiId(resolvedContext.api)) {
       recordApiKeyLookup('miss');
       handleUnauthorized(next, 'Unauthorized: API key does not grant access to this API');
       return;
@@ -340,9 +313,6 @@ export function createGatewayApiKeyAuthMiddleware<
         return;
       }
     }
-
-    // Only cache successful, non-revoked, non-expired verifications.
-    cache.set(keyHash, matchedCandidate);
 
     req.apiKeyValue = extracted.apiKey;
     req.apiKeyRecord = matchedCandidate.apiKeyRecord as unknown as Record<string, unknown>;
