@@ -94,7 +94,7 @@ describe('POST /api/billing/deduct - developerId validation', () => {
 
     // Validation passes and the request proceeds past developerId handling
     // (fails later at the DB layer, which is expected given the mocked pool).
-    expect(res.status).not.toBe(400);
+    expect(res.status).not.toBe400);
     expect(queryMock).toHaveBeenCalled();
   });
 
@@ -104,5 +104,63 @@ describe('POST /api/billing/deduct - developerId validation', () => {
       .send({ ...validPayload, developerId: null });
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe('GET /api/billing/deduct/request/:requestId - ownership scoping', () => {
+  function builApp(pool: Pool) {
+    const app = express();
+    app.use(express.json());
+    app.locals.dbPool = pool;
+    app.use('/api/billing/deduct', deductRouter);
+    app.use(errorHandler);
+    return app;
+  }
+
+  it('returns the record for the owning user', async () => {
+    const row = {
+      usage_event_id: 'usage_event_1',
+      stellar_tx_hash: 'tx_hash_1',
+      status: 'succeeded',
+    };
+    const queryMock = jest.fn().mockResolvedValue({ rows: [row], rowCount: 1 });
+    const res = await request(buildApp({ query: queryMock } as unknown as Pool))
+      .get('/api/billing/deduct/request/req_1')
+      .set('x-user-id', 'user_123');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      usageEventId: 'usage_event_1',
+      stellarTxHash: 'tx_hash_1',
+      status: 'succeeded',
+    });
+    // The SQL must filter by user_id rather than filtering in JS.
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining('user_id'),
+      ['req_1', 'user_123'],
+    );
+  });
+
+  it('returns 404 when the requestId belongs to another user', async () => {
+    const queryMock = jest.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const res = await request(buildApp({ query: queryMock } as unknown as Pool))
+      .get('/api/billing/deduct/request/req_1')
+      .set('x-user-id', 'user_other');
+
+    expect(res.status).toBe(404);
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining('user_id'),
+      ['req_1', 'user_other'],
+    );
+  });
+
+  it('returns 401 without auth', async () => {
+    const queryMock = jest.fn();
+    const res = await request(buildApp({ query: queryMock } as unknown as Pool)).get(
+      '/api/billing/deduct/request/req_1',
+    );
+
+    expect(res.status).toBe(401);
+    expect(queryMock).not.toHaveBeenCalled();
   });
 });
