@@ -7,39 +7,145 @@
 The test and library entrypoint is `createApp` in `src/app.ts`. The production
 bootstrap in `src/index.ts` creates a separate Express app, with its business
 mounts inside the `isDirectExecution` branch. The same URL can therefore be
-available through one entrypoint and absent from the other. Wildcard rows below
-identify router prefixes; see each source router for its exact subpaths.
+available through one entrypoint and absent from the other. Rows marked
+`src/index.ts only` are production-bootstrap routes and are not part of
+`createApp`.
 
 | Method | Full path | Router source file | Auth | Rate limit |
 | --- | --- | --- | --- | --- |
-| GET | `/api/health` | `src/app.ts`, `src/index.ts` | none | none |
-| GET | `/api/metrics` | `src/app.ts`, `src/index.ts` | production admin key | none |
-| * | `/api/health/dependencies/*` | `src/routes/health/dependencies.ts` | none | none |
-| * | `/api/rate-limit/*` | `src/routes/rate-limit.ts` | none | configured REST limiter |
-| * | `/api/maintenance/*` | `src/routes/maintenance.ts` | none | none |
-| * | `/api/admin/*` | `src/routes/admin.ts` | admin auth + IP allowlist | none |
-| * | `/api/admin/usage/anomalies/*` | `src/routes/admin/usage/anomalies.ts` | admin auth + IP allowlist | none |
-| * | `/api/admin/usage/by-endpoint/*` | `src/routes/admin/usage/by-endpoint.ts` | admin auth + IP allowlist | none |
-| * | `/api/admin/usage/spike/*` | `src/routes/admin/usage/spike.ts` | admin auth + IP allowlist | none |
-| * | `/api/admin/db/explain/*` | `src/routes/admin/explain.ts` | admin auth + IP allowlist | none |
-| * | `/api/quota/requests/*` | `src/routes/quota/requests.ts` | route-specific | endpoint limiter |
-| * | `/api/quotas/*` | `src/routes/quotas.ts` | route-specific | quota token bucket |
-| * | `/api/logs/*` | `src/routes/logs.ts` | route-specific | none |
-| * | `/api/apis/*` | `src/routes/apis.ts` | route-specific | none |
-| * | `/api/marketplace/plugins/*` | `src/routes/marketplace/plugins.ts` | route-specific | none |
-| * | `/api/webhooks/*` | `src/routes/webhooks.ts` | route-specific | webhook management limiter |
-| * | `/api/*` | `src/routes/index.ts` | route-specific | configured REST limiter on selected routes |
-| GET | `/api/developers/apis` | `src/app.ts` | user auth | none |
-| GET | `/api/developers/analytics` | `src/app.ts` | user auth | none |
-| POST | `/api/vault/deposit/prepare` | `src/app.ts` | user auth | none |
-| GET | `/api/vault/balance` | `src/app.ts` | user auth | none |
-| POST | `/api/developers/apis` | `src/app.ts` | user auth | none |
-| GET | `/api/developers/revenue` | `src/app.ts` | user auth | none |
-| * | `/api/developers/*` | `src/routes/developerRoutes.ts` (`src/index.ts`) | route-specific | none |
-| * | `/api/gateway/*` | `src/routes/gatewayRoutes.ts` (`src/index.ts`) | API key + IP allowlist | gateway limiter |
-| * | `/v1/call/*` | `src/routes/proxyRoutes.ts` (`src/index.ts`) | API key | gateway limiter |
-| * | `/api/refresh-token/*` | `src/routes/refresh-token.ts` (`src/index.ts`) | refresh token | none |
-| * | `/api/refunds/*` | `src/routes/refunds.ts` (`src/index.ts`) | route-specific | none |
+| GET | /api/health/dependencies/ | src/routes/health/dependencies.ts | none or production-gated | none |
+| GET | /api/rate-limit/health/ | src/routes/rate-limit/health.ts | none or production-gated | configured REST limiter |
+| GET | /api/health | src/app.ts | none or production-gated | none |
+| GET | /api/maintenance/ | src/routes/maintenance.ts | none or production-gated | none |
+| GET | /api/admin/usage/anomalies/ | src/routes/admin/usage/anomalies.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/usage/by-endpoint/ | src/routes/admin/usage/by-endpoint.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/users | src/routes/admin.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/usage/export/ | src/routes/admin/usage/export.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/usage/:developerId | src/routes/admin.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/usage/:developerId/reset | src/routes/admin.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/quota/requests | src/routes/admin/quotas/bulk.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/quota/requests/:id/approve | src/routes/admin/quotas/bulk.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/quota/requests/:id/reject | src/routes/admin/quotas/bulk.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/quota/requests/bulk-update | src/routes/admin/quotas/bulk.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/webhooks/rotate-key | src/routes/admin/webhooks.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/webhooks/grace-window | src/routes/admin/webhooks.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/webhooks/monitor | src/routes/admin/webhooks.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/webhooks/replay/ | src/routes/admin/webhooks/replay.ts | admin auth + IP allowlist | none |
+| DELETE | /api/admin/apis/:id | src/routes/admin/apis.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/apis/:id/restore | src/routes/admin/apis.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/health/probes/ | src/routes/admin/health/probes.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/health/probes/:component | src/routes/admin/health/probes.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/billing/credits/grant | src/routes/admin/billing/credits/grant.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/quotas/bulk-update | src/routes/admin/quotas/bulk.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/keys/concurrency | src/routes/admin/keys/concurrency.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/keys/concurrency/:keyId | src/routes/admin/keys/concurrency.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/metrics/ | src/routes/admin/metrics.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/metrics/concurrency | src/routes/admin/metrics.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/metrics/concurrency/:developerId | src/routes/admin/metrics.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/audit/replay/ | src/routes/admin/audit.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/audit/ | src/routes/admin/audit.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/maintenance/banner/ | src/routes/admin/maintenance/banner.ts | admin auth + IP allowlist | none |
+| POST | /api/admin/db/explain/ | src/routes/admin/explain.ts | admin auth + IP allowlist | none |
+| GET | /api/admin/usage/spike/ | src/routes/admin/usage/spike.ts | admin auth + IP allowlist | none |
+| POST | /api/quota/requests/ | src/routes/quota/requests.ts | route-specific | endpoint limiter |
+| GET | /api/quota/requests/ | src/routes/quota/requests.ts | route-specific | endpoint limiter |
+| GET | /api/quota/requests/:id | src/routes/quota/requests.ts | route-specific | endpoint limiter |
+| GET | /api/quotas/counts/ | src/routes/quotas/counts.ts | route-specific | quota token bucket |
+| GET | /api/quotas/health/ | src/routes/quotas/health.ts | route-specific | quota token bucket |
+| GET | /api/logs/ | src/routes/logs.ts | route-specific | none |
+| GET | /api/logs/:id | src/routes/logs.ts | route-specific | none |
+| GET | /api/metrics | src/app.ts | none or production-gated | none |
+| GET | /api/apis/ | src/routes/apis.ts | route-specific | none |
+| GET | /api/apis/:id | src/routes/apis.ts | route-specific | none |
+| POST | /api/apis/ | src/routes/apis.ts | route-specific | none |
+| POST | /api/apis/:id/endpoints/bulk | src/routes/apis.ts | route-specific | none |
+| GET | /api/marketplace/plugins/ | src/routes/marketplace/plugins.ts | route-specific | none |
+| POST | /api/marketplace/plugins/ | src/routes/marketplace/plugins.ts | route-specific | none |
+| GET | /api/marketplace/plugins/:id | src/routes/marketplace/plugins.ts | route-specific | none |
+| POST | /api/marketplace/plugins/:id/install | src/routes/marketplace/plugins.ts | route-specific | none |
+| DELETE | /api/marketplace/plugins/:id/install | src/routes/marketplace/plugins.ts | route-specific | none |
+| DELETE | /api/marketplace/plugins/:id | src/routes/marketplace/plugins.ts | route-specific | none |
+| POST | /api/webhooks/ | src/routes/webhooks.ts | route-specific | webhook management limiter |
+| GET | /api/webhooks/:developerId | src/routes/webhooks.ts | route-specific | webhook management limiter |
+| POST | /api/webhooks/:developerId/rotate-secret | src/routes/webhooks.ts | route-specific | webhook management limiter |
+| DELETE | /api/webhooks/:developerId | src/routes/webhooks.ts | route-specific | webhook management limiter |
+| PATCH | /api/webhooks/:developerId/retry-policy | src/routes/webhooks.ts | route-specific | webhook management limiter |
+| POST | /api/webhooks/deliver/:developerId | src/routes/webhooks.ts | route-specific | webhook management limiter |
+| GET | /api/health/db/ | src/routes/health.ts | route-specific | none |
+| GET | /api/health/health/ | src/routes/health.ts | route-specific | none |
+| GET | /api/plans/ | src/routes/plans.ts | route-specific | none |
+| GET | /api/plans/slow | src/routes/plans.ts | route-specific | none |
+| GET | /api/plans/:id | src/routes/plans.ts | route-specific | none |
+| GET | /api/credits/ | src/routes/credits.ts | route-specific | none |
+| GET | /api/spike/ | src/routes/spike.ts | route-specific | none |
+| GET | /api/spike/records | src/routes/spike.ts | route-specific | none |
+| POST | /api/spike/ | src/routes/spike.ts | route-specific | none |
+| PUT | /api/spike/:id | src/routes/spike.ts | route-specific | none |
+| DELETE | /api/spike/:id | src/routes/spike.ts | route-specific | none |
+| GET | /api/errors/ | src/routes/errors.ts | route-specific | none |
+| GET | /api/errors/:id | src/routes/errors.ts | route-specific | none |
+| POST | /api/errors/ | src/routes/errors.ts | route-specific | none |
+| PUT | /api/errors/:id | src/routes/errors.ts | route-specific | none |
+| PATCH | /api/errors/:id | src/routes/errors.ts | route-specific | none |
+| DELETE | /api/errors/:id | src/routes/errors.ts | route-specific | none |
+| GET | /api/audit/ | src/routes/audit.ts | route-specific | none |
+| POST | /api/audit/ | src/routes/audit.ts | route-specific | none |
+| PUT | /api/audit/:id | src/routes/audit.ts | route-specific | none |
+| DELETE | /api/audit/:id | src/routes/audit.ts | route-specific | none |
+| GET | /api/invoices/ | src/routes/invoices.ts | route-specific | none |
+| POST | /api/apis/:apiId/keys | src/routes/apiKeyRoutes.ts | route-specific | none |
+| GET | /api/apis/:apiId/keys | src/routes/apiKeyRoutes.ts | route-specific | none |
+| DELETE | /api/keys/:id | src/routes/apiKeyRoutes.ts | route-specific | none |
+| GET | /api/usage/csv/ | src/routes/usage/csv.ts | route-specific | none |
+| GET | /api/usage/by-endpoint/ | src/routes/usage/byEndpoint.ts | route-specific | none |
+| GET | /api/usage/aggregate/ | src/routes/usage/aggregate.ts | route-specific | none |
+| GET | /api/usage/sse/ | src/routes/usage/sse.ts | route-specific | none |
+| GET | /api/usage/health/ | src/routes/usage/health.ts | route-specific | none |
+| GET | /api/usage/ | src/routes/usage.ts | route-specific | none |
+| GET | /api/exports/health/ | src/routes/exports/health.ts | route-specific | none |
+| GET | /api/subscriptions/health/ | src/routes/subscriptions/health.ts | route-specific | none |
+| POST | /api/subscriptions/ | src/routes/subscriptionRoutes.ts | route-specific | none |
+| GET | /api/subscriptions/ | src/routes/subscriptionRoutes.ts | route-specific | none |
+| GET | /api/subscriptions/:id | src/routes/subscriptionRoutes.ts | route-specific | none |
+| PATCH | /api/subscriptions/:id | src/routes/subscriptionRoutes.ts | route-specific | none |
+| DELETE | /api/subscriptions/:id | src/routes/subscriptionRoutes.ts | route-specific | none |
+| GET | /api/billing/credits/ | src/routes/billing/credits.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/disputes/ | src/routes/billing/disputes.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/disputes/ | src/routes/billing/disputes.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/disputes/admin/all | src/routes/billing/disputes.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/disputes/:id | src/routes/billing/disputes.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/disputes/:id/resolve | src/routes/billing/disputes.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/deduct/ | src/routes/billing/deduct.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/deduct/request/:requestId | src/routes/billing/deduct.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/deduct/bulk/ | src/routes/billing/deduct/bulk.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/refund/ | src/routes/billing.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/fee-abstraction/quote | src/routes/billing.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/fee-abstraction/ | src/routes/billing.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/forecast/ | src/routes/billing.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/ | src/routes/billing.ts | route-specific | billing limiter (+ REST limiter) |
+| POST | /api/billing/deduct | src/routes/billing/deduct.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/request/:requestId | src/routes/billing.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/portal/summary | src/routes/billing/portal.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/portal/invoices/:id | src/routes/billing/portal.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/portal/invoices | src/routes/billing/portal.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/portal/invoices/:id/line-items | src/routes/billing/portal.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/billing/portal/invoices/:id/pdf | src/routes/billing/portal.ts | route-specific | billing limiter (+ REST limiter) |
+| GET | /api/limits/check | src/routes/limits.ts | route-specific | none |
+| GET | /api/refunds/ | src/routes/refunds.ts | route-specific | none |
+| GET | /api/openapi.json | src/routes/index.ts | route-specific | none |
+| GET | /api/developers/apis | src/app.ts | route-specific | none |
+| GET | /api/developers/analytics | src/app.ts | route-specific | none |
+| POST | /api/vault/deposit/prepare | src/app.ts | route-specific | none |
+| GET | /api/vault/balance | src/app.ts | route-specific | none |
+| POST | /api/developers/apis | src/app.ts | route-specific | none |
+| GET | /api/developers/me | src/routes/developerRoutes.ts (src/index.ts only) | user auth | none |
+| PATCH | /api/developers/me | src/routes/developerRoutes.ts (src/index.ts only) | user auth | none |
+| GET | /api/developers/me/usage/summary | src/routes/developers/me/usage.ts (src/index.ts only) | user auth | none |
+| GET | /api/developers/revenue | src/routes/developerRoutes.ts (src/index.ts only) | user auth | none |
+| GET | /api/gateway/ | src/routes/gatewayRoutes.ts (src/index.ts only) | none | gateway limiter on proxy requests |
+| GET | /api/gateway/health/:apiSlug | src/routes/gatewayRoutes.ts (src/index.ts only) | none | none |
+| ALL | /api/gateway/:apiId | src/routes/gatewayRoutes.ts (src/index.ts only) | API key | gateway limiter |
+| POST | /api/refresh-token/ | src/routes/refresh-token.ts (src/index.ts only) | refresh-token validation | none |
 
 ### Mounted prefixes
 
@@ -52,7 +158,7 @@ the developer routes, and the vault routes shown above.
 
 `src/index.ts` direct-execution bootstrap: `/api/developers`,
 `/api/admin/usage/anomalies`, `/api/admin`, `/api/refunds`, `/api/logs`,
-`/api/webhooks`, `/api/gateway`, `/v1/call`, and `/api/refresh-token`; direct
+`/api/webhooks`, `/api/gateway`, and `/api/refresh-token`; direct
 routes are `/api/health` and `/api/metrics`.
 
 ### Unmounted routers
@@ -65,14 +171,23 @@ These routers remain unmounted until wired or deleted:
 - `src/routes/feature-flags.ts` — unmounted.
 - `src/routes/admin/circuit-breaker.ts` — unmounted.
 - `src/routes/healthz.ts` — unmounted.
+- `src/routes/proxyRoutes.ts` — the router is created in `src/index.ts` but is
+  never passed to `app.use`, so `/v1/call` is not served by either entrypoint.
+
+`src/routes/billing/forecast.ts` is also unmounted. The mounted
+`GET /api/billing/forecast` is implemented in `src/routes/billing.ts`; it does
+not use that separate forecast router.
 
 ### Duplicate mounts
 
 `src/app.ts` registers anomalies at lines 390 and 397, usage-by-endpoint at
 391–394 and 398, the admin router at 395 and 400, and explain at 396 and 401.
-In `src/index.ts`, anomalies are mounted at lines 268 and 272 and admin at
-269 and 277. Repeated mounts repeat route matching; if a handler calls
-`next()`, a duplicate registration can run the same route set again.
+The `/api/logs` and `/api/apis` route sets are also reachable through both
+their direct mounts (lines 412 and 417) and the `/api` router (mounted at line
+433; its nested mounts are in `src/routes/index.ts` lines 86 and 95). In
+`src/index.ts`, anomalies are mounted at lines 268 and 272 and admin at 269
+and 277. Repeated mounts repeat route matching; if a handler calls `next()`, a
+duplicate registration can run the same route set again.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
