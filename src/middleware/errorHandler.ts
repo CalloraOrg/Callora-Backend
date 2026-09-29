@@ -28,7 +28,7 @@ function extractValidationDetails(err: unknown): ValidationErrorDetail[] | undef
  * - Returns consistent JSON envelope: { success: false, error: { code, message }, requestId, timestamp }
  * - Never sends stack traces to the client in production
  * - Logs full error server-side
- * - When headers are already sent, destroys the socket so clients see a terminated stream
+ * - When headers are already sent, destroys the socket so the client sees a terminated stream
  */
 export function errorHandler(
   err: unknown,
@@ -63,6 +63,13 @@ export function errorHandler(
 
   if (!res.headersSent) {
     res.status(statusCode).json(body);
+  } else {
+    // Headers already flushed: we cannot write a JSON envelope.
+    // Terminate the socket so the client observes a truncated stream
+    // instead of hanging until its own timeout.
+    if (typeof res.destroy === 'function') {
+      res.destroy(err instanceof Error ? err : undefined);
+    }
   }
 
   const logData = {
@@ -80,13 +87,5 @@ export function errorHandler(
     );
   } else {
     logger.error("[errorHandler]", logData);
-  }
-
-  if (res.headersSent) {
-    // Headers are already on the wire; we can't write a JSON error envelope.
-    // Terminate the connection so the client observes a truncated stream instead of hanging.
-    if (!res.writableEnded) {
-      res.destroy(err instanceof Error ? err : undefined);
-    }
   }
 }

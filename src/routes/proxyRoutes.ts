@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
-import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';import { resolveEndpointPrice } from '../data/apiRegistry.js';
+import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';
+import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import {
   startUpstreamTimer,
   recordProxyPrematureAbort,
@@ -8,19 +9,23 @@ import {
   setGatewayUpstreamBreakerState,
   recordEndpointThroughputSaturation,
 } from '../metrics.js';
-import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
-import { buildHopByHopSet } from '../lib/hopByHop.js';import {
+import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
+import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
+import { buildHopByHopSet } from '../lib/hopByHop.js';
+import {
   buildUpstreamTargetUrl,
   DEFAULT_UPSTREAM_HOST_ALLOWLIST,
   validateResolvedUpstreamTarget,
-} from '../lib/upstreamTarget.js';import {
+} from '../lib/upstreamTarget.js';
+import {
   BadGatewayError,
   GatewayTimeoutError,
   InternalServerError,
   PaymentRequiredError,
   ServiceUnavailableError,
   TooManyRequestsError,
-} from '../errors/index.js';import { CircuitBreakerOpenError } from '../lib/errors.js';
+} from '../errors/index.js';
+import { CircuitBreakerOpenError } from '../lib/errors.js';
 import { CircuitBreaker } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
@@ -30,7 +35,7 @@ import { logger } from '../logger.js';
 /**
  * Headers that must never be forwarded to the upstream server.
  *
- * Includes all RFC 7230 ¦6.1 hop-by-hop headers plus gateway-specific
+ * Includes all RFC 7230 §6.1 hop-by-hop headers plus gateway-specific
  * internal headers (host, x-api-key) that must not leak to the origin.
  * Dynamic Connection-listed headers are stripped at request time via
  * buildHopByHopSet().
@@ -112,8 +117,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   });
 
   // Per-user token-bucket rate limiter (issue #870).
-  // Runs AFTER authMiddleware so req.apiKeyRecord.userId is guaranteed to
-  // be populated. Reads limits from GATEWAY_RATE_LIMIT_* env vars by default;
+  // Runs AFTER authMiddleware so req.apiKeyRecord.userId is guaranteed to be
+  // populated. Reads limits from GATEWAY_RATE_LIMIT_* env vars by default;
   // can be overridden via deps for testing.
   const gatewayRateLimitMiddleware = deps.gatewayRateLimitMiddleware
     ?? createConfiguredGatewayRateLimitMiddleware();
@@ -189,7 +194,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
 
       // 6. Build forwarded headers — strip hop-by-hop and gateway-internal headers.
       // buildHopByHopSet() also strips any additional names listed in the
-      // incoming Connection header value (RFC 7230 ¦6.1).
+      // incoming Connection header value (RFC 7230 §6.1).
       const forwardHeaders: Record<string, string> = {};
       const connectionValue = typeof req.headers['connection'] === 'string'
         ? req.headers['connection']
@@ -267,6 +272,26 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       } catch (err: unknown) {
         let outcome: UpstreamOutcome = 'error';
 
+        // If headers have already been flushed to the client, we cannot send a
+        // structured error response.  Destroy the socket so the client sees a
+        // terminated stream instead of hanging on a truncated body.  Log once
+        // with the requestId for observability.
+        if (res.headersSent) {
+          logger.error(
+            {
+              err,
+              requestId,
+              apiId: String(apiEntry.id),
+              endpointId: endpoint.endpointId,
+              upstreamStatus,
+            },
+            'Proxy error after headers sent; destroying response socket',
+          );
+          timer.stop(upstreamStatus, outcome);
+          res.destroy(err instanceof Error ? err : undefined);
+          return;
+        }
+
         if (err instanceof CircuitBreakerOpenError) {
           // Circuit breaker open — don't bill the caller
           upstreamStatus = 502;
@@ -293,37 +318,107 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           const failedStateValue = failedMetrics.state === 'CLOSED' ? 0 : failedMetrics.state === 'OPEN' ? 1 : 2;
           setGatewayUpstreamBreakerState(breakerKey, failedStateValue);
           throw new GatewayTimeoutError('Upstream service timed out');
-        } else if (err instanceof TypeError && (err as NodeJS.ErrnoException).code === 'UND_ERR_CONNECT_TIMEOUT') {
-          upstreamStatus = 504;
-          outcome = 'timeout';
+        } else {
+          upstreamStatus = 502;
           timer.stop(upstreamStatus, outcome);
           // Update metric after failure
           const failedMetrics = await circuitBreaker.getMetrics(breakerKey);
           const failedStateValue = failedMetrics.state === 'CLOSED' ? 0 : failedMetrics.state === 'OPEN' ? 1 : 2;
           setGatewayUpstreamBreakerState(breakerKey, failedStateValue);
-          throw new GatewayTimeoutError('Upstream service timed out');
-        } else {
-          // Mid-stream failure after headers have been flushed: the client has
-          // already received a partial response, so we cannot send an error
-          // body. Terminate the socket instead of leaving a truncated stream
-          // open, and log once with the requestId for observability.
-          timer.stop(upstreamStatus, outcome);
-          if (res.headersSent) {
-            logger.error(
-              { requestId, err },
-              'Proxy error after headers sent; destroying connection',
-            );
-            res.destroy(err instanceof Error ? err : undefined);
-            return;
-          }
-          throw err;
+          throw new BadGatewayError('Bad Gateway: upstream unreachable');
         }
       }
-    } catch (err: unknown) {
-      // Errors that reach here occurred before any body bytes were written
-      // (or were re-thrown from the inner catch). Delegate to the central
-      // error handler, which owns the logging and response formatting.
-      next(err);
+
+      // 8. Keep metering and billing consistent — but ONLY after the response
+      //    has been fully delivered to the caller.
+      //
+      //    We distinguish two response lifecycle events:
+      //      • 'finish' — Node/Express has flushed all data and ended the
+      //                   response normally.  This is the success path; we
+      //                   record usage here.
+      //      • 'close'  — The underlying socket was torn down.  When this
+      //                   fires WITHOUT a prior 'finish' it means the client
+      //                   disconnected mid-stream (premature abort).  In that
+      //                   case we must NOT record usage because the caller
+      //                   never received the response.
+      //
+      //    Using a one-shot 'finish' listener (registered before we start
+      //    streaming) ensures we capture the event even if the stream
+      //    completes synchronously.  The 'close' listener is a guard that
+      //    cancels the deferred work when the socket drops first.
+      if (config.recordableStatuses(upstreamStatus)) {
+        // Track whether the response finished cleanly before the socket closed.
+        let responseFinished = false;
+
+        res.once('finish', () => {
+          responseFinished = true;
+
+          // Run usage recording in a non-blocking microtask so it does not
+          // delay the event loop that is already handling the next request.
+          setImmediate(() => {
+            void (async () => {
+              try {
+                const recorded = await usageStore.record({
+                  id: randomUUID(), // ID of the usage event itself
+                  requestId,        // Idempotency key — prevents double-counts
+                  // apiKey field omitted to prevent storing plaintext keys
+                  apiKeyId: keyRecord.id,
+                  apiId: String(apiEntry.id),
+                  endpointId: endpoint.endpointId,
+                  userId: keyRecord.userId,
+                  amountUsdc: endpoint.priceUsdc,
+                  statusCode: upstreamStatus,
+                  timestamp: new Date().toISOString(),
+                });
+
+                if (recorded) {
+                  defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
+                    id: randomUUID(),
+                    requestId,
+                    // apiKey field omitted to prevent broadcasting plaintext keys
+                    apiKeyId: keyRecord.id,
+                    apiId: String(apiEntry.id),
+                    endpointId: endpoint.endpointId,
+                    userId: keyRecord.userId,
+                    amountUsdc: endpoint.priceUsdc,
+                    statusCode: upstreamStatus,
+                    timestamp: new Date().toISOString(),
+                  });
+                }
+
+                recordEndpointThroughputSaturation({
+                  apiId: String(apiEntry.id),
+                  endpointId: endpoint.endpointId,
+                  endpointPath: endpoint.path,
+                  advertisedLimitPerMinute: Number(keyRecord?.rateLimitPerMinute ?? 0),
+                  observedAt: Date.now(),
+                });
+
+                // Only deduct billing if this requestId hasn't been processed
+                // before (idempotency guard inside usageStore.record).
+                if (recorded && endpoint.priceUsdc > 0) {
+                  billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
+                    console.error('Background billing deduction failed:', err);
+                  });
+                }
+              } catch (err) {
+                console.error('Background usage recording failed:', err);
+              }
+            })();
+          });
+        });
+
+        res.once('close', () => {
+          // 'close' fires after 'finish' on a normal response, or on its own
+          // when the socket is destroyed prematurely.  Only treat it as an
+          // abort when 'finish' has NOT already fired.
+          if (!responseFinished) {
+            recordProxyPrematureAbort();
+          }
+        });
+      }
+    } catch (error) {
+      next(error);
     }
   }
 
