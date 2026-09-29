@@ -44,6 +44,7 @@ import { createLogsRouter } from "./logs.js";
 import { createApiKeyRouter } from "./apiKeyRoutes.js";
 import { defaultApiRepository } from "../repositories/apiRepository.js";
 import { defaultDeveloperRepository } from "../repositories/developerRepository.js";
+import { adminAuth } from "../middleware/adminAuth.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
 const openApiSpec = JSON.parse(readFileSync(openApiPath, "utf8"));
@@ -76,7 +77,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     "/credits",
     createCreditsRouter({ creditsRepository: deps.creditsRepository }),
   );
-  router.use("/spike", createSpikeRouter());
+  router.use("/spike", adminAuth, createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
   router.use("/audit", createAuditRouter({ auditService: deps.auditService }));
   router.use("/invoices", createInvoicesRouter());
