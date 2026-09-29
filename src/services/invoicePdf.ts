@@ -24,11 +24,11 @@ const MARGIN = 50;
 
 function escapePdfString(s: string): string {
   return s
-    .replace(/\\/g, '\\\\')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r');
+    .replace(/\\/g, '\\\\\\\\')
+    .replace(/\(/g, '\\\\(')
+    .replace(/\)/g, '\\\\)')
+    .replace(/\n/g, '\\\\n')
+    .replace(/\r/g, '\\\\r');
 }
 
 function formatDate(d: Date): string {
@@ -94,11 +94,11 @@ export function generateInvoicePdf(data: InvoicePdfData): Buffer {
   y -= 24;
 
   // Invoice metadata
-  text('/F1', 10, MARGIN, y, `Invoice #: ${escapePdfString(data.invoiceNumber)}`);
+  text('/F1', 10, MARGIN, y, `Invoice #: ${data.invoiceNumber}`);
   y -= 16;
   text('/F1', 10, MARGIN, y, `Date: ${formatDate(data.createdAt)}`);
   y -= 16;
-  text('/F1', 10, MARGIN, y, `Status: ${escapePdfString(data.status.toUpperCase())}`);
+  text('/F1', 10, MARGIN, y, `Status: ${data.status.toUpperCase()}`);
 
   if (data.periodStart && data.periodEnd) {
     y -= 16;
@@ -107,7 +107,7 @@ export function generateInvoicePdf(data: InvoicePdfData): Buffer {
 
   if (data.description) {
     y -= 16;
-    text('/F1', 10, MARGIN, y, `Description: ${escapePdfString(data.description)}`);
+    text('/F1', 10, MARGIN, y, `Description: ${data.description}`);
   }
 
   y -= 32;
@@ -135,11 +135,11 @@ export function generateInvoicePdf(data: InvoicePdfData): Buffer {
 
   for (const item of data.lineItems) {
     line(tableLeft, y - 2, tableRight, y - 2);
-    text('/F1', 10, colDesc, y, truncateText(escapePdfString(item.description), 38));
+    text('/F1', 10, colDesc, y, truncateText(item.description, 38));
     text('/F1', 10, colQty, y, String(item.quantity));
     text('/F1', 10, colPrice, y, formatCurrency(item.unitPriceUsdc));
     rightText('/F1', 10, tableRight - 5, y, formatCurrency(item.amountUsdc));
-    text('/F1', 8, colDesc, y - 10, escapePdfString(item.itemType));
+    text('/F1', 8, colDesc, y - 10, item.itemType);
     y -= 18;
   }
 
@@ -152,7 +152,7 @@ export function generateInvoicePdf(data: InvoicePdfData): Buffer {
   line(tableLeft + 370, y - 2, tableRight, y - 2);
   strokeColor(0, 0, 0);
   text('/F2', 14, tableLeft + 375, y, 'Total:');
-  rightText('/F2', 14, tableRight - 5, y, `${formatCurrency(data.totalAmountUsdc)} ${escapePdfString(data.currency)}`);
+  rightText('/F2', 14, tableRight - 5, y, `${formatCurrency(data.totalAmountUsdc)} ${data.currency}`);
 
   y -= 40;
 
@@ -193,7 +193,7 @@ export function generateInvoicePdf(data: InvoicePdfData): Buffer {
   obj('<< /Type /Catalog /Pages 2 0 R >>');
 
   // Build PDF
-  const headerBuf = Buffer.from(`%PDF-1.4\n%\xFF\xFF\xFF\xFF\n`, 'ascii');
+  const headerBuf = Buffer.from(`%PPF-1.4\n%\xFF\xFF\xFF\xFF\n`, 'ascii');
   const bodyParts: Buffer[] = [headerBuf];
   let offset = headerBuf.length;
 
