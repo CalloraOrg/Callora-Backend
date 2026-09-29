@@ -91,6 +91,9 @@ export interface DatabaseGatewayApiKeyRow {
 
 const SHA256_HEX_LENGTH = 64;
 
+const DEFAULT_CACHE_MAX_ENTRIES = 500;
+const DEFAULT_CACHE_TTL_MS = 5_000;
+
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -136,6 +139,84 @@ function forbidden(next: NextFunction, message: string): void {
   next(new ForbiddenError(message));
 }
 
+/**
+ * Simple short-lived LRU cache keyed by the SHA-256 hex of an API key.
+ * Used to short-circuit repeated verifications of the same key within a
+ * short window, avoiding repeated bcrypt comparisons. Revoked keys are
+ * evicted immediately via invalidate().
+ */
+export interface ApiKeyVerificationCache {
+  get(keyHash: string): GatewayAuthCandidate | undefined;
+  set(keyHash: string, candidate: GatewayAuthCandidate): void;
+  invalidate(keyHash: string): void;
+  clear(): void;
+  size(): number;
+}
+
+export function createApiKeyVerificationCache(
+  maxEntries = DEFAULT_CACHE_MAX_ENTRIES,
+  ttlMs = DEFAULT_CACHE_TTL_MS,
+): ApiKeyVerificationCache {
+  interface Entry {
+    candidate: GatewayAuthCandidate;
+    expiresAt: number;
+  }
+
+  const entries = new Map<string, Entry>();
+
+  function evictExpired() {
+    const now = Date.now();
+    for (const [key, entry] of entries) {
+      if (entry.expiresAt <= now) {
+        entries.delete(key);
+      }
+    }
+  }
+
+  return {
+    get(keyHash) {
+      const entry = entries.get(keyHash);
+      if (!entry) {
+        return undefined;
+      }
+      if (entry.expiresAt <= Date.now()) {
+        entries.delete(keyHash);
+        return undefined;
+      }
+      // Refresh LRU order.
+      entries.delete(keyHash);
+      entries.set(keyHash, entry);
+      return entry.candidate;
+    },
+    set(keyHash, candidate) {
+      if (maxEntries <= 0) {
+        return;
+      }
+      evictExpired();
+      if (entries.has(keyHash)) {
+        entries.delete(keyHash);
+      }
+      entries.set(keyHash, { candidate, expiresAt: Date.now() + ttlMs });
+      while (entries.size > maxEntries) {
+        const oldest = entries.keys().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        entries.delete(oldest);
+      }
+    },
+    invalidate(keyHash) {
+      entries.delete(keyHash);
+    },
+    clear() {
+      entries.clear();
+    },
+    size() {
+      return entries.size;
+    },
+  };
+}
+
 export function extractApiKey(req: Request): ExtractedApiKey {
   const xApiKey = req.header('x-api-key');
   if (typeof xApiKey === 'string' && xApiKey.trim() !== '') {
@@ -165,17 +246,31 @@ export function extractApiKey(req: Request): ExtractedApiKey {
   };
 }
 
+export interface GatewayApiKeyAuthMiddlewareOptions<
+  TApi = Record<string, unknown>,
+  TEndpoint = Record<string, unknown>,
+  TUser = Record<string, unknown>,
+  TVault = Record<string, unknown> | null,
+> extends GatewayApiKeyAuthOptions<TApi, TEndpoint, TUser, TVault> {
+  /** Optional cache for recently verified keys. Defaults to an internal LRU. */
+  verificationCache?: ApiKeyVerificationCache | null;
+}
+
 export function createGatewayApiKeyAuthMiddleware<
   TApi = Record<string, unknown>,
   TEndpoint = Record<string, unknown>,
   TUser = Record<string, unknown>,
   TVault = Record<string, unknown> | null,
 >(
-  options: GatewayApiKeyAuthOptions<TApi, TEndpoint, TUser, TVault>,
+  options: GatewayApiKeyAuthMiddlewareOptions<TApi, TEndpoint, TUser, TVault>,
 ): RequestHandler {
   const handleUnauthorized = options.onUnauthorized ?? unauthorized;
   const handleNotFound = options.onNotFound ?? notFound;
   const handleForbidden = forbidden;
+  const verificationCache =
+    options.verificationCache === null
+      ? null
+      : options.verificationCache ?? createApiKeyVerificationCache();
 
   return async (req, res, next) => {
     const extracted = extractApiKey(req);
@@ -193,19 +288,33 @@ export function createGatewayApiKeyAuthMiddleware<
       return;
     }
 
-    const prefix = extracted.apiKey.slice(0, API_KEY_PREFIX_LENGTH);
-    const candidates = await options.getApiKeyCandidates(prefix, req);
-    if (candidates.length === 0) {
-      recordApiKeyLookup('miss');
-      handleUnauthorized(next, 'Unauthorized: API key not found');
-      return;
+    const keyHash = sha256Hex(extracted.apiKey);
+
+    // Fast path: a previously verified key within the cache TTL.
+    // This avoids any bcrypt work for repeated requests and keeps the
+    // event loop free.
+    let matchedCandidate: GatewayAuthCandidate<TUser, TVault> | null = null;
+    if (verificationCache) {
+      const cached = verificationCache.get(keyHash);
+      if (cached) {
+        matchedCandidate = cached as GatewayAuthCandidate<TUser, TVault>;
+      }
     }
 
-    let matchedCandidate: GatewayAuthCandidate<TUser, TVault> | null = null;
-    for (const candidate of candidates) {
-      if (matchesStoredHash(extracted.apiKey, candidate.apiKeyRecord.keyHash)) {
-        matchedCandidate = candidate;
-        break;
+    if (!matchedCandidate) {
+      const prefix = extracted.apiKey.slice(0, API_KEY_PREFIX_LENGTH);
+      const candidates = await options.getApiKeyCandidates(prefix, req);
+      if (candidates.length === 0) {
+        recordApiKeyLookup('miss');
+        handleUnauthorized(next, 'Unauthorized: API key not found');
+        return;
+      }
+
+      for (const candidate of candidates) {
+        if (matchesStoredHash(extracted.apiKey, candidate.apiKeyRecord.keyHash)) {
+          matchedCandidate = candidate;
+          break;
+        }
       }
     }
 
@@ -216,7 +325,10 @@ export function createGatewayApiKeyAuthMiddleware<
     }
 
     if (matchedCandidate.apiKeyRecord.revoked) {
-      // The key exists but was explicitly revoked by the developer
+      // The key exists but was explicitly revoked by the developer.
+      // Evict from the cache immediately so a revoked candidate can never
+      // be served from the fast path.
+      verificationCache?.invalidate(keyHash);
       recordApiKeyLookup('revoked');
       handleForbidden(next, 'Unauthorized: API key has been revoked');
       return;
@@ -225,7 +337,8 @@ export function createGatewayApiKeyAuthMiddleware<
     if (matchedCandidate.apiKeyRecord.expiresAt) {
       const expiresAt = new Date(matchedCandidate.apiKeyRecord.expiresAt);
       if (expiresAt.getTime() < Date.now()) {
-        // The key exists but its expiration timestamp has passed
+        // The key exists but its expiration timestamp has passed.
+        verificationCache?.invalidate(keyHash);
         recordApiKeyLookup('expired');
         handleUnauthorized(next, 'Unauthorized: API key has expired');
         return;
@@ -238,7 +351,7 @@ export function createGatewayApiKeyAuthMiddleware<
       return;
     }
 
-    if (String(matchedCandidate.apiKeyRecord.apiId) !== options.getApiId(resolvedContext.api)) {
+    if (String(matchedCandidate.apiKeyRecord.apid) !== options.getApiId(resolvedContext.api)) {
       recordApiKeyLookup('miss');
       handleUnauthorized(next, 'Unauthorized: API key does not grant access to this API');
       return;
@@ -251,6 +364,11 @@ export function createGatewayApiKeyAuthMiddleware<
         handleForbidden(next, 'Forbidden: API key lacks required scope');
         return;
       }
+    }
+
+    // Only cache successful verifications after all checks passed.
+    if (verificationCache) {
+      verificationCache.set(keyHash, matchedCandidate);
     }
 
     req.apiKeyValue = extracted.apiKey;
@@ -271,7 +389,7 @@ export function createMapBackedGatewayApiKeyAuthMiddleware<
   TApi = Record<string, unknown>,
   TEndpoint = Record<string, unknown>,
 >(
-  options: Omit<GatewayApiKeyAuthOptions<TApi, TEndpoint>, 'getApiKeyCandidates'> & {
+  options: Omit<GatewayApiKeyAuthMiddlewareOptions<TApi, TEndpoint>, 'getApiKeyCandidates'> & {
     apiKeys?: Map<string, InMemoryGatewayApiKey>;
   },
 ): RequestHandler {
@@ -304,7 +422,7 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
   TApi = Record<string, unknown>,
   TEndpoint = Record<string, unknown>,
 >(
-  options: Omit<GatewayApiKeyAuthOptions<TApi, TEndpoint>, 'getApiKeyCandidates'> & {
+  options: Omit<GatewayApiKeyAuthMiddlewareOptions<TApi, TEndpoint>, 'getApiKeyCandidates'> & {
     db: GatewayAuthQueryable;
     vaultNetwork?: string | ((req: Request) => string | null | undefined);
   },
@@ -314,7 +432,7 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
     async getApiKeyCandidates(prefix: string, req: Request) {
       const network =
         typeof options.vaultNetwork === 'function'
-          ? options.vaultNetwork(req)
+          ? options.vaultNetworkhreq)
           : options.vaultNetwork;
 
       const result = await options.db.query<DatabaseGatewayApiKeyRow>(

@@ -90,14 +90,14 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(verifiedKey!.keyHash).toBe("[REDACTED]"); // Sensitive data redacted
     });
 
-    it("should reject invalid API keys", () => {
+    it("should reject invalid API keys", async () => {
       const invalidKey = "ck_live_invalidkey123456789012345678901234";
       const verifiedKey = apiKeyRepository.verify(invalidKey);
 
       expect(verifiedKey).toBeNull();
     });
 
-    it("should reject keys with correct prefix but wrong suffix", () => {
+    it("should reject keys with correct prefix but wrong suffix", async () => {
       const userId = "user-1";
       const createResult = apiKeyRepository.create({
         apiId: "api-1",
@@ -108,7 +108,7 @@ describe("ApiKeyRepository Security Tests", () => {
 
       // Create a key with same prefix but different suffix
       const wrongKey = createResult.key.slice(0, 32) + "FFFFFFFF";
-      const verifiedKey = apiKeyRepository.verify(wrongKey);
+      const verifiedKey = await apiKeyRepository.verify(wrongKey);
 
       expect(verifiedKey).toBeNull();
     });
@@ -124,10 +124,9 @@ describe("ApiKeyRepository Security Tests", () => {
         123 as unknown as string,
       ];
 
-      malformedKeys.forEach((key) => {
-        expect(() => apiKeyRepository.verify(key)).not.toThrow();
-        expect(apiKeyRepository.verify(key)).toBeNull();
-      });
+      for (const key of malformedKeys) {
+        await expect(apiKeyRepository.verify(key)).resolves.toBeNull();
+      }
     });
 
     it("should be resistant to timing attacks", async () => {
@@ -144,12 +143,12 @@ describe("ApiKeyRepository Security Tests", () => {
 
       // Measure time for valid key verification
       const startValid = process.hrtime.bigint();
-      apiKeyRepository.verify(validKey);
+      await apiKeyRepository.verify(validKey);
       const endValid = process.hrtime.bigint();
 
       // Measure time for invalid key verification
       const startInvalid = process.hrtime.bigint();
-      apiKeyRepository.verify(invalidKey);
+      await apiKeyRepository.verify(invalidKey);
       const endInvalid = process.hrtime.bigint();
 
       const validTime = Number(endValid - startValid);
@@ -164,7 +163,7 @@ describe("ApiKeyRepository Security Tests", () => {
   });
 
   describe("Key Rotation Security", () => {
-    it("should rotate keys for authorized users", () => {
+    it("should rotate keys for authorized users", async () => {
       const userId = "user-1";
       const createResult = apiKeyRepository.create({
         apiId: "api-1",
@@ -186,10 +185,10 @@ describe("ApiKeyRepository Security Tests", () => {
         expect(rotateResult.newKey.length).toBe(createResult.key.length);
 
         // Old key should no longer work
-        expect(apiKeyRepository.verify(createResult.key)).toBeNull();
+        await expect(apiKeyRepository.verify(createResult.key)).resolves.toBeNull();
 
         // New key should work
-        const verifiedNewKey = apiKeyRepository.verify(rotateResult.newKey);
+        const verifiedNewKey = await apiKeyRepository.verify(rotateResult.newKey);
         expect(verifiedNewKey).toBeTruthy();
         expect(verifiedNewKey!.userId).toBe(userId);
         expect(verifiedNewKey!.scopes).toEqual(["read"]);
@@ -319,8 +318,8 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(uniqueIds.size).toBe(10);
     });
 
-    it("should handle empty repository operations", () => {
-      expect(apiKeyRepository.verify("any_key")).toBeNull();
+    it("should handle empty repository operations", async () => {
+      await expect(apiKeyRepository.verify("any_key")).resolves.toBeNull();
       expect(apiKeyRepository.rotate("any_id", "any_user")).toEqual({
         success: false,
         error: "not_found",
@@ -373,7 +372,7 @@ describe("ApiKeyRepository Security Tests", () => {
   });
 
   describe("Regression Tests", () => {
-    it("should prevent key reuse after revocation", () => {
+    it("should prevent key reuse after revocation", async () => {
       const userId = "user-1";
       const createResult = apiKeyRepository.create({
         apiId: "api-1",
@@ -393,7 +392,7 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(revokedKey.revoked).toBe(true);
 
       // Try to verify the revoked key
-      expect(apiKeyRepository.verify(createResult.key)).toBeNull();
+      await expect(apiKeyRepository.verify(createResult.key)).resolves.toBeNull();
 
       // Create a new key with same parameters
       const newCreateResult = apiKeyRepository.create({
@@ -405,11 +404,11 @@ describe("ApiKeyRepository Security Tests", () => {
 
       // New key should work and be different
       expect(newCreateResult.key).not.toBe(createResult.key);
-      expect(apiKeyRepository.verify(newCreateResult.key)).toBeTruthy();
-      expect(apiKeyRepository.verify(createResult.key)).toBeNull();
+      await expect(apiKeyRepository.verify(newCreateResult.key)).resolves.toBeTruthy();
+      await expect(apiKeyRepository.verify(createResult.key)).resolves.toBeNull();
     });
 
-    it("should maintain data integrity under mixed operations", () => {
+    it("should maintain data integrity under mixed operations", async () => {
       const users = ["user-1", "user-2", "user-3"];
       const createdKeys: Array<{ userId: string; key: string; id: string }> =
         [];
@@ -433,9 +432,9 @@ describe("ApiKeyRepository Security Tests", () => {
       });
 
       // Verify all keys work
-      createdKeys.forEach((ck) => {
-        expect(apiKeyRepository.verify(ck.key)).toBeTruthy();
-      });
+      for (const ck of createdKeys) {
+        await expect(apiKeyRepository.verify(ck.key)).resolves.toBeTruthy();
+      }
 
       // Rotate one key
       const rotateResult = apiKeyRepository.rotate(
@@ -451,9 +450,9 @@ describe("ApiKeyRepository Security Tests", () => {
       apiKeyRepository.revoke(createdKeys[1].id, createdKeys[1].userId);
 
       // Verify final state
-      expect(apiKeyRepository.verify(createdKeys[0].key)).toBeTruthy(); // Rotated key
-      expect(apiKeyRepository.verify(createdKeys[1].key)).toBeNull(); // Revoked key
-      expect(apiKeyRepository.verify(createdKeys[2].key)).toBeTruthy(); // Unchanged key
+      await expect(apiKeyRepository.verify(createdKeys[0].key)).resolves.toBeTruthy(); // Rotated key
+      await expect(apiKeyRepository.verify(createdKeys[1].key)).resolves.toBeNull(); // Revoked key
+      await expect(apiKeyRepository.verify(createdKeys[2].key)).resolves.toBeTruthy(); // Unchanged key
 
       const finalKeys = apiKeyRepository.listForTesting();
       expect(finalKeys).toHaveLength(3); // All 3 keys remain (1 revoked, 2 active)
@@ -471,7 +470,7 @@ describe("ApiKeyRepository Property-Based Tests", () => {
 
   // Feature: bcrypt-cost-config, Property 4: create hash round-trip
   // Validates: Requirements 3.1, 4.3
-  it("Property 4: create hash round-trip", () => {
+  it("Property 4: create hash round-trip", async () => {
     fc.assert(
       fc.property(fc.constant(null), () => {
         apiKeyRepository.clear();
@@ -482,7 +481,7 @@ describe("ApiKeyRepository Property-Based Tests", () => {
           rateLimitPerMinute: null,
         });
         const [record] = apiKeyRepository.listForTesting();
-        return bcrypt.compareSync(key, record.keyHash);
+        return bcrypt.compare(key, record.keyHash);
       }),
       { numRuns: 10 },
     );
@@ -490,7 +489,7 @@ describe("ApiKeyRepository Property-Based Tests", () => {
 
   // Feature: bcrypt-cost-config, Property 5: rotate hash round-trip
   // Validates: Requirements 3.2, 4.4
-  it("Property 5: rotate hash round-trip", () => {
+  it("Property 5: rotate hash round-trip", async () => {
     fc.assert(
       fc.property(fc.constant(null), () => {
         apiKeyRepository.clear();
@@ -504,10 +503,10 @@ describe("ApiKeyRepository Property-Based Tests", () => {
         const result = apiKeyRepository.rotate(record.id, record.userId);
         if (!result.success) return false;
         const [updated] = apiKeyRepository.listForTesting();
-        return (
-          bcrypt.compareSync(result.newKey, updated.keyHash) &&
-          !bcrypt.compareSync(oldKey, updated.keyHash)
-        );
+        return Promise.all([
+          bcrypt.compare(result.newKey, updated.keyHash),
+          bcrypt.compare(oldKey, updated.keyHash),
+        ]).then(([newMatch, oldMatch]) => newMatch && !oldMatch);
       }),
       { numRuns: 10 },
     );
