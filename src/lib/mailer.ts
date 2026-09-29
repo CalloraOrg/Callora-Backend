@@ -1,4 +1,4 @@
-import { logger } from '../logger.js';
+import { logger } from '../logger';
 
 export interface MailerOptions {
   enabled: boolean;
@@ -18,20 +18,14 @@ export interface MailPayload {
   text: string;
 }
 
-const defaultMailerOptions: MailerOptions = {
+let mailerOptions: MailerOptions = {
   enabled: process.env.MAILER_ENABLED === 'true',
   from: process.env.MAILER_FROM ?? 'noreply@callora.com',
   transport: (process.env.MAILER_TRANSPORT as 'console' | 'smtp') ?? 'console',
 };
 
-let mailerOptions: MailerOptions = { ...defaultMailerOptions };
-
 export function configureMailer(options: Partial<MailerOptions>): void {
   mailerOptions = { ...mailerOptions, ...options };
-}
-
-export function resetMailer(): void {
-  mailerOptions = { ...defaultMailerOptions };
 }
 
 export async function sendMail(payload: MailPayload): Promise<void> {
@@ -73,7 +67,7 @@ export async function sendMail(payload: MailPayload): Promise<void> {
   logToConsole(payload);
 }
 
-function logToConsole(payload: MailPayload): void {
+export function logToConsole(payload: MailPayload): void {
   logger.info('[mailer] Email notification', {
     from: mailerOptions.from,
     to: payload.to,
