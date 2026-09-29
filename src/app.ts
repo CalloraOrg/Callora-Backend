@@ -83,6 +83,10 @@ import { createRouteBodyLimitMiddleware } from "./middleware/routeBodyLimit.js";
 import { metricsMiddleware, metricsEndpoint } from "./metrics.js";
 import { config } from "./config/index.js";
 import {
+  createSorobanBillingService,
+  type SorobanBillingDependencies,
+} from "./services/createSorobanBillingService.js";
+import {
   BadRequestError,
   ForbiddenError,
   NotFoundError,
@@ -99,7 +103,7 @@ import {
 } from "./middleware/envelope.js";
 //import * as OpenApiValidator from 'express-openapi-validator';
 
-interface AppDependencies {
+interface AppDependencies extends SorobanBillingDependencies {
   usageEventsRepository?: UsageEventsRepository;
   healthCheckConfig?: HealthCheckConfig;
   vaultRepository?: VaultRepository;
@@ -163,6 +167,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
   // Set database pool in locals for billing routes
   app.locals.dbPool = pool;
+  app.locals.billingService = createSorobanBillingService(pool, dependencies);
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
   const vaultRepository =
