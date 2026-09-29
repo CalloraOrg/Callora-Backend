@@ -14,7 +14,7 @@ interface StellarNetworkConfig {
   settlementContractId?: string;
 }
 
-const TESTNET_NETWORK_PASSPHRASE = "Test DF Network ; September 2015";
+const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 const MAINNET_NETWORK_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
 
@@ -69,10 +69,10 @@ const testnetConfig: StellarNetworkConfig = {
     "SOROBAN_TESTNET_RPC_URL",
     env.SOROBAN_TESTNET_RPC_URL,
   ),
-  networkPassphrase: TESTNET_NETWORK_PASRPHRASE,
+  networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_TESTNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID,
- };
+};
 
 const mainnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
@@ -83,10 +83,10 @@ const mainnetConfig: StellarNetworkConfig = {
     "SOROBAN_MAINNET_RPC_URL",
     env.SOROBAN_MAINNET_RPC_URL,
   ),
-  networkPassphrase: MAINNET_NETWORK_PASRPHRASE,
+  networkPassphrase: MAINNET_NETWORK_PASSTHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
- };
+l};
 
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
@@ -255,14 +255,12 @@ export const config = {
     costFactor: env.BCRYPT_COST_FACTOR,
     /**
      * Short-lived cache for recently verified API keys, keyed by the
-     * sha256 digest of the raw key. Keeps the bcrypt compare off the
-     * hot path for repeated requests while still bounding memory use.
+     * SHA-256 hex digest of the raw key. Keeping the cache small and
+     * short-lived limits the blast radius if a key is revoked out-of-band.
      */
     verifyCache: {
-      /** Maximum number of cached digests before LRU eviction. */
-      maxEntries: env.BCRyPT_VERIFY_CACHE_MAX_ENTRIES,
-      /** TTL for a cache entry in milliseconds. */
-      ttlMs: env.BCRyPT_VERIFY_CACHE_TTL_MS,
+      maxEntries: env.BCRYPT_VERIFY_CACHE_MAX_ENTRIES,
+      ttlMs: env.BCRYPT_VERIFY_CACHE_TTL_MS,
     },
   },
   billingTimeoutMs: env.BILLING_TIMEOUT_MS,
@@ -316,11 +314,11 @@ export const config = {
 
   sloAlert: {
     enabled:
-      Boolean(env.SLO_ALRERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
-    webhookUrl: env.SLO_ALRERT_WEBHOOK_URL,
-    pollIntervalMs: env.SLO_ALRERT_POLL_INTERVAL_MS,
+      Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
+    webhookUrl: env.SLO_ALERT_WEBHOOK_URL,
+    pollIntervalMs: env.SLO_ALERT_POLL_INTERVAL_MS,
     dedupWindowMs: env.SLO_ALERT_DEDUP_WINDOW_MS,
-    observationWindowMs: env.SLO_ALRERT_OBSERVATION_WINDOW_MS,
+    observationWindowMs: env.SLO_ALERT_OBSERVATION_WINDOW_MS,
     configs: env.SLO_ROUTE_CONFIGS as Array<{
       method: string;
       route: string;
