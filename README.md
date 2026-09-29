@@ -2,6 +2,8 @@
 
 API gateway, usage metering, and billing services for the Callora API marketplace. Talks to Soroban contracts and Horizon for on-chain settlement.
 
+> For the authoritative list of routes mounted by each server entrypoint, see the [Route Map in ARCHITECTURE.md](./ARCHITECTURE.md#route-map). Some endpoint sections below describe routers that are not mounted; the map marks those explicitly.
+
 ## Logs Endpoint
 
 Authenticated users can submit and retrieve structured log entries via `/api/logs`.
@@ -559,3 +561,4 @@ This repo is part of [Callora](https://github.com/your-org/callora):
 
 ## Security Audit Logging
 Admin events are routed into an isolated, structured Pino log stream containing the channel label `admin_action` for clean alerting profiles.
+> **Route availability:** This README includes endpoint documentation from the wider codebase. For the authoritative list of routes actually mounted by each server entrypoint, see the [Route Map in ARCHITECTURE.md](./ARCHITECTURE.md#route-map).
