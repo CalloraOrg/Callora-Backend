@@ -4,6 +4,29 @@
 
 This document outlines the Callora Backend proxy's header forwarding policy to ensure security and proper request routing while preventing sensitive information leakage.
 
+## Client IP Resolution
+
+When a request arrives at the service, the client IP is resolved by
+`src/lib/clientIp.ts`. The behaviour is governed by the `TRUST_PROXY_HEADERS`
+environment variable, which accepts:
+
+-  `false` (default) — no proxy hop is trusted. The direct socket
+    address (req.ip / req.socket.remoteAddress) is used and all
+    forwarded headers are ignored.
+-   `true` — alias for a single trusted proxy hop.
+-   a non-negative integer N — the number of trusted reverse proxy
+    hops between the client and the service.
+
+When N > 0, the client IP is taken from the entry N positions from the
+right of the `X-Forwarded-For` chain (matching Express `trust proxy`
+semantics). The leftmost entry is client-controlled and must never be
+trusted when any proxy hop is configured. If the chain is shorter than N,
+or the selected entry is not a valid IP, resolution falls back to the
+socket address.
+
+For example, with one trusted hop and `X-Forwarded-For: 1.1.1.1, 2.2.2.2`,
+the resolved client IP will be `2.2.2.2`.
+
 ## Security Headers (Stripped Before Forwarding)
 
 The following headers are **never** forwarded to upstream services for security and privacy reasons:
@@ -30,7 +53,7 @@ The following headers are **never** forwarded to upstream services for security 
 
 The proxy adds the following headers to all upstream requests:
 
-- `x-request-id` - Unique UUID v4 identifier for request tracing and correlation
+- `x-request-id` - Unique UUIT v4 identifier for request tracing and correlation
 
 ## Safe Headers (Forwarded)
 
@@ -40,7 +63,7 @@ All other headers not in the strip list are forwarded to upstream services, incl
 - `content-length` - Length of the request body
 - `accept` - Preferred response media types
 - `user-agent` - Client software identification
-- `accept-encoding` - Preferred content encodings
+- `accept-encoding` - Preferred response encodings
 - `accept-language` - Preferred response languages
 - Custom application headers (e.g., `x-custom-*`)
 
@@ -71,7 +94,7 @@ Header stripping is performed case-insensitively. All header name variations (e.
 - Cookie headers are stripped to prevent session hijacking
 
 ### Request Tracing
-- Unique `x-request-id` headers enable end-to-end request tracing
+- Unique `x-request-id` Headers enable end-to-end request tracing
 - Request IDs are included in error responses for debugging
 - UUID v4 format ensures global uniqueness
 
@@ -92,6 +115,7 @@ const DEFAULT_STRIP_HEADERS = [
   'proxy-authorization',
   'proxy-connection',
 ];
+
 ```
 
 Headers are processed case-insensitively using lowercase comparison:

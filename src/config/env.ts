@@ -87,6 +87,40 @@ export const envSchema = z
     FORWARDED_USER_ID_SECRET: z.string().optional(),
     INTERNAL_GATEWAY_SECRET: z.string().optional(),
 
+    /**
+     * TRUST_PROXY_HOPS — number of trusted reverse-proxy hops in front of the
+     * application. Mirrors Express `trust proxy` numeric semantics: the client
+     * IP is taken that many positions from the right of the X-Forwarded-For
+     * list, so leftmost (client-controlled) entries cannot spoof the source.
+     *
+     *   0 (default) → ignore X-Forwarded-For entirely; use the socket address.
+     *   1           → one trusted proxy; take the rightmost XFF entry.
+     *   N           → N trusted proxies; take the Nth entry from the right.
+     *
+     * Values are clamped to a non-negative integer. When the header contains
+     * fewer entries than the configured hop count, callers fall back to the
+     * socket address (see src/lib/clientIp.ts).
+     */
+    TRUST_PROXY_HOPS: z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .default(0),
+
+    /**
+     * TRUST_PROXY_HEADERS — legacy boolean flag retained for backwards
+     * compatibility. When set to "true" and TRUST_PROXY_HOPS is left at its
+     * default, it is treated as a single trusted hop. Prefer TRUST_PROXY_HOPS
+     * for new deployments; the boolean cannot express multi-hop topologies and
+     * is retained only so existing environments do not silently lose proxy
+     * awareness.
+     */
+    TRUST_PROXY_HEADERS: z
+      .string()
+      .optional()
+      .transform((v) => v === "true")
+      .default(false),
+
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
     UPSTREAM_HOST_ALLOWLIST: z.string().optional(),
