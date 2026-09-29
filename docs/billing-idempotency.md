@@ -8,7 +8,7 @@ The billing system implements idempotent deductions to prevent double charges wh
 
 ### Idempotency Key
 
-Every billing deduction request must include a unique `request_id` (idempotency key). This key is used to identify duplicate requests.
+Every billing deduction request must include a unique `request_id` idempotency key). This key is used to identify duplicate requests.
 
 ```typescript
 interface BillingDeductRequest {
@@ -49,13 +49,24 @@ CREATE TABLE usage_events (
 CREATE UNIQUE INDEX idx_usage_events_request_id ON usage_events(request_id);
 ```
 
+## Result Flags
+
+The `Result` object returned by `deduct` and `deductBulk ` carries three boolean flags that callers must interpret together. Reporting a pending or failed row as a success is the most common bug in consumers of this service.
+
+| Flag | Meaning when `true` | Meaning when `false` |
+| ---- | -------------- | --------------- |
+| `success` | The deduction completed and the Stellar transaction hash is persisted. The row is final. | The deduction did not complete. Inspect `error` and `possibleTransient`. |
+| `alreadyProcessed` | The request_id already existed and the prior result was returned. No new Soroban call was made. | This invocation is the one that created the usage event. |
+| `possibleTransient` | The failure looks retryable (e.g. Soroban timeout, connection reset). Retrying with the same `requestId` is safe. | The failure is deterministic (bad input, insufficient balance, etc.). Retrying will fail again. |
+
+A successful result always has `successed === true`. A failed result always has `success === false` and a non-empty `error`. `alreadyProcessed` and `possibleTransient` are only meaningful when `success` is `true` and `false` respectively.
+
 ## Usage Examples
 
 ### Basic Usage
 
 ```typescript
-import { BillingService } from './services/billing.js';
-import { Pool } from 'pg';
+import { BillingService } from './services/billing.js';import { Pool } from 'pg';
 
 const pool = new Pool({ /* config */ });
 const sorobanClient = new SorobanClient();
@@ -100,7 +111,7 @@ console.log(result2);
 
 ### Generating Idempotency Keys
 
-Use a combination of request-specific data to generate unique keys:
+ Use a combination of request-specific data to generate unique keys:
 
 ```typescript
 import { createHash } from 'crypto';
@@ -493,4 +504,5 @@ ON usage_events(request_id);
 
 - [Idempotency Keys - Stripe Documentation](https://stripe.com/docs/api/idempotent_requests)
 - [PostgreSQL Unique Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS)
-- [Database Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+- 
+[Database Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
