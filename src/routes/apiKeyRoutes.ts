@@ -150,10 +150,10 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       }
 
       const { id } = keyIdParamsSchema.parse(req.params);
-      
+
       // Get the SHA-256 hash BEFORE(revoking (while key still exists)
       const sha256Hash = apiKeyRepository.getSha256Hash(id);
-      
+
       const result = apiKeyRepository.revoke(id, user.id);
 
       if (result === 'not_found') {

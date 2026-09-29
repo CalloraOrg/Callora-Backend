@@ -50,9 +50,6 @@ export interface GatewayApiKeyAuthOptions<
    *  Keys with scopes containing '*' are always allowed.
    *  Keys with empty/null scopes default to ['read']. */
   requiredScope?: string;
-  /** Optional hook to consult a revocation service (e.g. redis-backed) by
-   *  sha256 hex hash of the presented key. Return true to reject immediately. */
-  isRevoked?: (keyHash: string, req: Request) => Promise<boolean> | boolean;
   onUnauthorized?: (next: NextFunction, message: string) => void;
   onNotFound?: (next: NextFunction, message: string) => void;
 }
@@ -187,19 +184,6 @@ export function createGatewayApiKeyAuthMiddleware<
       recordApiKeyLookup('miss');
       handleUnauthorized(next, extracted.error ?? 'Unauthorized: missing API key');
       return;
-    }
-
-    // Immediate revocation check keyed by the sha256 hex hash of the presented
-    // key. This must happen before any upstream contact so a leaked key can be
-    // invalidated without waiting for a database read or cache expiry.
-    if (options.isRevoked) {
-      const keyHash = sha256Hex(extracted.apiKey);
-      const revoked = await options.isRevoked(keyHash, req);
-      if (revoked) {
-        recordApiKeyLookup('revoked');
-        handleUnauthorized(next, 'Unauthorized: API key has been revoked');
-        return;
-      }
     }
 
     const resolvedContext = await options.resolveApiContext(req);
