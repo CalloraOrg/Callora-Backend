@@ -500,3 +500,208 @@ describe('BillingService.getByRequestId', () => {
     assert.equal(result, null);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Error Classification Tests (Issue #1275)
+// ---------------------------------------------------------------------------
+
+describe('isTransientSorobanError - SorobanRpcError category classification', () => {
+  test('SorobanRpcError with TIMEOUT category is transient', () => {
+    const err = new SorobanRpcError('Request timed out', 'TIMEOUT');
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('SorobanRpcError with NETWORK_ERROR category is transient', () => {
+    const err = new SorobanRpcError('Network connection failed', 'NETWORK_ERROR');
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('SorobanRpcError with INSUFFICIENT_BALANCE category is NOT transient', () => {
+    const err = new SorobanRpcError('Insufficient balance', 'INSUFFICIENT_BALANCE');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+
+  test('SorobanRpcError with CONTRACT_ERROR category is NOT transient', () => {
+    const err = new SorobanRpcError('Contract validation failed', 'CONTRACT_ERROR');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+});
+
+describe('isTransientSorobanError - errno-based classification', () => {
+  test('Error with ECONNRESET errno is transient', () => {
+    const err = Object.assign(new Error('Connection reset'), { errno: 'ECONNRESET' });
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('Error with ECONNREFUSED errno is transient', () => {
+    const err = Object.assign(new Error('Connection refused'), { errno: 'ECONNREFUSED' });
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('Error with ETIMEDOUT errno is transient', () => {
+    const err = Object.assign(new Error('Operation timed out'), { errno: 'ETIMEDOUT' });
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('Error with EHOSTUNREACH errno is transient', () => {
+    const err = Object.assign(new Error('Host unreachable'), { errno: 'EHOSTUNREACH' });
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('Error with ENETUNREACH errno is transient', () => {
+    const err = Object.assign(new Error('Network unreachable'), { errno: 'ENETUNREACH' });
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('Error with ENOTFOUND errno is transient', () => {
+    const err = Object.assign(new Error('Host not found'), { errno: 'ENOTFOUND' });
+    assert.equal(billingInternals.isTransientSorobanError(err), true);
+  });
+
+  test('Error with non-transient errno is NOT transient', () => {
+    const err = Object.assign(new Error('Some error'), { errno: 'EACCES' });
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+});
+
+describe('isTransientSorobanError - word-boundary regex patterns', () => {
+  test('Error message with word-boundary "timeout" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('Request timeout')), true);
+  });
+
+  test('Error message with word-boundary "timed out" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('Request timed out')), true);
+  });
+
+  test('Error message with word-boundary "socket hang up" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('socket hang up')), true);
+  });
+
+  test('Error message with word-boundary "econnreset" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('ECONNRESET')), true);
+  });
+
+  test('Error message with word-boundary "rate limit" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('You are rate limited')), true);
+  });
+
+  test('Error message with word-boundary "network error" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('Network error detected')), true);
+  });
+
+  test('Error message with word-boundary "service unavailable" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('service unavailable')), true);
+  });
+
+  test('Error message with word-boundary "gateway timeout" is transient', () => {
+    assert.equal(billingInternals.isTransientSorobanError(new Error('gateway timeout')), true);
+  });
+});
+
+describe('isTransientSorobanError - false positives prevented (Issue #1275)', () => {
+  test('"insufficient: 1503 units" does NOT match "503" (no word boundary)', () => {
+    const err = new Error('insufficient: 1503 units');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+
+  test('"contract address 429xyz" does NOT match "429" (no word boundary)', () => {
+    const err = new Error('contract address 429xyz');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+
+  test('"amount 50399 too large" does NOT match "503" (no word boundary)', () => {
+    const err = new Error('amount 50399 too large');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+
+  test('"user 4291 not found" does NOT match "429" (no word boundary)', () => {
+    const err = new Error('user 4291 not found');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+
+  test('"balance check failed with code 12345" is NOT transient', () => {
+    const err = new Error('balance check failed with code 12345');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+
+  test('"contract execution code 9999 error" is NOT transient', () => {
+    const err = new Error('contract execution code 9999 error');
+    assert.equal(billingInternals.isTransientSorobanError(err), false);
+  });
+});
+
+describe('isTransientSorobanError - property tests with random numbers', () => {
+  function generateRandomNumericMessage(): string {
+    const num = Math.floor(Math.random() * 100000);
+    const messages = [
+      `Error code ${num}`,
+      `Operation ${num} failed`,
+      `Result ${num} returned`,
+      `Transaction ${num} not found`,
+      `Block ${num} unavailable`,
+      `Account balance ${num}`,
+    ];
+    return messages[Math.floor(Math.random() * messages.length)];
+  }
+
+  test('random numeric error messages are NOT transient (property test)', () => {
+    for (let i = 0; i < 50; i++) {
+      const msg = generateRandomNumericMessage();
+      const isTransient = billingInternals.isTransientSorobanError(new Error(msg));
+      assert.equal(
+        isTransient,
+        false,
+        `Random message "${msg}" should not be transient`
+      );
+    }
+  });
+});
+
+describe('isTransientSorobanError - regression tests (existing patterns)', () => {
+  const transientPatterns = [
+    'timeout',
+    'timed out',
+    'socket hang up',
+    'temporarily unavailable',
+    'temporary outage',
+    'econnreset',
+    'econnrefused',
+    'rate limit',
+    'network error',
+    'transport error',
+    'temporarily down',
+    'service unavailable',
+    'gateway timeout',
+  ];
+
+  for (const pattern of transientPatterns) {
+    test(`Pattern "${pattern}" is still detected as transient`, () => {
+      const err = new Error(`Something went wrong: ${pattern} during operation`);
+      assert.equal(
+        billingInternals.isTransientSorobanError(err),
+        true,
+        `Pattern "${pattern}" should be transient`
+      );
+    });
+  }
+
+  const nonTransientPatterns = [
+    'insufficient balance',
+    'contract error',
+    'simulation failed',
+    'validation error',
+    'bad request',
+    'unauthorized',
+  ];
+
+  for (const pattern of nonTransientPatterns) {
+    test(`Pattern "${pattern}" is NOT transient`, () => {
+      const err = new Error(`Failed with error: ${pattern}`);
+      assert.equal(
+        billingInternals.isTransientSorobanError(err),
+        false,
+        `Pattern "${pattern}" should NOT be transient`
+      );
+    });
+  }
+});
