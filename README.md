@@ -384,12 +384,11 @@ The test suite includes:
 
 ### Circuit Breaker Stuck Open
 
-If the circuit breaker remains open:
-
-1. Check `/api/deposits/health` to see current state
-2. Verify `HORIZON_URL` is correct and accessible
-3. Wait for cooldown period to elapse
-4. Restart service to reset circuit breaker
+For the gateway upstream breaker, inspect `gateway_upstream_breaker_state` on
+`/api/metrics`, verify upstream health, and follow the [stuck breaker operator
+runbook](./docs/circuit-breaker-stuck-open.md). It covers the Postgres store
+schema, configured reset options, and `PROXY_BREAKER_*` tuning. The current
+proxy wiring uses in-memory state and does not expose the admin reset router.
 
 ### High Latency
 
