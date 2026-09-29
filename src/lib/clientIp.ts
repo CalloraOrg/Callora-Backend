@@ -1,5 +1,7 @@
 import type { Request } from 'express';
 
+export type TrustProxyOption = boolean | number;
+
 /**
  * Proxy headers checked when trustProxy is enabled, ordered by reliability.
  * The same list is used by the IP-allowlist middleware and the request logger
@@ -8,8 +10,8 @@ import type { Request } from 'express';
 export const DEFAULT_PROXY_HEADERS = [
   'x-forwarded-for',     // Standard – RFC 7239
   'x-real-ip',           // Nginx
-  'x-client-ip',          // Apache
-  'x-forwarded',          // Non-standard but widely used
+  'x-client-ip',         // Apache
+  'x-forwarded',         // Non-standard but widely used
   'x-cluster-client-ip', // Load balancers
   'cf-connecting-ip',    // Cloudflare
   'x-aws-client-ip',     // AWS ALB
@@ -23,80 +25,62 @@ export function isValidIp(ip: string): boolean {
 }
 
 /**
- * Resolves the number of trusted proxy hops from the configured value.
- *
- * Accepts a number of hops or a boolean for backward compatibility:
- *  - `false` (default) -> 0 hops (never trust forwarded headers)
- *  - `true`            -> 1 hop (trust the rightmost forwarded entry)
- *  - `number`           -> that many trusted hops
- */
-export function resolveTrustedHops(trustProxy: number | boolean | undefined): number {
-  if (trustProxy === true) return 1;
-  if (trustProxy === false || trustProxy === undefined) return 0;
-  if (!Number.isFinite(trustProxy) || trustProxy < 0) return 0;
-  return Math.floor(trustProxy);
-}
-
-/**
- * Selects the client IP from a forwarded chain using Express 'trust proxy'
- * semantics: the address is picked `trustedHops`+1 positions from the
- * right of the chain. The leftmost entries are client-controlled and must not
- * be trusted.
- */
-export function selectClientIpWithTrust(
-  chain: string,
-  trustedHops: number,
-): string | undedefined {
-  if (trustedHops < 1) return undefined;
-
-  const parts = chain
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-
-  if (parts.length === 0) return undefined;
-
-  // Express picks the address `trustedHops` positions from the right.
-  // With one trusted hop, '1.1.1.1, 2.2.2.2' yields '2.2.2.2'.
-  const index = parts.length - trustedHops;
-  if (index < 0 || index >= parts.length) return undefined;
-
-  const candidate = parts[index];
-  return isValidIp(candidate) ? candidate : undefined;
-}
-
-/**
  * Extracts the real client IP from an Express request.
  *
- * When the trusted hop count is 0 the direct socket address is returned,
- * making IP spoofing via headers impossible.
+ * Trust semantics follow Express' `trust proxy` model:
+ * - `false` (default): all forwarded headers are ignored and the direct
+ *   socket address is returned, making header spoofing impossible.
+ * - `true`: treats the immediate peer as a trusted proxy (equivalent to
+ *   a hop count of 1).
+ * - `number`: the number of trusted proxy hops in front of the app.
  *
- * When trusted hops are configured the proxy headers listed in `proxyHeaders`
- * are consulted in order. For `X-Forwarded-For` the entry `trustedHops`
- * positions from the right is used, matching Express 'trust proxy' semantics.
- * Spoofed leftmost entries are ignored. Other headers are treated as a
- * single-value hint and only trusted when at least one hop is trusted.
+ * For the `x-forwarded-for` chain the client IP selected is the entry that
+ * many positions from the right (the leftmost entries are client-controlled
+ * and must not be trusted). Other single-value proxy headers are only
+ * consulted when the chain is exhausted, and the socket address is the
+ * final fallback.
  *
  * @param req          Express request object
- * @param trustProxy   Number of trusted proxy hops (boolean supported for backwards compat)
+ * @param trustProxy   Whether to honour proxy forwarding headers, or how
+ *                     many trusted proxy hops to skip from the right
  * @param proxyHeaders Ordered list of headers to inspect (defaults to {@link DEFAULT_PROXY_HEADERS})
  */
 export function getClientIp(
   req: Request,
-  trustProxy: number | boolean = false,
+  trustProxy: TrustProxyOption = false,
   proxyHeaders: readonly string[] = DEFAULT_PROXY_HEADERS,
 ): string {
-  const trustedHops = resolveTrustedHops(trustProxy);
+  const hops = normalizeTrustProxy(trustProxy);
 
-  if (trustedHops > 0) {
+  if (hops > 0) {
     for (const header of proxyHeaders) {
       const value = req.headers[header.toLowerCase()];
-      if (typeof value === 'string' && value.trim()) {
-        const candidate = selectClientIpWithTrust(value, trustedHops);
-        if (candidate) return candidate;
-      }
+      if (typeof value !== 'string' || !value.trim()) continue;
+
+      const entries = value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+
+      // The client is `trustedHops` positions from the right of the chain.
+      // When the chain is shorter than the configured hop count the
+      // client address is unknown, so we move on to the next source.
+      const index = entries.length - hops;
+      if (index < 0) continue;
+
+      const candidate = entries[index];
+      if (isValidIp(candidate)) return candidate;
     }
   }
 
   return req.ip ?? req.socket?.remoteAddress ?? '';
+}
+
+/** Normalizes the trust-proxy option into a non-negative hop count. */
+function normalizeTrustProxy(trustProxy: TrustProxyOption): number {
+  if (trustProxy === true) return 1;
+  if (typeof trustProxy === 'number' && Number.isFinite(trustProxy)) {
+    return Math.max(0, Math.floor(trustProxy));
+  }
+  return 0;
 }
