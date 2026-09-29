@@ -288,12 +288,13 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       allowedHeaders: [
         "Content-Type",
         "Authorization",
-        "x-admin-api-key",
-        "x-user-id", // Added for authentication
+        "Idempotency-Key",
+        "If-None-Match",
+        "X-Correlation-Id",
         "x-request-id", // Added for tracing
       ],
       credentials: true,
-      exposedHeaders: ["X-Request-Id"],
+      exposedHeaders: ["X-Request-Id", "Retry-After", "ETag", "X-Correlation-Id", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"],
       // Reduce preflight cache time in production for security
       maxAge: isProduction ? 600 : 86400, // 10 minutes vs 24 hours
       optionsSuccessStatus: 204, // No content for preflight
@@ -376,49 +377,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }),
   );
 
-  app.get("/api/health", createTimeoutMiddleware({ timeoutMs: config.healthRequestTimeoutMs }), async (req, res) => {
+  app.get("/api/health", (req, res) => {
     const requestId = getRequestId(req);
-    // If no health check config provided, return simple health check
-    if (!dependencies?.healthCheckConfig) {
-      const data = { status: "ok", service: "callora-backend" };
-      res.json(successEnvelope(data, requestId));
-      return;
-    }
-
-    try {
-      // Cooperative abort: if the per-request timeout fires while performHealthCheck
-      // is awaiting a dependency probe, the aborted signal propagates to any
-      // in-flight fetch calls inside the service layer, allowing them to cancel
-      // quickly rather than burning the full per-component timeout.
-      const healthStatus = await performHealthCheck(
-        dependencies.healthCheckConfig,
-        req.abortSignal,
-      );
-
-      // Guard: if the timeout middleware already sent a 504 (res.headersSent)
-      // we must not attempt to write a second response.
-      if (res.headersSent) {
-        return;
-      }
-
-      const statusCode = healthStatus.status === "down" ? 503 : 200;
-      res.status(statusCode).json(successEnvelope(healthStatus, requestId));
-    } catch {
-      if (res.headersSent) {
-        return;
-      }
-      // Never expose internal errors in health check
-      res.status(503).json(
-        errorEnvelope("SERVICE_UNAVAILABLE", "Health check failed", requestId, {
-          status: "down",
-          timestamp: new Date().toISOString(),
-          checks: {
-            api: "ok",
-            database: "down",
-          },
-        }),
-      );
-    }
+    const data = { status: "ok", service: "callora-backend" };
+    res.json(successEnvelope(data, requestId));
   });
 
   // Public maintenance status — readable by external monitoring without admin auth.
