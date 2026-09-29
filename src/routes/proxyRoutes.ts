@@ -213,6 +213,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       // 7. Proxy with circuit breaker and timeout
       let upstreamStatus = 502;
       const timer = startUpstreamTimer(apiEntry.id, req.method);
+      let headersFlushed = false;
 
       try {
         const executeWithRetry = async (attempt = 1): Promise<Response> => {
@@ -254,6 +255,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
 
         // Stream body back
         res.status(upstreamStatus);
+        headersFlushed = true;
         if (upstreamRes.body) {
           const reader = upstreamRes.body.getReader();
           const pump = async (): Promise<void> => {
@@ -268,6 +270,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         } else {
           const text = await upstreamRes.text();
           res.send(text);
+          headersFlushed = true;
         }
       } catch (err: unknown) {
         let outcome: UpstreamOutcome = 'error';
@@ -279,6 +282,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           // Update metric
           await circuitBreaker.getMetrics(breakerKey);
           setGatewayUpstreamBreakerState(breakerKey, 1);
+          if (headersFlushed || res.headersSent) {
+            logger.error(
+              { requestId, err, upstreamStatus, apiId: String(apiEntry.id) },
+              'Proxy error after headers flushed; destroying response socket',
+            );
+            res.destroy(err instanceof Error ? err : undefined);
+            return;
+          }
           throw new BadGatewayError('Bad Gateway: upstream unavailable');
         } else if (err instanceof DOMException && err.name === 'TimeoutError') {
           upstreamStatus = 504;
@@ -288,6 +299,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           const failedMetrics = await circuitBreaker.getMetrics(breakerKey);
           const failedStateValue = failedMetrics.state === 'CLOSED' ? 0 : failedMetrics.state === 'OPEN' ? 1 : 2;
           setGatewayUpstreamBreakerState(breakerKey, failedStateValue);
+          if (headersFlushed || res.headersSent) {
+            logger.error(
+              { requestId, err, upstreamStatus, apiId: String(apiEntry.id) },
+              'Proxy error after headers flushed; destroying response socket',
+            );
+            res.destroy(err instanceof Error ? err : undefined);
+            return;
+          }
           throw new GatewayTimeoutError('Upstream service timed out');
         } else if (err instanceof TypeError && (err as NodeJS.ErrnoException).code === 'UND_ERR_CONNECT_TIMEOUT') {
           upstreamStatus = 504;
@@ -297,6 +316,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           const failedMetrics = await circuitBreaker.getMetrics(breakerKey);
           const failedStateValue = failedMetrics.state === 'CLOSED' ? 0 : failedMetrics.state === 'OPEN' ? 1 : 2;
           setGatewayUpstreamBreakerState(breakerKey, failedStateValue);
+          if (headersFlushed || res.headersSent) {
+            logger.error(
+              { requestId, err, upstreamStatus, apiId: String(apiEntry.id) },
+              'Proxy error after headers flushed; destroying response socket',
+            );
+            res.destroy(err instanceof Error ? err : undefined);
+            return;
+          }
           throw new GatewayTimeoutError('Upstream service timed out');
         } else {
           upstreamStatus = 502;
@@ -305,6 +332,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           const failedMetrics = await circuitBreaker.getMetrics(breakerKey);
           const failedStateValue = failedMetrics.state === 'CLOSED' ? 0 : failedMetrics.state === 'OPEN' ? 1 : 2;
           setGatewayUpstreamBreakerState(breakerKey, failedStateValue);
+          if (headersFlushed || res.headersSent) {
+            logger.error(
+              { requestId, err, upstreamStatus, apiId: String(apiEntry.id) },
+              'Proxy error after headers flushed; destroying response socket',
+            );
+            res.destroy(err instanceof Error ? err : undefined);
+            return;
+          }
           throw new BadGatewayError('Bad Gateway: upstream unreachable');
         }
       }
@@ -398,6 +433,15 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         });
       }
     } catch (error) {
+      const requestId = req.id || getOrCreateRequestId(randomUUID);
+      if (res.headersSent) {
+        logger.error(
+          { requestId, err: error },
+          'Proxy error after headers flushed; destroying response socket',
+        );
+        res.destroy(error instanceof Error ? error : undefined);
+        return;
+      }
       next(error);
     }
   }

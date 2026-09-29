@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { errorHandler } from '../middleware/errorHandler.js';
-import { 
-  BadRequestError, 
+const { errorHandler } = require('../middleware/errorHandler.js');
+import {
+  BadRequestError,
   UnauthorizedError,
   ForbiddenError,
   NotFoundError,
@@ -33,12 +33,14 @@ describe('Error Handler', () => {
     mockRes = {
       status: jest.fn().mockReturnThis(),
       json: jest.fn(),
-      headersSent: false
+      destroy: jest.fn(),
+      headersSent: false,
+      writableEnded: false,
     };
     mockNext = jest.fn();
   });
 
-  afterEach(() => {
+  afterEach((() => {
     jest.clearAllMocks();
   });
 
@@ -48,7 +50,8 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorEnvelope>,
+      mockRes
+ as Response<ErrorEnvelope>,
       mockNext
     );
 
@@ -133,12 +136,52 @@ describe('Error Handler', () => {
     errorHandler(
       error,
       mockReq as Request,
-      mockRes as Response<ErrorEnvelope>,
+      mockRes
+ as Response<ErrorEnvelope>,
       mockNext
     );
 
     expect(mockRes.status).not.toHaveBeenCalled();
     expect(mockRes.json).not.toHaveBeenCalled();
+  });
+
+  it('destroys the socket when an error occurs after headers are sent', () => {
+    mockRes.headersSent = true;
+    mockRes.writableEnded = false;
+    const error = new Error('mid-stream failure');
+
+    errorHandler(
+      error,
+      mockReq as Request,
+      mockRes
+ as Response<ErrorEnvelope>,
+      mockNext
+    );
+
+    expect(mockRes.status).not.toHaveBeenCalled();
+    expect(mockRes.json).not.toHaveBeenCalled();
+    expect(mockRes.destroy).toHaveBeenCalledWith(error);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      '[errorHandler]',
+      expect.objectContaining({ requestId: 'test-request-id' })
+    );
+  });
+
+  it('does not destroy the socket if the response is already ended', () => {
+    mockRes.headersSent = true;
+    mockRes.writableEnded = true;
+    const error = new Error('late error');
+
+    errorHandler(
+      error,
+      mockReq as Request,
+      mockRes as Response<ErrorEnvelope>,
+      mockNext
+    );
+
+    expect(mockRes.destroy).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
   it('should include explicit catalog code when provided', () => {
@@ -212,7 +255,7 @@ describe('Error Handler', () => {
     expect(call.error.code).toBe('TOO_MANY_REQUESTS');
   });
 
-  it('all error envelopes have required fields', () => {
+  it('all error envelopes have required field', () => {
     const error = new BadRequestError('test');
     errorHandler(error, mockReq as Request, mockRes as Response<ErrorEnvelope>, mockNext);
     
