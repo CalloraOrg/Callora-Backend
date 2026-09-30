@@ -256,6 +256,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         res.status(upstreamStatus);
         if (upstreamRes.body) {
           const reader = upstreamRes.body.getReader();
+          // Release the upstream connection if the client goes away before the
+          // body has been fully delivered.
+          const onClientClose = (): void => {
+            if (!res.writableFinished) {
+              void reader.cancel().catch(() => undefined);
+            }
+          };
+          res.once('close', onClientClose);
           const pump = async (): Promise<void> => {
             while (true) {
               const { done, value } = await reader.read();
@@ -264,7 +272,18 @@ export function createProxyRouter(deps: ProxyDeps): Router {
             }
             res.end();
           };
-          await pump();
+          try {
+            await pump();
+          } catch (streamErr) {
+            // Mid-stream failure: headers are already flushed, so the error
+            // handler cannot send an envelope. Cancel the upstream body so its
+            // socket is freed; errorHandler then destroys the client response
+            // so the caller sees a terminated stream instead of a hang.
+            void reader.cancel(streamErr).catch(() => undefined);
+            throw streamErr;
+          } finally {
+            res.removeListener('close', onClientClose);
+          }
         } else {
           const text = await upstreamRes.text();
           res.send(text);
