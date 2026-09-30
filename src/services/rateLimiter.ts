@@ -444,7 +444,7 @@ export class StoreBackedRateLimiter implements RateLimiter {
   private resolvePolicy(tier?: string): TierPolicy {
     if (!tier || !(tier in this.tierPolicies)) {
       if (tier) {
-        console.warn(`[rateLimiter] Unknown tier "${tier}", using default`);
+        logger.warn(`[rateLimiter] Unknown tier "${tier}", using default`);
       }
       return { maxRequests: this.maxRequests, windowMs: this.windowMs };
     }

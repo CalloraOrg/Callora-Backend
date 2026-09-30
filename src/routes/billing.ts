@@ -110,7 +110,7 @@ function sendSimulationFailure(
   res: Response,
   result: Pick<BillingDeductResult, "error" | "simulationDetails">,
 ): void {
-  console.warn("Soroban simulation diagnostics:", result.simulationDetails);
+  logger.warn("Soroban simulation diagnostics:", result.simulationDetails);
   res.status(502).json({
     error: "Soroban simulation failed",
     code: "SIMULATION_FAILED",
@@ -289,7 +289,7 @@ router.post(
     } catch (error) {
       if (error instanceof SorobanRpcError) {
         if (error.simulationDetails) {
-          console.warn(
+          logger.warn(
             "Soroban simulation diagnostics:",
             error.simulationDetails,
           );

@@ -81,6 +81,7 @@ import { ApiKey } from './types/gateway.js';
 import { listingsCache } from './lib/listingsCache.js';
 import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
 import { createAnomalyDetectorJob } from './workers/anomalyDetector.js';
+import { logger } from './logger.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -430,7 +431,7 @@ if (isDirectExecution) {
       sloAlertJob?.start();
 
       const server = app.listen(PORT, () => {
-        console.log(`Callora backend listening on http://localhost:${PORT}`);
+        logger.info(`Callora backend listening on http://localhost:${PORT}`);
       });
 
       // Track active connections so we can wait for them to finish
@@ -459,7 +460,7 @@ if (isDirectExecution) {
       process.once("SIGTERM", () => onSignal("SIGTERM"));
       process.once("SIGINT", () => onSignal("SIGINT"));
     } catch (error) {
-      console.error("Failed to start server:", error);
+      logger.error("Failed to start server:", error);
       process.exit(1);
     }
   }

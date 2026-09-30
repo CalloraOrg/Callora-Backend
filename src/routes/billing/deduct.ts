@@ -27,6 +27,7 @@ import {
 } from "../../services/sorobanBilling.js";
 import { redactSimulationDetails } from "../../lib/simulationDiagnostics.js";
 import bulkDeductRouter from "./deduct/bulk.js";
+import { logger } from '../../logger.js';
 
 const router = Router();
 
@@ -100,7 +101,7 @@ function sendSimulationFailure(
   res: Response,
   result: Pick<BillingDeductResult, "error" | "simulationDetails">,
 ): void {
-  console.warn("Soroban simulation diagnostics:", result.simulationDetails);
+  logger.warn("Soroban simulation diagnostics:", result.simulationDetails);
   res.status(502).json({
     error: "Soroban simulation failed",
     code: "SIMULATION_FAILED",
@@ -178,7 +179,7 @@ router.post(
     } catch (error) {
       if (error instanceof SorobanRpcError) {
         if (error.simulationDetails) {
-          console.warn(
+          logger.warn(
             "Soroban simulation diagnostics:",
             error.simulationDetails,
           );
