@@ -9,18 +9,17 @@ import {
   InternalServerError,
   NotFoundError,
   PaymentRequiredError,
+  SimulationFailedError,
   UnauthorizedError,
 } from "../../errors/index.js";
+import { logger } from "../../logger.js";
 import {
   requireAuth,
   type AuthenticatedLocals,
 } from "../../middleware/requireAuth.js";
 import { idempotencyMiddleware } from "../../middleware/idempotency.js";
 import { billingDeductHistogramMiddleware } from "../../middleware/metricsHistogram.js";
-import {
-  BillingService,
-  type BillingDeductResult,
-} from "../../services/billing.js";
+import { BillingService } from "../../services/billing.js";
 import {
   createSorobanRpcBillingClient,
   SorobanRpcError,
@@ -96,16 +95,35 @@ const idempotencyHandler = (
   next: NextFunction,
 ) => idempotencyMiddleware(req, res, next);
 
-function sendSimulationFailure(
-  res: Response,
-  result: Pick<BillingDeductResult, "error" | "simulationDetails">,
-): void {
-  console.warn("Soroban simulation diagnostics:", result.simulationDetails);
-  res.status(502).json({
-    error: "Soroban simulation failed",
-    code: "SIMULATION_FAILED",
-    simulationDetails: redactSimulationDetails(result.simulationDetails),
+/**
+ * Record a simulation failure server-side with redacted diagnostics.
+ *
+ * Raw RPC payloads contain account addresses, balances, XDR and signatures,
+ * so they are never logged verbatim — only the summary produced by
+ * {@link redactSimulationDetails} is emitted.
+ */
+function logSimulationFailure(details: unknown): void {
+  logger.warn("[billing/deduct] Soroban simulation failed", {
+    simulationDetails: redactSimulationDetails(details),
   });
+}
+
+/**
+ * Build the error that carries a simulation failure out of the route.
+ *
+ * `SimulationFailedError` is a `BadGatewayError` (502) with the canonical
+ * `SIMULATION_FAILED` code and redacted `simulationDetails`. Because it is
+ * thrown rather than written directly to the response, the global error
+ * handler renders it with {@link buildErrorEnvelope}, so clients always
+ * receive the standard envelope and a `requestId` they can correlate with
+ * support.
+ */
+function simulationFailureError(
+  message: string,
+  details: unknown,
+): SimulationFailedError {
+  logSimulationFailure(details);
+  return new SimulationFailedError(message, details);
 }
 
 router.post(
@@ -156,7 +174,12 @@ router.post(
 
       if (!result.success) {
         if (result.simulationDetails) {
-          sendSimulationFailure(res, result);
+          next(
+            simulationFailureError(
+              result.error ?? "Soroban simulation failed",
+              result.simulationDetails,
+            ),
+          );
           return;
         }
 
@@ -178,15 +201,9 @@ router.post(
     } catch (error) {
       if (error instanceof SorobanRpcError) {
         if (error.simulationDetails) {
-          console.warn(
-            "Soroban simulation diagnostics:",
-            error.simulationDetails,
+          next(
+            simulationFailureError(error.message, error.simulationDetails),
           );
-          res.status(502).json({
-            error: "Soroban simulation failed",
-            code: "SIMULATION_FAILED",
-            simulationDetails: redactSimulationDetails(error.simulationDetails),
-          });
           return;
         }
 
