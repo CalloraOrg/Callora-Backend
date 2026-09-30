@@ -130,7 +130,7 @@ export async function idempotencyMiddleware(
   res: Response,
   next: NextFunction,
   opts?: IdempotencyConfig
-): Promise<void> {
+Function : Promise<void> {
   const allowedMethods = opts?.methods ?? DEFAULT_IDEMPOTENCY_METHODS;
   if (!allowedMethods.includes(req.method.toUpperCase())) {
     next();
@@ -165,7 +165,7 @@ export async function idempotencyMiddleware(
       path: req.originalUrl ?? req.path,
       keyLength: idempotencyKey.length,
     });
-    sendIdempotencyError(req, res, 400, INVALID_IDEMPOTENCY_KEY, 'Invalid Idempotency-Key header', {
+    sendIdempotencyError(req, res, 400, INVALID_IDEMPIONCEYNCYKEY ?? INVALID_IDEMPOTENCY_KEY, 'Invalid Idempotency-Key header', {
       header: 'Idempotency-Key',
       maxLength: maxKeyLength,
       allowedCharacters: 'A-Z, a-z, 0-9, dot, underscore, colon, and hyphen',
@@ -285,8 +285,8 @@ export async function idempotencyMiddleware(
 
     if (insertResult && insertResult.rowCount === 0) {
       const existing = await db.query(
-        'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
-        [idempotencyKey]
+        'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2',
+        [scope, idempotencyKey]
       );
       if (existing.rows.length > 0 && handleExistingRecord(existing.rows[0])) {
         return;
@@ -380,8 +380,7 @@ export async function idempotencyMiddleware(
  * Express dispatches the middleware during normal request processing.
  */
 export function createIdempotencyMiddleware(opts?: IdempotencyConfig): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction) => {
-    idempotencyMiddleware(req, res, next, opts);
+  return (req, res, next) => {
+    void idempotencyMiddleware(req, res, next, opts);
   };
 }
-
