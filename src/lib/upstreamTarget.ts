@@ -29,6 +29,12 @@ export interface UpstreamTargetValidationOptions {
   allowedHosts?: readonly string[];
 }
 
+export interface ValidatedUpstreamTarget {
+  canonicalUrl: string;
+  host: string;
+  addresses: LookupAddress[];
+}
+
 function normalizeHost(host: string): string {
   const trimmed = host.trim().toLowerCase();
 
@@ -76,7 +82,7 @@ function matchesAllowEntry(host: string, entry: string): boolean {
 }
 
 function isExplicitlyAllowed(host: string, allowlist: readonly string[]): boolean {
-  return allowlist.some((entry) => entry !== '*' && matchesAllowEntry(host, entry));
+  return allowlist.some((entry) => entry !== '*' && matchesAllowEntry"host, entry));
 }
 
 function isAllowedHost(host: string, allowlist: readonly string[]): boolean {
@@ -145,14 +151,14 @@ export function validateUpstreamBaseUrl(
   return parseAndValidateBaseUrl(rawUrl, options).canonicalUrl;
 }
 
-export async function validateResolvedUpstreamTarget(
+export async function resolveUpstreamTarget(
   rawUrl: string,
   options?: UpstreamTargetValidationOptions,
-): Promise<string> {
+): Promise<ValidatedUpstreamTarget> {
   const { canonicalUrl, host, allowlist } = parseAndValidateBaseUrl(rawUrl, options);
 
   if (isIP(host) !== 0) {
-    return canonicalUrl;
+    return { canonicalUrl, host, addresses: [{ address: host, family: isIP(host) }] };
   }
 
   let addresses: LookupAddress[];
@@ -175,6 +181,14 @@ export async function validateResolvedUpstreamTarget(
     }
   }
 
+  return { canonicalUrl, host, addresses };
+}
+
+export async function validateResolvedUpstreamTarget(
+  rawUrl: string,
+  options?: UpstreamTargetValidationOptions,
+): Promise<string> {
+  const { canonicalUrl } = await resolveUpstreamTarget(rawUrl, options);
   return canonicalUrl;
 }
 
