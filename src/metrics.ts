@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import client from 'prom-client';
 import { performance } from 'node:perf_hooks';
 import { UnauthorizedError } from './errors/index.js';
+import { parseBearerToken, timingSafeStringEqual } from './lib/timingSafe.js';
 
 // Initialize the Prometheus Registry and collect default Node.js metrics (CPU, RAM, Event Loop)
 export const register = new client.Registry();
@@ -402,22 +403,35 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
  * GET /api/metrics
  *
  * Exposes Prometheus text-format metrics.
- * In production, requires a valid `Authorization: Bearer <METRICS_API_KEY>` header.
  *
- * Security note: the endpoint is auth-gated in production to prevent
- * internal operational data from leaking to unauthenticated callers.
+ * Auth (#1266): whenever `METRICS_API_KEY` is configured — in *every*
+ * environment, not only production — the request must carry
+ * `Authorization: Bearer <METRICS_API_KEY>`. Previously staging and other
+ * non-production deployments served per-API latency, breaker state and
+ * throughput to anyone, which helps an attacker time attacks.
+ *
+ * The token is compared with {@link timingSafeStringEqual}
+ * (`crypto.timingSafeEqual` over SHA-256 digests), so neither the position
+ * of the first differing byte nor the token length leaks through timing.
+ * Missing, malformed or wrong tokens all produce the same 401
+ * `UnauthorizedError` in the standard error envelope, with a
+ * `WWW-Authenticate: Bearer` challenge; the token itself is never logged.
+ *
+ * When `METRICS_API_KEY` is unset or blank (local development) the endpoint
+ * stays open, matching the previous development behaviour.
  */
 export const metricsEndpoint = async (
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  const expectedKey = process.env.METRICS_API_KEY;
+  const expectedKey = process.env.METRICS_API_KEY?.trim();
 
-  if (isProduction && expectedKey) {
-    const authHeader = req.headers.authorization;
-    if (authHeader !== `Bearer ${expectedKey}`) {
+  // Enforced whenever a key is configured, regardless of NODE_ENV (#1266).
+  if (expectedKey) {
+    const token = parseBearerToken(req.headers.authorization);
+    if (token === null || !timingSafeStringEqual(token, expectedKey)) {
+      res.set('WWW-Authenticate', 'Bearer realm="metrics"');
       next(new UnauthorizedError());
       return;
     }
