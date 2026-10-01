@@ -74,7 +74,12 @@ When the timeout fires, the response uses the canonical error envelope:
 |--------|--------------|-------------------------------------------------------|
 | GET    | `/api/plans` | List all available subscription plans.                |
 | GET    | `/api/plans/:id` | Get a single plan by ID.                          |
-| GET    | `/api/plans/slow` | Simulates a slow handler (3s delay) for testing timeout behaviour. |
+| GET    | `/api/plans/slow` | Test-only fixture; never registered by the production router. |
+
+The slow fixture is opt-in (`enableSlowRoute: true`) and should only be mounted
+by isolated timeout tests. It is intentionally unavailable in production, where
+`GET /api/plans/slow` returns 404. Timeout behavior can also be tested with a
+stubbed repository or a standalone route using `createTimeoutMiddleware`.
 
 ## Disabling the Timeout
 

@@ -88,10 +88,18 @@ describe('/api/plans', () => {
     expect(res.body.error.code).toBe('NOT_FOUND');
   });
 
+  it('does not expose the slow fixture unless explicitly enabled', async () => {
+    const repo = new InMemoryPlansRepository(seedPlans);
+    const app = buildApp(repo);
+
+    const res = await request(app).get('/api/plans/slow');
+    expect(res.status).toBe(404);
+  });
+
   it('should return 504 when slow endpoint exceeds timeout', async () => {
     const repo = new InMemoryPlansRepository(seedPlans);
     const app = express();
-    app.use('/api/plans', createPlansRouter(10, { plansRepository: repo }));
+    app.use('/api/plans', createPlansRouter(10, { plansRepository: repo, enableSlowRoute: true }));
     app.use(errorHandler);
 
     const res = await request(app).get('/api/plans/slow');

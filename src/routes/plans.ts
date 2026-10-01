@@ -11,6 +11,8 @@ import {
 
 export interface PlansRouterDeps {
   plansRepository?: PlansRepository;
+  /** Enables the intentionally slow fixture only in isolated tests. */
+  enableSlowRoute?: boolean;
 }
 
 /**
@@ -80,12 +82,14 @@ export function createPlansRouter(
     res.json(successEnvelope(plans, requestId));
   }));
 
-  router.get('/slow', asyncHandler(async (req: Request, res: Response) => {
-    await sleepWithAbort(3000, req.signal ?? req.abortSignal);
-    const requestId = getRequestId(req) ?? 'unknown';
-    const plans = await plansRepository.list();
-    res.json(successEnvelope(plans, requestId));
-  }));
+  if (deps.enableSlowRoute) {
+    router.get('/slow', asyncHandler(async (req: Request, res: Response) => {
+      await sleepWithAbort(3000, req.signal ?? req.abortSignal);
+      const requestId = getRequestId(req) ?? 'unknown';
+      const plans = await plansRepository.list();
+      res.json(successEnvelope(plans, requestId));
+    }));
+  }
 
   router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     const requestId = getRequestId(req) ?? 'unknown';
