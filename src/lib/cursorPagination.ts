@@ -37,6 +37,7 @@ export function decodeCursor(cursor: string): CursorPayload | null {
     if (
       typeof parsed !== 'object' ||
       parsed === null ||
+      Array.isArray(parsed) ||
       typeof (parsed as Record<string, unknown>).timestamp !== 'string' ||
       typeof (parsed as Record<string, unknown>).id !== 'string'
     ) {

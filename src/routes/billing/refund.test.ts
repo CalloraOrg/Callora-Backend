@@ -45,35 +45,59 @@ function makeIdempotencyPool(): Pool {
     string,
     { request_hash: string; status: string; response_status: number; response_body: string; expires_at: string }
   >();
+  const composite = (scope: string, key: string) => `${scope}::${key}`;
 
   const query = jest.fn(async (text: string, params: unknown[] = []) => {
     if (text.includes('DELETE FROM idempotency_store WHERE expires_at')) {
       return { rows: [] };
     }
     if (text.includes('SELECT request_hash')) {
-      const key = params[0] as string;
-      const record = store.get(key);
+      const [scope, key] = params as [string, string];
+      const record = store.get(composite(scope, key));
       return { rows: record ? [record] : [] };
     }
     if (text.includes('INSERT INTO idempotency_store')) {
-      const [key, requestHash, status, expiresAt] = params as [string, string, string, string];
-      if (store.has(key)) {
+      const [scope, key, requestHash, status, expiresAt] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
+      if (store.has(composite(scope, key))) {
         return { rows: [], rowCount: 0 };
       }
-      store.set(key, { request_hash: requestHash, status, response_status: 0, response_body: '', expires_at: expiresAt });
+      store.set(composite(scope, key), {
+        request_hash: requestHash,
+        status,
+        response_status: 0,
+        response_body: '',
+        expires_at: expiresAt,
+      });
       return { rows: [], rowCount: 1 };
     }
     if (text.includes('UPDATE idempotency_store')) {
-      const [status, responseStatus, responseBody, key] = params as [string, number, string, string];
-      const existing = store.get(key);
+      const [status, responseStatus, responseBody, scope, key] = params as [
+        string,
+        number,
+        string,
+        string,
+        string,
+      ];
+      const existing = store.get(composite(scope, key));
       if (existing) {
-        store.set(key, { ...existing, status, response_status: responseStatus, response_body: responseBody });
+        store.set(composite(scope, key), {
+          ...existing,
+          status,
+          response_status: responseStatus,
+          response_body: responseBody,
+        });
       }
       return { rows: [] };
     }
-    if (text.includes('DELETE FROM idempotency_store WHERE idempotency_key')) {
-      const key = params[0] as string;
-      store.delete(key);
+    if (text.includes('DELETE FROM idempotency_store WHERE scope')) {
+      const [scope, key] = params as [string, string];
+      store.delete(composite(scope, key));
       return { rows: [] };
     }
     return { rows: [] };
