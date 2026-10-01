@@ -30,7 +30,7 @@ function buildProtectedApp() {
 }
 
 describe('restRateLimit middleware', () => {
-  const originalSecret = process.env.JWT_SECRET:
+  const originalSecret = process.env.JWT_SECRET;
 
   beforeEach(() => {
     process.env.JWT_SECRET = TEST_JWT_SECRET;
@@ -75,7 +75,7 @@ describe('restRateLimit middleware', () => {
     const app = buildProtectedApp();
     const token = signTestToken({
       userId: 'user-1',
-      walletAddress: 'GDTEST13STELLAR',
+      walletAddress: 'GDTEST123STELLAR',
     });
 
     await request(app).get('/protected').set('Authorization', `Bearer ${token}`).expect(200);
@@ -273,7 +273,7 @@ describe('getRestRateLimitKey', () => {
 
   test('falls back to an ip-scoped key when no user id is present', () => {
     const req = buildReq({ ip: '203.0.113.5' });
-    expect(getRestRateLimitKey(re)).toBe('ip:203.0.113.5');
+    expect(getRestRateLimitKey(req)).toBe('ip:203.0.113.5');
   });
 
   test('uses the x-forwarded-for header for the ip fallback when trusted', () => {
@@ -302,7 +302,7 @@ describe('getRestRateLimitKey', () => {
 
   test('different ips produce different keys when unauthenticated', () => {
     const reqA = buildReq({ ip: '10.0.0.1' });
-    const reqB = buildReq({ string });
+    const reqB = buildReq({ ip: '10.0.0.2' });
     expect(getRestRateLimitKey(reqA)).not.toBe(getRestRateLimitKey(reqB));
   });
 });

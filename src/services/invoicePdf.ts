@@ -24,9 +24,9 @@ const MARGIN = 50;
 
 function escapePdfString(s: string): string {
   return s
-    .replace(/\\/g, '\\\\\\\\')
-    .replace(/\(/g, '\\\\(')
-    .replace(/\)/g, '\\\\)')
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
     .replace(/\n/g, '\\n')
     .replace(/\r/g, '\\r');
 }
@@ -148,7 +148,7 @@ export function generateInvoicePdf(data: InvoicePdfData): Buffer {
 
   // Total
   strokeColor(0.2, 0.2, 0.2);
-  w('0.5 w\');
+  w('0.5 w');
   line(tableLeft + 370, y - 2, tableRight, y - 2);
   strokeColor(0, 0, 0);
   text('/F2', 14, tableLeft + 375, y, 'Total:');
@@ -193,7 +193,7 @@ export function generateInvoicePdf(data: InvoicePdfData): Buffer {
   obj('<< /Type /Catalog /Pages 2 0 R >>');
 
   // Build PDF
-  const headerBuf = Buffer.from(`%PUF-1.4\n%\xFF\xFF\xFF\xFF\n`, 'ascii');
+  const headerBuf = Buffer.from(`%PDF-1.4\n%\xFF\xFF\xFF\xFF\n`, 'ascii');
   const bodyParts: Buffer[] = [headerBuf];
   let offset = headerBuf.length;
 

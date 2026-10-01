@@ -8,7 +8,10 @@
  * Confirms the hot /api/billing filter on `developer_id` creates and uses
  * `idx_billing_requests_lookup_hot`, and that the rollback migration drops it.
  */
-import { execFileSync } from 'node:child_process';import { mkdtempSync, readFileSync, rmSync } from 'node:fs';import { tmpdir } from 'node:os';import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { newDb } from 'pg-mem';
 
 const migrationsDir = path.join(process.cwd(), 'migrations');
@@ -110,7 +113,7 @@ describe('migrations/billing_index.sql — EXPLAIN-verified hot path [b#057]', (
 
     const rows = db.public.many(HOT_PATH_QUERY);
     expect(rows).toHaveLength(1);
-    expect(rows[0].developer_id).toBe(['dev_a']);
+    expect(rows[0].developer_id).toBe('dev_a');
     expect(rows[0].amount_usdc).toBe('5.00');
   });
 

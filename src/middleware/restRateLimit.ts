@@ -1,5 +1,77 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-const { userId } = resolveRequestUserId(req);
+import { config } from '../config/index.js';
+import { getClientIp } from '../lib/clientIp.js';
+import { resolveRequestUserId } from './requireAuth.js';
+
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+
+interface RateLimitCheckResult {
+  allowed: boolean;
+  retryAfterMs?: number;
+}
+
+export interface RestRateLimitOptions {
+  windowMs: number;
+  maxRequests: number;
+}
+
+export class InMemoryRestRateLimiter {
+  private readonly buckets = new Map<string, RateLimitBucket>();
+
+  constructor(
+    private readonly windowMs: number,
+    private readonly maxRequests: number,
+  ) {}
+
+  check(key: string, now = Date.now()): RateLimitCheckResult {
+    const bucket = this.buckets.get(key);
+
+    if (!bucket || now >= bucket.resetAt) {
+      this.buckets.set(key, {
+        count: 1,
+        resetAt: now + this.windowMs,
+      });
+      return { allowed: true };
+    }
+
+    if (bucket.count >= this.maxRequests) {
+      return {
+        allowed: false,
+        retryAfterMs: Math.max(bucket.resetAt - now, 0),
+      };
+    }
+
+    bucket.count += 1;
+    return { allowed: true };
+  }
+
+  peek(key: string, now = Date.now()): RateLimitCheckResult {
+    const bucket = this.buckets.get(key);
+
+    if (!bucket || now >= bucket.resetAt) {
+      return { allowed: true };
+    }
+
+    if (bucket.count >= this.maxRequests) {
+      return {
+        allowed: false,
+        retryAfterMs: Math.max(bucket.resetAt - now, 0),
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  reset(): void {
+    this.buckets.clear();
+  }
+}
+
+export function getRestRateLimitKey(req: Request): string {
+  const { userId } = resolveRequestUserId(req);
   if (userId) {
     return `user:${userId}`;
   }

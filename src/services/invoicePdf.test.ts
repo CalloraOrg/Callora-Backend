@@ -1,7 +1,7 @@
-import { describe, it, expect } from '@test/globals';
+import { describe, it, expect } from '@jest/globals';
 import { generateInvoicePdf, InvoicePdfData } from './invoicePdf';
 
-function makeInvoice(overrides: Partial<InvoicePdata> = {}): InvoicePdata {
+function makeInvoice(overrides: Partial<InvoicePdfData> = {}): InvoicePdfData {
   return {
     invoiceNumber: 'INV-0001',
     status: 'paid',
@@ -40,7 +40,7 @@ describe('generateInvoicePdf', () => {
     const buf = generateInvoicePdf(makeInvoice());
     expect(buf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
     const tail = buf.subarray(Math.max(0, buf.length - 10)).toString('ascii');
-    expect(tail).toContain ('%%EOF');
+    expect(tail).toContain('%%EOF');
   });
 
   it('contains the invoice number and total in the content stream', () => {
@@ -53,17 +53,17 @@ describe('generateInvoicePdf', () => {
   it('line item totals and quantities appear in the document', () => {
     const buf = generateInvoicePdf(makeInvoice());
     const text = decodePdf(buf);
-    expect(text).toContain('1000.00');
+    expect(text).toContain('100.00');
     expect(text).toContain('23.45');
     expect(text).toContain('1000');
   });
 
   it('handles zero line items and still generates a valid PDF', () => {
     const buf = generateInvoicePdf(makeInvoice({ lineItems: [], totalAmountUsdc: '0.00' }));
-    expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF');
+    expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF-');
     const text = decodePdf(buf);
     expect(text).toContain('%%EOF');
-    expect(text).toContain(0.00');
+    expect(text).toContain('0.00');
   });
 
   it('escapes parentheses and backslashes in API names', () => {

@@ -205,7 +205,7 @@ export const apiKeyRepository = {
       const timeA = a.createdAt.getTime();
       const timeB = b.createdAt.getTime();
       if (timeB !== timeA) {
-        return timeB - time A;
+        return timeB - timeA;
       }
       return b.id.localeCompare(a.id);
     });
@@ -277,7 +277,7 @@ export const apiKeyRepository = {
     // Find potential matches by prefix first for efficiency
     const prefix = key.slice(0, 16);
     const candidates = apiKeys.filter((k) =>
-      constantTimeCompare(k, prefix),
+      constantTimeCompare(k.prefix, prefix),
     );
 
     // No records share this prefix — key does not exist at all.
