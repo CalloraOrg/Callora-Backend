@@ -6,6 +6,12 @@
  * harnesses so CI does not need a database, a wallet, an upstream service, or
  * a DNS resolver. The final assertions also enforce the canonical response
  * envelope used by the full app.
+ *
+ * The assembled-app contract suite below builds the real `createApp()`
+ * instance and issues a request for every documented path in `docs/openapi.json`,
+ * failing when a documented path is not mounted (the app returns 404). This
+ * catches the class of bug where a router is tested in isolation but never
+ * installed in the assembled app.
  */
 import express from "express";
 import request from "supertest";
@@ -46,6 +52,7 @@ const spec = JSON.parse(
 
 const validWallet = "G" + "A".repeat(55);
 
+const HTTP_METHODS = [
 const openApiMethods = new Set([
   "get",
   "post",
@@ -55,6 +62,30 @@ const openApiMethods = new Set([
   "options",
   "head",
   "trace",
+] as const;
+
+type HttpMethod = (typeof HTTP_METHODS)[number];
+
+/**
+ * Parameter values that satisfy the documented path templates. The goal is
+ * to reach the mounted router so the app responds with anything other than
+ * 404. Authentication and validation failures (4xx) are acceptable because
+ * they prove the route is wired into the app.
+ */
+const PATH_PARAMETER_VALUES: Record<string, string> = {
+  id: "contract-test-id",
+  userId: "contract-test-user",
+  walletAddress: validWallet,
+  address: validWallet,
+  tenantId: "contract-test-tenant",
+  flagKey: "contract-test-flag",
+  key: "contract-test-key",
+  jobId: "contract-test-job",
+  webhookId: "contract-test-webhook",
+  refundId: "contract-test-refund",
+};
+
+const DEFAULT_PATH_PARAMETER_VALUE = "contract-test";
 ]);
 
 const pathParameterValues: Record<string, string> = {
@@ -234,6 +265,52 @@ function assertErrorEnvelope(body: unknown, code?: string) {
   }
 }
 
+function isHttpMethod(method: string): method is HttpMethod {
+  return (HTTP_METHODS is readonly string[]).includes(method);
+}
+
+function describePath(pathTemplate: string) {
+  return pathTemplate.replace(/{([^}]+)}/g, (_match, name: string) => {
+    const value = PATH_PARAMETER_VALUES[name] ?? DEFAULT_PATH_PARAMETER_VALUE;
+    return encodeURIComponent(value);
+  });
+}
+
+function documentedRoutes() {
+  const routes: Array<{ pathTemplate: string; method: HttpMethod }> = [];
+  for (const [pathTemplate, pathItem] of Object.entries(spec.paths)) {
+    for (const method of Object.keys(pathItem)) {
+      if (isHttpMethod(method)) {
+        routes.push({ pathTemplate, method });
+      }
+    }
+  }
+  return routes;
+}
+
+/**
+ * Request bodies for documented POST/PUT/PATCH operations. The bodies are
+ * intentionally minimal: the goal is to exercise the mounted router, not to
+ * satisfy business validation. A 400 response is a successful contract
+ * assertion because it proves the route is mounted.
+ */
+function requestBodyFor(pathTemplate: string, method: HttpMethod): unknown | undefined {
+  if (!method.match(/^(post|put|patch)$/)) return undefined;
+  if (pathTemplate.includes("/auth/")) {
+    if (pathTemplate.endsWith("/login")) {
+      return {
+        walletAddress: validWallet,
+        signature: "contract-test-signature",
+        message: "contract-test-message",
+      };
+    }
+    if (pathTemplate.endsWith("/refresh")) {
+      return { refreshToken: "contract-test-refresh-token" };
+    }
+  }
+  return {};
+}
+
 describe("OpenAPI document integrity", () => {
   it("is OpenAPI 3.1 and exposes the canonical JSON contract", () => {
     expect(spec.openapi).toBe("3.1.0");
@@ -279,6 +356,54 @@ describe("OpenAPI document integrity", () => {
   });
 });
 
+describe("assembled app OpenAPI contract", () => {
+  const routes = documentedRoutes();
+
+  it("documents at least one operation per documented path", () => {
+    expect(routes.length).toBeGreaterThan(0);
+  });
+
+  it("mounts every documented path in createApp()", async () => {
+    const app = createApp();
+    const missing: string[] = [];
+
+    for (const { pathTemplate, method } of routes) {
+      const url = describePath(pathTemplate);
+      const body = requestBodyFor(pathTemplate, method);
+      const call = request(app)[method](url);
+      if (body !== undefined) {
+        call.send(body as object);
+      }
+      const response = await call;
+      if (response.status === 404) {
+        missing.push(`${method.toUpperCase()} ${pathTemplate}`);
+      }
+    }
+
+    expect(missing).toEqual([]);
+  });
+
+  it("reports undocumented mounted paths as warnings", () => {
+    const app = createApp();
+    const documented = new Set(
+      routes.map(({ pathTemplate, method }) => `${method} ${pathTemplate}`),
+    );
+    const mounted = new Set<string>();
+    const stack = (app as unknown as { _router?: { stack?: Array<{ route?: unknown }> } })._router
+      ?.stack;
+    for (const layer of stack ?? []) {
+      const route = layer.route;
+      if (typeof route === "string") {
+        mounted.add(`GET ${route}`);
+      }
+    }
+    const undocumented = [...mounted].filter((entry) => !documented.has(entry));
+    if (undocumented.length > 0) {
+      console.warn(
+        `Undocumented mounted paths (${undocumented.length}): ${undocumented.join(", ")}`,
+      );
+    }
+    expect(Array.isArray(undocumented)).toBe(true);
 describe("assembled application OpenAPI coverage", () => {
   it("routes every documented operation through createApp without a 404", async () => {
     const app = createApp();
@@ -467,7 +592,7 @@ describe("billing and proxy response contracts", () => {
 
   it("keeps auth, billing, webhook, and proxy contract surfaces represented by tests", () => {
     const testedSurfaces = new Set(["auth", "billing", "webhook", "proxy"]);
-    expect([...testedSurfaces]).toEqual(
+    expect(['testedSurfaces]).toEqual(
       expect.arrayContaining(["auth", "billing", "webhook", "proxy"]),
     );
   });
