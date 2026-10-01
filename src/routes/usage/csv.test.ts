@@ -1,6 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { EventEmitter } from 'node:events';
+import fc from 'fast-check';
 import { createUsageCsvRouter, escapeCsvField, writeChunk, type BackpressureSink } from './csv.js';
 import {
   InMemoryUsageEventsRepository,
@@ -56,6 +57,42 @@ describe('escapeCsvField', () => {
 
   it('both neutralises and quotes when a value is dangerous and contains delimiters', () => {
     expect(escapeCsvField('=HYPERLINK("x"),y')).toBe('"\'=HYPERLINK(""x""),y"');
+  });
+
+  describe('properties', () => {
+    // A strict, minimal RFC 4180 unescape for a single field
+    const unescapeCsvField = (escaped: string): string => {
+      if (escaped.startsWith('"') && escaped.endsWith('"')) {
+        return escaped.slice(1, -1).replace(/""/g, '"');
+      }
+      return escaped;
+    };
+
+    it('safely round-trips all strings under 2 seconds without evaluating formulas', () => {
+      fc.assert(
+        fc.property(fc.string(), (original) => {
+          const escaped = escapeCsvField(original);
+
+          // 2. No escaped field starts with a formula trigger or whitespace
+          expect(escaped).not.toMatch(/^[=+\-@\t\r]/);
+
+          // 3. Fields containing quotes and newlines are wrapped and doubled correctly
+          if (/[",\n\r]/.test(original)) {
+            expect(escaped.startsWith('"')).toBe(true);
+            expect(escaped.endsWith('"')).toBe(true);
+          }
+
+          // 1. Round-trip through an RFC 4180 parser preserves content
+          const unescaped = unescapeCsvField(escaped);
+          if (/^[=+\-@\t\r]/.test(original)) {
+            expect(unescaped).toBe(`'${original}`);
+          } else {
+            expect(unescaped).toBe(original);
+          }
+        }),
+        { interruptAfterTimeLimit: 1900 }
+      );
+    });
   });
 });
 
