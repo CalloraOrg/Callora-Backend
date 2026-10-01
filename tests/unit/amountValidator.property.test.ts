@@ -13,7 +13,7 @@
  *   2. **Sign**      – negative and zero amounts are always rejected.
  *   3. **Scale**     – amounts above the 1 billion USDC cap are rejected.
  *   4. **Format**    – scientific notation, whitespace, and locale
- *                      separators are never accepted.
+ *                    separators are never accepted.
  *   5. **Round-trip** – stroop → canonical string → stroop is lossless.
  *   6. **Validity**  – every generated canonical string is accepted.
  *
@@ -28,11 +28,11 @@
 import * as fc from 'fast-check';
 import { AmountValidator } from '../../src/validators/amountValidator.js';
 
-// ---------------------------------------------------------------------------
-// Constants & helpers
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+ // Constants & helpers
+ // ---------------------------------------------------------------------------
 
-/** Number of stroops in 1 USDC (10^7). */
+//** Number of stroops in 1 USDC (10^7). */
 const STROOPS_PER_USDC = BigInt(10 ** AmountValidator.USDC_DECIMALS);
 
 /** Maximum stroop value that the validator should accept. */
@@ -41,10 +41,10 @@ const MAX_STROOPS =
 
 /**
  * Convert a stroop bigint back to its canonical 7-decimal USDC string.
- * Uses pure integer arithmetic—no floating-point precision loss.
+ * Uses pure integer arithmetic"—no floating-point precision loss.
  *
  * @param stroops - A non-negative bigint stroop value.
- * @returns A string of the form `"<whole>.<7-digit-frac>"`.
+ * @returns A string of the form `"&lt;whole&gt;.&lt;7-digit-frac&gt;"`.
  */
 function stroopsToCanonical(stroops: bigint): string {
   const whole = stroops / STROOPS_PER_USDC;
@@ -54,7 +54,7 @@ function stroopsToCanonical(stroops: bigint): string {
 
 // ---------------------------------------------------------------------------
 // Arbitraries
-// ---------------------------------------------------------------------------
++// ---------------------------------------------------------------------------
 
 /**
  * Arbitrary: valid stroop count ∈ [1, MAX_STROOPS].
@@ -79,18 +79,21 @@ const wrongDecimalCountArb = fc
 /** Default run count – matches the acceptance criteria of 100 runs. */
 const NUM_RUNS = 100;
 
+/** Run count for the round-trip property (acceptance criteria: 10k). */
+const ROUND_TRIP_RUNS = 10_000;
+
 // ---------------------------------------------------------------------------
 // Properties
 // ---------------------------------------------------------------------------
 
 describe('AmountValidator – property-based tests (fast-check)', () => {
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   // 1. Precision
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
 
   describe('Precision', () => {
     it('strings with fewer or more than 7 decimal digits are rejected', () => {
-      // Build `"<whole>.<frac>"` where `frac` has a length ≠ 7.
+      // Build `"&lt;whole&gt;.&lt;frac&gt;"` where `frac` has a length ≠ 7.
       const wrongPrecisionArb = fc
         .tuple(
           fc.integer({ min: 0, max: 999_999 }),
@@ -142,9 +145,9 @@ describe('AmountValidator – property-based tests (fast-check)', () => {
     });
   });
 
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   // 2. Sign
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
 
   describe('Sign', () => {
     it('negative amounts (prefixed with "-") are always rejected', () => {
@@ -177,6 +180,24 @@ describe('AmountValidator – property-based tests (fast-check)', () => {
       expect(result.error).toMatch(/greater than zero/i);
     });
 
+    it('zero amount always throws "must be greater than zero"', () => {
+      // Any zero representation with exactly 7 fractional digits must be
+      // rejected with the specific zero error message.
+      const zeroArb = fc.constantFrom([
+        '0.0000000',
+        '0.00000000',
+        '0000.0000000',
+      ]);
+
+      fc.assert(
+        fc.property(zeroArb, (amount) => {
+          const result = AmountValidator.validateUsdcAmount(amount);
+          return result.valid === false && /greater than zero/i.test(result.error ?? '');
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    });
+
     it('valid amounts always produce a positive stroop value', () => {
       fc.assert(
         fc.property(validAmountArb, (amount) => {
@@ -188,9 +209,9 @@ describe('AmountValidator – property-based tests (fast-check)', () => {
     });
   });
 
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   // 3. Scale
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
 
   describe('Scale', () => {
     it('amounts above the 1 billion USDC cap are rejected', () => {
@@ -231,9 +252,9 @@ describe('AmountValidator – property-based tests (fast-check)', () => {
     });
   });
 
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   // 4. Format rejection
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
 
   describe('Format rejection', () => {
     it('scientific-notation strings are always rejected', () => {
@@ -316,19 +337,19 @@ describe('AmountValidator – property-based tests (fast-check)', () => {
     });
   });
 
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
   // 5. Round-trip integrity
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
 
   describe('Round-trip integrity', () => {
-    it('stroop → canonical string → stroop is lossless', () => {
+    it('stroop → canonical string → stroop is lossless (10k runs)', () => {
       fc.assert(
         fc.property(validStroopsArb, (stroops) => {
           const canonical = stroopsToCanonical(stroops);
           const roundTripped = AmountValidator.toSmallestUnit(canonical);
           return roundTripped === stroops;
         }),
-        { numRuns: NUM_RUNS },
+        { numRuns: ROUND_TRIP_RUNS },
       );
     });
 
@@ -342,58 +363,139 @@ describe('AmountValidator – property-based tests (fast-check)', () => {
       );
     });
 
-    it('toSmallestUnit result is always a positive bigint for valid amounts', () => {
+    it('format(parse(x)) normalises x for all valid decimals', () => {
+      // Generate amounts with a variable number of fractional digits
+      // (0–7) and verify that validation normalises to exactly 7 digits
+      // without changing the underlying value.
+      const variablePrecisionArb = fc
+        .tuple(fc.bigInt({ min: 1n, max: MAX_STROOPS }), fc.integer({ min: 0, max: 7 }))
+        .map(([stroops, digits]) => {
+          const whole = stroops / STROOPS_PER_USDC;
+          const frac = stroops % STROOPS_PER_USDC;
+          const fracFull = String(frac).padStart(AmountValidator.USDC_DECIMALS, '0');
+          // Truncate to `digits` fractional digits.
+          const fracTruncated = fracFull.slice(0, digits);
+          return digits === 0 ? `${whole}` : `${whole}.${fracTruncated}`;
+        })
+        .filter((amount) => {
+          // Only keep amounts that are non-zero and within the cap.
+          const stroops = AmountValidator.toSmallestUnit(amount);
+          return stroops > 0n && stroops <= MAX_STROOPS;
+        });
+
+      fc.assert(
+        fc.property(variablePrecisionArb, (amount) => {
+          const result = AmountValidator.validateUsdcAmount(amount);
+          if (!result.valid || !result.normalizedAmount) return false;
+          // Normalised output must have exactly 7 fractional digits.
+          const fracPart = result.normalizedAmount.split('.')[1];
+          if (fracPart === undefined || fracPart.length !== AmountValidator.USDC_DECIMALS) return false;
+          // Round-trip through stroops must preserve the value.
+          const originalStroops = AmountValidator.toSmallestUnit(amount);
+          const normalizedStroops = AmountValidator.toSmallestUnit(result.normalizedAmount);
+          return originalStroops === normalizedStroops;
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    });
+
+    it('format output never has trailing zeros beyond the 7-decimal scale', () => {
+      // Canonical output must always carry exactly 7 fractional digits,
+      // with no extra trailing zeros and no trailing dot.
       fc.assert(
         fc.property(validAmountArb, (amount) => {
-          const stroops = AmountValidator.toSmallestUnit(amount);
-          return typeof stroops === 'bigint' && stroops > 0n;
+          const result = AmountValidator.validateUsdcAmount(amount);
+          if (!result.valid || !result.normalizedAmount) return false;
+          const normalized = result.normalizedAmount;
+          // Must not end with a dot.
+          if (normalized.endsWith('.')) return false;
+          // Fractional part must be exactly 7 digits.
+          const fracPart = normalized.split('.')[1];
+          if (fracPart === undefined || fracPart.length !== AmountValidator.USDC_DECIMALS) return false;
+          // No extra trailing zeros beyond the 7-decimal scale.
+          return !/\.0+0/.test(normalized);
         }),
         { numRuns: NUM_RUNS },
       );
     });
   });
 
-  // -----------------------------------------------------------------------
-  // 6. Counterexample shrinkage verification
-  // -----------------------------------------------------------------------
+  // ------------------------------------------------------------------------
+  // 6. Precision (8 fractional digits)
+  // ------------------------------------------------------------------------
 
-  describe('Shrinkage', () => {
-    it('fast-check shrinks to a minimal counterexample on a forced failure', () => {
-      // We intentionally introduce a property that fails for amounts > 500 USDC
-      // and verify that fast-check's shrinkage produces a counterexample.
-      const threshold = 500n * STROOPS_PER_USDC;
+  describe('Eight fractional digits', () => {
+    it('inputs with 8 fractional digits always throw', () => {
+      // Any amount with exactly 8 fractional digits must be rejected,
+      // regardless of the whole part or the fractional digits.
+      const eightDigitArb = fc
+        .tuple(
+          fc.bigInt({ min: 0n, max: 999_999_999n }),
+          fc.integer({ min: 0, max: 99_999_999 }),
+        )
+        .map(([whole, frac]) => {
+          const fracStr = String(frac).padStart(8, '0').slice(0, 8);
+          return `${whole}.${fracStr}`;
+        });
 
-      let shrunkCounterexample: string | undefined;
+      fc.assert(
+        fc.property(eightDigitArb, (amount) => {
+          const result = AmountValidator.validateUsdcAmount(amount);
+          return result.valid === false;
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    });
 
-      try {
-        fc.assert(
-          fc.property(validAmountArb, (amount) => {
-            const stroops = AmountValidator.toSmallestUnit(amount);
-            // This will fail for any amount > 500 USDC.
-            return stroops <= threshold;
-          }),
-          { numRuns: NUM_RUNS },
-        );
-      } catch (err: unknown) {
-        // fast-check throws a `Property failed` error with a
-        // `counterexample` array on the error object.
-        if (err instanceof Error && 'counterexample' in err) {
-          const ce = (err as Error & { counterexample: unknown[] }).counterexample;
-          shrunkCounterexample = ce?.[0] as string;
-        }
-      }
+    it('8-digit fractional inputs with non-zero digits always throw', () => {
+      const nonZeroEightArb = fc
+        .tuple(
+          fc.bigInt({ min: 1n, max: 999_999_999n }),
+          fc.integer({ min: 1, max: 99_999_999 }),
+        )
+        .map(([whole, frac]) => {
+          const fracStr = String(frac).padStart(8, '0').slice(0, 8);
+          return `${whole}.${fracStr}`;
+        });
 
-      // Verify that a counterexample was produced and that shrinkage
-      // brought it close to the boundary (≤ 501 USDC is a reasonable
-      // shrink target).
-      expect(shrunkCounterexample).toBeDefined();
-      const shrunkStroops = AmountValidator.toSmallestUnit(shrunkCounterexample!);
-      expect(shrunkStroops).toBeGreaterThan(threshold);
+      fc.assert(
+        fc.property(nonZeroEightArb, (amount) => {
+          const result = AmountValidator.validateUsdcAmount(amount);
+          return result.valid === false;
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    });
+  });
 
-      // Shrinkage should bring the counterexample close to the 500 USDC
-      // boundary. We allow a generous margin of 1 USDC above threshold.
-      const onUsdcAbove = threshold + STROOPS_PER_USDC;
-      expect(shrunkStroops).toBeLessThanOrEqual(onUsdcAbove);
+  // ------------------------------------------------------------------------
+  // 7. Large whole numbers (bigint precision)
+  // ------------------------------------------------------------------------
+
+  describe('Large whole numbers', () => {
+    it('very large whole numbers do not lose precision', () => {
+      // Generate values near the cap with arbitrary fractional parts and
+      // verify the stroop round-trip is exact.
+      const largeArb = fc
+        .bigInt({ min: 1n, max: MAX_STROOPS })
+        .map(stroopsToCanonical);
+
+      fc.assert(
+        fc.property(largeArb, (amount) => {
+          const stroops = AmountValidator.toSmallestUnit(amount);
+          const roundTrip = AmountValidator.toSmallestUnit(
+            AmountValidator.validateUsdcAmount(amount).normalizedAmount ?? amount,
+          );
+          return stroops === roundTrip;
+        }),
+        { numRuns: NUM_RUNS },
+      );
+    });
+
+    it('exact maximum converts to exactly MAX_STROOPS', () => {
+      const maxString = stroopsToCanonical(MAX_STROOPS);
+      const stroops = AmountValidator.toSmallestUnit(maxString);
+      expect(stroops).toBe(MAX_STROOPS);
     });
   });
 });
