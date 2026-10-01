@@ -129,7 +129,7 @@ function handlePreflight(
   );
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, x-admin-api-key, x-request-id',
+    'Content-Type, Authorization, Idempotency-Key, If-None-Match, X-Correlation-Id, x-request-id',
   );
   res.setHeader(
     'Access-Control-Max-Age',

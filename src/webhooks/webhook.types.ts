@@ -8,15 +8,12 @@ export type WebhookEventType =
     | 'fee_abstraction.executed'
     | 'usage_event.created';
 
-export interface RetryPolicy {
-  maxRetries?: number;
-  baseDelayMs?: number;
-}
-
-export const DEFAULT_RETRY_POLICY: RetryPolicy = {
-  maxRetries: 3,
-  baseDelayMs: 1000,
-};
+// `RetryPolicy` and `DEFAULT_RETRY_POLICY` are declared once, at the bottom of
+// this file under "Retry policy types". A duplicate copy used to sit here with
+// `maxRetries: 3`, which is a redeclaration error under ESM (the module could
+// not be loaded) and also disagreed with the documented platform default of
+// `maxRetries: 5` (migrations/0020_subscription_retry_policy.sql,
+// docs/webhook-retry-override.md).
 
 export interface WebhookConfig {
     developerId: string;

@@ -130,7 +130,7 @@ export async function idempotencyMiddleware(
   res: Response,
   next: NextFunction,
   opts?: IdempotencyConfig
-Function : Promise<void> {
+): Promise<void> {
   const allowedMethods = opts?.methods ?? DEFAULT_IDEMPOTENCY_METHODS;
   if (!allowedMethods.includes(req.method.toUpperCase())) {
     next();
@@ -165,7 +165,7 @@ Function : Promise<void> {
       path: req.originalUrl ?? req.path,
       keyLength: idempotencyKey.length,
     });
-    sendIdempotencyError(req, res, 400, INVALID_IDEMPIONCEYNCYKEY ?? INVALID_IDEMPOTENCY_KEY, 'Invalid Idempotency-Key header', {
+    sendIdempotencyError(req, res, 400, INVALID_IDEMPOTENCY_KEY, 'Invalid Idempotency-Key header', {
       header: 'Idempotency-Key',
       maxLength: maxKeyLength,
       allowedCharacters: 'A-Z, a-z, 0-9, dot, underscore, colon, and hyphen',
@@ -182,11 +182,6 @@ Function : Promise<void> {
   const requestHash = calculateRequestHash(userId, req.body, req.method, req.path, bodyExcludingKeys);
 
   try {
-    if (opts?.cleanExpiredTTL ?? true) {
-      await db.query('DELETE FROM idempotency_store WHERE expires_at < NOW()::timestamp', []);
-    }
-    await db.query('DELETE FROM idempotency_store WHERE expires_at < $1', [new Date().toISOString()]);
-
     const handleExistingRecord = (record: {
       request_hash: string;
       status: string;
@@ -263,7 +258,9 @@ Function : Promise<void> {
     };
 
     const result = await db.query(
-      'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2',
+      `SELECT request_hash, status, response_status, response_body, expires_at
+       FROM idempotency_store
+       WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
       [scope, idempotencyKey]
     );
 
@@ -279,13 +276,22 @@ Function : Promise<void> {
     const insertResult = await db.query(
       `INSERT INTO idempotency_store (scope, idempotency_key, request_hash, status, expires_at, created_at)
        VALUES ($1, $2, $3, $4, $5, NOW()::timestamp)
-       ON CONFLICT (scope, idempotency_key) DO NOTHING`,
+       ON CONFLICT (scope, idempotency_key) DO UPDATE
+       SET request_hash = EXCLUDED.request_hash,
+           status = EXCLUDED.status,
+           response_status = NULL,
+           response_body = NULL,
+           expires_at = EXCLUDED.expires_at,
+           created_at = EXCLUDED.created_at
+       WHERE idempotency_store.expires_at <= NOW()::timestamp`,
       [scope, idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
     );
 
     if (insertResult && insertResult.rowCount === 0) {
       const existing = await db.query(
-        'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2',
+        `SELECT request_hash, status, response_status, response_body, expires_at
+         FROM idempotency_store
+         WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
         [scope, idempotencyKey]
       );
       if (existing.rows.length > 0 && handleExistingRecord(existing.rows[0])) {
@@ -380,7 +386,7 @@ Function : Promise<void> {
  * Express dispatches the middleware during normal request processing.
  */
 export function createIdempotencyMiddleware(opts?: IdempotencyConfig): RequestHandler {
-  return (req, res, next) => {
-    void idempotencyMiddleware(req, res, next, opts);
+  return (req: Request, res: Response, next: NextFunction) => {
+    idempotencyMiddleware(req, res, next, opts);
   };
 }
