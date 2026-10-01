@@ -26,6 +26,7 @@ export const PUBLIC_ERROR_CODES = [
   'NETWORK_MISMATCH',
   'SOROBAN_RPC_TIMEOUT',
   'SOROBAN_RPC_ERROR',
+  'SIMULATION_FAILED',
   'BILLING_DEDUCTION_FAILED',
   'BILLING_REQUEST_NOT_FOUND',
   'DEVELOPER_NOT_FOUND',
@@ -108,6 +109,60 @@ export function safeValidationDetails(value: unknown): ValidationErrorDetail[] |
   return details.length > 0 ? details : undefined;
 }
 
+/**
+ * Simulation diagnostics that are safe to publish to clients.
+ *
+ * This deliberately mirrors ONLY the redacted summary produced by
+ * `lib/simulationDiagnostics.ts` (`errorCode`, `errorMessage`, `eventCount`,
+ * `footprintPresent`). Raw simulation payloads carry account addresses,
+ * balances, XDR and signatures, so anything outside this whitelist is dropped
+ * rather than forwarded.
+ */
+export interface RedactedSimulationDetailsSummary {
+  errorCode?: string | number;
+  errorMessage?: string;
+  eventCount?: number;
+  footprintPresent?: boolean;
+}
+
+/**
+ * Re-validate an already-redacted simulation summary and bound its fields.
+ *
+ * Used as defence in depth: even if a caller hands the envelope a raw or
+ * hand-crafted object, only the four whitelisted fields with the expected
+ * primitive types can reach the response body. Returns `undefined` when
+ * nothing survives, so the envelope omits the key entirely.
+ */
+export function safeSimulationDetails(value: unknown): RedactedSimulationDetailsSummary | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+
+  const candidate = value as Record<string, unknown>;
+  const summary: RedactedSimulationDetailsSummary = {};
+
+  const errorCode = candidate.errorCode;
+  if (typeof errorCode === 'string' && errorCode.trim() !== '') {
+    summary.errorCode = errorCode.slice(0, 200);
+  } else if (typeof errorCode === 'number' && Number.isFinite(errorCode)) {
+    summary.errorCode = errorCode;
+  }
+
+  const errorMessage = candidate.errorMessage;
+  if (typeof errorMessage === 'string' && errorMessage.trim() !== '') {
+    summary.errorMessage = errorMessage.slice(0, 500);
+  }
+
+  const eventCount = candidate.eventCount;
+  if (typeof eventCount === 'number' && Number.isFinite(eventCount) && eventCount >= 0) {
+    summary.eventCount = Math.floor(eventCount);
+  }
+
+  if (typeof candidate.footprintPresent === 'boolean') {
+    summary.footprintPresent = candidate.footprintPresent;
+  }
+
+  return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
 export function boundedRetryAfterMs(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
   return Math.min(Math.floor(value), 86_400_000);
@@ -119,6 +174,7 @@ export interface NormalizedError {
   message: string;
   details?: ValidationErrorDetail[];
   retryAfterMs?: number;
+  simulationDetails?: RedactedSimulationDetailsSummary;
 }
 
 export function normalizeError(input: {
@@ -127,6 +183,7 @@ export function normalizeError(input: {
   message?: unknown;
   details?: unknown;
   retryAfterMs?: unknown;
+  simulationDetails?: unknown;
   trusted: boolean;
   development?: boolean;
 }): NormalizedError {
@@ -137,7 +194,9 @@ export function normalizeError(input: {
   };
   const details = safeValidationDetails(input.details);
   const retryAfterMs = boundedRetryAfterMs(input.retryAfterMs);
+  const simulationDetails = safeSimulationDetails(input.simulationDetails);
   if (details) normalized.details = details;
   if (retryAfterMs !== undefined) normalized.retryAfterMs = retryAfterMs;
+  if (simulationDetails) normalized.simulationDetails = simulationDetails;
   return normalized;
 }

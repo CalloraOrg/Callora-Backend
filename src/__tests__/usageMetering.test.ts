@@ -317,7 +317,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
   });
 
   it('exposes gateway_usage_record_failures_total at /api/metrics', async () => {
-    const res = await request(proxyServer).get('/api/metrics');
+    const res = await request(proxyServer).get('/api/metrics').set('Authorization', `Bearer ${process.env.METRICS_API_KEY ?? ''}`);
     expect(res.status).toBe(200);
     expect(res.text).toContain('gateway_usage_record_failures_total');
   });
@@ -350,7 +350,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
   });
 
   async function getUsageRecordFailuresMetric(): Promise<number> {
-    const res = await request(proxyServer).get('/api/metrics');
+    const res = await request(proxyServer).get('/api/metrics').set('Authorization', `Bearer ${process.env.METRICS_API_KEY ?? ''}`);
     const match = res.text.match(/gateway_usage_record_failures_total(?:\{[^}]*\})?\s+(\d+)/);
     return match ? Number(match[1]) : 0;
   }

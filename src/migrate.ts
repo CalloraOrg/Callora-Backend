@@ -188,7 +188,17 @@ export function validateSchemaState(db: Database.Database, migrationDir: string)
 }
 
 // Guard: only run the migration logic when executed as a script, not when imported.
-if (require.main === module) {
+//
+// The project is ESM ("type": "module" in package.json), so `require.main`
+// does not exist: importing this module threw
+// `ReferenceError: require is not defined in ES module scope` and the server
+// could not start. The argv check mirrors the CommonJS/Jest-compatible guard
+// already used in `src/index.ts`.
+const isDirectExecution =
+  !!process.argv[1] &&
+  (process.argv[1].endsWith('migrate.ts') || process.argv[1].endsWith('migrate.js'));
+
+if (isDirectExecution) {
   const db = new Database(dbPath);
   try {
     applyMigrations(db, migrationDir);

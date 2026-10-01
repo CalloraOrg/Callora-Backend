@@ -9,6 +9,7 @@
  */
 import express from "express";
 import request from "supertest";
+import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { describe, expect, it } from "@jest/globals";
 import {
@@ -29,6 +30,8 @@ import {
   validateWebhookUrl,
   WebhookValidationError,
 } from "../../src/webhooks/webhook.validator.js";
+import { createApp } from "../../src/app.js";
+import { defaultPluginRepository } from "../../src/services/pluginRegistry.js";
 import { openApiErrorHandler } from "../../src/middleware/openApiErrorHandler.js";
 
 type OpenApiDocument = {
@@ -42,6 +45,135 @@ const spec = JSON.parse(
 ) as OpenApiDocument;
 
 const validWallet = "G" + "A".repeat(55);
+
+const openApiMethods = new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "options",
+  "head",
+  "trace",
+]);
+
+const pathParameterValues: Record<string, string> = {
+  apiSlug: "contract-test-api",
+  developerId: "contract-test-developer",
+  id: "1",
+};
+
+type ExpressLayer = {
+  route?: {
+    path?: string | string[];
+    methods?: Record<string, boolean>;
+  };
+  handle?: { stack?: ExpressLayer[] };
+  regexp?: { source?: string };
+};
+
+function concretePath(pathTemplate: string) {
+  const values: Record<string, string> = {
+    ...pathParameterValues,
+    id: pathTemplate === "/api/marketplace/plugins/{id}" ? "contract-test-plugin" : "1",
+  };
+  return pathTemplate.replace(
+    /\{([^}]+)\}/g,
+    (_match, name: string) =>
+      encodeURIComponent(values[name] ?? "contract-test"),
+  );
+}
+
+async function seedContractResources(app: ReturnType<typeof createApp>) {
+  if (!defaultPluginRepository.findById("contract-test-plugin")) {
+    defaultPluginRepository.register({
+      id: "contract-test-plugin",
+      name: "Contract Test Plugin",
+      version: "1.0.0",
+      hooks: ["before_charge"],
+    }, "contract-test-user");
+  }
+
+  const token = jwt.sign(
+    { userId: "contract-test-user" },
+    process.env.JWT_SECRET ?? "test-jwt-secret",
+  );
+  await request(app)
+    .post("/api/errors")
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      code: "CONTRACT_TEST_ERROR",
+      message: "Contract test error",
+      statusCode: 400,
+    });
+}
+
+function normalizePath(routePath: string) {
+  return routePath
+    .replace(/\/:[^/]+/g, "/{param}")
+    .replace(/\/$/, "") || "/";
+}
+
+function mountPath(source: string | undefined) {
+  if (!source || source === "^\\/?(?=\\/|$)") return "";
+  const normalized = source.replace(/^\^/, "").replace(/\\\//g, "/");
+  return normalized
+    .replace(/\/\?\(\?=\/\|\$\)$/, "")
+    .replace(/\(\?=\/\|\$\)$/, "");
+}
+
+function collectMountedOperations(
+  stack: ExpressLayer[] | undefined,
+  prefix = "",
+  operations = new Set<string>(),
+) {
+  for (const layer of stack ?? []) {
+    if (layer.route) {
+      const paths = Array.isArray(layer.route.path)
+        ? layer.route.path
+        : [layer.route.path ?? "/"];
+      for (const routePath of paths) {
+        for (const method of Object.keys(layer.route.methods ?? {})) {
+          operations.add(
+            `${method.toUpperCase()} ${normalizePath(prefix + routePath)}`,
+          );
+        }
+      }
+      continue;
+    }
+
+    if (layer.handle?.stack) {
+      collectMountedOperations(
+        layer.handle.stack,
+        prefix + mountPath(layer.regexp?.source),
+        operations,
+      );
+    }
+  }
+  return operations;
+}
+
+function documentedOperations() {
+  return Object.entries(spec.paths).flatMap(([routePath, pathItem]) =>
+    Object.keys(pathItem)
+      .filter((method) => openApiMethods.has(method))
+      .map((method) => `${method.toUpperCase()} ${normalizePath(routePath)}`),
+  );
+}
+
+function issueRequest(
+  app: ReturnType<typeof createApp>,
+  method: string,
+  routePath: string,
+) {
+  const client = request(app) as unknown as Record<
+    string,
+    (path: string) => ReturnType<ReturnType<typeof request>["get"]>
+  >;
+  const requestMethod = client[method];
+  if (!requestMethod) throw new Error(`Unsupported OpenAPI method: ${method}`);
+  return requestMethod.call(client, routePath);
+}
 
 function buildSchemaApp(schema: z.ZodSchema) {
   const app = express();
@@ -144,6 +276,42 @@ describe("OpenAPI document integrity", () => {
           }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("assembled application OpenAPI coverage", () => {
+  it("routes every documented operation through createApp without a 404", async () => {
+    const app = createApp();
+    await seedContractResources(app);
+    const failures: string[] = [];
+
+    for (const operation of documentedOperations()) {
+      const [method, routePath] = operation.split(" ");
+      const response = await issueRequest(
+        app,
+        method.toLowerCase(),
+        concretePath(routePath),
+      );
+      if (response.status === 404) {
+        failures.push(`${operation} resolved to 404`);
+      }
+    }
+
+    const documented = new Set(documentedOperations());
+    const application = app as express.Application & {
+      _router?: ExpressLayer;
+      router?: ExpressLayer;
+    };
+    const mounted = collectMountedOperations(
+      (application._router ?? application.router)?.stack,
+    );
+    for (const operation of mounted) {
+      if (!documented.has(operation)) {
+        console.warn(`Undocumented mounted operation: ${operation}`);
+      }
+    }
+
+    expect(failures).toEqual([]);
   });
 });
 

@@ -1,16 +1,15 @@
-import { createHash, timingSafeEqual } from 'crypto';
+import { createHash } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { InternalServerError, UnauthorizedError } from '../errors/index.js';
 import { ALLOWED_ALGORITHMS } from './requireAuth.js';
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
+import { timingSafeStringEqual } from '../lib/timingSafe.js';
 
 interface AdminJwtPayload { role: string; [key: string]: unknown }
 
-function timingSafeStringEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
+// #1266: constant-time comparison lives in src/lib/timingSafe.ts (SHA-256
+// digests compared with crypto.timingSafeEqual, so key length is not leaked).
 
 /** Require the configured admin API key or an admin-role JWT. */
 export function adminAuth(req: Request, res: Response, next: NextFunction): void {

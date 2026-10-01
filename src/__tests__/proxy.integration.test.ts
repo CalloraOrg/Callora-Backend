@@ -820,6 +820,38 @@ describe('Proxy usage recording – finish vs premature close', () => {
     void fetchError;
   });
 
+  it('terminates the client stream when upstream fails after headers were flushed', async () => {
+    // Upstream promises 1000 bytes, sends a few, then resets the socket.
+    // Headers have already been flushed to the caller by then, so the error
+    // handler cannot send a 502; it must destroy the response so the caller
+    // sees an aborted stream instead of hanging or accepting a partial body.
+    setUpstreamHandler((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': '1000' });
+      res.write('{"partial":');
+      setTimeout(() => res.socket!.destroy(), 20);
+    });
+
+    const outcome = await Promise.race([
+      (async () => {
+        const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/mid-stream-terminate`, {
+          method: 'GET',
+          headers: { 'x-api-key': TEST_API_KEY },
+        });
+        return res.text().then(
+          () => 'completed' as const,
+          () => 'terminated' as const,
+        );
+      })().catch(() => 'terminated' as const),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 3000)),
+    ]);
+
+    expect(outcome).toBe('terminated');
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(usageStore.getEvents()).toHaveLength(0);
+    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(1000);
+  });
+
   it('does NOT double-count when the same requestId is seen twice', async () => {
     // Simulates a retry or duplicate delivery of the same logical request.
     const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/idempotency-test`, {
