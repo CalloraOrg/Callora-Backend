@@ -18,16 +18,10 @@ import {
 } from "../middleware/requireAuth.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { billingDeductHistogramMiddleware } from "../middleware/metricsHistogram.js";
-import {
-  BillingService,
-  type BillingDeductResult,
-} from "../services/billing.js";
-import {
-  createSorobanRpcBillingClient,
-  SorobanRpcError,
-} from "../services/sorobanBilling.js";
+import type { BillingDeductResult } from "../services/billing.js";
+import { SorobanRpcError } from "../services/sorobanBilling.js";
 import { redactSimulationDetails } from "../lib/simulationDiagnostics.js";
-import { billingAccessLogMiddleware } from "../middleware/accessLog.js";
+import { billingAccessLogMiddleware } from "../middleware/billingAccessLog.js";
 import creditsRouter from "./billing/credits.js";
 import deductRouter from "./billing/deduct.js";
 import disputesRouter from "./billing/disputes.js";
@@ -39,6 +33,7 @@ import { createTimeoutMiddleware } from "../middleware/timeout.js";
 import { config } from "../config/index.js";
 import { logger } from "../logger.js";
 import { getRequestId } from "../lib/envelope.js";
+import { getBillingService } from "./billing/billingService.js";
 
 const router = Router();
 
@@ -60,25 +55,6 @@ interface BillingDeductBody {
   apiKeyId?: unknown;
   amountUsdc?: unknown;
   idempotencyKey?: unknown;
-}
-
-function createRouteBillingService(pool: Pool): BillingService {
-  const sorobanClient = createSorobanRpcBillingClient({
-    rpcUrl:
-      process.env.SOROBAN_BILLING_RPC_URL ??
-      process.env.SOROBAN_RPC_URL ??
-      "http://localhost:8000",
-    contractId: process.env.SOROBAN_BILLING_CONTRACT_ID ?? "vault_contract",
-    sourceAccount: process.env.SOROBAN_BILLING_SOURCE_ACCOUNT,
-    networkPassphrase: process.env.SOROBAN_BILLING_NETWORK_PASSPHRASE,
-    requestTimeoutMs: Number(
-      process.env.SOROBAN_BILLING_RPC_TIMEOUT_MS ?? 5_000,
-    ),
-    balanceFunctionName: process.env.SOROBAN_BILLING_BALANCE_FN ?? "balance",
-    deductFunctionName: process.env.SOROBAN_BILLING_DEDUCT_FN ?? "deduct",
-  });
-
-  return new BillingService(pool, sorobanClient);
 }
 
 function requireString(value: unknown, field: string): string {
@@ -254,7 +230,7 @@ router.post(
         ? requireString(body.developerId, "developerId")
         : user.id;
 
-      const billingService = createRouteBillingService(getPool(req));
+      const billingService = getBillingService(req);
       const result = await billingService.deduct({
         requestId,
         userId: developerId,
@@ -338,7 +314,7 @@ router.get(
       }
 
       const requestId = requireString(req.params.requestId, "requestId");
-      const billingService = createRouteBillingService(getPool(req));
+      const billingService = getBillingService(req);
       const result = await billingService.getByRequestId(requestId);
 
       if (!result) {

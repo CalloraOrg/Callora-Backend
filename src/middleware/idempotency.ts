@@ -174,14 +174,14 @@ export async function idempotencyMiddleware(
   }
 
   const userId = res.locals.authenticatedUser?.id;
+  // Namespace keys per authenticated principal so the same key chosen by two
+  // different users (or admin actors) cannot collide, mismatch, or replay
+  // across tenants. Unauthenticated callers share the explicit 'anonymous'
+  // scope.
+  const scope = userId ?? (res.locals as { adminActor?: string }).adminActor ?? 'anonymous';
   const requestHash = calculateRequestHash(userId, req.body, req.method, req.path, bodyExcludingKeys);
 
   try {
-    if (opts?.cleanExpiredTTL ?? true) {
-      await db.query('DELETE FROM idempotency_store WHERE expires_at < NOW()::timestamp', []);
-    }
-    await db.query('DELETE FROM idempotency_store WHERE expires_at < $1', [new Date().toISOString()]);
-
     const handleExistingRecord = (record: {
       request_hash: string;
       status: string;
@@ -258,8 +258,10 @@ export async function idempotencyMiddleware(
     };
 
     const result = await db.query(
-      'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
-      [idempotencyKey]
+      `SELECT request_hash, status, response_status, response_body, expires_at
+       FROM idempotency_store
+       WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
+      [scope, idempotencyKey]
     );
 
     if (result.rows.length > 0) {
@@ -272,16 +274,25 @@ export async function idempotencyMiddleware(
     const expiresAtDate = new Date(Date.now() + retentionSeconds * 1000);
 
     const insertResult = await db.query(
-      `INSERT INTO idempotency_store (idempotency_key, request_hash, status, expires_at, created_at)
-       VALUES ($1, $2, $3, $4, NOW()::timestamp)
-       ON CONFLICT (idempotency_key) DO NOTHING`,
-      [idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
+      `INSERT INTO idempotency_store (scope, idempotency_key, request_hash, status, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW()::timestamp)
+       ON CONFLICT (scope, idempotency_key) DO UPDATE
+       SET request_hash = EXCLUDED.request_hash,
+           status = EXCLUDED.status,
+           response_status = NULL,
+           response_body = NULL,
+           expires_at = EXCLUDED.expires_at,
+           created_at = EXCLUDED.created_at
+       WHERE idempotency_store.expires_at <= NOW()::timestamp`,
+      [scope, idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
     );
 
     if (insertResult && insertResult.rowCount === 0) {
       const existing = await db.query(
-        'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
-        [idempotencyKey]
+        `SELECT request_hash, status, response_status, response_body, expires_at
+         FROM idempotency_store
+         WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
+        [scope, idempotencyKey]
       );
       if (existing.rows.length > 0 && handleExistingRecord(existing.rows[0])) {
         return;
@@ -298,7 +309,10 @@ export async function idempotencyMiddleware(
 
       try {
         if (status >= 500) {
-          await db.query('DELETE FROM idempotency_store WHERE idempotency_key = $1', [idempotencyKey]);
+          await db.query('DELETE FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2', [
+            scope,
+            idempotencyKey,
+          ]);
           return;
         }
 
@@ -318,8 +332,8 @@ export async function idempotencyMiddleware(
         await db.query(
           `UPDATE idempotency_store
            SET status = $1, response_status = $2, response_body = $3
-           WHERE idempotency_key = $4`,
-          ['completed', status, bodyStr, idempotencyKey]
+           WHERE scope = $4 AND idempotency_key = $5`,
+          ['completed', status, bodyStr, scope, idempotencyKey]
         );
       } catch (err) {
         logger.error('[idempotency] failed to save response', {
@@ -376,4 +390,3 @@ export function createIdempotencyMiddleware(opts?: IdempotencyConfig): RequestHa
     idempotencyMiddleware(req, res, next, opts);
   };
 }
-

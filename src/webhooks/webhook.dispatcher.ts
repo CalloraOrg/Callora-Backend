@@ -3,9 +3,17 @@ import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
-import { getEffectiveRetryPolicy } from '../services/webhookRetry.js';
+import { getEffectiveRetryPolicy, calculateBackoff } from '../services/webhookRetry.js';
+import { computeJitteredDelay, type RandomSource } from '../lib/retry.js';
+
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
+
+/**
+ * Random source used for retry backoff jitter. Injectable so tests can supply
+ * a seeded, deterministic sequence; production uses `Math.random`.
+ */
+let jitterRandom: RandomSource = Math.random;
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,6 +45,15 @@ export async function awaitWebhookDispatcherIdle(): Promise<void> {
 export function resetWebhookDispatcherForTests(): void {
     acceptingDispatches = true;
     inFlightDispatches.clear();
+    jitterRandom = Math.random;
+}
+
+/**
+ * Overrides the random source used to jitter webhook retry delays.
+ * Tests pass a seeded generator to make backoff deterministic.
+ */
+export function setWebhookJitterRandom(random: RandomSource): void {
+    jitterRandom = random;
 }
 
 /**
@@ -45,7 +62,9 @@ export function resetWebhookDispatcherForTests(): void {
  * Operational Limits:
  * - Max retries: Uses subscription's retryPolicy.maxRetries (defaults to 5)
  * - Timeout: 10 seconds per attempt
- * - Backoff: Exponential using subscription's retryPolicy.baseDelayMs (defaults to 1s)
+ * - Backoff: Exponential with full jitter, using subscription's retryPolicy.baseDelayMs
+ *   (defaults to 1s). The exponential value is an upper bound; actual delays are randomised
+ *   below it so recovering receivers are not hit by a synchronised retry storm.
  * - Idempotency: Uses a deterministic Deduplication key (X-Callora-Delivery) per dispatch call
  */
 export async function dispatchWebhook(
@@ -115,8 +134,18 @@ export async function dispatchWebhook(
             }
 
             if (attempt < maxRetries - 1) {
-                const delay = baseDelayMs * Math.pow(2, attempt);
-                logger.info(`[webhook] Retrying in ${delay}ms...`);
+                // Jitter keeps concurrent deliveries from retrying in lockstep.
+                // The exponential value is also the ceiling, so a delivery never
+                // waits longer than its configured backoff.
+                const scheduledDelay = calculateBackoff(attempt, baseDelayMs);
+                const delay = computeJitteredDelay(scheduledDelay, {
+                    strategy: 'full',
+                    random: jitterRandom,
+                    maxDelayMs: scheduledDelay,
+                });
+                logger.info(
+                    `[webhook] Retrying in ${delay}ms (scheduled ${scheduledDelay}ms)...`
+                );
                 await sleep(delay);
             }
         }

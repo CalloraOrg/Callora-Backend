@@ -1,13 +1,33 @@
 import jwt from 'jsonwebtoken';
 
-export const TEST_JWT_SECRET = 'test-secret-do-not-use-in-prod';
+import crypto from 'node:crypto';
 
-export function signTestToken(payload: { userId: string; walletAddress: string }) {
-  return jwt.sign(payload, TEST_JWT_SECRET, { expiresIn: '1h' });
+export const TEST_JWT_SECRET = 'test-secret-do-not-use-in-prod';
+export const TEST_GATEWAY_SECRET = 'test-gateway-secret-for-forwarded-user-id';
+
+export function signTestToken(payload: { userId: string; walletAddress?: string }) {
+  const fullPayload = {
+    walletAddress: 'GDTEST123STELLAR',
+    ...payload,
+  };
+  return jwt.sign(fullPayload, TEST_JWT_SECRET, { expiresIn: '1h' });
 }
 
-export function signExpiredToken(payload: { userId: string; walletAddress: string }) {
-  return jwt.sign(payload, TEST_JWT_SECRET, { expiresIn: '-1s' });
+export function createTestGatewaySignature(
+  userId: string,
+  secret: string = TEST_GATEWAY_SECRET,
+  timestamp?: string,
+): string {
+  const data = timestamp ? `${timestamp}.${userId}` : userId;
+  return crypto.createHmac('sha256', secret).update(data).digest('hex');
+}
+
+export function signExpiredToken(payload: { userId: string; walletAddress?: string }) {
+  const fullPayload = {
+    walletAddress: 'GDTEST123STELLAR',
+    ...payload,
+  };
+  return jwt.sign(fullPayload, TEST_JWT_SECRET, { expiresIn: '-1s' });
 }
 
 /** Sign a token using a different secret than the one the server expects. */

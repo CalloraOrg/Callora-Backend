@@ -1,4 +1,5 @@
 import client from 'prom-client';
+import { register as sharedRegistry } from '../metrics.js';
 
 const billingDeductDuration = new client.Histogram({
   name: 'billing_deduct_duration_seconds',
@@ -158,6 +159,26 @@ export function recordApisLatency(
 export function resetApisMetrics(): void {
   apisLatencyDuration.reset();
 }
+
+// ── Shared-registry registration ─────────────────────────────────────────────
+//
+// The histograms above are created against prom-client's default registry, but
+// GET /api/metrics serves the *shared* registry exported by src/metrics.ts.
+// Registering them there too ensures the metric series referenced by the
+// committed Grafana dashboards are actually scraped. Without this, panels that
+// query e.g. billing_deduct_duration_seconds_bucket silently render "No data".
+//
+// A metric object may live in more than one registry; the default registration
+// is kept so existing consumers that read client.register continue to work.
+// ─────────────────────────────────────────────────────────────────────────────
+
+sharedRegistry.registerMetric(billingDeductDuration);
+sharedRegistry.registerMetric(refreshTokenDuration);
+sharedRegistry.registerMetric(creditsDuration);
+sharedRegistry.registerMetric(subscriptionsLatencyDuration);
+sharedRegistry.registerMetric(maintenanceDuration);
+sharedRegistry.registerMetric(adminDuration);
+sharedRegistry.registerMetric(apisLatencyDuration);
 
 export {
   billingDeductDuration,

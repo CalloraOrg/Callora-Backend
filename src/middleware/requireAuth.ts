@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 
 import type { AuthenticatedUser } from "../types/auth.js";
 import { UnauthorizedError } from "../errors/index.js";
@@ -18,7 +19,60 @@ export interface ResolvedRequestUserId {
   error?: UnauthorizedError;
 }
 
-export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
+export interface ResolvedRequestJwtUserId extends ResolvedRequestUserId {
+  subject?: string;
+}
+
+/**
+ * Compute the HMAC-SHA256 signature for a forwarded user identity.
+ */
+export function computeGatewaySignature(
+  secret: string,
+  userId: string,
+  timestamp?: string,
+): string {
+  const payload = timestamp ? `${timestamp}.${userId}` : userId;
+  return crypto.createHmac("sha256", secret).update(payload).digest("hex");
+}
+
+/**
+ * Timing-safe verification of internal gateway signature.
+ */
+export function verifyGatewaySignature(
+  userId: string,
+  signatureHeader?: string,
+  timestampHeader?: string,
+): boolean {
+  const secret =
+    process.env.FORWARDED_USER_ID_SECRET ||
+    process.env.INTERNAL_GATEWAY_SECRET;
+
+  if (!secret || !signatureHeader) {
+    return false;
+  }
+
+  const rawSig = signatureHeader.startsWith("sha256=")
+    ? signatureHeader.slice("sha256=".length)
+    : signatureHeader;
+
+  // Verify against plain userId and against timestamp.userId if timestampHeader is present
+  const candidates = [computeGatewaySignature(secret, userId)];
+  if (timestampHeader) {
+    candidates.push(computeGatewaySignature(secret, userId, timestampHeader));
+  }
+
+  return candidates.some((expectedSig) => {
+    if (rawSig.length !== expectedSig.length) return false;
+    if (!/^[0-9a-f]+$/i.test(rawSig)) return false;
+    return crypto.timingSafeEqual(
+      Buffer.from(rawSig, "hex"),
+      Buffer.from(expectedSig, "hex"),
+    );
+  });
+}
+
+/** Resolve only cryptographically verified JWT claims, never forwarded headers. */
+export function resolveRequestJwtUserId(req: Request): ResolvedRequestJwtUserId {
   const authHeader = req.header("authorization");
   if (authHeader !== undefined) {
     if (!authHeader.startsWith("Bearer ")) {
@@ -68,7 +122,10 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
         };
       }
 
-      return { userId: uid };
+      const subject = typeof payload.sub === "string" && payload.sub.trim() !== ""
+        ? payload.sub
+        : undefined;
+      return { userId: uid, subject };
     } catch (err) {
       const code =
         err instanceof jwt.TokenExpiredError
@@ -87,8 +144,33 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
     }
   }
 
-  const forwardedUserId = req.header("x-user-id")?.trim();
-  return forwardedUserId ? { userId: forwardedUserId } : {};
+  return {};
+}
+
+export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
+  if (req.header("authorization") !== undefined) {
+    const result = resolveRequestJwtUserId(req);
+    return result.userId ? { userId: result.userId } : result;
+  }
+
+  // Only accept x-user-id if TRUST_FORWARDED_USER_ID is explicitly enabled AND a valid internal gateway signature is present
+  const trustForwardedUserId = process.env.TRUST_FORWARDED_USER_ID === "true";
+  if (trustForwardedUserId) {
+    const forwardedUserId = req.header("x-user-id")?.trim();
+    const gatewaySignature =
+      req.header("x-gateway-signature") || req.header("x-internal-signature");
+    const timestampHeader =
+      req.header("x-gateway-timestamp") || req.header("x-callora-timestamp");
+
+    if (
+      forwardedUserId &&
+      verifyGatewaySignature(forwardedUserId, gatewaySignature, timestampHeader)
+    ) {
+      return { userId: forwardedUserId };
+    }
+  }
+
+  return {};
 }
 
 export const requireAuth = (
