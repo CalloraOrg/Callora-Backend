@@ -50,14 +50,14 @@ function generatePlainKey(): string {
   return `ck_live_${randomBytes(24).toString("hex")}`;
 }
 
-function toHash(value: string): string {
-  // Use bcrypt with configurable cost factor for proper password hashing
-  return bcrypt.hashSync(value, config.bcrypt.costFactor);
+async function toHash(value: string): Promise<string> {
+  // Use the async bcrypt API so the event loop is not blocked during hashing.
+  return bcrypt.hash(value, config.bcrypt.rounds);
 }
 
-function verifyHash(value: string, hash: string): boolean {
+async function verifyHash(value: string, hash: string): Promise<boolean> {
   try {
-    return bcrypt.compareSync(value, hash);
+    return await bcrypt.compare(value, hash);
   } catch {
     return false;
   }
@@ -71,25 +71,106 @@ function constantTimeCompare(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
+/**
+ * Short-lived LRU cache keyed by the sha256 of the raw API key. Only
+ * successful verifications are cached. Entries are invalidated on revocation
+ * and rotation so a revoked key never returns a cached hit.
+ */
+interface VerifyCacheEntry {
+  record: ApiKeyRecord;
+  expiresAt: number;
+}
+
+const VERIFY_CACHE_MAX_ENTRIES = 500;
+const VERIFY_CACHE_TTL_MS = 5_000;
+
+class LruVerifyCache {
+  private readonly map = new Map<string, VerifyCacheEntry>();
+
+  constructor(
+    private readonly maxEntries: number,
+    private readonly ttlMs: number,
+  ) {}
+
+  get(key: string): ApiKeyRecord | null {
+    const entry = this.map.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+      this.map.delete(key);
+      return null;
+    }
+    // Refresh recency for LRU ordering.
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry.record;
+  }
+
+  set(key: string, record: ApiKeyRecord): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, { record, expiresAt: Date.now() + this.ttlMs });
+    while (this.map.size > this.maxEntries) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+  }
+
+  delete(key: string): void {
+    this.map.delete(key);
+  }
+
+  deleteByRecordId(id: string): void {
+    for (const [cacheKey, entry] of this.map) {
+      if (entry.record.id === id) {
+        this.map.delete(cacheKey);
+      }
+    }
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+}
+
+const verifyCache = new LruVerifyCache(VERIFY_CACHE_MAX_ENTRIES, VERIFY_CACHE_TTL_MS);
+
+function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
+  return {
+    id: record.id,
+    apiId: record.apiId,
+    userId: record.userId,
+    prefix: record.prefix,
+    keyHash: '[REDACTED]',
+    sha256Hash: record.sha256Hash,
+    scopes: record.scopes,
+    rateLimitPerMinute: record.rateLimitPerMinute,
+    createdAt: record.createdAt,
+    revoked: record.revoked,
+    lastUsedAt: record.lastUsedAt,
+    revokedAt: record.revokedAt,
+  };
+}
+
 export const apiKeyRepository = {
-   create(params: {
+   async create(params: {
      apiId: string;
      userId: string;
      scopes: string[];
      rateLimitPerMinute: number | null;
-    }): ApiKeyCreateResult {
+    }): Promise<ApiKeyCreateResult> {
       const key = generatePlainKey();
       const prefix = key.slice(0, 16);
       const id = randomBytes(8).toString('hex');
       const createdAt = new Date();
       const sha256Hash = sha256Hex(key);
+      const keyHash = await toHash(key);
 
     apiKeys.push({
       id,
       apiId: params.apiId,
       userId: params.userId,
       prefix,
-      keyHash: toHash(key),
+      keyHash,
       sha256Hash,
       scopes: params.scopes,
       rateLimitPerMinute: params.rateLimitPerMinute,
@@ -168,14 +249,31 @@ export const apiKeyRepository = {
 
     key.revoked = true;
     key.revokedAt = new Date();
+    // Evict any cached verification for this key so a revoked key cannot
+    // continue to authenticate from the cache.
+    verifyCache.deleteByRecordId(id);
     return 'success';
   },
   getSha256Hash(id: string): string | null {
     const key = apiKeys.find(k => k.id === id);
     return key?.sha256Hash ?? null;
   },
-  verify(key: string): ApiKeyRecord | null {
+  async verify(key: string): Promise<ApiKeyRecord | null> {
     if (typeof key !== 'string') return null;
+
+    const keySha256 = sha256Hex(key);
+
+    // Fast path: a recently verified key is served from the LRU cache
+    // without touching bcrypt. Revoked keys are evicted on revoke.
+    const cached = verifyCache.get(keySha256);
+    if (cached) {
+      if (cached.revoked) {
+        verifyCache.delete(keySha256);
+        return null;
+      }
+      return redactRecord(cached);
+    }
+
     // Find potential matches by prefix first for efficiency
     const prefix = key.slice(0, 16);
     const candidates = apiKeys.filter((k) =>
@@ -185,28 +283,35 @@ export const apiKeyRepository = {
     // No records share this prefix — key does not exist at all.
     if (candidates.length === 0) return null;
 
+    // High-entropy keys are exact-matched by their sha256 digest using a
+    // constant-time comparison. This avoids the costly bcrypt path for the
+    // common case while still falling back to bcrypt for legacy records.
     for (const candidate of candidates) {
-      if (verifyHash(key, candidate.keyHash)) {
+      if (constantTimeCompare(candidate.sha256Hash, keySha256)) {
         if (candidate.revoked) {
           // A revoked key is not valid — treat it exactly like an unknown key
           // so callers cannot distinguish "revoked" from "never existed".
           return null;
         }
-        // Return a copy without the raw hash so callers never see the secret.
-        return {
-          id: candidate.id,
-          apiId: candidate.apiId,
-          userId: candidate.userId,
-          prefix: candidate.prefix,
-          keyHash: '[REDACTED]',
-          sha256Hash: candidate.sha256Hash,
-          scopes: candidate.scopes,
-          rateLimitPerMinute: candidate.rateLimitPerMinute,
-          createdAt: candidate.createdAt,
-          revoked: candidate.revoked,
-          lastUsedAt: candidate.lastUsedAt,
-          revokedAt: candidate.revokedAt,
-        };
+        verifyCache.set(keySha256, candidate);
+        return redactRecord(candidate);
+      }
+    }
+
+    for (const candidate of candidates) {
+      if (await verifyHash(key, candidate.keyHash)) {
+        if (candidate.revoked) {
+          // A revoked key is not valid — treat it exactly like an unknown key
+          // so callers cannot distinguish "revoked" from "never existed".
+          return null;
+        }
+        // Backfill the sha256 digest for legacy records so future calls can
+        // use the constant-time exact-match fast path.
+        if (!candidate.sha256Hash) {
+          candidate.sha256Hash = keySha256;
+        }
+        verifyCache.set(keySha256, candidate);
+        return redactRecord(candidate);
       }
     }
 
@@ -215,7 +320,7 @@ export const apiKeyRepository = {
     // prefix exists via a distinct error path (timing/oracle safety).
     return null;
   },
-  rotate(id: string, userId: string): { success: true; newKey: string; prefix: string } | { success: false; error: 'not_found' | 'forbidden' | 'revoked' } {
+  async rotate(id: string, userId: string): Promise<{ success: true; newKey: string; prefix: string } | { success: false; error: 'not_found' | 'forbidden' | 'revoked' }> {
     const index = apiKeys.findIndex(k => k.id === id);
     if (index === -1) return { success: false, error: 'not_found' };
     if (apiKeys[index].userId !== userId) return { success: false, error: 'forbidden' };
@@ -224,10 +329,16 @@ export const apiKeyRepository = {
     // Generate new key
     const newKey = generatePlainKey();
     const newPrefix = newKey.slice(0, 16);
+    const newSha256Hash = sha256Hex(newKey);
+    const newKeyHash = await toHash(newKey);
 
     // Update existing record
-    apiKeys[index].keyHash = toHash(newKey);
+    apiKeys[index].keyHash = newKeyHash;
     apiKeys[index].prefix = newPrefix;
+    apiKeys[index].sha256Hash = newSha256Hash;
+
+    // Invalidate any cached entry for the rotated key.
+    verifyCache.deleteByRecordId(id);
 
     return { success: true, newKey, prefix: newPrefix };
   },
@@ -237,5 +348,6 @@ export const apiKeyRepository = {
   // Clear method for testing
   clear(): void {
     apiKeys.length = 0;
+    verifyCache.clear();
   },
 };

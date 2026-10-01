@@ -85,7 +85,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
 
         await assertDeveloperOwnsApi(user.id, apiId, deps);
 
-        const created = apiKeyRepository.create({
+        const created = await apiKeyRepository.create({
           apiId,
           userId: user.id,
           scopes,

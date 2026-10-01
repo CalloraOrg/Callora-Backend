@@ -1,47 +1,74 @@
 import { Router } from 'express';
-import type { Pool, QueryResult } from 'pg';
+import type { Pool, PoolClient, QueryResult } from 'pg';
 import { adminAuth } from '../../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../../middleware/ipAllowlist.js';
 import { BadRequestError, InternalServerError } from '../../errors/index.js';
 import { logger } from '../../logger.js';
 import { getClientIp } from '../../lib/clientIp.js';
 import { validate } from '../../middleware/validate.js';
-import { dbExplainBodySchema, type DbExplainBody } from '../../validators/admin.js';
+import {
+  dbExplainBodySchema,
+  isAllowedQuery,
+  hasMultiStatement,
+  hasDisallowedDmlKeywords,
+  ALLOWED_QUERY_PATTERNS,
+  type DbExplainBody,
+} from '../../validators/admin.js';
+import type { ReplicaPool } from '../../db/replicaPool.js';
+
+export {
+  isAllowedQuery,
+  hasMultiStatement,
+  hasDisallowedDmlKeywords,
+  ALLOWED_QUERY_PATTERNS,
+};
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
-const ALLOWED_QUERY_PATTERNS: RegExp[] = [
-  /^\s*SELECT\b/is,
-  /^\s*WITH\b/is,
-];
-
-function hasMultiStatement(query: string): boolean {
-  const cleaned = query.replace(/'(?:[^'\\]|\\.)*'/gs, '').replace(/--.*$/gm, '');
-  return cleaned.includes(';');
-}
-
-function isAllowedQuery(query: string): boolean {
-  if (hasMultiStatement(query)) return false;
-  return ALLOWED_QUERY_PATTERNS.some((p) => p.test(query));
-}
+export const DEFAULT_EXPLAIN_TIMEOUT_MS = 5_000;
 
 export interface ExplainRouterDeps {
   pool?: Pool;
+  replicaPool?: ReplicaPool;
+  statementTimeoutMs?: number;
+}
+
+async function acquireClient(deps: ExplainRouterDeps): Promise<PoolClient> {
+  if (deps.replicaPool) {
+    return deps.replicaPool.getReadClient();
+  }
+
+  if (deps.pool) {
+    if (typeof deps.pool.connect === 'function') {
+      return deps.pool.connect();
+    }
+    // Duck-typed fallback for test mocks that only define query
+    const stubPool = deps.pool as unknown as { query: (text: string, params?: unknown[]) => Promise<QueryResult> };
+    return {
+      query: stubPool.query.bind(stubPool),
+      release: () => {},
+    } as unknown as PoolClient;
+  }
+
+  throw new InternalServerError('Database pool not available');
 }
 
 /**
  * Router exposing `POST /api/admin/db/explain` — runs
- * `EXPLAIN (ANALYZE, FORMAT JSON)` on a read-only SQL query and returns the
- * query plan for diagnostic use.
+ * `EXPLAIN (ANALYZE, FORMAT JSON)` on a read-only SQL query inside a dedicated
+ * read-only transaction (`BEGIN READ ONLY; SET LOCAL statement_timeout = ...; ROLLBACK`)
+ * and returns the query plan for diagnostic use.
  *
  * Admin-only: gated behind the admin IP allowlist and admin authentication.
  *
- * Request body is validated by {@link dbExplainBodySchema} via the
- * {@link validate} middleware, which returns a structured
- * `{ code, message, details }` 400 response for any invalid input.
- *
- * Only `SELECT` and `WITH` (CTE) queries are accepted; multi-statement
- * queries are rejected at the application layer as an extra safety guard.
+ * Safety measures:
+ * - Request body is validated by {@link dbExplainBodySchema} at the boundary.
+ * - Multi-statement queries are strictly rejected.
+ * - Data-modifying keywords (DELETE, UPDATE, INSERT, MERGE, DDL) in CTEs or
+ *   subqueries are rejected before database execution.
+ * - Executes on a dedicated client in an explicit `BEGIN READ ONLY` transaction.
+ * - Sets a local statement_timeout to cancel runaway queries or pg_sleep calls.
+ * - Guaranteed transaction `ROLLBACK` and `client.release()` on all code paths.
  */
 export function createExplainRouter(deps: ExplainRouterDeps = {}): Router {
   const router = Router();
@@ -51,17 +78,11 @@ export function createExplainRouter(deps: ExplainRouterDeps = {}): Router {
 
   router.post(
     '/',
-    // ── Input validation at the boundary ──────────────────────────────────
-    // dbExplainBodySchema enforces: query non-empty ≤ 50 000 chars,
-    // params is an array (defaults to []).  Any violation returns a
-    // structured 400 before the query parser or database are touched.
     validate({ body: dbExplainBodySchema }),
     async (req, res, next) => {
       try {
-        // Re-parse to pick up Zod defaults (e.g. params defaults to []).
-        // validate() already confirmed the shape is valid; this is zero-cost.
         const parsed = dbExplainBodySchema.parse(req.body);
-        const { query: rawQuery, params } = parsed;
+        const { query: rawQuery, params, statementTimeoutMs: bodyTimeout } = parsed;
 
         if (!isAllowedQuery(rawQuery)) {
           next(
@@ -72,22 +93,47 @@ export function createExplainRouter(deps: ExplainRouterDeps = {}): Router {
           return;
         }
 
-        const { pool } = deps;
-        if (!pool) {
-          next(new InternalServerError('Database pool not available'));
+        const effectiveTimeoutMs =
+          bodyTimeout ??
+          deps.statementTimeoutMs ??
+          (process.env.ADMIN_EXPLAIN_TIMEOUT_MS
+            ? parseInt(process.env.ADMIN_EXPLAIN_TIMEOUT_MS, 10)
+            : DEFAULT_EXPLAIN_TIMEOUT_MS);
+
+        let client: PoolClient;
+        try {
+          client = await acquireClient(deps);
+        } catch (acquireError) {
+          next(acquireError);
           return;
         }
 
         const explainSql = `EXPLAIN (ANALYZE, FORMAT JSON) ${rawQuery}`;
         let result: QueryResult;
+        let rolledBack = false;
 
         try {
-          result = await pool.query(explainSql, params);
+          await client.query('BEGIN READ ONLY');
+          await client.query(`SET LOCAL statement_timeout = ${Math.floor(effectiveTimeoutMs)}`);
+          result = await client.query(explainSql, params);
+          await client.query('ROLLBACK');
+          rolledBack = true;
         } catch (dbError) {
+          if (!rolledBack) {
+            try {
+              await client.query('ROLLBACK');
+              rolledBack = true;
+            } catch {
+              // Rollback may fail if connection was dropped
+            }
+          }
+
           const message =
             dbError instanceof Error ? dbError.message : 'EXPLAIN query execution failed';
           next(new BadRequestError(message));
           return;
+        } finally {
+          client.release();
         }
 
         const plan =
@@ -103,6 +149,7 @@ export function createExplainRouter(deps: ExplainRouterDeps = {}): Router {
           userAgent,
           query: rawQuery,
           paramCount: params.length,
+          statementTimeoutMs: Math.floor(effectiveTimeoutMs),
         });
 
         res.json({ plan });
@@ -116,3 +163,4 @@ export function createExplainRouter(deps: ExplainRouterDeps = {}): Router {
 }
 
 export default createExplainRouter;
+

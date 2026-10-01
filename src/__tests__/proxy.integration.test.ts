@@ -14,6 +14,7 @@ import { InMemoryUsageStore } from '../services/usageStore.js';
 import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { ApiKey, ApiRegistryEntry } from '../types/gateway.js';
 import { resetAllMetrics } from '../metrics.js';
+import { InMemoryCircuitBreakerStore } from '../lib/circuitBreaker.js';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -1464,5 +1465,142 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
       expect(res2.headers.get('Idempotent-Replayed')).toBe('true');
       expect(upstreamCallCount).toBe(1);
     });
+  });
+});
+
+// ── Idempotent-method retry contract (issue #1292) ─────────────────────
+//
+// Pins the exact retry behaviour described in the issue:
+//   • GET/HEAD/OPTIONS retry up to 3 attempts total on any thrown error
+//   • All other methods (POST, PUT, PATCH, DELETE) are attempted exactly once
+//   • A fully-exhausted GET retry sequence is bounded to ~3 x timeoutMs,
+//     not silently uncapped
+//   • The circuit breaker records the whole retried sequence as a single
+//     execution (one success/failure), not one per internal attempt
+// ─────────────────────────────────────────────────────────────────────
+
+describe('Proxy idempotent-method retry contract (#1292)', () => {
+  beforeEach(() => {
+    usageStore.clear();
+    billing.clear();
+    billing.setBalance(TEST_DEVELOPER_ID, 1000);
+    rateLimiter.reset();
+    resetAllMetrics();
+  });
+
+  it('GET succeeds on the third attempt after two connection failures', async () => {
+    let attemptCount = 0;
+    setUpstreamHandler((_req, res) => {
+      attemptCount++;
+      if (attemptCount < 3) {
+        res.socket!.destroy();
+        return;
+      }
+      res.status(200).json({ message: 'succeeded on retry', attempt: attemptCount });
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/get-retry-success`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    expect(res.status).toBe(200);
+    expect(attemptCount).toBe(3);
+    const body = await res.json();
+    expect(body.message).toBe('succeeded on retry');
+  });
+
+  it('POST is attempted exactly once, even though the upstream would succeed on retry', async () => {
+    let attemptCount = 0;
+    setUpstreamHandler((_req, res) => {
+      attemptCount++;
+      if (attemptCount < 3) {
+        res.socket!.destroy();
+        return;
+      }
+      res.status(200).json({ message: 'would have succeeded on retry' });
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/post-no-retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({ test: 'data' }),
+    });
+
+    expect(res.status).toBe(502);
+    expect(attemptCount).toBe(1);
+  });
+
+  it('bounds total elapsed time for a fully-timing-out GET to ~3x the configured timeout', async () => {
+    setUpstreamHandler((_req, _res) => {
+      // Never respond.
+    });
+
+    const startTime = Date.now();
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/get-timeout-bounded`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+    const duration = Date.now() - startTime;
+
+    expect(res.status).toBe(504);
+    expect(duration).toBeGreaterThanOrEqual(5900);
+    expect(duration).toBeLessThan(7000);
+  }, 10000);
+
+  it('counts a retried GET sequence as exactly one circuit breaker execution', async () => {
+    const breakerStore = new InMemoryCircuitBreakerStore();
+
+    const tmpApp = express();
+    tmpApp.use(express.json());
+    tmpApp.use(requestIdMiddleware);
+    tmpApp.use('/v1/call', createProxyRouter({
+      billing,
+      rateLimiter,
+      usageStore,
+      registry: new InMemoryApiRegistry([{
+        id: TEST_API_ID,
+        slug: TEST_API_SLUG,
+        base_url: upstreamUrl,
+        developerId: TEST_DEVELOPER_ID,
+        endpoints: [{ endpointId: 'default', path: '*', priceUsdc: 1 }],
+      }]),
+      apiKeys,
+      circuitBreakerStore: breakerStore,
+      proxyConfig: {
+        timeoutMs: 2000,
+        allowedHosts: ['localhost'],
+      },
+    }));
+    tmpApp.use(errorHandler);
+
+    const tmpServer = await new Promise<Server>((resolve) => {
+      const s = tmpApp.listen(0, () => resolve(s));
+    });
+    const tmpAddr = tmpServer.address();
+    const tmpUrl = tmpAddr && typeof tmpAddr === 'object'
+      ? `http://localhost:${tmpAddr.port}`
+      : '';
+
+    let attemptCount = 0;
+    setUpstreamHandler((_req, res) => {
+      attemptCount++;
+      res.socket!.destroy();
+    });
+
+    const res = await fetch(`${tmpUrl}/v1/call/${TEST_API_SLUG}/breaker-single-count`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+
+    expect(res.status).toBe(502);
+    expect(attemptCount).toBe(3);
+
+    const metrics = await breakerStore.get(TEST_API_ID);
+    expect(metrics).not.toBeNull();
+    expect(metrics!.totalFailures).toBe(1);
+    expect(metrics!.consecutiveFailures).toBe(1);
+
+    await new Promise<void>((resolve) => tmpServer.close(() => resolve()));
   });
 });

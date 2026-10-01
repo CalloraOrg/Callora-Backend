@@ -26,7 +26,7 @@ jest.mock('../logger.js', () => ({
 
 describe('Error Handler', () => {
   let mockReq: Partial<Request> & { id?: string };
-  let mockRes: Partial<Response>;
+  let mockRes: Partial<Response> & { destroy?: jest.Mock };
   let mockNext: NextFunction;
 
   beforeEach(() => {
@@ -36,6 +36,7 @@ describe('Error Handler', () => {
     mockRes = {
       status: jest.fn().mockReturnThis(),
       json: jest.fn(),
+      destroy: jest.fn(),
       headersSent: false
     };
     mockNext = jest.fn();
@@ -265,6 +266,40 @@ describe('Error Handler', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it('should destroy the socket when headers are already sent', () => {
+    mockRes.headersSent = true;
+    const error = new Error('mid-stream failure');
+
+    errorHandler(
+      error,
+      mockReq as Request,
+      mockRes as Response<ErrorEnvelope>,
+      mockNext
+    );
+
+    expect(mockRes.status).not.toHaveBeenCalled();
+    expect(mockRes.json).not.toHaveBeenCalled();
+    expect(mockRes.destroy).toHaveBeenCalledWith(error);
+  });
+
+  it('logs the error once with requestId when headers are already sent', () => {
+    mockRes.headersSent = true;
+    const error = new Error('mid-stream failure');
+
+    errorHandler(
+      error,
+      mockReq as Request,
+      mockRes as Response<ErrorEnvelope>,
+      mockNext
+    );
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      '[errorHandler]',
+      expect.objectContaining({ requestId: 'test-request-id' })
+    );
   });
 
   it('should include explicit catalog code when provided', () => {
