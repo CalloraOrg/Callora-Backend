@@ -19,9 +19,16 @@ function isUpMigration(filename: string): boolean {
   return (filename.endsWith('.sql') || filename.endsWith('.up.sql')) && !filename.endsWith('.down.sql');
 }
 
+function downMigrationName(filename: string): string {
+  return filename.endsWith('.up.sql')
+    ? filename.replace(/\.up\.sql$/, '.down.sql')
+    : filename.replace(/\.sql$/, '.down.sql');
+}
+
 /** Return policy violations without mutating the migration directory. */
 export function validateMigrationLayout(migrationDir: string): string[] {
-  const files = readdirSync(migrationDir).filter(isUpMigration);
+  const directoryEntries = readdirSync(migrationDir);
+  const files = directoryEntries.filter(isUpMigration);
   const violations: string[] = [];
   const future = files.filter((file) => {
     const number = prefix(file);
@@ -36,6 +43,10 @@ export function validateMigrationLayout(migrationDir: string): string[] {
     }
     if (!/^\d{4}_[a-z0-9][a-z0-9_-]*\.sql$/.test(file) && !/^\d{4}_[a-z0-9][a-z0-9_-]*\.up\.sql$/.test(file)) {
       violations.push(`Migration file "${file}" must use four digits and a lowercase description.`);
+    }
+    const downFile = downMigrationName(file);
+    if (!directoryEntries.includes(downFile)) {
+      violations.push(`Migration file "${file}" requires matching rollback file "${downFile}".`);
     }
     const content = readFileSync(path.join(migrationDir, file), 'utf8');
     if (/\b(?:DROP|TRUNCATE)\b|\bDELETE\s+FROM\b/i.test(content) && !/^\s*--\s*destructive-approved:\s*#[0-9]+\s*$/im.test(content)) {
