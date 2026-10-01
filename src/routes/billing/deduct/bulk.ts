@@ -1,12 +1,10 @@
 import { Router, type Response, type NextFunction, type Request } from 'express';
 import { z } from 'zod';
-import { UnauthorizedError, InternalServerError } from '../../../errors/index.js';
+import { UnauthorizedError } from '../../../errors/index.js';
 import { requireAuth, type AuthenticatedLocals } from '../../../middleware/requireAuth.js';
 import { validate } from '../../../middleware/validate.js';
-import { BillingService } from '../../../services/billing.js';
-import { createSorobanRpcBillingClient } from '../../../services/sorobanBilling.js';
+import { getBillingService } from '../billingService.js';
 import { logger } from '../../../logger.js';
-import type { Pool } from 'pg';
 
 const router = Router();
 
@@ -35,28 +33,6 @@ const bulkDeductSchema = z.object({
     .min(1, 'At least one item is required')
     .max(100, 'Batch size limit of 100 items exceeded'),
 }).strict();
-
-function getPool(req: Request): Pool {
-  const pool = req.app?.locals?.dbPool as Pool | undefined;
-  if (!pool) {
-    throw new InternalServerError('Database pool is not configured');
-  }
-  return pool;
-}
-
-function createRouteBillingService(pool: Pool): BillingService {
-  const sorobanClient = createSorobanRpcBillingClient({
-    rpcUrl: process.env.SOROBAN_BILLING_RPC_URL ?? process.env.SOROBAN_RPC_URL ?? 'http://localhost:8000',
-    contractId: process.env.SOROBAN_BILLING_CONTRACT_ID ?? 'vault_contract',
-    sourceAccount: process.env.SOROBAN_BILLING_SOURCE_ACCOUNT,
-    networkPassphrase: process.env.SOROBAN_BILLING_NETWORK_PASSPHRASE,
-    requestTimeoutMs: Number(process.env.SOROBAN_BILLING_RPC_TIMEOUT_MS ?? 5_000),
-    balanceFunctionName: process.env.SOROBAN_BILLING_BALANCE_FN ?? 'balance',
-    deductFunctionName: process.env.SOROBAN_BILLING_DEDUCT_FN ?? 'deduct',
-  });
-
-  return new BillingService(pool, sorobanClient);
-}
 
 /**
  * POST /api/billing/deduct/bulk
@@ -94,7 +70,7 @@ router.post(
       }
 
       const { items } = req.body as z.infer<typeof bulkDeductSchema>;
-      const billingService = createRouteBillingService(getPool(req));
+      const billingService = getBillingService(req);
       const results: BulkDeductItemResult[] = [];
 
       for (const item of items) {

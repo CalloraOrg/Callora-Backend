@@ -624,6 +624,30 @@ export function resetApiKeyLookupMetrics(): void {
   gatewayApiKeyLookupTotal.reset();
 }
 
+// ── Gateway usage recording failure counter ───────────────────────────────────
+//
+// Metric: gateway_usage_record_failures_total
+//   Type:    Counter
+//   Labels:  (none)
+//   Purpose: Count failures inside the proxy's background usage-recording
+//            block (usageStore.record, SSE emit, throughput metrics).  A
+//            non-zero value indicates metering silently stopped, which
+//            directly affects developer payouts and quota enforcement.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const gatewayUsageRecordFailuresTotal = new client.Counter({
+  name: 'gateway_usage_record_failures_total',
+  help: 'Total number of background usage-recording failures in the proxy',
+});
+
+register.registerMetric(gatewayUsageRecordFailuresTotal);
+
+/** Increment the usage-recording failure counter. Called by proxyRoutes when
+ *  the background usage-recording block throws. */
+export function recordUsageRecordFailure(): void {
+  gatewayUsageRecordFailuresTotal.inc();
+}
+
 // ── Proxy premature-abort counter ─────────────────────────────────────────────
 //
 // Metric: proxy_premature_aborts_total
@@ -732,6 +756,7 @@ export function resetAllMetrics(): void {
   resetReplicaMetrics();
   resetApiKeyLookupMetrics();
   resetThroughputSaturationMetrics();
+  gatewayUsageRecordFailuresTotal.reset();
 }
 
 // ── Replica routing metrics ───────────────────────────────────────────────────
