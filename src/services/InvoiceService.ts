@@ -11,7 +11,18 @@ export class InvoiceService {
   constructor(private readonly pool: Pool) {}
 
   async generateMonthlyInvoices(periodId: string): Promise<InvoiceGenerationResult> {
+    const periodMatch = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(periodId);
+    if (!periodMatch) {
+      throw new Error("periodId must use YYYY-MM format");
+    }
+
+    const year = Number(periodMatch[1]);
+    const month = Number(periodMatch[2]);
+    const periodStart = `${periodId}-01`;
+    const nextPeriodStart = `${month === 12 ? year + 1 : year}-${String(month === 12 ? 1 : month + 1).padStart(2, "0")}-01`;
+    const periodEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
     const client = await this.pool.connect();
+    const createdEvents: Array<{ invoiceId: string; developerId: string; total: number }> = [];
 
     try {
       await client.query("BEGIN");
@@ -35,7 +46,7 @@ export class InvoiceService {
         };
       }
 
-      // Aggregate previous period usage
+      // Aggregate usage strictly within the requested calendar month.
       const usage = await client.query(
         `
         SELECT
@@ -44,10 +55,11 @@ export class InvoiceService {
           COUNT(*) AS usage_count,
           SUM(amount_usdc) AS amount
         FROM usage_events
-        WHERE to_char(created_at,'YYYY-MM') = $1
+        WHERE created_at >= $2
+          AND created_at < $3
         GROUP BY user_id, api_id
         `,
-        [periodId]
+        [periodId, periodStart, nextPeriodStart]
       );
 
       let invoicesCreated = 0;
@@ -82,13 +94,13 @@ export class InvoiceService {
           (
             $1,
             $2,
-            date_trunc('month', CURRENT_DATE - interval '1 month'),
-            date_trunc('month', CURRENT_DATE) - interval '1 day',
-            $3
+            $3,
+            $4,
+            $5
           )
           RETURNING id
           `,
-          [developerId, periodId, total]
+          [developerId, periodId, periodStart, periodEnd, total]
         );
 
         const invoiceId = invoice.rows[0].id;
@@ -114,23 +126,27 @@ export class InvoiceService {
           );
         }
 
-calloraEvents.emit(
-  "invoice_created",
-  developerId,
-  {
-    invoiceId: invoiceId.toString(),
-    developerId,
-    periodId,
-    totalAmount: total.toFixed(7),
-    currency: "USDC",
-    createdAt: new Date().toISOString(),
-  }
-);
+        createdEvents.push({
+          invoiceId: invoiceId.toString(),
+          developerId,
+          total,
+        });
 
         invoicesCreated++;
       }
 
       await client.query("COMMIT");
+
+      for (const event of createdEvents) {
+        calloraEvents.emit("invoice_created", event.developerId, {
+          invoiceId: event.invoiceId,
+          developerId: event.developerId,
+          periodId,
+          totalAmount: event.total.toFixed(7),
+          currency: "USDC",
+          createdAt: new Date().toISOString(),
+        });
+      }
 
       return {
         success: true,

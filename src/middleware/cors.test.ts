@@ -100,6 +100,19 @@ describe('createCorsAllowlistMiddleware', () => {
       expect(res.headers['access-control-allow-methods']).toBeDefined();
     });
 
+    it('sets Access-Control-Allow-Headers on preflight with expected values', async () => {
+      const app = buildApp(['https://trusted.example.com']);
+      const res = await request(app)
+        .options('/test')
+        .set('Origin', 'https://trusted.example.com');
+      
+      const allowedHeaders = res.headers['access-control-allow-headers'];
+      expect(allowedHeaders).toContain('Idempotency-Key');
+      expect(allowedHeaders).toContain('If-None-Match');
+      expect(allowedHeaders).toContain('X-Correlation-Id');
+      expect(allowedHeaders).not.toContain('x-admin-api-key');
+    });
+
     it('denies preflight from disallowed origin', async () => {
       const app = buildApp(['https://trusted.example.com']);
       const res = await request(app)

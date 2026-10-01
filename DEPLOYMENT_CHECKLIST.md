@@ -2,9 +2,9 @@
 
 Use this checklist to ensure the circuit breaker and retry implementation is properly deployed and configured.
 
-## Pre-Deployment
+##Pre-Deployment
 
-### Code Review
+###Code Review
 
 - [ ] All tests pass: `npm test`
 - [ ] Test coverage ≥ 90%: `npm test -- --coverage`

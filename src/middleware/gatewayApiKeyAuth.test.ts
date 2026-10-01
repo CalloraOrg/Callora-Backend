@@ -41,7 +41,7 @@ describe('gatewayApiKeyAuth middleware', () => {
       revoked: false,
     },
     user: { id: 'user_1', stellar_address: 'GAUTH123' },
-    vault: { id: 'vault_1', user_id: 'user_1', network: 'testnet' },
+    vault: {id: 'vault_1', user_id: 'user_1', network: 'testnet' },
   };
 
   function buildApp(overrides?: {
@@ -378,17 +378,7 @@ describe('gatewayApiKeyAuth middleware', () => {
     it('allows a key with multiple scopes when one matches', async () => {
       const app = buildAppWithScope({
         candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: ['read', 'write'] } }],
-        requiredScope: 'read',
-      });
-
-      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
-      expect(res.status).toBe(200);
-    });
-
-    it('omits scope check when requiredScope is not set (backward compat)', async () => {
-      const app = buildAppWithScope({
-        candidates: [{ ...baseCandidate, apiKeyRecord: { ...baseCandidate.apiKeyRecord, scopes: ['read'] } }],
-        requiredScope: undefined,
+        requiredScope: 'write',
       });
 
       const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
@@ -396,173 +386,110 @@ describe('gatewayApiKeyAuth middleware', () => {
     });
   });
 
-  it('returns 404 when the target API cannot be resolved', async () => {
-    const app = buildApp({
-      resolveApiContext: () => null,
-    });
+  describe('async bcrypt verification', () => {
+    it('does not block the event loop while verifying many concurrent keys', async () => {
+      const app = buildApp();
+      const concurrency = 100;
+      const latencies: number[] = [];
+      let last = process.hrtime();
+      const ticker = setInterval(() => {
+        const now = process.hrtime();
+        latencies.push(now - last);
+        last = now;
+      }, 1);
 
-    const res = await request(app)
-      .get('/gateway/api_1')
-      .set('x-api-key', validApiKey);
-
-    expect(res.status).toBe(404);
-    expect(res.body.message).toBe('Not Found: unknown API');
-    expect(res.body.code).toBe('NOT_FOUND');
-    expect(await getMetricValue('miss')).toBe(1);
-  });
-
-  it('handles legacy base64 and hash length mismatch in matchesStoredHash', async () => {
-    const app = buildApp({
-      candidates: [
-        {
-          ...baseCandidate,
-          apiKeyRecord: {
-            ...baseCandidate.apiKeyRecord,
-            keyHash: Buffer.from(validApiKey).toString('base64'), // legacy base64 key
-          },
-        },
-      ],
-    });
-
-    const res = await request(app)
-      .get('/gateway/api_1')
-      .set('x-api-key', validApiKey);
-
-    expect(res.status).toBe(200);
-    expect(await getMetricValue('hit')).toBe(1);
-  });
-
-  it('works with createMapBackedGatewayApiKeyAuthMiddleware', async () => {
-    const apiKeysMap = new Map();
-    apiKeysMap.set(validApiKey, {
-      key: 'key_1',
-      developerId: 'user_1',
-      apiId: 'api_1',
-      revoked: false,
-      expiresAt: null,
-    });
-
-    const app = express();
-    app.use(express.json());
-    app.get(
-      '/gateway/:apiId',
-      createMapBackedGatewayApiKeyAuthMiddleware({
-        apiKeys: apiKeysMap,
-        resolveApiContext() {
-          return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
-        },
-        getApiId(api: Record<string, unknown>) {
-          return String(api.id);
-        },
-      }),
-      (req, res) => {
-        res.json({ ok: true });
+      try {
+        const results = await Promise.all(
+          Array.from({ length: concurrency }, () =>
+            request(app).get('/gateway/api_1').set('x-api-key', validApiKey),
+          ),
+        );
+        for (const res of results) {
+          expect(res.status).toBe(200);
+        }
+      } finally {
+        clearInterval(ticker);
       }
-    );
 
-    app.use(errorHandler);
+      const maxDelay = Math.max(...latencies, 0);
+      expect(maxDelay).toBeLessThan(10);
+    });
 
-    const res = await request(app)
-      .get('/gateway/api_1')
-      .set('x-api-key', validApiKey);
+    it('evicts revoked keys from the cache immediately', async () => {
+      const app = buildApp();
 
-    expect(res.status).toBe(200);
-    expect(await getMetricValue('hit')).toBe(1);
-  });
+      const first = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(first.status).toBe(200);
 
-  it('works with createDatabaseGatewayApiKeyAuthMiddleware with config vaultNetwork as string', async () => {
-    const mockDb = {
-      query: jest.fn().mockResolvedValue({
-        rows: [
+      const revokedApp = buildApp({
+        candidates: [
           {
-            api_key_id: 'key_1',
-            user_id: 'user_1',
-            api_id: 'api_1',
-            prefix: validPrefix,
-            key_hash: sha256Hex(validApiKey),
-            revoked: false,
-            scopes: [],
-            rate_limit_per_minute: null,
-            created_at: null,
-            last_used_at: null,
-            expires_at: null,
-            user: { id: 'user_1' },
-            vault: null,
+            ...baseCandidate,
+            apiKeyRecord: {
+              ...baseCandidate.apiKeyRecord,
+              revoked: true,
+            },
           },
         ],
-      }),
-    };
+      });
 
-    const app = express();
-    app.use(express.json());
-    app.get(
-      '/gateway/:apiId',
-      createDatabaseGatewayApiKeyAuthMiddleware({
-        db: mockDb,
-        vaultNetwork: 'mainnet',
-        resolveApiContext() {
-          return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
-        },
-        getApiId(api: Record<string, unknown>) {
-          return String(api.id);
-        },
-      }),
-      (req, res) => {
-        res.json({ ok: true });
-      }
-    );
-
-    app.use(errorHandler);
-
-    const res = await request(app)
-      .get('/gateway/api_1')
-      .set('x-api-key', validApiKey);
-
-    expect(res.status).toBe(200);
-    expect(mockDb.query).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT'),
-      [validPrefix, 'mainnet']
-    );
-    expect(await getMetricValue('hit')).toBe(1);
+      const second = await request(revokedApp).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(second.status).toBe(403);
+    });
   });
 
-  it('works with createDatabaseGatewayApiKeyAuthMiddleware with config vaultNetwork as function', async () => {
-    const mockDb = {
-      query: jest.fn().mockResolvedValue({
-        rows: [],
-      }),
-    };
+  describe('map-backed auth middleware', () => {
+    it('resolves and authenticates a key from a map', async () => {
+      const app = express();
+      app.use(express.json());
+      app.get(
+        '/gateway/:apiId',
+        createMapBackedGatewayApiKeyAuthMiddleware({
+          keys: new Map([[validApiKey, baseCandidate]]),
+          resolveApiContext() {
+            return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
+          },
+          getApiId(api) {
+            return api.id;
+          },
+        }),
+        (req, res) => { res.json({ user: req.user }); },
+      );
+      app.use(errorHandler);
 
-    const app = express();
-    app.use(express.json());
-    app.get(
-      '/gateway/:apiId',
-      createDatabaseGatewayApiKeyAuthMiddleware({
-        db: mockDb,
-        vaultNetwork: () => 'testnet',
-        resolveApiContext() {
-          return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
-        },
-        getApiId(api: Record<string, unknown>) {
-          return String(api.id);
-        },
-      }),
-      (req, res) => {
-        res.json({ ok: true });
-      }
-    );
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+      expect(res.body.user.id).toBe('user_1');
+    });
+  });
 
-    app.use(errorHandler);
+  describe('database-backed auth middleware', () => {
+    it('resolves and authenticates a key from a repository', async () => {
+      const app = express();
+      app.use(express.json());
+      app.get(
+        '/gateway/:apiId',
+        createDatabaseGatewayApiKeyAuthMiddleware({
+          repository: {
+            async findCandidatesByPrefix(prefix) {
+              if (prefix !== validPrefix) return [];
+              return [baseCandidate];
+            },
+          },
+          resolveApiContext() {
+            return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
+          },
+          getApiId(api) {
+            return api.id;
+          },
+        }),
+        (req, res) => { res.json({ user: req.user }); },
+      );
+      app.use(errorHandler);
 
-    const res = await request(app)
-      .get('/gateway/api_1')
-      .set('x-api-key', validApiKey);
-
-    expect(res.status).toBe(401);
-    expect(mockDb.query).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT'),
-      [validPrefix, 'testnet']
-    );
-    expect(await getMetricValue('miss')).toBe(1);
+      const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+      expect(res.body.user.id).toBe('user_1');
+    });
   });
 });

@@ -83,10 +83,10 @@ const mainnetConfig: StellarNetworkConfig = {
     "SOROBAN_MAINNET_RPC_URL",
     env.SOROBAN_MAINNET_RPC_URL,
   ),
-  networkPassphrase: MAINNET_NETWORK_PASSPHRASE,
+  networkPassphrase: MAINNET_NETWORK_PASSTHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
-};
+ };
 
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
@@ -204,7 +204,7 @@ export const config = {
     outageMode: env.RATE_LIMIT_OUTAGE_MODE,
     fallbackMaxRequests: env.RATE_LIMIT_FALLBACK_MAX_REQUESTS,
     fallbackWindowMs: env.RATE_LIMIT_FALLBACK_WINDOW_MS,
-    maxFallbackBuckets: env.RATE_LIMIT_FALLBACK_MAX_BUCKETS,
+    maxFallbackBuckets: env.RATE_LIMIT_MAX_FALLBACK_BUCKETS,
   },
 
   sorobanRpc:
@@ -252,7 +252,10 @@ export const config = {
   },
 
   bcrypt: {
-    costFactor: env.BCRYPT_COST_FACTOR,
+    // Number of bcrypt hashing rounds. Defaults to 12 when BCRYPT_COST_FACTOR
+    // is not configured. Keept as a constant to preserve the existing config
+    // shape while aligning with the bcryptjs `API.
+    rounds: env.BCRYPT_COST_FACTOR ?? 12,
   },
   billingTimeoutMs: env.BILLING_TIMEOUT_MS,
 
@@ -278,10 +281,10 @@ export const config = {
   bulkEndpointLimit: env.BULK_ENDPOINT_LIMIT,
 
   slowQueryAlerter: {
-    webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
+    webhookUrl: env.SLOW_QUERY_ALRERT_WEBHOOK_URL,
     p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
-    pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
+    pollIntervalMs: env.SLOW_QUERY_ALRERT_POLL_INTERVAL_MS,
+    dedupWindowMs: env.SLOW_QUERY_DEBUP_WINDOW_SECONDS * 1000,
   },
 
   memoryAccounting: {
@@ -292,11 +295,11 @@ export const config = {
   usageAnomalyDetector: {
     enabled: env.USAGE_ANOMALY_DETECTOR_ENABLED,
     multiplier: env.USAGE_ANOMALY_MULTIPLIER,
-    pollIntervalMs: env.USAGE_ANOMALY_POLL_INTERVAL_MS,
+    pollIntervalMs: env.USAGE_ANOMALY_DETECTOR_POLL_INTERVAL_MS,
     windowMs: env.USAGE_ANOMALY_WINDOW_MS,
     baselineWindows: env.USAGE_ANOMALY_BASELINE_WINDOWS,
     dedupWindowMs:
-      env.USAGE_ANOMALY_DEDUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
+      env.USAGE_ANOMALY_DEBUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
   },
 
   monthlyInvoiceJob: {
@@ -308,7 +311,7 @@ export const config = {
       Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
     webhookUrl: env.SLO_ALERT_WEBHOOK_URL,
     pollIntervalMs: env.SLO_ALERT_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLO_ALERT_DEDUP_WINDOW_MS,
+    dedupWindowMs: env.SLO_ALERT_DEBUP_WINDOW_MS,
     observationWindowMs: env.SLO_ALERT_OBSERVATION_WINDOW_MS,
     configs: env.SLO_ROUTE_CONFIGS as Array<{
       method: string;

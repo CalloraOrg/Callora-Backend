@@ -79,6 +79,13 @@ export const envSchema = z
     JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
     ADMIN_API_KEY: z.string().min(1, "ADMIN_API_KEY is required"),
     METRICS_API_KEY: z.string().min(1, "METRICS_API_KEY is required"),
+    TRUST_FORWARDED_USER_ID: z
+      .string()
+      .optional()
+      .transform((v) => v === "true")
+      .default(false),
+    FORWARDED_USER_ID_SECRET: z.string().optional(),
+    INTERNAL_GATEWAY_SECRET: z.string().optional(),
 
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
@@ -202,6 +209,16 @@ export const envSchema = z
       .default(false),
     SOROBAN_RPC_URL: z.string().url().optional(),
     SOROBAN_RPC_TIMEOUT: z.coerce.number().default(2_000),
+
+    // Billing RPC (the contract must be configured in production)
+    SOROBAN_BILLING_RPC_URL: z.string().url().optional(),
+    SOROBAN_BILLING_CONTRACT_ID: z.string().trim().min(1).optional(),
+    SOROBAN_BILLING_SOURCE_ACCOUNT: z.string().min(1).optional(),
+    SOROBAN_BILLING_NETWORK_PASSPHRASE: z.string().min(1).optional(),
+    SOROBAN_BILLING_BACKEND_SECRET_KEY: z.string().min(1).optional(),
+    SOROBAN_BILLING_RPC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+    SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
+    SOROBAN_BILLING_DEDUCT_FN: z.string().min(1).default("deduct"),
 
     // Horizon (optional)
     HORIZON_ENABLED: z
@@ -526,6 +543,14 @@ export const envSchema = z
       .default(345_600_000), // 96h = 4 days, the slow-burn window
   })
   .superRefine((values, ctx) => {
+    if (values.NODE_ENV === "production" && !values.SOROBAN_BILLING_CONTRACT_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SOROBAN_BILLING_CONTRACT_ID"],
+        message: "SOROBAN_BILLING_CONTRACT_ID is required in production",
+      });
+    }
+
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -539,6 +564,22 @@ export const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["HORIZON_URL"],
         message: "HORIZON_URL is required when HORIZON_ENABLED=true",
+      });
+    }
+
+    // In production the upstream host allowlist must be explicitly configured.
+    // The default empty allowlist rejects all upstream hosts, so operators
+    // must set UPSTREAM_ALLOWED_HOSTS to a non-empty value to proxy traffic.
+    if (
+      values.NODE_ENV === "production" &&
+      (!values.UPSTREAM_HOST_ALLOWLIST ||
+        values.UPSTREAM_HOST_ALLOWLIST.trim() === "")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["UPSTREAM_HOST_ALLOWLIST"],
+        message:
+          "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
       });
     }
   });

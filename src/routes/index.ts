@@ -40,6 +40,11 @@ import { createBillingRateLimitMiddleware } from "../middleware/rateLimit.js";
 import { createAuditRouter } from "./audit.js";
 import { createInvoicesRouter } from "./invoices.js";
 import type { AuditService } from "../services/auditService.js";
+import { createLogsRouter } from "./logs.js";
+import { createApiKeyRouter } from "./apiKeyRoutes.js";
+import { defaultApiRepository } from "../repositories/apiRepository.js";
+import { defaultDeveloperRepository } from "../repositories/developerRepository.js";
+import { adminAuth } from "../middleware/adminAuth.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
 const openApiSpec = JSON.parse(readFileSync(openApiPath, "utf8"));
@@ -72,7 +77,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     "/credits",
     createCreditsRouter({ creditsRepository: deps.creditsRepository }),
   );
-  router.use("/spike", createSpikeRouter());
+  router.use("/spike", adminAuth, createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
   router.use("/audit", createAuditRouter({ auditService: deps.auditService }));
   router.use("/invoices", createInvoicesRouter());
@@ -82,12 +87,23 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   router.use("/logs", createLogsRouter());
 
   router.use(
+    createApiKeyRouter({
+      apiRepository: deps.apiRepository ?? defaultApiRepository,
+      developerRepository: deps.developerRepository ?? defaultDeveloperRepository,
+    }),
+  );
+
+  router.use(
     "/apis",
     createApisRouter({
       apiRepository: deps.apiRepository,
       developerRepository: deps.developerRepository,
     }),
   );
+
+  const usageAccessLogMiddleware = createUsageAccessLogMiddleware({
+    redactFields: config.usageAccessLog.redactFields,
+  });
 
   // Mounted before '/usage' so the more specific paths match first.
   router.use(

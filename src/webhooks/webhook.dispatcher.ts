@@ -3,7 +3,7 @@ import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
-import { getEffectiveRetryPolicy } from '../services/webhookRetry.js';
+import { getEffectiveRetryPolicy, calculateBackoff } from '../services/webhookRetry.js';
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
 
@@ -115,7 +115,7 @@ export async function dispatchWebhook(
             }
 
             if (attempt < maxRetries - 1) {
-                const delay = baseDelayMs * Math.pow(2, attempt);
+                const delay = calculateBackoff(attempt, baseDelayMs);
                 logger.info(`[webhook] Retrying in ${delay}ms...`);
                 await sleep(delay);
             }

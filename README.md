@@ -2,6 +2,8 @@
 
 API gateway, usage metering, and billing services for the Callora API marketplace. Talks to Soroban contracts and Horizon for on-chain settlement.
 
+> For the authoritative list of routes mounted by each server entrypoint, see the [Route Map in ARCHITECTURE.md](./ARCHITECTURE.md#route-map). Some endpoint sections below describe routers that are not mounted; the map marks those explicitly. In particular, the `/v1/call` path mentioned in the gateway rate-limit configuration has no mount in either entrypoint.
+
 ## Logs Endpoint
 
 Authenticated users can submit and retrieve structured log entries via `/api/logs`.
@@ -459,7 +461,7 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 | `PROXY_TIMEOUT_MS` | No | `30000` | Proxy request timeout (ms) |
 | `REST_RATE_LIMIT_WINDOW_MS` | No | `60000` | Window length for REST API rate limiting (ms) |
 | `REST_RATE_LIMIT_MAX_REQUESTS` | No | `100` | Max REST API requests allowed per user/IP per window |
-| `RATE_LIMIT_MAX_REQUESTS` | No | `5` | Per-API-key token-bucket limit for `/api/gateway` and `/v1/call`; exceeding it returns `429` with `Retry-After` |
+| `RATE_LIMIT_MAX_REQUESTS` | No | `5` | Per-API-key token-bucket limit for `/api/gateway`; `/v1/call` has no active mount (see the [Route Map](./ARCHITECTURE.md#route-map)) |
 | `RATE_LIMIT_WINDOW_MS` | No | `60000` | Token-bucket refill window for `RATE_LIMIT_MAX_REQUESTS` (ms) |
 | `RATE_LIMIT_STORE` | No | `memory` | `memory` or `postgres`. Use `postgres` to share bucket state across multiple gateway instances |
 | `RATE_LIMIT_PG_TABLE` | No | `gateway_rate_limit_buckets` | Table name used when `RATE_LIMIT_STORE=postgres` (auto-created) |
@@ -498,6 +500,7 @@ For request-id validation, AsyncLocalStorage propagation, structured logging, an
 Each dependency uses its own bounded timeout, so a hung database or remote Stellar service cannot stall the full health response. Use `HEALTH_CHECK_DB_TIMEOUT` for PostgreSQL, `SOROBAN_RPC_TIMEOUT` for Soroban RPC, and `HORIZON_TIMEOUT` for Horizon.
 
 ## Production Shutdown Expectations
+The `/v1/call` shutdown behavior described below is not active while its router remains unmounted; see the [Route Map](./ARCHITECTURE.md#route-map).
 - The server listens for `SIGTERM` and `SIGINT` and performs a graceful shutdown.
 - `shutdownSubsystems` in `src/index.ts` registers exactly six drainable subsystems, in this order: `gateway-proxy`, `refresh-token`, `revenue-ledger-indexer`, `idempotency-sweeper`, `webhook-dispatcher`, `settlement-reconciliation`. Each is stopped (`beginShutdown()`) and then drained (`awaitIdle()`) before database resources are closed.
 - On shutdown, it stops accepting new HTTP requests, drains in-flight `/v1/call` proxy and `POST /api/refresh-token` requests, waits for in-flight webhook deliveries to finish, and only then closes database resources.
@@ -561,3 +564,4 @@ This repo is part of [Callora](https://github.com/your-org/callora):
 
 ## Security Audit Logging
 Admin events are routed into an isolated, structured Pino log stream containing the channel label `admin_action` for clean alerting profiles.
+> **Route availability:** This README includes endpoint documentation from the wider codebase. For the authoritative list of routes actually mounted by each server entrypoint, see the [Route Map in ARCHITECTURE.md](./ARCHITECTURE.md#route-map).

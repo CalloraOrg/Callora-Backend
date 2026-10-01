@@ -1,4 +1,5 @@
 import express from 'express';
+import request from 'supertest';
 import type { Server } from 'node:http';
 import { createProxyRouter } from '../routes/proxyRoutes.js';
 import { MockSorobanBilling } from '../services/billingService.js';
@@ -7,6 +8,7 @@ import { InMemoryUsageStore } from '../services/usageStore.js';
 import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { ApiKey, ApiRegistryEntry, ProxyConfig } from '../types/gateway.js';
 import { errorHandler } from '../middleware/errorHandler.js';
+import { gatewayUsageRecordFailuresTotal } from '../metrics.js';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -291,6 +293,34 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     errorSpy.mockRestore();
   });
 
+  it('increments gateway_usage_record_failures_total when usageStore.record throws', async () => {
+    const before = await getUsageRecordFailuresMetric();
+    const recordSpy = jest
+      .spyOn(usageStore, 'record')
+      .mockImplementation(() => {
+        throw new Error('usage store offline');
+      });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+    expect(res.status).toBe(200);
+
+    await yieldTick();
+
+    const after = await getUsageRecordFailuresMetric();
+    expect(after).toBeGreaterThan(before);
+
+    recordSpy.mockRestore();
+  });
+
+  it('exposes gateway_usage_record_failures_total at /api/metrics', async () => {
+    const res = await request(proxyServer).get('/api/metrics');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('gateway_usage_record_failures_total');
+  });
+
   it('is idempotent: duplicate requestIds do not double-bill', async () => {
     // Simulate a case where proxy handles same request twice
     // (In reality this is handled by usageStore idempotency directly, so let's unit-test it)
@@ -317,6 +347,12 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
 
     expect(usageStore.getEvents()).toHaveLength(1);
   });
+
+  async function getUsageRecordFailuresMetric(): Promise<number> {
+    const res = await request(proxyServer).get('/api/metrics');
+    const match = res.text.match(/gateway_usage_record_failures_total(?:\{[^}]*\})?\s+(\d+)/);
+    return match ? Number(match[1]) : 0;
+  }
 
   it('rejects proxy completely if initial balance is 0', async () => {
     billing.setBalance(TEST_DEVELOPER_ID, 0);

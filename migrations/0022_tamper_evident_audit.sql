@@ -1,4 +1,5 @@
 -- Migration: 0022_tamper_evident_audit
+-- destructive-approved: #1148
 --
 -- Privileged audit rows are append-only.  sequence_no provides a stable chain
 -- order, previous_hash links each row to its predecessor, and integrity_hash

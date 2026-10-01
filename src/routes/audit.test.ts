@@ -8,19 +8,17 @@ jest.mock('../middleware/requireAuth.js', () => ({
   }
 }));
 
-import { createAuditRouter } from './audit.js';
+import { createAuditRouter, AuditConfigRepository, AuditConfig } from './audit.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 
 describe('/api/audit mutations', () => {
   let app: express.Express;
   let recordMock: jest.Mock;
+  let repository: AuditConfigRepository;
 
-  beforeEach(() => {
-    recordMock = jest.fn().mockResolvedValue(undefined);
-    app = express();
+  const buildApp = (options: { admin?: boolean } = {}) => {
+    const app = express();
     app.use(express.json());
-    
-    // Inject a dummy auditContext
     app.use((req, _res, next) => {
       (req as any).auditContext = {
         tenantId: 'tenant-1',
@@ -29,18 +27,33 @@ describe('/api/audit mutations', () => {
         correlationId: 'corr-1',
         bodyHash: 'hash-1',
       };
+      if (options.admin) {
+        (req as any).adminActor = 'admin-user-1';
+      }
       next();
     });
-
-    app.use('/api/audit', createAuditRouter({ auditService: { record: recordMock } }));
+    app.use('/api/audit', createAuditRouter({ auditService: { record: recordMock } as any, repository }));
     app.use(errorHandler);
+    return app;
+  };
+
+  beforeEach(() => {
+    recordMock = jest.fn().mockResolved(undefined);
+    repository = {
+      list: jest.fn().mockResolved([]),
+      getById: jest.fn().mockResolved(undefined),
+      create: jest.fn().mockImplementation(async (c: AuditConfig) => c),
+      update: jest.fn().mockImplementation(async (_id: string, c: AuditConfig) => c),
+      delete: jest.fn().mockResolved(true),
+    };
+    app = buildApp();
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  it('GET /api/audit returns empty list initially', async () => {
+  it('GQT /api/audit returns empty list initially', async () => {
     const res = await request(app).get('/api/audit');
     expect(res.status).toBe(200);
     expect(res.body.data).toBeInstanceOf(Array);
@@ -87,16 +100,13 @@ describe('/api/audit mutations', () => {
   });
 
   it('PUT /api/audit/:id updates config and logs AUDIT_CONFIG_UPDATE', async () => {
-    // Create first
-    const createRes = await request(app).post('/api/audit').send({ targetEndpoint: '/v1', enabled: true });
-    const id = createRes.body.id;
-    recordMock.mockClear();
+    const existing: AuditConfig = { id: 'config-1', targetEndpoint: '/v1', enabled: true, createdBy: 'dev-user-123' };
+    (repository.getById as jest.Mock).mockResolvedOnce(existing);
 
-    // Update
-    const updateRes = await request(app).put(`/api/audit/${id}`).send({ targetEndpoint: '/v2' });
+    const updateRes = await request(app).put('/api/audit/config-1').send({ targetEndpoint: '/v2' });
     expect(updateRes.status).toBe(200);
     expect(updateRes.body.targetEndpoint).toBe('/v2');
-    expect(updateRes.body.enabled).toBe(true); // kept old value
+    expect(updateRes.body.enabled).toBe(true);
 
     expect(recordMock).toHaveBeenCalledTimes(1);
     const callArgs = recordMock.mock.calls[0][0];
@@ -106,24 +116,21 @@ describe('/api/audit mutations', () => {
   });
 
   it('PUT /api/audit/:id rejects invalid data', async () => {
-    const createRes = await request(app).post('/api/audit').send({ targetEndpoint: '/v1', enabled: true });
-    const id = createRes.body.id;
-    
-    const res = await request(app).put(`/api/audit/${id}`).send({ enabled: 'not-a-bool' });
+    (repository.getById as jest.Mock).mockResolvedOnce({ id: 'config-1', targetEndpoint: '/v1', enabled: true, createdBy: 'dev-user-123' });
+    const res = await request(app).put('/api/audit/config-1').send({ enabled: 'not-a-bool' });
     expect(res.status).toBe(400);
   });
 
   it('PUT /api/audit/:id returns 404 for unknown ID', async () => {
+    (repository.getById as jest.Mock).mockResolved(undefined);
     const res = await request(app).put('/api/audit/9999').send({ targetEndpoint: '/x' });
     expect(res.status).toBe(404);
   });
 
   it('DELETE /api/audit/:id deletes config and logs AUDIT_CONFIG_DELETE', async () => {
-    const createRes = await request(app).post('/api/audit').send({ targetEndpoint: '/del', enabled: false });
-    const id = createRes.body.id;
-    recordMock.mockClear();
+    (repository.getById as jest.Mock).mockResolvedOnce({ id: 'config-1', targetEndpoint: '/del', enabled: false, createdBy: 'dev-user-123' });
 
-    const delRes = await request(app).delete(`/api/audit/${id}`);
+    const delRes = await request(app).delete('/api/audit/config-1');
     expect(delRes.status).toBe(204);
 
     expect(recordMock).toHaveBeenCalledTimes(1);
@@ -134,19 +141,41 @@ describe('/api/audit mutations', () => {
   });
 
   it('DELETE /api/audit/:id returns 404 for unknown ID', async () => {
+    (repository.getById as jest.Mock).mockResolved(undefined);
     const res = await request(app).delete('/api/audit/9999');
     expect(res.status).toBe(404);
   });
-  
+
   it('does not fail request if audit logging fails', async () => {
-    recordMock.mockRejectedValueOnce(new Error('DB error'));
-    
+    recordMock.mockRejectedOnce(new Error('DB error'));
+
     const res = await request(app).post('/api/audit').send({
       targetEndpoint: '/fail-log',
       enabled: true
     });
 
-    expect(res.status).toBe(201); // Request still succeeds
+    expect(res.status).toBe(201);
     expect(recordMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('attributes mutations to adminActor when present', async () => {
+    app = buildApp({ admin: true });
+    const res = await request(app).post('/api/audit').send({
+      targetEndpoint: '/admin-created',
+      enabled: true,
+    });
+    expect(res.status).toBe(201);
+    const callArgs = recordMock.mock.calls[0][0];
+    expect(callArgs.actor).toBe('admin-user-1');
+  });
+
+  it('non-admin users cannot modify or delete records they do not own', async () => {
+    (repository.getById as jest.Mock).mockResolved({ id: 'config-1', targetEndpoint: '/v1', enabled: true, createdBy: 'other-user' });
+    const updateRes = await request(app).put('/api/audit/config-1').send({ targetEndpoint: '/v2' });
+    expect(updateRes.status).toBe(403);
+
+    (repository.getById as jest.Mock).mockResolved({ enabled: true, id: 'config-1', targetEndpoint: '/v1', createdBy: 'other-user' });
+    const delRes = await request(app).delete('/api/audit/config-1');
+    expect(delRes.status).toBe(403);
   });
 });

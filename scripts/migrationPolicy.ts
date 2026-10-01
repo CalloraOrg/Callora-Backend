@@ -11,7 +11,7 @@ const LEGACY_UNNUMBERED = new Set([
 ]);
 
 function prefix(filename: string): number | null {
-  const match = filename.match(/^(\d{4})_/);
+  const match = filename.match(/^(\d{3,4})_/);
   return match ? Number(match[1]) : null;
 }
 
@@ -19,9 +19,16 @@ function isUpMigration(filename: string): boolean {
   return (filename.endsWith('.sql') || filename.endsWith('.up.sql')) && !filename.endsWith('.down.sql');
 }
 
+function downMigrationName(filename: string): string {
+  return filename.endsWith('.up.sql')
+    ? filename.replace(/\.up\.sql$/, '.down.sql')
+    : filename.replace(/\.sql$/, '.down.sql');
+}
+
 /** Return policy violations without mutating the migration directory. */
 export function validateMigrationLayout(migrationDir: string): string[] {
-  const files = readdirSync(migrationDir).filter(isUpMigration);
+  const directoryEntries = readdirSync(migrationDir);
+  const files = directoryEntries.filter(isUpMigration);
   const violations: string[] = [];
   const future = files.filter((file) => {
     const number = prefix(file);
@@ -37,6 +44,10 @@ export function validateMigrationLayout(migrationDir: string): string[] {
     if (!/^\d{4}_[a-z0-9][a-z0-9_-]*\.sql$/.test(file) && !/^\d{4}_[a-z0-9][a-z0-9_-]*\.up\.sql$/.test(file)) {
       violations.push(`Migration file "${file}" must use four digits and a lowercase description.`);
     }
+    const downFile = downMigrationName(file);
+    if (!directoryEntries.includes(downFile)) {
+      violations.push(`Migration file "${file}" requires matching rollback file "${downFile}".`);
+    }
     const content = readFileSync(path.join(migrationDir, file), 'utf8');
     if (/\b(?:DROP|TRUNCATE)\b|\bDELETE\s+FROM\b/i.test(content) && !/^\s*--\s*destructive-approved:\s*#[0-9]+\s*$/im.test(content)) {
       violations.push(`Destructive migration "${file}" requires -- destructive-approved: #<issue>.`);
@@ -44,13 +55,19 @@ export function validateMigrationLayout(migrationDir: string): string[] {
   }
 
   const numbers = future.map(prefix).filter((number): number is number => number !== null).sort((a, b) => a - b);
-  for (let index = 0; index < numbers.length; index += 1) {
+  for (let index = 1; index < numbers.length; index += 1) {
+    if (numbers[index] === numbers[index - 1]) {
+      violations.push(`Duplicate new migration prefix ${numbers[index]}.`);
+    }
+  }
+
+  const uniqueNumbers = Array.from(new Set(numbers));
+  for (let index = 0; index < uniqueNumbers.length; index += 1) {
     const expected = LEGACY_MAX_PREFIX + 1 + index;
-    if (numbers[index] !== expected) {
-      violations.push(`Migration sequence must continue at ${String(expected).padStart(4, '0')}; found ${String(numbers[index]).padStart(4, '0')}.`);
+    if (uniqueNumbers[index] !== expected) {
+      violations.push(`Migration sequence must continue at ${String(expected).padStart(4, '0')}; found ${String(uniqueNumbers[index]).padStart(4, '0')}.`);
       break;
     }
-    if (index > 0 && numbers[index] === numbers[index - 1]) violations.push(`Duplicate new migration prefix ${numbers[index]}.`);
   }
   return violations;
 }

@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { GenericContainer, StartedTestContainer } from 'testcontainers';
 import pkg from 'pg';
-const { Pool } = pkg;
+const { Pool } = pg;
 
 const TEST_ADMIN_API_KEY = 'test-admin-api-key';
 
@@ -43,7 +43,7 @@ describe('Admin Audit Log Integration Tests (with Testcontainers)', () => {
         event          VARCHAR(255) NOT NULL,
         actor          VARCHAR(255) NOT NULL,
         tenant_id      VARCHAR(255),
-        client_ip      VARCHAR(255),
+        client_ip       VARCHAR(255),
         user_agent     TEXT,
         correlation_id VARCHAR(255),
         body_hash      TEXT,
@@ -173,7 +173,7 @@ describe('Admin Audit Log Integration Tests (with Testcontainers)', () => {
       actor: 'admin-api-key',
       createdAt: new Date('2026-07-26T10:05:00.000Z'),
     });
-    await seedAuditLog({
+    await seedAuditLog( {
       id: 'audit-3',
       event: 'LIST_USERS',
       actor: 'admin-api-key',
@@ -229,5 +229,10 @@ describe('Admin Audit Log Integration Tests (with Testcontainers)', () => {
     const res = await request(app).get('/api/admin/audit');
     expect(res.status).toBe(401);
     expect(res.body.code).toBe('UNAUTHORIZED');
+  });
+
+  it('should return 401 for unauthenticated GET /api/audit', async () => {
+    const res = await request(app).get('/api/audit');
+    expect(res.status).toBe(401);
   });
 });
