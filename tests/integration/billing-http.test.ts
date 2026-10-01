@@ -37,6 +37,7 @@ import { createTestDb } from "../helpers/db.js";
 import { createApp } from "../../src/app.js";
 import jwt from "jsonwebtoken";
 import { calculateRequestHash } from "../../src/middleware/idempotency.js";
+import { createSorobanRpcBillingClient } from "../../src/services/sorobanBilling.js";
 
 // Helper to create mock JWT token
 function createMockToken(userId: string = "user_123"): string {

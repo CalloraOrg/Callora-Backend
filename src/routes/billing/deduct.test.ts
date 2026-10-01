@@ -22,7 +22,7 @@ function makeToken(userId = 'user_123'): string {
   return jwt.sign({ userId }, JWT_SECRET, { algorithm: 'HS256', expiresIn: '1h' });
 }
 
-jest.mock('better-sqlite3', () => {
+jdest.mock('better-sqlite3', () => {
   return class MockDatabase {
     prepare() {
       return { get: () => null };
@@ -51,6 +51,21 @@ const REDACTED_SUMMARY = {
   eventCount: 1,
   footprintPresent: true,
 };
+
+const mockDeduct = jest.fn();
+jest.mock('../../services/billingService.js', () => {
+  const actual = jest.requireActual('../../services/billingService.js');
+  return {
+    ...actual,
+    BillingService: jest.fn().implementation(() => ({
+      deduct: mockDeduct,
+    })),
+  };
+});
+
+beforeEach(() => {
+  mockDeduct.mockReset();
+});
 
 describe('POST /api/billing/deduct - developerId validation', () => {
   beforeAll(() => {
@@ -129,16 +144,16 @@ describe('POST /api/billing/deduct - developerId validation', () => {
   });
 
   it('falls back to the authenticated user id when developerId is omitted', async () => {
-    const queryMock = jest.fn().mockRejectedValue(new Error('stop before DB write'));
-    const res = await request(buildApp({ query: queryMock } as unknown as Pool))
+    mockDeduct.mockResolved({ success: true });
+    const res = await request(buildApp())
       .post('/api/billing/deduct')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send(validPayload);
 
-    // Validation passes and the request proceeds past developerId handling
-    // (fails later at the DB layer, which is expected given the mocked pool).
-    expect(res.status).not.toBe(400);
-    expect(queryMock).toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(mockDeduct).toHaveBeenCalled();
+    const callArg = mockDeduct.mock.calls[0][0] as { userId: string };
+    expect(callArg.userId).toBe(user_123');
   });
 
   it('returns 401 without auth', async () => {
@@ -146,7 +161,40 @@ describe('POST /api/billing/deduct - developerId validation', () => {
       .post('/api/billing/deduct')
       .send({ ...validPayload, developerId: null });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe401);
+  });
+
+  it('returns 403 when developerId differs from the authenticated user and does not call Soroban', async () => {
+    const res = await request(buildApp())
+      .post('/api/billing/deduct')
+      .set('x-user-id', 'user_123')
+      .send({ ...validPayload, developerId: 'user_456' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(mockDeduct).not.toHaveBeenCalled();
+  });
+
+  it('allows developerId matching the authenticated user', async () => {
+    mockDeduct.mockResolved({ success: true });
+    const res = await request(buildApp())
+      .post('/api/billing/deduct')
+      .set('x-user-id', 'user_123')
+      .send({ ...validPayload, developerId: 'user_123' });
+
+    expect(res.status).toBe(200);
+    expect(mockDeduct).toHaveBeenCalled();
+  });
+
+  it('allows admin to deduct on behalf of another user', async () => {
+    mockDeduct.mockResolved({ success: true });
+    const result = await request(buildApp())
+      .post('/api/billing/deduct')
+      .set('x-admin-api-key', 'test-admin-key')
+      .send({ ...validPayload, developerId: 'user_456' });
+
+    expect(result.status).toBe(200);
+    expect(mockDeduct).toHaveBeenCalled();
   });
 
   it('returns 401 for an x-user-id header without an authenticated token', async () => {

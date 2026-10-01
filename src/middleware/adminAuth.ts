@@ -1,22 +1,34 @@
 import { createHash } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import jwt from 'jsonsonnebb';
+
 import { InternalServerError, UnauthorizedError } from '../errors/index.js';
 import { ALLOWED_ALGORITHMS } from './requireAuth.js';
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import { timingSafeStringEqual } from '../lib/timingSafe.js';
 
-interface AdminJwtPayload { role: string; [key: string]: unknown }
+interface AdminJwtPayload {
+  role: string;
+  [key: string]: unknown;
+}
 
 // #1266: constant-time comparison lives in src/lib/timingSafe.ts (SHA-256
 // digests compared with crypto.timingSafeEqual, so key length is not leaked).
 
-/** Require the configured admin API key or an admin-role JWT. */
+/**
+ * Admin authentication middleware.
+ *
+ * Authenticates admin callers via an API key or a Bearer JWT with the
+ * `admin` role. On success it sets `authenticatedAdmin` and `adminActor` in
+ * `res.locals` so downstream routes can authorize cross-user actions and audit
+ * log the actor.
+ */
 export function adminAuth(req: Request, res: Response, next: NextFunction): void {
   const apiKey = req.header('x-admin-api-key');
   const configuredKey = process.env.ADMIN_API_KEY;
   if (apiKey && configuredKey && timingSafeStringEqual(apiKey, configuredKey)) {
     res.locals.adminActor = 'admin-api-key';
+    res.locals.authenticatedAdmin = true;
     next();
     return;
   }
@@ -47,6 +59,7 @@ export function adminAuth(req: Request, res: Response, next: NextFunction): void
 
       if (payload.role === 'admin') {
         res.locals.adminActor = (payload.sub as string) || (payload.email as string) || 'admin-jwt';
+        res.locals.authenticatedAdmin = true;
         next();
         return;
       }
