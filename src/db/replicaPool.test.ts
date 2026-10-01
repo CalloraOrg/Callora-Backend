@@ -71,6 +71,16 @@ function makePoolStub(rows: unknown[] = [], shouldReject = false) {
       if (shouldReject) throw new Error('Pool connection error');
       return { rows };
     }),
+    connect: jest.fn(async () => {
+      if (shouldReject) throw new Error('Pool connection error');
+      return {
+        query: jest.fn(async (text: string, params?: unknown[]) => {
+          calls.push({ text, params });
+          return { rows };
+        }),
+        release: jest.fn(),
+      };
+    }),
     end: jest.fn().mockResolvedValue(undefined),
     _calls: calls,
   };
@@ -198,6 +208,13 @@ describe('ReplicaPool — no replicas configured', () => {
     await rp.write('INSERT 1');
     expect(mockMetrics.recordPrimaryQuery).toHaveBeenCalledTimes(1);
   });
+
+  test('getReadClient() acquires client from primary when no replicas configured', async () => {
+    const client = await rp.getReadClient();
+    expect(primary.connect).toHaveBeenCalledTimes(1);
+    expect(client).toBeDefined();
+    expect(typeof client.query).toBe('function');
+  });
 });
 
 // ── Reads routed to replicas ──────────────────────────────────────────────────
@@ -247,6 +264,21 @@ describe('ReplicaPool — reads routed to replicas', () => {
     await rp.write('INSERT 1');
     expect(mockMetrics.recordPrimaryQuery).toHaveBeenCalledTimes(1);
     expect(mockMetrics.recordReplicaQuery).not.toHaveBeenCalled();
+  });
+
+  test('getReadClient() routes client acquisition to replica and falls back to primary on error', async () => {
+    const client1 = await rp.getReadClient();
+    expect(replica1.connect).toHaveBeenCalledTimes(1);
+    expect(primary.connect).not.toHaveBeenCalled();
+    expect(client1).toBeDefined();
+
+    // Now make replica throw on connect to test fallback to primary
+    replica2.connect.mockRejectedValueOnce(new Error('Replica connection refused'));
+    const client2 = await rp.getReadClient();
+    expect(replica2.connect).toHaveBeenCalledTimes(1);
+    expect(primary.connect).toHaveBeenCalledTimes(1);
+    expect(mockMetrics.recordReplicaFailure).toHaveBeenCalledTimes(1);
+    expect(client2).toBeDefined();
   });
 });
 

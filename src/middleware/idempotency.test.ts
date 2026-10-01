@@ -12,10 +12,7 @@ import {
 
 function makeDb(rows: Record<string, unknown>[] = []) {
   const mock = { query: jest.fn() };
-  // First two calls: DELETE expired keys (cleanExpiredTTL + parameterized)
-  mock.query.mockResolvedValueOnce({ rows: [] });
-  mock.query.mockResolvedValueOnce({ rows: [] });
-  // Third call: SELECT existing key
+  // First call: SELECT existing, non-expired key
   mock.query.mockResolvedValueOnce({ rows });
   // All subsequent calls (INSERT / UPDATE / DELETE): succeed
   mock.query.mockResolvedValue({ rows: [] });
@@ -190,7 +187,7 @@ describe('idempotencyMiddleware — unit', () => {
     expect(mockDb.query).not.toHaveBeenCalled();
   });
 
-  it('deletes expired keys and inserts started record for new key', async () => {
+  it('does not delete on the request path and inserts a new key', async () => {
     const mockDb = makeDb([]);
     const req = makeReq() as Request;
     const res = makeRes();
@@ -201,25 +198,17 @@ describe('idempotencyMiddleware — unit', () => {
 
     expect(mockDb.query).toHaveBeenNthCalledWith(
       1,
-      expect.stringContaining('DELETE FROM idempotency_store WHERE expires_at < NOW()'),
-      []
-    );
-    expect(mockDb.query).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining('DELETE FROM idempotency_store WHERE expires_at < $1'),
-      [expect.any(String)]
-    );
-    expect(mockDb.query).toHaveBeenNthCalledWith(
-      3,
       expect.stringContaining('SELECT request_hash'),
       ['user-1', 'test-key-123']
     );
     expect(mockDb.query).toHaveBeenNthCalledWith(
-      4,
+      2,
       expect.stringContaining('INSERT INTO idempotency_store'),
       ['user-1', 'test-key-123', expect.any(String), 'started', expect.any(String)]
     );
-    expect(mockDb.query.mock.calls[3][0]).toContain('ON CONFLICT (scope, idempotency_key)');
+    expect(mockDb.query.mock.calls[1][0]).toContain('ON CONFLICT (scope, idempotency_key)');
+    expect(mockDb.query.mock.calls[0][0]).toContain('expires_at > NOW()');
+    expect(mockDb.query.mock.calls.filter(([text]: [string]) => text.includes('DELETE FROM idempotency_store WHERE expires_at')).length).toBe(0);
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -487,10 +476,8 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
 
   it('handles saveResponse database error gracefully', async () => {
     const mockDb = { query: jest.fn() };
-    mockDb.query.mockResolvedValueOnce({ rows: [] }); // DELETE expired
-    mockDb.query.mockResolvedValueOnce({ rows: [] }); // DELETE parameterized
     mockDb.query.mockResolvedValueOnce({ rows: [] }); // SELECT empty
-    mockDb.query.mockResolvedValueOnce({ rows: [] }); // INSERT started
+    mockDb.query.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // INSERT started
     mockDb.query.mockRejectedValueOnce(new Error('DB error')); // UPDATE fails
 
     const req = makeReq() as Request;

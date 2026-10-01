@@ -87,9 +87,14 @@ import {
 import type { RestRateLimitOptions } from "./middleware/restRateLimit.js";
 import { createPerDevConcurrencyMiddleware } from "./middleware/perDevConcurrency.js";
 import { auditEnrichMiddleware } from "./middleware/auditEnrich.js";
+import { asyncHandler } from "./utils/asyncHandler.js";
 import { createRouteBodyLimitMiddleware } from "./middleware/routeBodyLimit.js";
 import { metricsMiddleware, metricsEndpoint } from "./metrics.js";
 import { config } from "./config/index.js";
+import {
+  createSorobanBillingService,
+  type SorobanBillingDependencies,
+} from "./services/createSorobanBillingService.js";
 import {
   BadRequestError,
   ForbiddenError,
@@ -103,11 +108,11 @@ import OpenApiValidator from "express-openapi-validator";
 import {
   envelopeMiddleware,
   createResponseValidatorMiddleware,
-  buildErrorEnvelope,
 } from "./middleware/envelope.js";
+import { openApiErrorHandler } from "./middleware/openApiErrorHandler.js";
 //import * as OpenApiValidator from 'express-openapi-validator';
 
-interface AppDependencies {
+interface AppDependencies extends SorobanBillingDependencies {
   usageEventsRepository?: UsageEventsRepository;
   healthCheckConfig?: HealthCheckConfig;
   vaultRepository?: VaultRepository;
@@ -171,6 +176,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
   // Set database pool in locals for billing routes
   app.locals.dbPool = pool;
+  app.locals.billingService = createSorobanBillingService(pool, dependencies);
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
   const vaultRepository =
@@ -310,7 +316,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
         "x-request-id", // Added for tracing
       ],
       credentials: true,
-      exposedHeaders: ["X-Request-Id"],
+      exposedHeaders: ["X-Request-Id", "Retry-After", "ETag", "X-Correlation-Id", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"],
       // Reduce preflight cache time in production for security
       maxAge: isProduction ? 600 : 86400, // 10 minutes vs 24 hours
       optionsSuccessStatus: 204, // No content for preflight
@@ -466,7 +472,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   app.get(
     "/api/developers/apis",
     requireAuth,
-    async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+    asyncHandler(async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
       const requestId = getRequestId(req);
       const user = res.locals.authenticatedUser;
       if (!user) {
@@ -536,7 +542,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
           requestId,
         ),
       );
-    },
+    }),
   );
 
   /**
@@ -572,7 +578,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   app.get(
     "/api/developers/analytics",
     requireAuth,
-    async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+    asyncHandler(async (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
       const requestId = getRequestId(req);
       const user = res.locals.authenticatedUser;
       if (!user) {
@@ -624,7 +630,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
       const analytics = buildDeveloperAnalytics(events, groupBy, includeTop);
       res.json(successEnvelope(analytics, requestId));
-    },
+    }),
   );
 
   // Deposit transaction preparation endpoint
@@ -753,41 +759,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
 
   // OpenAPI validation errors
-  app.use(
-    (
-      err: Error & {
-        status?: number;
-        errors?: unknown[];
-      },
-      req: express.Request,
-      res: express.Response,
-      next: express.NextFunction,
-    ) => {
-      if (!err.status) {
-        return next(err);
-      }
-
-      const requestId = req.id || "unknown";
-      const details = Array.isArray(err.errors)
-        ? err.errors.map((e, i) => ({
-            field: `body.${i}`,
-            message:
-              typeof e === "object" && e !== null && "message" in e
-                ? String((e as { message: unknown }).message)
-                : String(e),
-            code: "INVALID_BODY",
-          }))
-        : undefined;
-
-      const envelope = buildErrorEnvelope(
-        "BAD_REQUEST",
-        err.message,
-        requestId,
-        details,
-      );
-      res.status(err.status).json(envelope);
-    },
-  );
+  app.use(openApiErrorHandler);
 
   app.use(errorHandler);
 

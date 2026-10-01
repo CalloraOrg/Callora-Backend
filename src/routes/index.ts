@@ -49,6 +49,7 @@ import { InMemorySettlementStore } from "../services/settlementStore.js";
 import { InMemoryUsageStore } from "../services/usageStore.js";
 import { requireAuth, type AuthenticatedLocals } from "../middleware/requireAuth.js";
 import { apiKeyRepository } from "../repositories/apiKeyRepository.js";
+import { adminAuth } from "../middleware/adminAuth.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
 const openApiSpec = JSON.parse(readFileSync(openApiPath, "utf8"));
@@ -81,7 +82,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     "/credits",
     createCreditsRouter({ creditsRepository: deps.creditsRepository }),
   );
-  router.use("/spike", createSpikeRouter());
+  router.use("/spike", adminAuth, createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
   router.use(
     "/developers",
