@@ -3,86 +3,27 @@ import type { RefreshToken } from '../types/auth.js';
 import type { CursorPayload } from '../lib/cursorPagination.js';
 import { readQuery, writeQuery } from '../db.js';
 
-/** Injectable queryable for tests. */
 export interface RefreshTokenRepositoryQueryable {
   query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[]; rowCount?: number | null }>;
 }
 
 export interface RefreshTokenRepository {
-  /**
-   * Store a new refresh token in the database
-   */
   createRefreshToken(token: Omit<RefreshToken, 'id'> & { id?: string }): Promise<RefreshToken>;
-
-  /**
-   * Find refresh token by ID and user ID
-   */
   findRefreshTokenById(tokenId: string, userId: string): Promise<RefreshToken | null>;
-
-  /**
-   * Find refresh token by hash (for verification)
-   */
   findRefreshTokenByHash(tokenHash: string, userId: string): Promise<RefreshToken | null>;
-
-  /**
-   * Update the last used timestamp for a refresh token
-   */
   updateLastUsed(tokenId: string, userId: string): Promise<void>;
-
-  /**
-   * Revoke a refresh token
-   */
   revokeRefreshToken(tokenId: string, userId: string): Promise<void>;
-
-  /**
-   * Revoke all refresh tokens belonging to a token family atomically
-   */
   revokeFamily(familyId: string, userId: string): Promise<void>;
-
-  /**
-   * Revoke all refresh tokens for a user
-   */
   revokeAllUserTokens(userId: string): Promise<void>;
-
-  /**
-   * Clean up expired and revoked tokens
-   */
   cleanupExpiredTokens(): Promise<number>;
-
-  /**
-   * Count active refresh tokens for a user
-   */
   countActiveTokens(userId: string): Promise<number>;
-
-  /**
-   * List refresh tokens for a user with cursor-based pagination.
-   * Uses stable keyset ordering over (created_at DESC, id DESC) to
-   * guarantee consistent results under concurrent writes.
-   *
-   * @param userId     - The user whose tokens to list
-   * @param limit      - Maximum number of tokens to return (clamped to 1..100)
-   * @param afterCursor - Optional cursor encoding the last seen (created_at, id)
-   * @returns          - Array of refresh tokens and a hasMore flag
-   */
-  listRefreshTokens(
-    userId: string,
-    limit: number,
-    afterCursor?: CursorPayload,
-  ): Promise<{ tokens: RefreshToken[]; hasMore: boolean }>;
+  listRefreshTokens(userId: string, limit: number, afterCursor?: CursorPayload): Promise<{ tokens: RefreshToken[]; hasMore: boolean }>;
 }
 
-/**
- * Database implementation of RefreshTokenRepository
- * This should be adapted to your specific database setup
- */
 export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
   private readonly readDb: RefreshTokenRepositoryQueryable;
   private readonly writeDb: RefreshTokenRepositoryQueryable;
 
-  /**
-   * @param db - Optional injectable queryable (test helper).
-   *   When omitted, reads route to replicas and writes route to the primary.
-   */
   constructor(db?: RefreshTokenRepositoryQueryable) {
     if (db) {
       this.readDb = db;
@@ -127,9 +68,7 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
       [tokenId, userId]
     );
 
-    if (result.rows.length === 0) {
-      return null;
-    }
+    if (result.rows.length === 0) return null;
 
     const row = result.rows[0] as Record<string, unknown>;
     return {
@@ -152,9 +91,7 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
       [tokenHash, userId]
     );
 
-    if (result.rows.length === 0) {
-      return null;
-    }
+    if (result.rows.length === 0) return null;
 
     const row = result.rows[0] as Record<string, unknown>;
     return {
@@ -229,16 +166,11 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
     limit: number,
     afterCursor?: CursorPayload,
   ): Promise<{ tokens: RefreshToken[]; hasMore: boolean }> {
-    // Fetch one extra row to determine if there are more results beyond the limit.
     const fetchLimit = limit + 1;
-
     let query: string;
     let params: unknown[];
 
     if (afterCursor) {
-      // Keyset pagination: rows strictly after the cursor position.
-      // Ordering is (created_at DESC, id DESC) so we fetch rows that are
-      // either created earlier, or same timestamp with a smaller id.
       query = `
         SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id
         FROM refresh_tokens

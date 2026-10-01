@@ -161,20 +161,28 @@ routes rather than by the cardinality of HTTP traffic.
 
 The worker follows the same `{ start, stop, beginShutdown, awaitIdle }`
 factory pattern used by other background jobs (`slowQueryAlerter`,
-`anomalyDetector`, `revenueLedgerIndexer`). It registers as a
-`DrainableSubsystem` in `src/index.ts` so graceful shutdown drains
-the in-flight tick before closing the HTTP server.
+`anomalyDetector`, `revenueLedgerIndexer`).
 
 ## Graceful shutdown
 
-The alerter is added to `shutdownSubsystems` in `src/index.ts` as
-`slo-alert-job`. On SIGTERM/SIGINT:
+The alerter is **not** registered in `shutdownSubsystems` in
+`src/index.ts`, so graceful shutdown does **not** drain its in-flight
+tick before closing the HTTP server. What actually happens on
+SIGTERM/SIGINT:
 
-1. `beginShutdown` clears the timer and refuses new ticks.
-2. `awaitIdle` waits for the currently running tick to finish posting
-   its webhook.
-3. `stop` is then called from `closeAllDataResources` for belt-and-
-   braces idempotency.
+1. The job is constructed only when `SLO_ALERT_WEBHOOK_URL` is set and at
+   least one `SLO_ROUTE_CONFIGS` entry exists.
+2. Nothing calls `beginShutdown()` / `awaitIdle()` for it during the 30 s
+   drain window.
+3. `stop()` is called from `closeAllDataResources` (the `closeDatabase`
+   callback) after that window: the timer is cleared, but a tick that is
+   already in flight — including a webhook POST it started — is not awaited.
+
+The `beginShutdown()` / `awaitIdle()` methods exist on the factory and are
+covered by `src/workers/sloAlertJob.test.ts`; appending the job to
+`shutdownSubsystems` so its in-flight tick is awaited is a follow-up code
+change. See
+[Graceful Shutdown → Jobs that are cancelled, not drained](./graceful-shutdown.md#jobs-that-are-cancelled-not-drained).
 
 ## Testing
 

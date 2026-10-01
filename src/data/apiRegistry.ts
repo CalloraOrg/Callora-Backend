@@ -78,16 +78,17 @@ export function resolveEndpointPrice(
   endpoints: EndpointPricing[],
   path: string,
 ): EndpointPricing {
-  // Normalize: strip leading slash for comparison
-  const normalised = path.startsWith('/') ? path : `/${path}`;
+  const normalisePath = (value: string): string =>
+    value.startsWith('/') ? value : `/${value}`;
+  const normalised = normalisePath(path);
 
   // Try exact prefix match (longest first)
   const sorted = [...endpoints]
     .filter((e) => e.path !== '*')
-    .sort((a, b) => b.path.length - a.path.length);
+    .sort((a, b) => normalisePath(b.path).length - normalisePath(a.path).length);
 
   for (const ep of sorted) {
-    const epPath = ep.path.startsWith('/') ? ep.path : `/${ep.path}`;
+    const epPath = normalisePath(ep.path);
     if (normalised.startsWith(epPath)) {
       return ep;
     }
@@ -103,7 +104,7 @@ export function resolveEndpointPrice(
 
 // ── Mock data for development / testing ─────────────────────────────────────
 
-const SEED_ENTRIES: ApiRegistryEntry[] = [
+const DEV_SEED_ENTRIES: ApiRegistryEntry[] = [
   {
     id: 'api_001',
     slug: 'weather-api',
@@ -126,6 +127,14 @@ const SEED_ENTRIES: ApiRegistryEntry[] = [
     ],
   },
 ];
+
+/**
+ * Seed entries are only used outside of production. In production the
+ * registry must be populated from a trusted source, and the upstream
+ * allowlist must be provided explicitly via UPSTREAM_HOST_ALLOWLIST.
+ */
+const SEED_ENTRIES: ApiRegistryEntry[] =
+  process.env.NODE_ENV === 'production' ? [] : DEV_SEED_ENTRIES;
 
 export function createApiRegistry(
   entries: ApiRegistryEntry[] = SEED_ENTRIES,

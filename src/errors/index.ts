@@ -4,6 +4,7 @@
  */
 
 import type { ErrorCode as ErrorCodeType } from "./codes.js";
+import { redactSimulationDetails } from "../lib/simulationDiagnostics.js";
 
 // Re-export ErrorCode from the generated codes module
 export { ErrorCode, isErrorCode, type ErrorCode as ErrorCodeType } from "./codes.js";
@@ -87,6 +88,60 @@ export class BadGatewayError extends AppError {
     super(message, 502, code ?? "BAD_GATEWAY");
     this.name = "BadGatewayError";
   }
+}
+
+/**
+ * A Soroban simulation (pre-flight) returned a failure response.
+ *
+ * This is a `BadGatewayError` (502) carrying the canonical
+ * `SIMULATION_FAILED` code plus a *redacted* summary of the RPC diagnostics,
+ * so it travels through the global error handler and therefore gets the
+ * standard error envelope and `requestId` like every other failure.
+ *
+ * Redaction happens in the constructor rather than at the call site: raw
+ * simulation payloads contain account addresses, balances, XDR and
+ * signatures, so no caller can accidentally publish them by constructing
+ * this error with unredacted input.
+ */
+export class SimulationFailedError extends BadGatewayError {
+  /**
+   * Marker used instead of `instanceof`.
+   *
+   * `AppError` re-points `this` at `AppError.prototype`, which severs the
+   * prototype chain of every subclass, so `err instanceof
+   * SimulationFailedError` is always false. `isAppError` already works around
+   * this with a flag; this mirrors that pattern.
+   */
+  public readonly isSimulationFailedError = true;
+
+  constructor(
+    message: string = "Soroban simulation failed",
+    simulationDetails?: unknown,
+  ) {
+    super(
+      message,
+      "SIMULATION_FAILED",
+      simulationDetails === undefined
+        ? undefined
+        : redactSimulationDetails(simulationDetails),
+    );
+    this.name = "SimulationFailedError";
+  }
+}
+
+/**
+ * Type guard for {@link SimulationFailedError}.
+ *
+ * Used by the error handler so simulation details are only ever read off an
+ * error this codebase constructed (and therefore only ever read in a
+ * redacted form).
+ */
+export function isSimulationFailedError(err: unknown): err is SimulationFailedError {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as Record<string, unknown>).isSimulationFailedError === true
+  );
 }
 
 export class ServiceUnavailableError extends AppError {

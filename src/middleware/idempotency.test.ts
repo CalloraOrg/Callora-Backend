@@ -6,16 +6,16 @@ import {
   INVALID_IDEMPOTENCY_KEY,
 } from './idempotency.js';
 
+/** Mirrors DEFAULT_KEY_MAX_LENGTH in idempotency.ts (not exported). */
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function makeDb(rows: Record<string, unknown>[] = []) {
   const mock = { query: jest.fn() };
-  // First two calls: DELETE expired keys (cleanExpiredTTL + parameterized)
-  mock.query.mockResolvedValueOnce({ rows: [] });
-  mock.query.mockResolvedValueOnce({ rows: [] });
-  // Third call: SELECT existing key
+  // First call: SELECT existing, non-expired key
   mock.query.mockResolvedValueOnce({ rows });
   // All subsequent calls (INSERT / UPDATE / DELETE): succeed
   mock.query.mockResolvedValue({ rows: [] });
@@ -190,7 +190,7 @@ describe('idempotencyMiddleware — unit', () => {
     expect(mockDb.query).not.toHaveBeenCalled();
   });
 
-  it('deletes expired keys and inserts started record for new key', async () => {
+  it('does not delete on the request path and inserts a new key', async () => {
     const mockDb = makeDb([]);
     const req = makeReq() as Request;
     const res = makeRes();
@@ -201,25 +201,17 @@ describe('idempotencyMiddleware — unit', () => {
 
     expect(mockDb.query).toHaveBeenNthCalledWith(
       1,
-      expect.stringContaining('DELETE FROM idempotency_store WHERE expires_at < NOW()'),
-      []
-    );
-    expect(mockDb.query).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining('DELETE FROM idempotency_store WHERE expires_at < $1'),
-      [expect.any(String)]
-    );
-    expect(mockDb.query).toHaveBeenNthCalledWith(
-      3,
       expect.stringContaining('SELECT request_hash'),
       ['user-1', 'test-key-123']
     );
     expect(mockDb.query).toHaveBeenNthCalledWith(
-      4,
+      2,
       expect.stringContaining('INSERT INTO idempotency_store'),
       ['user-1', 'test-key-123', expect.any(String), 'started', expect.any(String)]
     );
-    expect(mockDb.query.mock.calls[3][0]).toContain('ON CONFLICT (scope, idempotency_key)');
+    expect(mockDb.query.mock.calls[1][0]).toContain('ON CONFLICT (scope, idempotency_key)');
+    expect(mockDb.query.mock.calls[0][0]).toContain('expires_at > NOW()');
+    expect(mockDb.query.mock.calls.filter(([text]: [string]) => text.includes('DELETE FROM idempotency_store WHERE expires_at')).length).toBe(0);
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -487,10 +479,8 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
 
   it('handles saveResponse database error gracefully', async () => {
     const mockDb = { query: jest.fn() };
-    mockDb.query.mockResolvedValueOnce({ rows: [] }); // DELETE expired
-    mockDb.query.mockResolvedValueOnce({ rows: [] }); // DELETE parameterized
     mockDb.query.mockResolvedValueOnce({ rows: [] }); // SELECT empty
-    mockDb.query.mockResolvedValueOnce({ rows: [] }); // INSERT started
+    mockDb.query.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // INSERT started
     mockDb.query.mockRejectedValueOnce(new Error('DB error')); // UPDATE fails
 
     const req = makeReq() as Request;
@@ -637,3 +627,229 @@ describe('idempotencyMiddleware — per-user key scoping (issue #1273)', () => {
 
 // Keep next defined at module scope for use in the describe blocks above
 const next = jest.fn();
+
+// ---------------------------------------------------------------------------
+// Concurrency — duplicate idempotency keys in simultaneous requests
+// ---------------------------------------------------------------------------
+
+describe('idempotencyMiddleware — concurrent duplicate keys', () => {
+  /**
+   * A pool whose INSERT ... ON CONFLICT returns rowCount 0 when the key
+   * already exists, mirroring Postgres semantics for the atomic insert.
+   */
+  function makeConcurrentPool() {
+    const store = new Map<string, ScopedRow>();
+    const composite = (scope: string, key: string) => `${scope}::${key}`;
+
+    const query = jest.fn(async (text: string, params: unknown[] = []) => {
+      if (text.includes('DELETE FROM idempotency_store WHERE expires_at')) {
+        return { rows: [] };
+      }
+      if (text.includes('SELECT request_hash')) {
+        const [scope, key] = params as [string, string];
+        const row = store.get(composite(scope, key));
+        return { rows: row ? [row] : [] };
+      }
+      if (text.includes('INSERT INTO idempotency_store')) {
+        const [scope, key, requestHash, status, expiresAt] = params as [
+          string,
+          string,
+          string,
+          string,
+          string,
+        ];
+        if (store.has(composite(scope, key))) {
+          return { rows: [], rowCount: 0 };
+        }
+        store.set(composite(scope, key), {
+          request_hash: requestHash,
+          status,
+          response_status: 0,
+          response_body: '',
+          expires_at: expiresAt,
+        });
+        return { rows: [], rowCount: 1 };
+      }
+      if (text.includes('UPDATE idempotency_store')) {
+        const [status, responseStatus, responseBody, scope, key] = params as [
+          string,
+          number,
+          string,
+          string,
+          string,
+        ];
+        const row = store.get(composite(scope, key));
+        if (row) {
+          store.set(composite(scope, key), {
+            ...row,
+            status,
+            response_status: responseStatus,
+            response_body: responseBody,
+          });
+        }
+        return { rows: [] };
+      }
+      if (text.includes('DELETE FROM idempotency_store WHERE scope')) {
+        const [scope, key] = params as [string, string];
+        store.delete(composite(scope, key));
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    return { query, store, composite } as unknown as {
+      query: jest.Mock;
+      store: Map<string, ScopedRow>;
+      composite: (scope: string, key: string) => string;
+    };
+  }
+
+  it('lets exactly one of two simultaneous requests proceed and returns 409 IDEMPOTENCY_IN_PROGRESS to the other', async () => {
+    const db = makeConcurrentPool();
+    const body = { amountUsdc: '1.00', apiId: 'api-1' };
+
+    const reqA = makeReq({ body }) as Request;
+    const reqB = makeReq({ body }) as Request;
+    (reqA as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+    (reqB as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+
+    const resA = makeRes();
+    const resB = makeRes();
+    const nextA = jest.fn();
+    const nextB = jest.fn();
+
+    await Promise.all([
+      idempotencyMiddleware(reqA, resA as Response, nextA as unknown as NextFunction),
+      idempotencyMiddleware(reqB, resB as Response, nextB as unknown as NextFunction),
+    ]);
+
+    const proceeded = [nextA, nextB].filter(n => n.mock.calls.length === 1).length;
+    expect(proceeded).toBe(1);
+
+    const blocked = [resA, resB].find(r => (r.status as jest.Mock).mock.calls.some(c => c[0] === 409));
+    expect(blocked).toBeDefined();
+    expect(blocked!.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({ code: 'IDEMPOTENCY_IN_PROGRESS' }),
+      })
+    );
+  });
+
+  it('does not overwrite the in-progress record when the second insert conflicts', async () => {
+    const db = makeConcurrentPool();
+    const body = { amountUsdc: '1.00', apiId: 'api-1' };
+
+    const reqA = makeReq({ body }) as Request;
+    const reqB = makeReq({ body }) as Request;
+    (reqA as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+    (reqB as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+
+    await Promise.all([
+      idempotencyMiddleware(reqA, makeRes() as Response, jest.fn() as unknown as NextFunction),
+      idempotencyMiddleware(reqB, makeRes() as Response, jest.fn() as unknown as NextFunction),
+    ]);
+
+    const stored = db.store.get(db.composite('user-1', 'test-key-123'));
+    expect(stored).toBeDefined();
+    expect(stored!.status).toBe('started');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5xx cleanup — a failed handler must leave no stored record
+// ---------------------------------------------------------------------------
+
+describe('idempotencyMiddleware — 5xx cleanup enables retry', () => {
+  it('removes the stored record after a 500 so a retry can proceed', async () => {
+    const db = makeScopedPool();
+    const body = { amountUsdc: '1.00', apiId: 'api-1' };
+
+    const req = makeReq({ body }) as Request;
+    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+    const res = makeRes();
+    const next = jest.fn();
+
+    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(db.store.has(db.composite('user-1', 'test-key-123'))).toBe(true);
+
+    res.statusCode = 500;
+    res.json({ error: 'Internal Server Error' });
+    await new Promise(resolve => process.nextTick(resolve));
+
+    expect(db.store.has(db.composite('user-1', 'test-key-123'))).toBe(false);
+
+    // Retry with the same key must be allowed to proceed.
+    const retryReq = makeReq({ body }) as Request;
+    (retryReq as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+    const retryRes = makeRes();
+    const retryNext = jest.fn();
+    await idempotencyMiddleware(retryReq, retryRes as Response, retryNext as unknown as NextFunction);
+
+    expect(retryNext).toHaveBeenCalledTimes(1);
+    expect(retryRes.status).not.toHaveBeenCalledWith(409);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Replay verbatim — a 201 response is returned unchanged on retry
+// ---------------------------------------------------------------------------
+
+describe('idempotencyMiddleware — 201 replay is verbatim', () => {
+  it('replays the exact 201 status and body on retry', async () => {
+    const db = makeScopedPool();
+    const body = { amountUsdc: '1.00', apiId: 'api-1' };
+
+    const req = makeReq({ body }) as Request;
+    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+    const res = makeRes();
+    const next = jest.fn();
+
+    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
+    expect(next).toHaveBeenCalledTimes(1);
+
+    const createdBody = { success: true, txHash: 'tx-created', id: 'res-1' };
+    res.statusCode = 201;
+    res.json(createdBody);
+    await new Promise(resolve => process.nextTick(resolve));
+
+    const retryReq = makeReq({ body }) as Request;
+    (retryReq as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+    const retryRes = makeRes();
+    const retryNext = jest.fn();
+    await idempotencyMiddleware(retryReq, retryRes as Response, retryNext as unknown as NextFunction);
+
+    expect(retryRes.setHeader).toHaveBeenCalledWith('Idempotent-Replayed', 'true');
+    expect(retryRes.status).toHaveBeenCalledWith(201);
+    expect(retryRes.json).toHaveBeenCalledWith(createdBody);
+    expect(retryNext).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Key length validation
+// ---------------------------------------------------------------------------
+
+describe('idempotencyMiddleware — key length validation', () => {
+  it('returns 400 INVALID_IDEMPOTENCY_KEY when the key exceeds maxKeyLength', async () => {
+    const mockDb = makeDb();
+    const tooLong = 'k'.repeat(MAX_IDEMPOTENCY_KEY_LENGTH + 1);
+    const req = makeReq({ idempotencyKeyHeader: tooLong }) as Request;
+    const res = makeRes();
+    const next = jest.fn();
+    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
+
+    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({ code: INVALID_IDEMPOTENCY_KEY }),
+      })
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(mockDb.query).not.toHaveBeenCalled();
+  });
+});
