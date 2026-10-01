@@ -5,6 +5,7 @@ import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 import { envelopeSchema } from '../../middleware/envelope.js';
 import { SorobanRpcError } from '../../services/sorobanBilling.js';
+import type { SimulationDetails } from '../../lib/simulationDiagnostics.js';
 import deductRouter from './deduct.js';
 import type { Pool } from 'pg';
 import { BillingService, type SorobanClient } from '../../services/billing.js';
@@ -20,6 +21,29 @@ const JWT_SECRET = 'test-deduct-secret';
  */
 function makeToken(userId = 'user_123'): string {
   return jwt.sign({ userId }, JWT_SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+}
+
+/** Minimal valid payload shared across suites. */
+const validPayload = {
+  requestId: 'req_test_1',
+  apiId: 'api_1',
+  endpointId: 'endpoint_1',
+  apiKeyId: 'key_1',
+  amountUsdc: '0.01',
+  developerId: 'user_123',
+};
+
+/**
+ * Spy on `BillingService.prototype.deduct` for the duration of a single test.
+ * Pass `{ throws: err }` to simulate a rejection, or `{ returns: value }` to
+ * simulate a resolved result.
+ */
+function mockBillingService(opts: { throws: Error } | { returns: unknown }) {
+  if ('throws' in opts) {
+    jest.spyOn(BillingService.prototype, 'deduct').mockRejectedValue(opts.throws);
+  } else {
+    jest.spyOn(BillingService.prototype, 'deduct').mockResolvedValue(opts.returns as never);
+  }
 }
 
 jest.mock('better-sqlite3', () => {
@@ -52,6 +76,29 @@ const REDACTED_SUMMARY = {
   footprintPresent: true,
 };
 
+/**
+ * Shared app factory used by Suite 1 and Suite 2.
+ * Wires up the deduct router with an optional pool and billing service override.
+ */
+function buildApp(
+  pool: Pool | null = { query: jest.fn() } as unknown as Pool,
+  billingService?: BillingService,
+) {
+  const app = express();
+  app.use(requestIdMiddleware);
+  app.use(express.json());
+  if (pool) {
+    app.locals.dbPool = pool;
+    app.locals.billingService = billingService ?? new BillingService(pool, {
+      getBalance: jest.fn(),
+      deductBalance: jest.fn(),
+    });
+  }
+  app.use('/api/billing/deduct', deductRouter);
+  app.use(errorHandler);
+  return app;
+}
+
 describe('POST /api/billing/deduct - developerId validation', () => {
   beforeAll(() => {
     process.env.JWT_SECRET = JWT_SECRET;
@@ -65,24 +112,10 @@ describe('POST /api/billing/deduct - developerId validation', () => {
     jest.restoreAllMocks();
   });
 
-  function buildApp(
-    pool: Pool | null = { query: jest.fn() } as unknown as Pool,
-    billingService?: BillingService,
-  ) {
-    const app = express();
-    app.use(requestIdMiddleware);
-    app.use(express.json());
-    if (pool) {
-      app.locals.dbPool = pool;
-      app.locals.billingService = billingService ?? new BillingService(pool, {
-        getBalance: jest.fn(),
-        deductBalance: jest.fn(),
-      });
-    }
-    app.use('/api/billing/deduct', deductRouter);
-    app.use(errorHandler);
-    return app;
-  }
+  it('returns 401 for a request without an Authorization header', async () => {
+    const res = await request(buildApp())
+      .post('/api/billing/deduct')
+      .send(validPayload);
 
     expect(res.status).toBe(401);
   });
@@ -149,11 +182,23 @@ describe('POST /api/billing/deduct - developerId validation', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/billing/deduct - SorobanRpcError category mapping', () => {
+  beforeAll(() => {
+    process.env.JWT_SECRET = JWT_SECRET;
+  });
+
+  afterAll(() => {
+    delete process.env.JWT_SECRET;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   // Shared assertion helper
   async function postDeduct(overrides: Record<string, unknown> = {}) {
     return request(buildApp())
       .post('/api/billing/deduct')
-      .set('Authorization', `Bearer ${signToken()}`)
+      .set('Authorization', `Bearer ${makeToken()}`)
       .send({ ...validPayload, ...overrides });
   }
 
@@ -393,18 +438,19 @@ describe('POST /api/billing/deduct - SorobanRpcError category mapping', () => {
 
     it('returns SIMULATION_FAILED code', async () => {
       const res = await postDeduct();
-      expect(res.body.code).toBe('SIMULATION_FAILED');
+      expect(res.body.error.code).toBe('SIMULATION_FAILED');
     });
 
     it('includes redacted simulationDetails in the response body', async () => {
       const res = await postDeduct();
-      // The route calls redactSimulationDetails() before sending
-      expect(res.body.simulationDetails).toBeDefined();
+      // The route passes through errorHandler which places simulationDetails
+      // inside the error envelope.
+      expect(res.body.error.simulationDetails).toBeDefined();
     });
 
     it('redacts sensitive address/key fields from simulationDetails', async () => {
       const res = await postDeduct();
-      const details = res.body.simulationDetails as Record<string, unknown>;
+      const details = res.body.error.simulationDetails as Record<string, unknown>;
       const bodyStr = JSON.stringify(details);
 
       // Sensitive values from the original simulationDetails must not appear
@@ -417,7 +463,7 @@ describe('POST /api/billing/deduct - SorobanRpcError category mapping', () => {
 
     it('preserves non-sensitive diagnostic fields (errorCode, errorMessage)', async () => {
       const res = await postDeduct();
-      const details = res.body.simulationDetails as Record<string, unknown>;
+      const details = res.body.error.simulationDetails as Record<string, unknown>;
 
       // errorCode and errorMessage are non-sensitive and should survive redaction
       expect(details.errorCode).toBe('CONTRACT_ERR_42');
@@ -426,7 +472,7 @@ describe('POST /api/billing/deduct - SorobanRpcError category mapping', () => {
 
     it('replaces event list with eventCount (not raw events)', async () => {
       const res = await postDeduct();
-      const details = res.body.simulationDetails as Record<string, unknown>;
+      const details = res.body.error.simulationDetails as Record<string, unknown>;
 
       // redactSimulationDetails replaces events with eventCount
       expect(details.eventCount).toBe(1);
@@ -435,18 +481,18 @@ describe('POST /api/billing/deduct - SorobanRpcError category mapping', () => {
 
     it('replaces footprint with footprintPresent flag', async () => {
       const res = await postDeduct();
-      const details = res.body.simulationDetails as Record<string, unknown>;
+      const details = res.body.error.simulationDetails as Record<string, unknown>;
 
       expect(details.footprintPresent).toBe(true);
       expect(details.footprint).toBeUndefined();
     });
 
-    it('does not use the standard error envelope for the 502 simulation body', async () => {
+    it('returns the standard error envelope for the 502 simulation body', async () => {
       const res = await postDeduct();
-      // The route sends a custom JSON object (not via errorHandler), so the
-      // response lacks the envelope's `error.code` nested shape.
-      expect(res.body.error).toBe('Soroban simulation failed');
-      expect(res.body.code).toBe('SIMULATION_FAILED');
+      // The route passes through errorHandler which renders the standard envelope.
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('SIMULATION_FAILED');
+      expect(res.body.requestId).toEqual(expect.any(String));
     });
   });
 
