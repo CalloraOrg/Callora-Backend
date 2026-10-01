@@ -44,46 +44,49 @@ export function discoverMigrations(dir: string): string[] {
     f => (f.endsWith('.sql') || f.endsWith('.up.sql')) && !f.endsWith('.down.sql'),
   );
 
-  // Validate that every file has a numeric prefix
-  for (const f of files) {
-    if (extractPrefix(f) === null) {
+  // Parse and validate prefixes before sorting so invalid filenames never
+  // participate in the numeric comparator.
+  const migrations = files.map(filename => {
+    const prefix = extractPrefix(filename);
+    if (prefix === null) {
       throw new Error(
-        `Migration file "${f}" has no numeric prefix. ` +
+        `Migration file "${filename}" has no numeric prefix. ` +
           `Rename it to follow the NNNN_description.sql convention.`,
       );
     }
-  }
+    return { filename, prefix };
+  });
 
-  // Sort by numeric prefix so we process in order
-  const sorted = [...files].sort((a, b) => extractPrefix(a)! - extractPrefix(b)!);
-
-  // Duplicate-prefix guard
+  // Reject duplicates before sorting so an ambiguous sequence cannot be applied.
   const seen = new Map<number, string>();
-  for (const f of sorted) {
-    const prefix = extractPrefix(f)!;
+  for (const { filename, prefix } of migrations) {
     if (seen.has(prefix)) {
       throw new Error(
-        `Duplicate migration prefix ${prefix}: "${seen.get(prefix)}" and "${f}". ` +
+        `Duplicate migration prefix ${prefix}: "${seen.get(prefix)}" and "${filename}". ` +
           `Each migration must have a unique numeric prefix.`,
       );
     }
-    seen.set(prefix, f);
+    seen.set(prefix, filename);
   }
 
+  // Sort validated migrations by their numeric prefix.
+  const sorted = migrations.sort((a, b) => a.prefix - b.prefix);
+
   // Gap guard — prefixes must be contiguous starting from the smallest value
-  const prefixes = sorted.map(f => extractPrefix(f)!);
-  const first = prefixes[0];
-  for (let i = 1; i < prefixes.length; i++) {
-    if (prefixes[i] !== first + i) {
-      throw new Error(
-        `Gap detected in migration sequence: expected prefix ${first + i} after ${prefixes[i - 1]} ` +
-          `but found ${prefixes[i]} ("${sorted[i]}"). ` +
-          `Migrations must be numbered consecutively with no gaps.`,
-      );
+  if (sorted.length > 0) {
+    const first = sorted[0].prefix;
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i].prefix !== first + i) {
+        throw new Error(
+          `Gap detected in migration sequence: expected prefix ${first + i} after ${sorted[i - 1].prefix} ` +
+            `but found ${sorted[i].prefix} ("${sorted[i].filename}"). ` +
+            `Migrations must be numbered consecutively with no gaps.`,
+        );
+      }
     }
   }
 
-  return sorted;
+  return sorted.map(({ filename }) => filename);
 }
 
 // ---------------------------------------------------------------------------
