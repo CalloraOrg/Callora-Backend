@@ -543,6 +543,31 @@ export const envSchema = z
       .default(345_600_000), // 96h = 4 days, the slow-burn window
   })
   .superRefine((values, ctx) => {
+    if (values.NODE_ENV === "production") {
+      const origins = values.CORS_ALLOWED_ORIGINS
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean);
+      if (origins.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["CORS_ALLOWED_ORIGINS"],
+          message: "CORS_ALLOWED_ORIGINS is required in production",
+        });
+      }
+      for (const origin of origins) {
+        let parsed: URL;
+        try {
+          parsed = new URL(origin);
+        } catch {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["CORS_ALLOWED_ORIGINS"], message: `Invalid CORS origin: ${origin}` });
+          continue;
+        }
+        if (parsed.protocol !== "https:" || parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["CORS_ALLOWED_ORIGINS"], message: "Production CORS origins must be HTTPS and cannot be localhost" });
+        }
+      }
+    }
     if (values.NODE_ENV === "production" && !values.SOROBAN_BILLING_CONTRACT_ID) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

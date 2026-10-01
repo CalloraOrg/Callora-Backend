@@ -264,17 +264,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
 
   // Parse allowed origins with validation
-  const allowedOrigins = (
-    process.env.CORS_ALLOWED_ORIGINS ?? "http://localhost:5173"
-  )
-    .split(",")
-    .map((o: string) => o.trim())
-    .filter((o: string) => o.length > 0);
-
-  // Validate origins in production
-  if (isProduction && allowedOrigins.length === 0) {
-    console.warn("WARNING: No CORS_ALLOWED_ORIGINS configured in production");
-  }
+  const allowedOrigins = config.corsAllowedOrigins;
 
   // Regex for localhost with optional port (e.g., http://localhost:5173)
   const localhostRegex = /^http:\/\/localhost(:\d+)?$/;

@@ -10,6 +10,33 @@ const baseEnv = {
   METRICS_API_KEY: "test-metrics-key",
 };
 
+describe("production CORS origins", () => {
+  const productionEnv = {
+    ...baseEnv,
+    NODE_ENV: "production" as const,
+    SOROBAN_BILLING_CONTRACT_ID: "contract",
+    UPSTREAM_HOST_ALLOWLIST: "api.example.com",
+  };
+
+  it("requires explicit HTTPS origins and rejects localhost", () => {
+    for (const origins of ["", "http://localhost:5173", "http://app.example.com"]) {
+      const result = envSchema.safeParse({ ...productionEnv, CORS_ALLOWED_ORIGINS: origins });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => issue.path[0] === "CORS_ALLOWED_ORIGINS")).toBe(true);
+      }
+    }
+  });
+
+  it("accepts HTTPS production origins", () => {
+    const result = envSchema.safeParse({
+      ...productionEnv,
+      CORS_ALLOWED_ORIGINS: "https://app.example.com,https://admin.example.com",
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("env schema — Soroban billing", () => {
   it("requires a nonempty contract ID in production", () => {
     for (const contractId of [undefined, "", "   "]) {
@@ -30,6 +57,9 @@ describe("env schema — Soroban billing", () => {
   it("accepts a valid production billing configuration", () => {
     const result = envSchema.safeParse({
       ...baseEnv,
+      JWT_SECRET: "j".repeat(32),
+      ADMIN_API_KEY: "a".repeat(32),
+      METRICS_API_KEY: "m".repeat(32),
       NODE_ENV: "production",
       SOROBAN_BILLING_CONTRACT_ID: "contract_123",
       SOROBAN_BILLING_RPC_URL: "https://soroban.example.com",
