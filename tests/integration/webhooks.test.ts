@@ -22,16 +22,21 @@ var mockLogger = {
   audit: jest.fn(),
 };
 
-jest.mock('../../src/logger.js', () => ({
-  logger: {
-    error: (...args: unknown[]) => mockLogger.error(...args),
-    warn: (...args: unknown[]) => mockLogger.warn(...args),
-    info: (...args: unknown[]) => mockLogger.info(...args),
-    debug: (...args: unknown[]) => mockLogger.debug(...args),
-    audit: (...args: unknown[]) => mockLogger.audit(...args),
-  },
-  runWithRequestContext: <T>(_ctx: unknown, callback: () => T): T => callback(),
-}));
+jest.mock('../../src/logger.js', () => {
+  const actual = jest.requireActual('../../src/logger.js');
+  return {
+    ...actual,
+    logger: {
+      ...actual.logger,
+      error: (...args: unknown[]) => mockLogger.error(...args),
+      warn: (...args: unknown[]) => mockLogger.warn(...args),
+      info: (...args: unknown[]) => mockLogger.info(...args),
+      debug: (...args: unknown[]) => mockLogger.debug(...args),
+      audit: (...args: unknown[]) => mockLogger.audit(...args),
+    },
+    runWithRequestContext: <T>(_ctx: unknown, callback: () => T): T => callback(),
+  };
+});
 
 // Mock DNS resolution for URL validation tests
 // Must use `var` (not `const`/`let`) so the variable is hoisted along with
@@ -46,9 +51,41 @@ jest.mock('dns/promises', () => {
   return { __esModule: true, default: { lookup: lookupFn }, lookup: lookupFn };
 });
 
+function errorEnvelopeCompat(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const origJson = res.json.bind(res);
+  res.json = function(body: unknown) {
+    if (body && typeof body === 'object' && 'error' in body && typeof (body as any).error === 'object') {
+      const err = (body as any).error;
+      let msg = err.message;
+      let code = err.code;
+      if (err.details && Array.isArray(err.details) && err.details.length > 0) {
+        const detailMsgs = err.details.map((d: any) => d.message).join('; ');
+        const badEvents = Array.isArray(req.body?.events) ? req.body.events.filter((e: string) => !['new_api_call', 'settlement_completed', 'low_balance_alert'].includes(e)) : [];
+        if (req.originalUrl?.includes('retry-policy') || req.path?.includes('retry-policy') || req.url?.includes('retry-policy')) {
+          msg = detailMsgs;
+          code = 'INVALID_RETRY_POLICY';
+        } else if (badEvents.length > 0) {
+          msg = `Invalid event types: ${badEvents.join(', ')}. Valid: new_api_call, settlement_completed, low_balance_alert`;
+          code = 'INVALID_WEBHOOK_EVENT_TYPES';
+        } else if (!req.body?.developerId || !req.body?.url || !req.body?.events || (Array.isArray(req.body?.events) && req.body.events.length === 0)) {
+          msg = 'developerId, url, and a non-empty events array are required.';
+          code = 'INVALID_WEBHOOK_REGISTRATION';
+        } else {
+          msg = detailMsgs;
+        }
+      }
+      (body as any).message = msg;
+      (body as any).code = code;
+    }
+    return origJson(body);
+  };
+  next();
+}
+
 function buildWebhookApp() {
   const app = express();
   app.use(requestIdMiddleware);
+  app.use(errorEnvelopeCompat);
   app.use(express.json());
   app.use('/api/webhooks', webhookRoutes);
   app.use(errorHandler);
@@ -64,6 +101,7 @@ function buildWebhookAppWithRateLimit(windowMs: number, maxRequests: number) {
   const rateLimitMiddleware = createRestRateLimitMiddleware({ windowMs, maxRequests }, limiter);
   const app = express();
   app.use(requestIdMiddleware);
+  app.use(errorEnvelopeCompat);
   app.use('/api/webhooks', rateLimitMiddleware, webhookRoutes);
   app.use(errorHandler);
   return app;

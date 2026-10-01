@@ -10,7 +10,7 @@ The graceful shutdown handler ensures that the application terminates cleanly wh
 
 - **Signal Handling**: Responds to SIGTERM and SIGINT signals
 - **Request Draining**: Waits up to 30 seconds for in-flight HTTP requests to complete
-- **Subsystem Coordination**: Stops and drains background jobs, webhook dispatchers, and other subsystems
+- **Subsystem Coordination**: Stops and drains the six subsystems registered in `shutdownSubsystems`, then cancels the remaining background jobs
 - **Database Cleanup**: Closes all database connection pools gracefully
 - **Structured Logging**: Logs each phase of the shutdown process with correlation IDs
 - **Timeout Protection**: Forcefully closes lingering connections after the grace period
@@ -50,11 +50,11 @@ interface DrainableSubsystem {
 }
 ```
 
-**Built-in Subsystems**:
-- `gateway-proxy`: Tracks in-flight HTTP requests through the API gateway
-- `revenue-ledger-indexer`: Background job for indexing revenue events
-- `idempotency-sweeper`: Background job for cleaning up expired idempotency records
-- `webhook-dispatcher`: Asynchronous webhook delivery system
+The subsystems handed to `createGracefulShutdownHandler` are the entries of the
+`shutdownSubsystems` array in `src/index.ts`. That array — not this document and
+not the individual worker modules — is the source of truth for what the handler
+drains. The exact list and order is in
+[Registered drain subsystems](#registered-drain-subsystems).
 
 #### 3. In-Flight Drain Tracker
 
@@ -75,6 +75,85 @@ so that new requests arriving after shutdown begins are immediately rejected wit
 requests that were already in flight when the shutdown signal arrived are allowed
 to complete normally.  See the **Proxy drain guard** section below for details.
 
+A tracker is only drained by the shutdown handler if its `subsystem` object is a
+member of `shutdownSubsystems`. Creating a tracker (or exporting one from a
+route module) does **not** register it — see
+[Trackers that exist but are not wired](#trackers-that-exist-but-are-not-wired).
+
+## Registered drain subsystems
+
+`src/index.ts` builds the `shutdownSubsystems: DrainableSubsystem[]` array that is
+passed to `createGracefulShutdownHandler`. The array is populated in one place
+and has no conditional (`push`) entries, so the registered set is identical in
+every environment:
+
+<!-- shutdown-subsystem-order:start -->
+```text
+1. gateway-proxy
+2. refresh-token
+3. revenue-ledger-indexer
+4. idempotency-sweeper
+5. webhook-dispatcher
+6. settlement-reconciliation
+```
+<!-- shutdown-subsystem-order:end -->
+
+The order above is the order in which `beginShutdown()` is called. This list is
+asserted by `src/lifecycle/shutdown.docs.test.ts`, which parses the
+`shutdownSubsystems` array out of `src/index.ts` and fails if the document and
+the code disagree.
+
+| # | Subsystem name | Source in `src/index.ts` | In-flight work awaited by `awaitIdle()` |
+|---|---|---|---|
+| 1 | `gateway-proxy` | `createInFlightDrainTracker("gateway-proxy")` → `proxyDrainTracker` | In-flight `/v1/call/...` proxy requests. `isDraining()` is also injected into the proxy router so requests arriving after `beginShutdown()` are rejected with `503`. |
+| 2 | `refresh-token` | `createInFlightDrainTracker('refresh-token')` → `refreshTokenDrainTracker` | In-flight `POST /api/refresh-token` requests. |
+| 3 | `revenue-ledger-indexer` | `revenueLedgerIndexerJob` | The revenue-ledger indexer tick that was already running when the signal arrived. |
+| 4 | `idempotency-sweeper` | `idempotencySweeperJob` | The idempotency-record sweep that was already running when the signal arrived. |
+| 5 | `webhook-dispatcher` | `stopWebhookDispatching` / `awaitWebhookDispatcherIdle` | Webhook deliveries still queued or in flight. |
+| 6 | `settlement-reconciliation` | `settlementReconJob` | The settlement reconciliation run in progress (see [Settlement reconciliation worker](./settlement-reconciliation-worker.md)). |
+
+### Jobs that are cancelled, not drained
+
+`closeAllDataResources` — passed to the handler as the `closeDatabase` callback —
+calls `stop()` on every background job it can reach. Five of those jobs are
+**not** members of `shutdownSubsystems`, so their `stop()` runs in Phase 6, after
+the drain window, and no `awaitIdle()` is ever performed for them:
+
+| Job | Constructed when | Why it is not drained |
+|---|---|---|
+| `settlement-status-sync` | always | `stop()` clears the polling timer. The job type exposes only `stop()` — there is no `beginShutdown()` / `awaitIdle()` pair to register. |
+| `anomaly-detector` | `config.usageAnomalyDetector.enabled` (`USAGE_ANOMALY_DETECTOR_ENABLED`) | Poller whose tick is bounded by DB query timeouts; the job is constructed but never added to `shutdownSubsystems`. |
+| `monthly-invoice` | always | Scheduler driven by a day boundary; the job is constructed but never added to `shutdownSubsystems`. |
+| `slo-alert` | `SLO_ALERT_WEBHOOK_URL` is set **and** at least one `SLO_ROUTE_CONFIGS` entry exists | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
+| `slow-query-alerter` | `SLOW_QUERY_ALERT_WEBHOOK_URL` is set | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
+
+`anomaly-detector`, `monthly-invoice`, `slo-alert` and `slow-query-alerter` do
+expose `beginShutdown()` / `awaitIdle()` and could be appended to
+`shutdownSubsystems` without changing the handler. That is a runtime behaviour
+change with its own review, not a documentation fix, so this document records
+the behaviour that is actually shipped today.
+
+`revenue-ledger-indexer`, `idempotency-sweeper` and `settlement-reconciliation`
+appear in both places: they are drained in Phase 4 and then `stop()`ped
+idempotently in Phase 6.
+
+### Trackers that exist but are not wired
+
+Two `createInFlightDrainTracker` instances are created but never registered in
+`shutdownSubsystems`, so `awaitIdle()` is not called for them:
+
+- `api-keys` (`keysDrainTracker` in `src/index.ts`) — the tracker is created, but
+  neither its middleware nor the router it belongs to is mounted, so no requests
+  are counted through it.
+- `quotas` (`quotasDrainTracker`, defined in `src/routes/quotas/counts.ts` and
+  re-exported by `src/app.ts`) — its middleware **is** mounted on
+  `/api/quotas/counts`, but the subsystem is never appended to
+  `shutdownSubsystems`.
+
+Consequently the handler does not wait for in-flight `/api/quotas/counts`
+requests by name; they are covered only by the process-wide drain
+(`server.close()` plus `activeConnections`) and the same 30 s timeout.
+
 ## Shutdown Sequence
 
 The shutdown process follows these phases:
@@ -83,8 +162,16 @@ The shutdown process follows these phases:
 - Log the received signal (SIGTERM or SIGINT)
 - Start the grace period timer (default: 30 seconds)
 
+> Phases 2–4 are **started concurrently and awaited together** by
+> `createGracefulShutdownHandler` (`Promise.all` over `stopSubsystems()`,
+> `closeServer()` and `drainSubsystems()`). Draining does not wait for the HTTP
+> server's `close` callback, and the server close does not wait for draining.
+> The numbered phases describe intent, not wall-clock ordering.
+
 ### Phase 2: Subsystems Stopping
-- Call `beginShutdown()` on all registered subsystems
+- Call `beginShutdown()` on all registered subsystems, in array order
+  (`gateway-proxy`, `refresh-token`, `revenue-ledger-indexer`,
+  `idempotency-sweeper`, `webhook-dispatcher`, `settlement-reconciliation`)
 - Subsystems stop accepting new work but continue processing in-flight operations
 - Log each subsystem as it stops
 
@@ -93,15 +180,21 @@ The shutdown process follows these phases:
 - Existing connections remain open for in-flight requests
 
 ### Phase 4: Subsystems Draining
-- Wait for all subsystems to complete in-flight work via `awaitIdle()`
+- Wait for the registered subsystems to complete in-flight work via `awaitIdle()`
 - Race against the timeout period
 - Log each subsystem as it becomes idle
 
 ### Phase 5: Timeout Protection
 - If the grace period expires, forcefully destroy all remaining socket connections
 - Log warning with connection count
+- A subsystem drain that hits the same deadline also fails the shutdown
 
-### Phase 6: Database Closing
+### Phase 6: Database Closing (with final job cancellation)
+- Cancel every background job this process started, including the ones that are
+  not registered drain subsystems — `settlement-status-sync`,
+  `slow-query-alerter` (conditional), `anomaly-detector` (conditional),
+  `monthly-invoice`, `slo-alert` (conditional) — plus a second, idempotent
+  `stop()` for the jobs already drained in Phase 4
 - Close all database connection pools:
   - Drizzle ORM connections
   - PostgreSQL connection pool
@@ -111,7 +204,9 @@ The shutdown process follows these phases:
 
 ### Phase 7: Exit
 - Exit with code 0 for clean shutdown
-- Exit with code 1 if any errors occurred
+- Exit with code 1 if the server close failed, any registered subsystem failed to
+  stop, the subsystem drain timed out or rejected, the database close failed, or
+  an unexpected error escaped the orchestration
 
 ## Configuration
 
@@ -124,6 +219,42 @@ No specific environment variables are required. The shutdown handler is configur
 ```typescript
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
 ```
+
+## Timeout and exit codes
+
+`createGracefulShutdownHandler` takes a single `timeoutMs` option, default
+`30_000`. `src/index.ts` passes `30_000` explicitly, so production uses the
+default value:
+
+| Item | Value | Location |
+|---|---|---|
+| `timeoutMs` default | `30_000` ms | `createGracefulShutdownHandler` in `src/lifecycle/shutdown.ts` |
+| `timeoutMs` in the production wiring | `30_000` ms | `createGracefulShutdownHandler({ ..., timeoutMs: 30_000 })` in `src/index.ts` |
+| Force-close timer | armed when the signal arrives, fires after `timeoutMs` | `forceCloseTimeout` in `createGracefulShutdownHandler` |
+| Subsystem drain race | `Promise.race([all awaitIdle(), timeoutMs])` | `drainSubsystems()` in `createGracefulShutdownHandler` |
+
+The same window is applied independently to two things:
+
+1. **Connections** — `forceCloseTimeout` destroys every socket still in
+   `activeConnections` after `timeoutMs`.
+2. **Subsystem drain** — `drainSubsystems()` races the `awaitIdle()` promises of
+   all registered subsystems against the same `timeoutMs`; on expiry it logs
+   `[shutdown:timeout_reached] Subsystem drain timeout after 30000ms` and the
+   shutdown is reported as failed.
+
+The handler resolves with an exit code and `src/index.ts` forwards it to
+`process.exit(exitCode)`:
+
+| Exit code | Conditions |
+|---|---|
+| `0` | All registered subsystems stopped and drained within the window, the HTTP server closed without error, and `closeDatabase()` succeeded. |
+| `1` | The HTTP server `close` callback reported an error, **or** a subsystem `beginShutdown()` threw, **or** the subsystem drain timed out / an `awaitIdle()` rejected, **or** `closeDatabase()` threw, **or** an unexpected error escaped the orchestration. |
+
+`0` is a drain guarantee for the six registered subsystems only. The jobs
+listed under
+[Jobs that are cancelled, not drained](#jobs-that-are-cancelled-not-drained) are
+cancelled in Phase 6, after the window, without waiting for their in-flight tick,
+so a `0` exit does not mean those ticks ran to completion.
 
 ## Usage
 
@@ -261,10 +392,10 @@ The shutdown handler emits structured log messages for each phase:
 
 ```
 [shutdown:signal_received] Received SIGTERM, initiating graceful shutdown
-[shutdown:subsystems_stopping] Stopping 4 subsystem(s): gateway-proxy, revenue-ledger-indexer, idempotency-sweeper, webhook-dispatcher
+[shutdown:subsystems_stopping] Stopping 6 subsystem(s): gateway-proxy, refresh-token, revenue-ledger-indexer, idempotency-sweeper, webhook-dispatcher, settlement-reconciliation
 [shutdown:subsystems_stopping] Stopped subsystem: gateway-proxy
 [shutdown:server_closing] Closing HTTP server
-[shutdown:subsystems_draining] Draining 4 subsystem(s) (timeout: 30000ms)
+[shutdown:subsystems_draining] Draining 6 subsystem(s) (timeout: 30000ms)
 [shutdown:subsystems_draining] Drained subsystem: gateway-proxy
 [shutdown:database_closing] Closing database pools
 [shutdown:database_closing] Database pools closed successfully
@@ -297,7 +428,8 @@ Location: `src/lifecycle/shutdown.test.ts`
 
 Run tests:
 ```bash
-npm test -- shutdown.test.ts
+npx jest src/lifecycle/shutdown.test.ts
+npx jest src/lifecycle/shutdown.docs.test.ts
 ```
 
 ### Test Coverage
@@ -320,12 +452,20 @@ The test suite covers:
 - ✅ Proxy drain guard — upstream NOT called for rejected requests
 - ✅ Proxy drain guard — usage NOT recorded for rejected requests
 - ✅ Shutdown handler waits for in-flight proxy requests before closing DB
-- ✅ `isDraining()` flag — false before shutdown, true after
-- ✅ Proxy drain guard — 503 on new requests during shutdown
-- ✅ Proxy drain guard — `Connection: close` + `Retry-After: 0` headers
-- ✅ Proxy drain guard — upstream NOT called for rejected requests
-- ✅ Proxy drain guard — usage NOT recorded for rejected requests
-- ✅ Shutdown handler waits for in-flight proxy requests before closing DB
+
+### Documentation consistency test
+
+`src/lifecycle/shutdown.docs.test.ts` guards this page against drift. It parses
+`src/index.ts` and fails the build when:
+
+- the ordered list in [Registered drain subsystems](#registered-drain-subsystems)
+  no longer matches `shutdownSubsystems`;
+- the documented timeout no longer matches the handler default (`30_000`) or the
+  `timeoutMs` passed from `src/index.ts`;
+- the documented exit codes no longer match the handler's contract;
+- a background job that `closeAllDataResources` stops is no longer explained in
+  [Jobs that are cancelled, not drained](#jobs-that-are-cancelled-not-drained);
+- the README's "Production Shutdown Expectations" section stops linking here.
 
 ### Integration Tests
 

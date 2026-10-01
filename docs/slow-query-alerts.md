@@ -76,8 +76,14 @@ are lazily evicted on `has()` / `cleanup()` calls.
 
 ### Graceful Shutdown
 
-The worker registers as a `DrainableSubsystem` via the standard lifecycle
-handler in `src/lifecycle/shutdown.ts`.
+The worker implements the `{ stop, beginShutdown, awaitIdle }` lifecycle from
+`src/lifecycle/shutdown.ts`, but it is **not** registered in
+`shutdownSubsystems` in `src/index.ts`, so it is not drained during the 30 s
+grace period. Only `stop()` runs, from the `closeDatabase` callback after the
+drain window — a poll that is already in flight when the signal arrives is not
+awaited. The job is only constructed when `SLOW_QUERY_ALERT_WEBHOOK_URL` is set.
+
+See [Graceful Shutdown → Jobs that are cancelled, not drained](./graceful-shutdown.md#jobs-that-are-cancelled-not-drained).
 
 ## Testing
 
