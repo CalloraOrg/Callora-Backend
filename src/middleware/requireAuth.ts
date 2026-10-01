@@ -12,11 +12,15 @@ export type AuthenticatedLocals = {
 };
 
 /** Restrict accepted signing algorithms to prevent algorithm-confusion attacks. */
-const ALLOWED_ALGORITHMS: jwt.Algorithm[] = ["HS256"];
+export const ALLOWED_ALGORITHMS: jwt.Algorithm[] = ["HS256"];
 
 export interface ResolvedRequestUserId {
   userId?: string;
   error?: UnauthorizedError;
+}
+
+export interface ResolvedRequestJwtUserId extends ResolvedRequestUserId {
+  subject?: string;
 }
 
 /**
@@ -67,7 +71,8 @@ export function verifyGatewaySignature(
   });
 }
 
-export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
+/** Resolve only cryptographically verified JWT claims, never forwarded headers. */
+export function resolveRequestJwtUserId(req: Request): ResolvedRequestJwtUserId {
   const authHeader = req.header("authorization");
   if (authHeader !== undefined) {
     if (!authHeader.startsWith("Bearer ")) {
@@ -117,7 +122,10 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
         };
       }
 
-      return { userId: uid };
+      const subject = typeof payload.sub === "string" && payload.sub.trim() !== ""
+        ? payload.sub
+        : undefined;
+      return { userId: uid, subject };
     } catch (err) {
       const code =
         err instanceof jwt.TokenExpiredError
@@ -134,6 +142,15 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
         ),
       };
     }
+  }
+
+  return {};
+}
+
+export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
+  if (req.header("authorization") !== undefined) {
+    const result = resolveRequestJwtUserId(req);
+    return result.userId ? { userId: result.userId } : result;
   }
 
   // Only accept x-user-id if TRUST_FORWARDED_USER_ID is explicitly enabled AND a valid internal gateway signature is present

@@ -1,82 +1,27 @@
 # OpenAPI Contract Testing
 
-## Overview
+## Source of Truth
 
-The billing contract is protected using `express-openapi-validator`.
+[`docs/openapi.json`](openapi.json) is the only hand-edited OpenAPI specification. It is served at `GET /api/openapi.json`, loaded by `express-openapi-validator`, and checked by `npm run validate:openapi`. Do not maintain another JSON or YAML copy.
 
-Runtime request and response payloads are validated against the OpenAPI specification located at:
+## Adding or Changing an Endpoint
 
-`docs/openapi.json`
-
-## Covered Endpoints
-
-- `POST /api/billing/deduct`
-- OpenAPI example regression checks for:
-  - `GET /api/apis`
-  - `POST /api/apis`
-  - `GET /api/apis/{id}`
-  - `POST /api/apis/{id}/endpoints/bulk`
-
-## Contract Test Coverage
-
-The contract suite verifies:
-
-* 200 Success
-* 400 Bad Request
-* 409 Conflict (idempotency conflict)
-* 429 Too Many Requests (rate limiting)
-
-**Location:**
-
-`tests/contract/billing.test.ts`
-
-OpenAPI example regression coverage for API marketplace routes lives in:
-
-`src/routes/apis.openapi.test.ts`
-
-## Running Tests
-
-Run the complete test suite:
+1. Update the endpoint's path and operation in `docs/openapi.json` to match the actual route handler, including its security, parameters, request body, status codes, response schemas, and named examples.
+2. Add or update reusable definitions under `components.schemas` and `components.securitySchemes` as needed. Keep `$ref` values within this same document.
+3. Add or update focused OpenAPI assertions alongside the route tests. Prefer checking parsed JSON properties, examples, and schema constraints over searching serialized text.
+4. Run the contract validator and the affected tests:
 
 ```bash
-npm test
+npm run validate:openapi
+npm test -- src/routes/rate-limit/openapi.test.ts src/routes/webhooks/openapi.test.ts
 ```
 
-Run only contract tests:
+Run the relevant route's `.openapi.test.ts` alongside these focused suites. Run the full test suite with `npm test` when the change affects shared schemas or multiple routes.
 
-```bash
-npm test -- tests/contract
-```
+## CI and SDKs
 
-## CI Enforcement
+The CI workflow's Optic backward-compatibility check compares `docs/openapi.json` with the target branch. SDK generation should use this same document as its input; generated clients must not depend on a separately maintained contract. No separate SDK-spec source is maintained in this repository.
 
-Contract tests execute as part of CI.
+## Runtime Validation
 
-Any mismatch between runtime responses and the OpenAPI specification causes the build to fail.
-
-## Validator Configuration
-
-```ts
-app.use(
-  OpenApiValidator.middleware({
-    apiSpec: path.resolve(process.cwd(), 'docs/openapi.json'),
-    validateRequests: true,
-    validateResponses: true,
-  }),
-);
-```
-
-## Error Envelope
-
-All contract errors follow:
-
-```json
-{
-  "code": "IDEMPOTENCY_CONFLICT",
-  "message": "Conflict detected",
-  "requestId": "req_123",
-  "details": []
-}
-```
-
-Correlation IDs are propagated through the existing request ID middleware.
+The application configures `express-openapi-validator` with `docs/openapi.json` and validates requests and responses for documented operations. Contract tests live beside route implementations and under `tests/contract`.

@@ -225,7 +225,8 @@ function updateOpenApi(openApi, entries) {
 }
 
 function writeOrCheck(filePath, current, next) {
-  if (current === next) return false;
+  const normalize = (s) => (s ?? "").replace(/\r\n/g, "\n");
+  if (normalize(current) === normalize(next)) return false;
 
   if (checkOnly) {
     console.error(`${path.relative(root, filePath)} is not generated from the current error catalog.`);
