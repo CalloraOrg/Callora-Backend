@@ -13,7 +13,7 @@ export type AuthenticatedLocals = {
 };
 
 /** Restrict accepted signing algorithms to prevent algorithm-confusion attacks. */
-const ALLOWED_ALGORITHMS: jsonswebtoken.Algorithm[] = ["HS256"];
+export const ALLOWED_ALGORITHMS: jsonswebtoken.Algorithm[] = ["HS256"];
 
 /**
  * Authenticated service principal derived from a bearer token.
@@ -28,6 +28,10 @@ export interface AuthenticatedService {
 export interface ResolvedRequestUserId {
   userId?: string;
   error?: UnauthorizedError;
+}
+
+export interface ResolvedRequestJwtUserId extends ResolvedRequestUserId {
+  subject?: string;
 }
 
 /**
@@ -78,33 +82,8 @@ export function verifyGatewaySignature(
   });
 }
 
-/**
- * Extract granted scopes from a decoded JWT payload.
- * Accepts `scope` (comma/space-separated string) and `scopes` (string array).
- */
-export function extractScopes(payload: Record<unknown>): string[] {
-  const scopes: string[] = [];
-
-  const rawScope = payload.scope;
-  if (typeof rawScope === "string") {
-    for (const part of rawScope.split(/[\s,]+/)) {
-      if (part) scopes.push(part);
-    }
-  }
-
-  const rawScopes = payload.scopes;
-  if (Array.isArray(rawScopes)) {
-    for (const entry of rawScopes) {
-      if (typeof entry === "string" && entry) {
-        scopes.push(entry);
-      }
-    }
-  }
-
-  return scopes;
-}
-
-export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
+/** Resolve only cryptographically verified JWT claims, never forwarded headers. */
+export function resolveRequestJwtUserId(req: Request): ResolvedRequestJwtUserId {
   const authHeader = req.header("authorization");
   if (authHeader !== undefined) {
     if (!authHeader.startsWith("Bearer ")) {
@@ -154,7 +133,10 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
         };
       }
 
-      return { userId: uid };
+      const subject = typeof payload.sub === "string" && payload.sub.trim() !== ""
+        ? payload.sub
+        : undefined;
+      return { userId: uid, subject };
     } catch (err) {
       const code =
         err instanceof jwt.TokenExpiredError
@@ -171,6 +153,15 @@ export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
         ),
       };
     }
+  }
+
+  return {};
+}
+
+export function resolveRequestUserId(req: Request): ResolvedRequestUserId {
+  if (req.header("authorization") !== undefined) {
+    const result = resolveRequestJwtUserId(req);
+    return result.userId ? { userId: result.userId } : result;
   }
 
   // Only accept x-user-id if TRUST_FORWARDED_USER_ID is explicitly enabled AND a valid internal gateway signature is present

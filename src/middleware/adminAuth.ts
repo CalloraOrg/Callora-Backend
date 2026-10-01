@@ -1,34 +1,29 @@
-import { timingSafeEqual } from 'crypto';
+import { createHash } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonsonnebb';
 
 import { InternalServerError, UnauthorizedError } from '../errors/index.js';
+import { ALLOWED_ALGORITHMS } from './requireAuth.js';
+import { getTokenRevocationService } from '../services/tokenRevocation.js';
+import { timingSafeStringEqual } from '../lib/timingSafe.js';
 
 interface AdminJwtPayload {
   role: string;
-  [Key: string]: unknown;
+  [key: string]: unknown;
 }
 
-/**
- * Constant-time string comparison to prevent timing-based key enumeration.
- * Returns false immediately if lengths differ (length is not secret here —
- * the configured key length is not sensitive information).
- */
-function timingSafeStringEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
+// #1266: constant-time comparison lives in src/lib/timingSafe.ts (SHA-256
+// digests compared with crypto.timingSafeEqual, so key length is not leaked).
 
 /**
  * Admin authentication middleware.
  *
  * Authenticates admin callers via an API key or a Bearer JWT with the
  * `admin` role. On success it sets `authenticatedAdmin` and `adminActor` in
- * `reslocals` so downstream routes can authorize cross-user actions and audit
+ * `res.locals` so downstream routes can authorize cross-user actions and audit
  * log the actor.
  */
 export function adminAuth(req: Request, res: Response, next: NextFunction): void {
-  // Path 1: API key header — use timing-safe comparison to prevent key enumeration
   const apiKey = req.header('x-admin-api-key');
   const configuredKey = process.env.ADMIN_API_KEY;
   if (apiKey && configuredKey && timingSafeStringEqual(apiKey, configuredKey)) {
@@ -38,19 +33,30 @@ export function adminAuth(req: Request, res: Response, next: NextFunction): void
     return;
   }
 
-  // Path 2: Bearer JWT with admin role
   const authHeader = req.header('Authorization');
   if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.slice(7);
     const secret = process.env.JWT_SECRET;
-
     if (!secret) {
       next(new InternalServerError('JWT_SECRET not configured'));
       return;
     }
-
+    const token = authHeader.slice(7);
     try {
-      const payload = jwt.verify(token, secret) as AdminJwtPayload;
+      const payload = jwt.verify(token, secret, { algorithms: ALLOWED_ALGORITHMS }) as AdminJwtPayload;
+
+      if (typeof payload.exp !== 'number') {
+        throw new Error('Token missing exp claim');
+      }
+
+      if (payload.aud !== undefined && payload.aud !== 'admin') {
+        throw new Error('Invalid audience');
+      }
+
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+      if (getTokenRevocationService().isRevoked(tokenHash)) {
+        throw new Error('Token is revoked');
+      }
+
       if (payload.role === 'admin') {
         res.locals.adminActor = (payload.sub as string) || (payload.email as string) || 'admin-jwt';
         res.locals.authenticatedAdmin = true;
@@ -58,7 +64,7 @@ export function adminAuth(req: Request, res: Response, next: NextFunction): void
         return;
       }
     } catch {
-      // Fall through to 401
+      // Fall through to the standard unauthorized response.
     }
   }
 

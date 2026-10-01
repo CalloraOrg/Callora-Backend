@@ -2,7 +2,7 @@ import { URL } from 'url';
 import dns from 'dns/promises';
 import ipRangeCheck from 'ip-range-check';
 
-const BLOCKED_RANGES = [
+export const BLOCKED_RANGES = [
     '10.0.0.0/8',
     '172.16.0.0/12',
     '192.168.0.0/16',
@@ -16,9 +16,21 @@ const BLOCKED_RANGES = [
     '240.0.0.0/4',
 ];
 
-export class WebhookValidationError extends Error {}
+export class WebhookValidationError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'WebhookValidationError';
+    }
+}
 
-export async function validateWebhookUrl(rawUrl: string): Promise<void> {
+export interface WebhookValidationOptions {
+    enforcePrivateIpCheck?: boolean;
+}
+
+export async function validateWebhookUrl(
+    rawUrl: string,
+    options?: WebhookValidationOptions
+): Promise<void> {
     let parsed: URL;
 
     // 1. Must be a valid URL
@@ -26,6 +38,10 @@ export async function validateWebhookUrl(rawUrl: string): Promise<void> {
         parsed = new URL(rawUrl);
     } catch {
         throw new WebhookValidationError('Invalid URL format.');
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new WebhookValidationError('Webhook URL must use HTTP or HTTPS protocol.');
     }
 
     // 2. Must use HTTPS in production
@@ -43,13 +59,18 @@ export async function validateWebhookUrl(rawUrl: string): Promise<void> {
         throw new WebhookValidationError('Could not resolve webhook hostname.');
     }
 
-    if (isProduction) {
+    const shouldCheckPrivateIps =
+        isProduction ||
+        options?.enforcePrivateIpCheck === true ||
+        process.env.WEBHOOK_ENFORCE_PRIVATE_IP_CHECK === 'true';
+
+    if (shouldCheckPrivateIps) {
         for (const ip of addresses) {
-        if (ipRangeCheck(ip, BLOCKED_RANGES)) {
-            throw new WebhookValidationError(
-            `Webhook URL resolves to a private/internal IP address (${ip}), which is not allowed.`
-            );
-        }
+            if (ipRangeCheck(ip, BLOCKED_RANGES)) {
+                throw new WebhookValidationError(
+                    `Webhook URL resolves to a private/internal IP address (${ip}), which is not allowed.`
+                );
+            }
         }
     }
 
@@ -57,4 +78,5 @@ export async function validateWebhookUrl(rawUrl: string): Promise<void> {
     if (isProduction && parsed.port && !['80', '443'].includes(parsed.port)) {
         throw new WebhookValidationError('Only ports 80 and 443 are allowed in production.');
     }
-    }
+}
+

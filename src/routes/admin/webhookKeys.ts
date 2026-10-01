@@ -18,6 +18,7 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { getClientIp } from '../../lib/clientIp.js';
 import {
   AppError,
@@ -26,6 +27,7 @@ import {
 } from '../../errors/index.js';
 import { logger } from '../../logger.js';
 import { sendMail } from '../../lib/mailer.js';
+import { validate } from '../../middleware/validate.js';
 import {
   WebhookSignerService,
   InMemoryWebhookKeyStore,
@@ -84,6 +86,20 @@ function buildAdminNotifier(): (result: RotationResult) => Promise<void> {
 }
 
 /**
+ * Body schema for POST /rotate-key. The body itself is optional (a rotation
+ * needs no parameters); when present, only `graceWindowMs` is allowed and it
+ * must be a positive integer. Unknown keys are rejected rather than ignored.
+ */
+const rotateKeyBodySchema = z
+  .object({
+    /** One-off grace window override in milliseconds (positive integer). */
+    graceWindowMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  // An absent body parses to {} so bodyless rotations stay valid.
+  .default({});
+
+/**
  * Factory — lets callers inject a custom WebhookSignerService in tests.
  */
 export function createWebhookKeysRouter(
@@ -121,6 +137,18 @@ export function createWebhookKeysRouter(
    *     security:
    *       - AdminApiKey: []
    *       - AdminJWT: []
+   *     requestBody:
+   *       required: false
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               graceWindowMs:
+   *                 type: integer
+   *                 minimum: 1
+   *                 description: One-off grace window override (ms) for this rotation.
+   *             additionalProperties: false
    *     responses:
    *       '200':
    *         description: Key rotated successfully.
@@ -142,53 +170,65 @@ export function createWebhookKeysRouter(
    *       '403': { $ref: '#/components/responses/Forbidden' }
    *       '500': { $ref: '#/components/responses/InternalServerError' }
    */
-  router.post('/rotate-key', async (req, res, next) => {
-    // Validate Content-Type when a body is present (guard against stray data)
-    const contentType = req.get('Content-Type') ?? '';
-    if (req.body && Object.keys(req.body).length > 0 && !contentType.includes('application/json')) {
-      next(new BadRequestError('Content-Type must be application/json when a body is supplied'));
-      return;
-    }
-
-    try {
-      const actor: string = res.locals.adminActor as string;
-      const result = await service.rotateKey(actor);
-
-      // Structured audit entry (also written inside the service, this provides
-      // HTTP-layer context that the service layer cannot see)
-      logger.audit('ADMIN_WEBHOOK_ROTATE_KEY', actor, {
-        clientIp: getClientIp(req, TRUST_PROXY),
-        userAgent: req.get('User-Agent'),
-        newKeyId: result.newKey.id,
-        previousKeyId: result.previousKey?.id ?? null,
-        graceWindowMs: result.graceWindowMs,
-        previousKeyExpiresAt: result.previousKeyExpiresAt,
-      });
-
-      return res.status(200).json({
-        data: {
-          newKeyId: result.newKey.id,
-          /**
-           * rawSecret is returned ONCE and never stored in plaintext.
-           * Subscribers must update their verification logic before
-           * previousKeyExpiresAt to avoid signature failures.
-           */
-          rawSecret: result.rawSecret,
-          graceWindowMs: result.graceWindowMs,
-          previousKeyId: result.previousKey?.id ?? null,
-          previousKeyExpiresAt: result.previousKeyExpiresAt,
-          rotatedAt: result.newKey.created_at,
-        },
-      });
-    } catch (error) {
-      if (error instanceof AppError) {
-        next(error);
+  router.post(
+    '/rotate-key',
+    validate({ body: rotateKeyBodySchema }),
+    async (req, res, next) => {
+      // Validate Content-Type when a body is present (guard against stray data).
+      // Note: only express.json() is mounted, so a non-JSON body never reaches
+      // req.body — this guard covers misconfigured parsers on the parent app.
+      const contentType = req.get('Content-Type') ?? '';
+      const rawBody: unknown = req.body;
+      const hasBody =
+        rawBody !== undefined &&
+        rawBody !== null &&
+        !(typeof rawBody === 'object' && Object.keys(rawBody as object).length === 0);
+      if (hasBody && !contentType.includes('application/json')) {
+        next(new BadRequestError('Content-Type must be application/json when a body is supplied'));
         return;
       }
-      logger.error('Webhook key rotation failed', error);
-      next(new InternalServerError('Webhook key rotation failed'));
-    }
-  });
+
+      try {
+        const actor: string = res.locals.adminActor as string;
+        const override = (req.body as { graceWindowMs?: number } | undefined)?.graceWindowMs;
+        const result = await service.rotateKey(actor, override);
+
+        // Structured audit entry (also written inside the service, this provides
+        // HTTP-layer context that the service layer cannot see)
+        logger.audit('ADMIN_WEBHOOK_ROTATE_KEY', actor, {
+          clientIp: getClientIp(req, TRUST_PROXY),
+          userAgent: req.get('User-Agent'),
+          newKeyId: result.newKey.id,
+          previousKeyId: result.previousKey?.id ?? null,
+          graceWindowMs: result.graceWindowMs,
+          previousKeyExpiresAt: result.previousKeyExpiresAt,
+        });
+
+        return res.status(200).json({
+          data: {
+            newKeyId: result.newKey.id,
+            /**
+             * rawSecret is returned ONCE and never stored in plaintext.
+             * Subscribers must update their verification logic before
+             * previousKeyExpiresAt to avoid signature failures.
+             */
+            rawSecret: result.rawSecret,
+            graceWindowMs: result.graceWindowMs,
+            previousKeyId: result.previousKey?.id ?? null,
+            previousKeyExpiresAt: result.previousKeyExpiresAt,
+            rotatedAt: result.newKey.created_at,
+          },
+        });
+      } catch (error) {
+        if (error instanceof AppError) {
+          next(error);
+          return;
+        }
+        logger.error('Webhook key rotation failed', error);
+        next(new InternalServerError('Webhook key rotation failed'));
+      }
+    },
+  );
 
   /**
    * GET /grace-window
