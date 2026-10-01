@@ -14,19 +14,7 @@ import type { UsageEventsRepository } from '../repositories/usageEventsRepositor
 import { InMemoryUsageEventsRepository } from '../repositories/usageEventsRepository.js';
 import type { ReportExporterService } from '../services/reportExporter.js';
 import { createDeveloperMeUsageRouter } from './developers/me/usage.js';
-
-/**
- * Wraps an async Express route handler so that any thrown error is forwarded
- * to the next() error-handling middleware. Express 4 does not automatically
- * catch rejected promises from async handlers.
- */
-function asyncHandler(
-  fn: (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction) => Promise<void>,
-) {
-  return (req: Request, res: Response<unknown, AuthenticatedLocals>, next: NextFunction): void => {
-    fn(req, res, next).catch(next);
-  };
-}
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 export interface DeveloperRoutesDeps {
   settlementStore: SettlementStore;

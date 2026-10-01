@@ -243,11 +243,49 @@ describe('resolveEndpointPrice', () => {
     assert.equal(result.priceUsdc, 0.10);
   });
 
+  test('uses normalized path lengths when overlapping prefixes omit a leading slash', () => {
+    const overlapping: EndpointPricing[] = [
+      { endpointId: 'ep_short', path: '/a', priceUsdc: 0.01 },
+      { endpointId: 'ep_long', path: 'a/', priceUsdc: 0.02 },
+    ];
+
+    const result = resolveEndpointPrice(overlapping, '/a/child');
+
+    assert.equal(result.endpointId, 'ep_long');
+  });
+
+  test('normalizes configured paths and request paths with or without leading slashes', () => {
+    const withoutLeadingSlash: EndpointPricing[] = [
+      { endpointId: 'ep_v1', path: 'v1', priceUsdc: 0.01 },
+      { endpointId: 'ep_search', path: 'v1/search', priceUsdc: 0.02 },
+    ];
+
+    assert.equal(resolveEndpointPrice(withoutLeadingSlash, 'v1/search/items').endpointId, 'ep_search');
+    assert.equal(resolveEndpointPrice(withoutLeadingSlash, '/v1/items').endpointId, 'ep_v1');
+  });
+
   test('falls back to wildcard when no prefix matches', () => {
     const result = resolveEndpointPrice(endpoints, '/unknown/path');
 
     assert.equal(result.endpointId, 'ep_wild');
     assert.equal(result.priceUsdc, 0.005);
+  });
+
+  test('uses a matching endpoint before the wildcard', () => {
+    const result = resolveEndpointPrice(endpoints, '/data/advanced');
+
+    assert.equal(result.endpointId, 'ep_2');
+  });
+
+  test('treats a root path as a prefix fallback beneath more specific paths', () => {
+    const withRoot: EndpointPricing[] = [
+      { endpointId: 'ep_root', path: '/', priceUsdc: 0.01 },
+      { endpointId: 'ep_v1', path: '/v1', priceUsdc: 0.02 },
+      { endpointId: 'ep_wild', path: '*', priceUsdc: 0.03 },
+    ];
+
+    assert.equal(resolveEndpointPrice(withRoot, '/v1/search').endpointId, 'ep_v1');
+    assert.equal(resolveEndpointPrice(withRoot, '/other').endpointId, 'ep_root');
   });
 
   test('returns default free pricing when no match and no wildcard', () => {
