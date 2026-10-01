@@ -44,6 +44,12 @@ import { createLogsRouter } from "./logs.js";
 import { createApiKeyRouter } from "./apiKeyRoutes.js";
 import { defaultApiRepository } from "../repositories/apiRepository.js";
 import { defaultDeveloperRepository } from "../repositories/developerRepository.js";
+import { createDeveloperRouter } from "./developerRoutes.js";
+import { InMemorySettlementStore } from "../services/settlementStore.js";
+import { InMemoryUsageStore } from "../services/usageStore.js";
+import { requireAuth, type AuthenticatedLocals } from "../middleware/requireAuth.js";
+import { apiKeyRepository } from "../repositories/apiKeyRepository.js";
+import { adminAuth } from "../middleware/adminAuth.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
 const openApiSpec = JSON.parse(readFileSync(openApiPath, "utf8"));
@@ -76,8 +82,36 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
     "/credits",
     createCreditsRouter({ creditsRepository: deps.creditsRepository }),
   );
-  router.use("/spike", createSpikeRouter());
+  router.use("/spike", adminAuth, createSpikeRouter());
   router.use("/errors", createErrorsRouter({ auditService: deps.auditService }));
+  router.use(
+    "/developers",
+    createDeveloperRouter({
+      settlementStore: new InMemorySettlementStore(),
+      usageStore: new InMemoryUsageStore(),
+      developerRepository: deps.developerRepository ?? defaultDeveloperRepository,
+      usageEventsRepository: deps.usageEventsRepository,
+    }),
+  );
+  router.get(
+    "/developers/me/keys",
+    requireAuth,
+    (req, res: import("express").Response<unknown, AuthenticatedLocals>) => {
+      const user = res.locals.authenticatedUser;
+      const keys = user
+        ? apiKeyRepository.list({ userId: user.id }).map((key) => ({
+            id: key.id,
+            apiId: key.apiId,
+            prefix: key.prefix,
+            revoked: key.revoked,
+            scopes: key.scopes,
+            rateLimitPerMinute: key.rateLimitPerMinute,
+            createdAt: key.createdAt.toISOString(),
+          }))
+        : [];
+      res.json({ keys });
+    },
+  );
   router.use("/audit", createAuditRouter({ auditService: deps.auditService }));
   router.use("/invoices", createInvoicesRouter());
 

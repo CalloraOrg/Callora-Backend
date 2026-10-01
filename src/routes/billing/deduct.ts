@@ -1,12 +1,10 @@
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
-import type { Pool } from "pg";
 
 import {
   BadGatewayError,
   BadRequestError,
   GatewayTimeoutError,
-  InternalServerError,
   NotFoundError,
   PaymentRequiredError,
   SimulationFailedError,
@@ -19,12 +17,9 @@ import {
 } from "../../middleware/requireAuth.js";
 import { idempotencyMiddleware } from "../../middleware/idempotency.js";
 import { billingDeductHistogramMiddleware } from "../../middleware/metricsHistogram.js";
-import { BillingService } from "../../services/billing.js";
-import {
-  createSorobanRpcBillingClient,
-  SorobanRpcError,
-} from "../../services/sorobanBilling.js";
+import { SorobanRpcError } from "../../services/sorobanBilling.js";
 import { redactSimulationDetails } from "../../lib/simulationDiagnostics.js";
+import { getBillingService } from "./billingService.js";
 import bulkDeductRouter from "./deduct/bulk.js";
 
 const router = Router();
@@ -37,25 +32,6 @@ interface BillingDeductBody {
   apiKeyId?: unknown;
   amountUsdc?: unknown;
   idempotencyKey?: unknown;
-}
-
-function createRouteBillingService(pool: Pool): BillingService {
-  const sorobanClient = createSorobanRpcBillingClient({
-    rpcUrl:
-      process.env.SOROBAN_BILLING_RPC_URL ??
-      process.env.SOROBAN_RPC_URL ??
-      "http://localhost:8000",
-    contractId: process.env.SOROBAN_BILLING_CONTRACT_ID ?? "vault_contract",
-    sourceAccount: process.env.SOROBAN_BILLING_SOURCE_ACCOUNT,
-    networkPassphrase: process.env.SOROBAN_BILLING_NETWORK_PASSPHRASE,
-    requestTimeoutMs: Number(
-      process.env.SOROBAN_BILLING_RPC_TIMEOUT_MS ?? 5_000,
-    ),
-    balanceFunctionName: process.env.SOROBAN_BILLING_BALANCE_FN ?? "balance",
-    deductFunctionName: process.env.SOROBAN_BILLING_DEDUCT_FN ?? "deduct",
-  });
-
-  return new BillingService(pool, sorobanClient);
 }
 
 function requireString(value: unknown, field: string): string {
@@ -73,14 +49,6 @@ function requirePositiveAmount(value: unknown): string {
     );
   }
   return amount;
-}
-
-function getPool(req: Request): Pool {
-  const pool = req.app?.locals?.dbPool as Pool | undefined;
-  if (!pool) {
-    throw new InternalServerError("Database pool is not configured");
-  }
-  return pool;
 }
 
 // idempotencyMiddleware declares an optional 4th `opts` parameter, giving it
@@ -161,7 +129,7 @@ router.post(
         ? requireString(body.developerId, "developerId")
         : user.id;
 
-      const billingService = createRouteBillingService(getPool(req));
+      const billingService = getBillingService(req);
       const result = await billingService.deduct({
         requestId,
         userId: developerId,
@@ -180,6 +148,16 @@ router.post(
               result.simulationDetails,
             ),
           );
+          return;
+        }
+
+        if (result.reconciliationRequired) {
+          res.status(409).json({
+            error: "Billing deduction pending reconciliation",
+            code: "RECONCILIATION_REQUIRED",
+            reconciliationRequired: true,
+            usageEventId: result.usageEventId,
+          });
           return;
         }
 
@@ -243,7 +221,7 @@ router.get(
       }
 
       const requestId = requireString(req.params.requestId, "requestId");
-      const billingService = createRouteBillingService(getPool(req));
+      const billingService = getBillingService(req);
       const result = await billingService.getByRequestId(requestId);
 
       if (!result) {

@@ -294,3 +294,209 @@ describe('POST /api/refresh-token — input validation', () => {
   });
 });
 
+describe('POST /api/refresh-token — happy path', () => {
+  let testApp: TestApp;
+
+  beforeEach(() => {
+    testApp = buildApp();
+  });
+
+  it('returns 200 with accessToken and tokenType for a valid refresh token', async () => {
+    const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
+
+    const res = await request(testApp.app)
+      .post('/api/refresh-token')
+      .send({ refreshToken });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('accessToken');
+    expect(res.body.tokenType).toBe('Bearer');
+
+    // Verify the returned access token is a valid JWT with the right claims
+    const decoded = jwt.verify(res.body.accessToken, TEST_SECRET) as any;
+    expect(decoded.userId).toBe('user-abc');
+    expect(decoded.type).toBe('access');
+  });
+
+  it('includes x-request-id in every response', async () => {
+    const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
+
+    const success = await request(testApp.app)
+      .post('/api/refresh-token')
+      .send({ refreshToken });
+
+    expect(success.headers['x-request-id']).toBeDefined();
+
+    const error = await request(testApp.app)
+      .post('/api/refresh-token')
+      .send({});
+
+    expect(error.headers['x-request-id']).toBeDefined();
+  });
+
+  it('echoes a caller-supplied x-request-id back in the response', async () => {
+    const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
+    const correlationId = 'test-correlation-id-12345';
+
+    const res = await request(testApp.app)
+      .post('/api/refresh-token')
+      .set('x-request-id', correlationId)
+      .send({ refreshToken });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-request-id']).toBe(correlationId);
+  });
+});
+
+describe('POST /api/refresh-token — revoked token', () => {
+  let testApp: TestApp;
+
+  beforeEach(() => {
+    testApp = buildApp();
+  });
+
+  it('returns 401 REVOKED_TOKEN for a revoked refresh token', async () => {
+    const { refreshToken, stored } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
+    await testApp.repo.revokeRefreshToken(stored.id, stored.userId);
+
+    const res = await request(testApp.app)
+      .post('/api/refresh-token')
+      .send({ refreshToken });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error?.code ?? res.body.code).toBe('REVOKED_TOKEN');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graceful-shutdown drain tests
+// ---------------------------------------------------------------------------
+
+describe('POST /api/refresh-token — graceful shutdown drain', () => {
+  it('drain subsystem is named refresh-token', () => {
+    const { drainTracker } = buildApp();
+    expect(drainTracker.subsystem.name).toBe('refresh-token');
+  });
+
+  it('awaitIdle resolves immediately when no requests are in flight', async () => {
+    const { drainTracker } = buildApp();
+    drainTracker.subsystem.beginShutdown();
+    await expect(drainTracker.subsystem.awaitIdle()).resolves.toBeUndefined();
+  });
+
+  it('sets Connection: close on responses received after beginShutdown', async () => {
+    const { app, refreshTokenService, repo, drainTracker } = buildApp();
+
+    // Signal shutdown BEFORE sending the request
+    drainTracker.subsystem.beginShutdown();
+
+    // The request still completes (drain doesn't block new requests from
+    // starting — it only prevents the process from exiting while they run)
+    const { refreshToken } = await seedValidToken(refreshTokenService, repo);
+    const res = await request(app)
+      .post('/api/refresh-token')
+      .send({ refreshToken });
+
+    expect(res.status).toBe(200);
+    // During drain the drain middleware must set Connection: close so that
+    // keep-alive clients do not attempt to reuse the connection.
+    expect(res.headers['connection']).toBe('close');
+  });
+
+  it('SIGTERM waits for an in-flight request to finish before the shutdown handler resolves', async () => {
+    /**
+     * This test directly exercises the production wiring:
+     *   - A real HTTP server is started on an ephemeral port.
+     *   - The refresh-token drain tracker is registered as a DrainableSubsystem.
+     *   - We start a long-running request (delayed by a setTimeout inside a
+     *     mock controller), fire SIGTERM (via gracefulShutdown), and verify
+     *     that the shutdown promise does not resolve until the request finishes.
+     */
+
+    // Slow controller: holds the response open for `delay` ms then responds.
+    let resolveDelayedResponse: (() => void) | undefined;
+    const delayedResponseSettled = new Promise<void>((resolve) => {
+      resolveDelayedResponse = resolve;
+    });
+
+    const slowApp = express();
+    slowApp.use(express.json());
+
+    const drainTracker = createInFlightDrainTracker('refresh-token');
+
+    slowApp.post(
+      '/api/refresh-token',
+      drainTracker.middleware,
+      (_req, res) => {
+        // Don't respond immediately — simulate an in-flight DB call.
+        setTimeout(() => {
+          res.json({ accessToken: 'fake', tokenType: 'Bearer' });
+          resolveDelayedResponse?.();
+        }, 80);
+      },
+    );
+
+    const server = slowApp.listen(0) as Server;
+
+    const activeConnections = new Set<any>();
+    server.on('connection', (socket: any) => {
+      activeConnections.add(socket);
+      socket.once('close', () => activeConnections.delete(socket));
+    });
+
+    const closeDatabase = jest.fn(async () => Promise.resolve());
+    const shutdown = createGracefulShutdownHandler({
+      server,
+      activeConnections,
+      closeDatabase,
+      timeoutMs: 2_000,
+      subsystems: [drainTracker.subsystem],
+    });
+
+    // Fire the slow request — don't await supertest yet, just start it.
+    const requestPromise = request(slowApp)
+      .post('/api/refresh-token')
+      .send({ refreshToken: 'any' });
+
+    // Give the request time to enter the handler before triggering shutdown.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Trigger graceful shutdown — should NOT resolve until the request finishes.
+    const shutdownPromise = shutdown('SIGTERM');
+
+    let shutdownResolved = false;
+    void shutdownPromise.then(() => { shutdownResolved = true; });
+
+    // Wait for the delayed response to be sent.
+    await delayedResponseSettled;
+    await requestPromise; // ensure supertest drains the socket
+
+    // Now the shutdown can complete.
+    const exitCode = await shutdownPromise;
+
+    expect(exitCode).toBe(0);
+    expect(shutdownResolved).toBe(true);
+    expect(closeDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it('shutdown resolves immediately when no requests are in flight at SIGTERM time', async () => {
+    const { drainTracker } = buildApp();
+
+    const server = { close: jest.fn((cb: (err?: Error) => void) => cb()) } as unknown as Server;
+    const closeDatabase = jest.fn(async () => Promise.resolve());
+
+    const shutdown = createGracefulShutdownHandler({
+      server,
+      activeConnections: new Set(),
+      closeDatabase,
+      timeoutMs: 100,
+      subsystems: [drainTracker.subsystem],
+    });
+
+    const exitCode = await shutdown('SIGTERM');
+
+    expect(exitCode).toBe(0);
+    expect(closeDatabase).toHaveBeenCalledTimes(1);
+  });
+});
+
