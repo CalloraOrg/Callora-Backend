@@ -235,6 +235,36 @@ Authenticated developers can register a marketplace API by calling `POST /api/ap
 
 The request requires developer auth via `Authorization: Bearer ...` or `x-user-id` in local/test flows. Validation errors return HTTP `400` with field-level `details`, and successful writes are persisted atomically with their endpoint rows.
 
+## Marketplace Plugins
+
+The community marketplace allows developers to register and install billing rule plugins.
+
+### Manifest Schema
+
+A plugin manifest defines the plugin's metadata and hooks. The schema requires:
+- `id`: Unique lowercase alphanumeric identifier (with hyphens), 3-64 chars.
+- `name`: String, 1-128 chars.
+- `version`: Semantic version string (e.g. "1.0.0").
+- `description`: (Optional) String up to 512 chars.
+- `author`: (Optional) String up to 128 chars.
+- `hooks`: Array of lifecycle events the plugin listens to. Currently supported hooks are `before_charge`, `after_charge`, `on_refund`, and `on_quota_exceeded`. At least one hook is required.
+- `source_url`: (Optional) Valid URL pointing to the plugin source.
+
+### Lifecycle Endpoints
+
+- `GET /api/marketplace/plugins` — List all registered plugins.
+- `POST /api/marketplace/plugins` — Register a new plugin manifest (auth required).
+- `GET /api/marketplace/plugins/:id` — Get details of a single plugin.
+- `POST /api/marketplace/plugins/:id/install` — Install a plugin (auth required). Returns an installation record.
+- `DELETE /api/marketplace/plugins/:id/install` — Uninstall a plugin (auth required).
+- `DELETE /api/marketplace/plugins/:id` — Remove a plugin from the registry (requires admin or the owner's auth).
+
+### Sandboxed Execution & Hooks (No-op)
+
+Currently, the `executeHook` system is **explicitly a stub**. Hooks are registered and installation might report `sandboxed: true`, but **no plugin code is executed**. The hook invocation simply validates that the plugin declared the hook, logs the event, and returns a stable, audit-friendly response.
+
+In the future, the intended design for the `sandboxed` flag is to indicate that plugin code runs inside an isolated Worker thread or VM context with strict resource limits, preventing arbitrary or unsafe code execution in the main process.
+
 ## Vault repository behavior
 
 - Enforces one vault per user per network.
