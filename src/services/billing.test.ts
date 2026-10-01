@@ -503,7 +503,7 @@ describe('BillingService.getByRequestId', () => {
     const soroban = createMockSorobanClient();
     const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
 
-    const result = await svc.getByRequestId('req_existing');
+    const result = await svc.getByRequestId('req_existing', 'user_abc');
 
     assert.ok(result !== null);
     assert.equal(result?.usageEventId, '123');
@@ -518,7 +518,40 @@ describe('BillingService.getByRequestId', () => {
     const soroban = createMockSorobanClient();
     const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
 
-    const result = await svc.getByRequestId('req_missing');
+    const result = await svc.getByRequestId('req_missing', 'user_abc');
+
+    assert.equal(result, null);
+  });
+
+  test('scopes the lookup to the owning user via SQL parameters', async () => {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const pool = {
+      query: async (sql: string, params: unknown[] = []) => {
+        calls.push({ sql, params });
+        return makeQr([{ id: 123, stellar_tx_hash: 'tx_abc' }]);
+      },
+    } as unknown as Pool;
+
+    const soroban = createMockSorobanClient();
+    const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
+
+    const result = await svc.getByRequestId('req_existing', 'user_abc');
+
+    assert.ok(result !== null);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].sql, /user_id\s*=\s*\$2/);
+    assert.deepEqual(calls[0].params, ['req_existing', 'user_abc']);
+  });
+
+  test('returns null for a request owned by another user', async () => {
+    const pool = {
+      query: async () => makeQr(),
+    } as unknown as Pool;
+
+    const soroban = createMockSorobanClient();
+    const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
+
+    const result = await svc.getByRequestId('req_other_user', 'user_abc');
 
     assert.equal(result, null);
   });
