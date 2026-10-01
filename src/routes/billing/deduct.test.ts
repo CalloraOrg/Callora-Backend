@@ -4,13 +4,9 @@ import jwt from 'jsonwebtoken';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import deductRouter from './deduct.js';
 import type { Pool } from 'pg';
-import { BillingService } from '../../services/billing.js';
-import { SorobanRpcError } from '../../services/sorobanBilling.js';
-import type { SimulationDetails } from '../../lib/simulationDiagnostics.js';
-
-// ---------------------------------------------------------------------------
-// Module-level mocks (must be hoisted before any imports are executed)
-// ---------------------------------------------------------------------------
+import { BillingService, type SorobanClient } from '../../services/billing.js';
+import { createSorobanBillingService } from '../../services/createSorobanBillingService.js';
+import { env } from '../../config/env.js';
 
 jest.mock('better-sqlite3', () => {
   return class MockDatabase {
@@ -26,87 +22,24 @@ jest.mock('better-sqlite3', () => {
   };
 });
 
-jest.mock('../../services/sorobanBilling.js', () => {
-  const actual = jest.requireActual('../../services/sorobanBilling.js');
-  return {
-    ...actual,
-    createSorobanRpcBillingClient: jest.fn().mockReturnValue({
-      getBalance: jest.fn(),
-      deductBalance: jest.fn(),
-    }),
-  };
-});
-
-// BillingService is injected via createRouteBillingService inside the route.
-// We mock the constructor so tests can control what deduct() throws/returns.
-jest.mock('../../services/billing.js', () => {
-  const actual = jest.requireActual('../../services/billing.js');
-  return {
-    ...actual,
-    BillingService: jest.fn(),
-  };
-});
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-const TEST_JWT_SECRET = 'test-secret-do-not-use-in-prod';
-
-/** Sign a valid short-lived JWT for test requests. */
-function signToken(userId = 'user_test_123'): string {
-  return jwt.sign({ userId }, TEST_JWT_SECRET, { expiresIn: '1h' });
-}
-
-/** Return an Express app wired up with the deduct router and error handler. */
-function buildApp(pool: Pool = { query: jest.fn() } as unknown as Pool) {
-  const app = express();
-  app.use(express.json());
-  app.locals.dbPool = pool;
-  app.use('/api/billing/deduct', deductRouter);
-  app.use(errorHandler);
-  return app;
-}
-
-/** Minimal valid POST body for /api/billing/deduct. */
-const validPayload = {
-  requestId: 'req_1',
-  apiId: 'api_1',
-  endpointId: 'endpoint_1',
-  apiKeyId: 'key_1',
-  amountUsdc: '0.01',
-};
-
-// ---------------------------------------------------------------------------
-// Helper: configure BillingService mock for a given test
-// ---------------------------------------------------------------------------
-
-type DeductMockResult =
-  | { throws: Error }
-  | { returns: Awaited<ReturnType<BillingService['deduct']>> };
-
-function mockBillingService(result: DeductMockResult): void {
-  const MockBillingService = BillingService as jest.MockedClass<typeof BillingService>;
-  const deductFn = result instanceof Object && 'throws' in result
-    ? jest.fn().mockRejectedValue((result as { throws: Error }).throws)
-    : jest.fn().mockResolvedValue((result as { returns: unknown }).returns);
-
-  MockBillingService.mockImplementation(() => ({
-    deduct: deductFn,
-    deductBulk: jest.fn(),
-    getByRequestId: jest.fn().mockResolvedValue(null),
-  }) as unknown as BillingService);
-}
-
-// ---------------------------------------------------------------------------
-// Suite 1: pre-existing developerId validation tests (kept for regression)
-// ---------------------------------------------------------------------------
-
 describe('POST /api/billing/deduct - developerId validation', () => {
-  it('returns 401 without auth', async () => {
-    const res = await request(buildApp())
-      .post('/api/billing/deduct')
-      .send({ ...validPayload, developerId: null });
+  function buildApp(
+    pool: Pool | null = { query: jest.fn() } as unknown as Pool,
+    billingService?: BillingService,
+  ) {
+    const app = express();
+    app.use(express.json());
+    if (pool) {
+      app.locals.dbPool = pool;
+      app.locals.billingService = billingService ?? new BillingService(pool, {
+        getBalance: jest.fn(),
+        deductBalance: jest.fn(),
+      });
+    }
+    app.use('/api/billing/deduct', deductRouter);
+    app.use(errorHandler);
+    return app;
+  }
 
     expect(res.status).toBe(401);
   });
@@ -505,5 +438,113 @@ describe('POST /api/billing/deduct - SorobanRpcError category mapping', () => {
         alreadyProcessed: false,
       });
     });
+  });
+
+  it('fails clearly when the billing service is not configured', async () => {
+    const app = buildApp();
+    delete app.locals.billingService;
+
+    const res = await request(app)
+      .post('/api/billing/deduct')
+      .set('x-user-id', 'user_123')
+      .send(validPayload);
+
+    expect(res.status).toBe(500);
+    expect(res.body.error.message).toContain('Billing service is not configured');
+  });
+
+  it('uses an injected fake Soroban client across requests without network access', async () => {
+    const pool = {
+      query: jest.fn().mockResolvedValue({ rows: [] }),
+    } as unknown as Pool;
+    const fakeClient: jest.Mocked<SorobanClient> = {
+      getBalance: jest.fn().mockResolvedValue({ balance: '0' }),
+      deductBalance: jest.fn(),
+    };
+    const service = new BillingService(pool, fakeClient);
+    const app = buildApp(pool, service);
+
+    for (const requestId of ['req_first', 'req_second']) {
+      const res = await request(app)
+        .post('/api/billing/deduct')
+        .set('x-user-id', 'user_123')
+        .send({ ...validPayload, requestId });
+      expect(res.status).toBe(402);
+    }
+
+    expect(app.locals.billingService).toBe(service);
+    expect(fakeClient.getBalance).toHaveBeenCalledTimes(2);
+    expect(fakeClient.deductBalance).not.toHaveBeenCalled();
+  });
+
+  it('uses the same injected service for deduction and request lookup', async () => {
+    const result = {
+      success: true,
+      usageEventId: 'evt_1',
+      stellarTxHash: 'tx_1',
+      alreadyProcessed: false,
+    };
+    const fakeService = {
+      deduct: jest.fn().mockResolvedValue(result),
+      getByRequestId: jest.fn().mockResolvedValue(result),
+    };
+    const app = buildApp(
+      { query: jest.fn() } as unknown as Pool,
+      fakeService as unknown as BillingService,
+    );
+
+    const deducted = await request(app)
+      .post('/api/billing/deduct')
+      .set('x-user-id', 'user_123')
+      .send(validPayload);
+    const lookup = await request(app)
+      .get('/api/billing/deduct/request/req_1')
+      .set('x-user-id', 'user_123');
+
+    expect(deducted.status).toBe(200);
+    expect(lookup.status).toBe(200);
+    expect(fakeService.deduct).toHaveBeenCalledTimes(1);
+    expect(fakeService.getByRequestId).toHaveBeenCalledWith('req_1');
+    expect(app.locals.billingService).toBe(fakeService);
+  });
+
+  it('creates the billing client only once when the app starts', async () => {
+    const fakeClient: jest.Mocked<SorobanClient> = {
+      getBalance: jest.fn().mockResolvedValue({ balance: '0' }),
+      deductBalance: jest.fn(),
+    };
+    const createBillingSorobanClient = jest.fn<
+      SorobanClient,
+      []
+    >().mockReturnValue(fakeClient);
+    const pool = { query: jest.fn().mockResolvedValue({ rows: [] }) } as unknown as Pool;
+    const service = createSorobanBillingService(pool, { createBillingSorobanClient });
+    const app = buildApp(pool, service);
+    expect(createBillingSorobanClient).toHaveBeenCalledTimes(1);
+
+    for (const requestId of ['req_first', 'req_second']) {
+      const res = await request(app)
+        .post('/api/billing/deduct')
+        .set('x-user-id', 'user_123')
+        .send({ ...validPayload, requestId });
+      expect(res.status).toBe(402);
+    }
+
+    expect(createBillingSorobanClient).toHaveBeenCalledTimes(1);
+    expect(fakeClient.getBalance).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses the default billing service across app initializations', () => {
+    const previousContractId = env.SOROBAN_BILLING_CONTRACT_ID;
+    env.SOROBAN_BILLING_CONTRACT_ID = 'contract_123';
+    try {
+      const pool = { query: jest.fn() } as unknown as Pool;
+      const first = createSorobanBillingService(pool);
+      const second = createSorobanBillingService(pool);
+      expect(first).toBeInstanceOf(BillingService);
+      expect(second).toBe(first);
+    } finally {
+      env.SOROBAN_BILLING_CONTRACT_ID = previousContractId;
+    }
   });
 });

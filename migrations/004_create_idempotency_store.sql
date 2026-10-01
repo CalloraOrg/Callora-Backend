@@ -1,6 +1,6 @@
 -- Migration: Create idempotency_store table
 CREATE TABLE IF NOT EXISTS idempotency_store (
-  idempotency_key VARCHAR(255) PRIMARY KEY,
+  idempotency_key VARCHAR(255) NOT NULL,
   request_hash VARCHAR(64) NOT NULL,
   status VARCHAR(50) NOT NULL, -- 'started', 'completed'
   response_status INTEGER,

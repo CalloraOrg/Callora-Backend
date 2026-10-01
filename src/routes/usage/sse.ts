@@ -11,8 +11,8 @@ export interface UsageSseDeps {
 export interface UsageSseEventPayload {
   id: string;
   requestId: string;
-  apiKey: string;
   apiKeyId: string;
+  apiKeyPrefix?: string;
   apiId: string;
   endpointId: string;
   userId: string;
@@ -21,17 +21,34 @@ export interface UsageSseEventPayload {
   timestamp: string;
 }
 
-export class UsageSseBroadcaster {
-  private readonly listeners = new Map<string, Set<(event: UsageSseEventPayload) => void>>();
+export type UsageSseListener = (event: UsageSseEventPayload) => void;
 
-  subscribe(userId: string, listener: (event: UsageSseEventPayload) => void): () => void {
-    const listeners = this.listeners.get(userId) ?? new Set();
+export class UsageSseBroadcaster {
+  private readonly listeners = new Map<string, Set<UsageSseListener>>();
+
+  /**
+   * Register `listener` for `userId` and return an idempotent unsubscribe.
+   *
+   * Buckets are keyed strictly by user id, so a stream can only ever observe
+   * events emitted for its own user. The returned unsubscribe is safe to call
+   * more than once (clients disconnect can surface as `close`, `aborted` and
+   * response `close`) and it only ever drops the bucket it was created with,
+   * never a newer bucket registered by a later stream for the same user.
+   */
+  subscribe(userId: string, listener: UsageSseListener): () => void {
+    const listeners = this.listeners.get(userId) ?? new Set<UsageSseListener>();
     listeners.add(listener);
     this.listeners.set(userId, listeners);
 
+    let unsubscribed = false;
     return () => {
+      if (unsubscribed) {
+        return;
+      }
+      unsubscribed = true;
+
       listeners.delete(listener);
-      if (listeners.size === 0) {
+      if (listeners.size === 0 && this.listeners.get(userId) === listeners) {
         this.listeners.delete(userId);
       }
     };
@@ -50,6 +67,16 @@ export class UsageSseBroadcaster {
         logger.error('[usage.sse] failed to dispatch event', { userId, error });
       }
     }
+  }
+
+  /** Number of live streams currently attached to `userId`. */
+  listenerCount(userId: string): number {
+    return this.listeners.get(userId)?.size ?? 0;
+  }
+
+  /** Number of user ids currently tracked; `0` means nothing is subscribed. */
+  trackedUserCount(): number {
+    return this.listeners.size;
   }
 
   clear(): void {
@@ -84,6 +111,10 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
     res.flushHeaders?.();
 
     const writeSse = (event: string, payload: unknown): void => {
+      if (res.writableEnded || res.destroyed) {
+        return;
+      }
+
       const data = JSON.stringify(payload);
       if (payload !== null && typeof payload === 'object' && 'id' in payload) {
         res.write(`id: ${(payload as { id: string }).id}\n`);
@@ -98,17 +129,24 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
       writeSse('usage', event);
     });
 
-    req.on('close', () => {
+    let disconnected = false;
+    const disconnect = (reason: 'close' | 'aborted' | 'response-close'): void => {
+      if (disconnected) {
+        return;
+      }
+      disconnected = true;
+
       unsubscribe();
       logger.info('[usage.sse] client disconnected', {
         userId: user.id,
         requestId,
+        reason,
       });
-    });
+    };
 
-    req.on('aborted', () => {
-      unsubscribe();
-    });
+    req.once('close', () => disconnect('close'));
+    req.once('aborted', () => disconnect('aborted'));
+    res.once('close', () => disconnect('response-close'));
   });
 
   return router;

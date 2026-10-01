@@ -3,9 +3,80 @@ import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
-import { getEffectiveRetryPolicy } from '../services/webhookRetry.js';
+import { getEffectiveRetryPolicy, calculateBackoff } from '../services/webhookRetry.js';
+import { computeJitteredDelay, type RandomSource } from '../lib/retry.js';
+import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
+
+export const MAX_WEBHOOK_RESPONSE_BYTES = 64 * 1024;
+
+export async function consumeCappedResponseBody(
+    response: Response,
+    maxBytes: number = MAX_WEBHOOK_RESPONSE_BYTES
+): Promise<string> {
+    if (!response.body) {
+        if (typeof (response as any).text === 'function') {
+            try {
+                const text = await (response as any).text();
+                return typeof text === 'string' && text.length > maxBytes
+                    ? text.slice(0, maxBytes)
+                    : text || '';
+            } catch {
+                return '';
+            }
+        }
+        return '';
+    }
+
+    try {
+        const reader = response.body.getReader();
+        let receivedBytes = 0;
+        const chunks: Uint8Array[] = [];
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value) {
+                    if (receivedBytes + value.byteLength > maxBytes) {
+                        const remaining = maxBytes - receivedBytes;
+                        if (remaining > 0) {
+                            chunks.push(value.subarray(0, remaining));
+                        }
+                        try {
+                            await reader.cancel('Response body exceeded maximum allowed size');
+                        } catch {
+                            // ignore cancel error
+                        }
+                        break;
+                    }
+                    chunks.push(value);
+                    receivedBytes += value.byteLength;
+                }
+            }
+        } catch {
+            // ignore stream read error
+        } finally {
+            try {
+                reader.releaseLock();
+            } catch {
+                // ignore release error
+            }
+        }
+
+        return Buffer.concat(chunks).toString('utf8');
+    } catch {
+        return '';
+    }
+}
+
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
+
+/**
+ * Random source used for retry backoff jitter. Injectable so tests can supply
+ * a seeded, deterministic sequence; production uses `Math.random`.
+ */
+let jitterRandom: RandomSource = Math.random;
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,6 +108,15 @@ export async function awaitWebhookDispatcherIdle(): Promise<void> {
 export function resetWebhookDispatcherForTests(): void {
     acceptingDispatches = true;
     inFlightDispatches.clear();
+    jitterRandom = Math.random;
+}
+
+/**
+ * Overrides the random source used to jitter webhook retry delays.
+ * Tests pass a seeded generator to make backoff deterministic.
+ */
+export function setWebhookJitterRandom(random: RandomSource): void {
+    jitterRandom = random;
 }
 
 /**
@@ -45,7 +125,9 @@ export function resetWebhookDispatcherForTests(): void {
  * Operational Limits:
  * - Max retries: Uses subscription's retryPolicy.maxRetries (defaults to 5)
  * - Timeout: 10 seconds per attempt
- * - Backoff: Exponential using subscription's retryPolicy.baseDelayMs (defaults to 1s)
+ * - Backoff: Exponential with full jitter, using subscription's retryPolicy.baseDelayMs
+ *   (defaults to 1s). The exponential value is an upper bound; actual delays are randomised
+ *   below it so recovering receivers are not hit by a synchronised retry storm.
  * - Idempotency: Uses a deterministic Deduplication key (X-Callora-Delivery) per dispatch call
  */
 export async function dispatchWebhook(
@@ -83,17 +165,70 @@ export async function dispatchWebhook(
         }
 
         let lastError: unknown;
+        let attemptsMade = 0;
+
+        try {
+            await validateWebhookUrl(config.url);
+        } catch (err) {
+            const failedAt = new Date().toISOString();
+            const lastErrorMessage =
+                err instanceof Error ? err.message : String(err);
+
+            logger.warn(
+                `[webhook] Pre-dispatch validation failed for ${config.url}:`,
+                lastErrorMessage
+            );
+            logger.error(
+                `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after 0 attempts.`,
+                err
+            );
+
+            WebhookStore.recordFailedDelivery({
+                deliveryId,
+                developerId: config.developerId,
+                event: payload.event,
+                url: config.url,
+                failedAt,
+                lastError: lastErrorMessage,
+                attempts: 0,
+            });
+            return;
+        }
 
         for (let attempt = 0; attempt < maxRetries; attempt++) {
+            attemptsMade = attempt + 1;
             try {
                 const response = await fetch(config.url, {
                     method: 'POST',
                     body,
                     headers,
+                    redirect: 'manual',
                     signal: AbortSignal.timeout(10_000), // 10s timeout per attempt
                 });
 
+                const isRedirect =
+                    (response.status >= 300 && response.status < 400) ||
+                    response.type === 'opaqueredirect';
+
+                if (isRedirect) {
+                    if (response.body) {
+                        await consumeCappedResponseBody(response);
+                    }
+                    const location = response.headers.get('location') || '';
+                    const redirectMsg = location
+                        ? `Webhook redirect to "${location}" refused (HTTP ${response.status}): redirects are not followed`
+                        : `Webhook HTTP ${response.status} redirect refused: redirects are not followed`;
+                    lastError = new Error(redirectMsg);
+                    logger.warn(
+                        `[webhook] ${redirectMsg} for ${config.url}, attempt ${attempt + 1}`
+                    );
+                    break;
+                }
+
                 if (response.ok) {
+                    if (response.body) {
+                        await consumeCappedResponseBody(response);
+                    }
                     logger.info(
                         `[webhook] ✓ Delivered ${payload.event} to ${config.url}`,
                         `attempt ${attempt + 1}`
@@ -101,6 +236,9 @@ export async function dispatchWebhook(
                     return;
                 }
 
+                if (response.body) {
+                    await consumeCappedResponseBody(response);
+                }
                 lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
                 logger.warn(
                     `[webhook] Non-2xx response (${response.status}) for ${config.url}`,
@@ -115,8 +253,18 @@ export async function dispatchWebhook(
             }
 
             if (attempt < maxRetries - 1) {
-                const delay = baseDelayMs * Math.pow(2, attempt);
-                logger.info(`[webhook] Retrying in ${delay}ms...`);
+                // Jitter keeps concurrent deliveries from retrying in lockstep.
+                // The exponential value is also the ceiling, so a delivery never
+                // waits longer than its configured backoff.
+                const scheduledDelay = calculateBackoff(attempt, baseDelayMs);
+                const delay = computeJitteredDelay(scheduledDelay, {
+                    strategy: 'full',
+                    random: jitterRandom,
+                    maxDelayMs: scheduledDelay,
+                });
+                logger.info(
+                    `[webhook] Retrying in ${delay}ms (scheduled ${scheduledDelay}ms)...`
+                );
                 await sleep(delay);
             }
         }
@@ -138,7 +286,7 @@ export async function dispatchWebhook(
             url: config.url,
             failedAt,
             lastError: lastErrorMessage,
-            attempts: maxRetries,
+            attempts: attemptsMade || maxRetries,
         });
     })());
 }

@@ -115,10 +115,15 @@ export class InMemoryPlansRepository implements PlansRepository {
       }
     }
 
-    return results;
+    // Return shallow copies so callers cannot mutate the repository's stored
+    // plans by writing to a returned object.
+    return results.map((p) => ({ ...p }));
   }
 
   async findById(id: string): Promise<Plan | undefined> {
-    return this.plans.get(id);
+    const plan = this.plans.get(id);
+    // Copy on read for the same reason as list(): the returned object must not
+    // be a live reference into the repository's internal store.
+    return plan ? { ...plan } : undefined;
   }
 }

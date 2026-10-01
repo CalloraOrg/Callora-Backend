@@ -245,6 +245,80 @@ export type SpikeQuery = z.infer<typeof spikeQuerySchema>;
 // POST /api/admin/db/explain
 // ---------------------------------------------------------------------------
 
+export const ALLOWED_QUERY_PATTERNS: RegExp[] = [
+  /^\s*SELECT\b/is,
+  /^\s*WITH\b/is,
+];
+
+export const DISALLOWED_DML_KEYWORDS = [
+  'DELETE',
+  'UPDATE',
+  'INSERT',
+  'MERGE',
+  'DROP',
+  'ALTER',
+  'TRUNCATE',
+  'CREATE',
+  'GRANT',
+  'REVOKE',
+  'LOCK',
+  'VACUUM',
+  'REINDEX',
+  'EXECUTE',
+  'CALL',
+  'DO',
+] as const;
+
+export const DISALLOWED_KEYWORDS_REGEX = new RegExp(
+  `\\b(${DISALLOWED_DML_KEYWORDS.join('|')})\\b`,
+  'i',
+);
+
+/**
+ * Strips SQL comments and string literals so keyword checking does not trigger
+ * on string literals (e.g. `WHERE status = 'DELETE'`) or comments.
+ */
+export function stripSqlLiteralsAndComments(query: string): string {
+  return query
+    // Remove single-quoted strings (handling escaped quotes '')
+    .replace(/'(?:[^'\\]|\\.)*'/gs, "''")
+    // Remove dollar-quoted strings: $$...$$ or $tag$...$tag$
+    .replace(/\$([a-zA-Z0-9_]*)\$[\s\S]*?\$\1\$/g, "''")
+    // Remove single-line comments: -- ...
+    .replace(/--.*$/gm, '')
+    // Remove multi-line comments: /* ... */
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * Checks whether the query contains multiple statements separated by semicolons.
+ */
+export function hasMultiStatement(query: string): boolean {
+  const cleaned = stripSqlLiteralsAndComments(query);
+  return cleaned.includes(';');
+}
+
+/**
+ * Checks whether the query contains data-modifying or DDL keywords outside of
+ * literals and comments.
+ */
+export function hasDisallowedDmlKeywords(query: string): boolean {
+  const cleaned = stripSqlLiteralsAndComments(query);
+  return DISALLOWED_KEYWORDS_REGEX.test(cleaned);
+}
+
+/**
+ * Validates that an EXPLAIN query is read-only and safe to analyze.
+ * Rejects multi-statement queries, queries not starting with SELECT or WITH,
+ * and queries containing data-modifying keywords (e.g. data-modifying CTEs).
+ */
+export function isAllowedQuery(query: string): boolean {
+  if (hasMultiStatement(query)) return false;
+  if (!ALLOWED_QUERY_PATTERNS.some((p) => p.test(query))) return false;
+  if (hasDisallowedDmlKeywords(query)) return false;
+  return true;
+}
+
 /**
  * Request body for POST /api/admin/db/explain.
  * Kept in sync with the inline schema in explain.ts so both can share the
@@ -255,6 +329,8 @@ export const dbExplainBodySchema = z.object({
   query: z.string().min(1, 'Query is required').max(50_000, 'Query too long'),
   /** Optional positional parameters to pass to the query. */
   params: z.array(z.unknown()).optional().default([]),
+  /** Optional statement timeout in milliseconds. */
+  statementTimeoutMs: z.number().int().positive().max(60_000).optional(),
 });
 
 export type DbExplainBody = z.infer<typeof dbExplainBodySchema>;
