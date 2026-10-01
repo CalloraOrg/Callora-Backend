@@ -5,6 +5,7 @@ import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import {
   startUpstreamTimer,
   recordProxyPrematureAbort,
+  recordUsageRecordFailure,
   type UpstreamOutcome,
   setGatewayUpstreamBreakerState,
   recordEndpointThroughputSaturation,
@@ -30,7 +31,7 @@ import { CircuitBreaker } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
-import { logger } from '../middleware/logging.js';
+import { logger } from '../logger.js';
 
 /**
  * Headers that must never be forwarded to the upstream server.
@@ -61,6 +62,17 @@ const DEFAULT_STRIP_HEADERS = [
 ];
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Mask a plaintext API key for safe inclusion in SSE payloads.
+ * Keeps only a short prefix so operators can correlate events without
+ * exposing the full secret.
+ */
+function maskApiKey(apiKey: string): string {
+  if (!apiKey) return '';
+  const prefix = apiKey.slice(0, 8);
+  return `${prefix}…`;
+}
 
 function resolveConfig(partial?: Partial<ProxyConfig>): ProxyConfig {
   return {
@@ -256,6 +268,14 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         res.status(upstreamStatus);
         if (upstreamRes.body) {
           const reader = upstreamRes.body.getReader();
+          // Release the upstream connection if the client goes away before the
+          // body has been fully delivered.
+          const onClientClose = (): void => {
+            if (!res.writableFinished) {
+              void reader.cancel().catch(() => undefined);
+            }
+          };
+          res.once('close', onClientClose);
           const pump = async (): Promise<void> => {
             while (true) {
               const { done, value } = await reader.read();
@@ -264,13 +284,44 @@ export function createProxyRouter(deps: ProxyDeps): Router {
             }
             res.end();
           };
-          await pump();
+          try {
+            await pump();
+          } catch (streamErr) {
+            // Mid-stream failure: headers are already flushed, so the error
+            // handler cannot send an envelope. Cancel the upstream body so its
+            // socket is freed; errorHandler then destroys the client response
+            // so the caller sees a terminated stream instead of a hang.
+            void reader.cancel(streamErr).catch(() => undefined);
+            throw streamErr;
+          } finally {
+            res.removeListener('close', onClientClose);
+          }
         } else {
           const text = await upstreamRes.text();
           res.send(text);
         }
       } catch (err: unknown) {
         let outcome: UpstreamOutcome = 'error';
+
+        // If headers have already been flushed to the client, we cannot send a
+        // structured error response.  Destroy the socket so the client sees a
+        // terminated stream instead of hanging on a truncated body.  Log once
+        // with the requestId for observability.
+        if (res.headersSent) {
+          logger.error(
+            {
+              err,
+              requestId,
+              apiId: String(apiEntry.id),
+              endpointId: endpoint.endpointId,
+              upstreamStatus,
+            },
+            'Proxy error after headers sent; destroying response socket',
+          );
+          timer.stop(upstreamStatus, outcome);
+          res.destroy(err instanceof Error ? err : undefined);
+          return;
+        }
 
         if (err instanceof CircuitBreakerOpenError) {
           // Circuit breaker open — don't bill the caller
@@ -341,7 +392,6 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                 const recorded = await usageStore.record({
                   id: randomUUID(), // ID of the usage event itself
                   requestId,        // Idempotency key — prevents double-counts
-                  // apiKey field omitted to prevent storing plaintext keys
                   apiKeyId: keyRecord.id,
                   apiId: String(apiEntry.id),
                   endpointId: endpoint.endpointId,
@@ -355,8 +405,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                   defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
                     id: randomUUID(),
                     requestId,
-                    // apiKey field omitted to prevent broadcasting plaintext keys
                     apiKeyId: keyRecord.id,
+                    apiKeyPrefix: maskApiKey(apiKeyHeader),
                     apiId: String(apiEntry.id),
                     endpointId: endpoint.endpointId,
                     userId: keyRecord.userId,
@@ -378,11 +428,16 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                 // before (idempotency guard inside usageStore.record).
                 if (recorded && endpoint.priceUsdc > 0) {
                   billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
-                    logger.error('Background billing deduction failed:', err);
+                    logger.error({ error: err }, 'Background billing deduction failed');
                   });
                 }
               } catch (err) {
-                logger.error('Background usage recording failed:', err);
+                recordUsageRecordFailure();
+                logger.error({
+                  requestId,
+                  apiId: String(apiEntry.id),
+                  error: err,
+                }, 'Background usage recording failed');
               }
             })();
           });

@@ -1,12 +1,13 @@
 import request from 'supertest';
 import { createApp } from './app.js';
-import { InMemoryUsageEventsRepository } from './repositories/usageEventsRepository.js';
+import { InMemoryUsageEventsRepository, type UsageEventsRepository } from './repositories/usageEventsRepository.js';
 import type { Api } from './db/schema.js';
 import type { ApiRepository, ApiListFilters, ApiCreateInput, ApiUpdateInput } from './repositories/apiRepository.js';
 import type { Developer } from './db/schema.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { TEST_JWT_SECRET, signTestToken } from '../tests/helpers/jwt.js';
 
 process.env.JWT_SECRET = TEST_JWT_SECRET;
@@ -1358,5 +1359,271 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
       });
       expect(isRegistered).toBe(true);
     }
+  });
+
+  test('every createApp route is represented in the ARCHITECTURE route map', () => {
+    const app = createApp({ apiRepository: buildApiRepo() });
+    const architecture = readFileSync('ARCHITECTURE.md', 'utf8');
+    const tableRows = architecture
+      .split(/\r?\n/)
+      .filter((line) => /^\|\s*(GET|POST|PUT|PATCH|DELETE|OPTIONS|ALL|\*)\s*\|/.test(line));
+    const documented = tableRows.map((line) => {
+      const cells = line.split('|').map((cell) => cell.trim());
+      return {
+        method: cells[1].toUpperCase(),
+        path: cells[2].replace(/`/g, ''),
+        indexOnly: cells[3].includes('(src/index.ts only)'),
+      };
+    });
+
+    interface ExpressLayer {
+      route?: { path: string | string[]; methods: Record<string, boolean> };
+      name?: string;
+      handle?: { stack?: ExpressLayer[] };
+      regexp?: RegExp;
+      matchers?: Array<(path: string) => unknown>;
+    }
+
+    const mounted: Array<{ method: string; path: string }> = [];
+    const normalize = (path: string) => path.replace(/\/{2,}/g, '/');
+    const mountPath = (layer: ExpressLayer) => {
+      if (layer.matchers?.length) {
+        const matcher = layer.matchers[0] as unknown as { source?: string };
+        if (matcher.source) return matcher.source;
+      }
+      const source = layer.regexp?.source;
+      if (!source) return '';
+      return source
+        .replace(/^\^/, '')
+        .replace(/\\\//g, '/')
+        .replace(/\\\/?\(\?=\/\|\$\).*$/, '')
+        .replace(/\\\/?\$$/, '')
+        .replace(/\$$/, '');
+    };
+    const walk = (stack: ExpressLayer[], prefix = '') => {
+      for (const layer of stack) {
+        if (layer.route) {
+          const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
+          for (const routePath of paths) {
+            for (const [method, enabled] of Object.entries(layer.route.methods)) {
+              if (enabled) mounted.push({ method: method.toUpperCase(), path: normalize(`${prefix}/${routePath}`) });
+            }
+          }
+        } else if (layer.name === 'router' && layer.handle?.stack) {
+          const mount = mountPath(layer);
+          const literal = mount.match(/^(?:\/[\w.-]+)*/)?.[0] ?? '';
+          walk(layer.handle.stack, normalize(`${prefix}/${literal}`));
+        }
+      }
+    };
+
+    walk(app._router.stack as ExpressLayer[]);
+    const mountedSet = new Set(mounted.map(({ method, path }) => `${method} ${path}`));
+    const documentedAppSet = new Set(
+      documented
+        .filter(({ indexOnly }) => !indexOnly)
+        .map(({ method, path }) => `${method} ${path}`),
+    );
+
+    expect(mountedSet.size).toBeGreaterThan(0);
+    expect([...mountedSet].filter((route) => !documentedAppSet.has(route))).toEqual([]);
+    expect([...documentedAppSet].filter((route) => !mountedSet.has(route))).toEqual([]);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Async Rejection Handling Tests (Issue #1278)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Async rejection handling in GET /api/developers/apis', () => {
+  test('returns 500 when apiRepository.listByDeveloper throws', async () => {
+    const throwingApiRepository: ApiRepository = {
+      ...new InMemoryApiRepository(),
+      async listByDeveloper() {
+        throw new Error('Database connection lost');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: usageEventsForApis(),
+      developerRepository: createDeveloperRepository(developerProfile),
+      apiRepository: throwingApiRepository,
+    });
+
+    const response = await request(app)
+      .get('/api/developers/apis')
+      .set('Authorization', authBearer('dev-1'));
+
+    // Should not hang; should return 500 error envelope
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('returns 500 when usageEventsRepository.aggregateByDeveloper throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async aggregateByDeveloper() {
+        throw new Error('Query timeout');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+      apiRepository: new FakeApiRepository(sampleApis),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/apis')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('does not emit unhandledRejection event when repository throws', async () => {
+    const throwingApiRepository: ApiRepository = {
+      ...new InMemoryApiRepository(),
+      async listByDeveloper() {
+        throw new Error('Repository error');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: usageEventsForApis(),
+      developerRepository: createDeveloperRepository(developerProfile),
+      apiRepository: throwingApiRepository,
+    });
+
+    let unhandledRejectionEmitted = false;
+    const handler = () => {
+      unhandledRejectionEmitted = true;
+    };
+
+    process.on('unhandledRejection', handler);
+
+    try {
+      const response = await request(app)
+        .get('/api/developers/apis')
+        .set('Authorization', authBearer('dev-1'));
+
+      assert.equal(response.status, 500);
+      // Give the event loop a chance to emit the event
+      await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(unhandledRejectionEmitted, false);
+    } finally {
+      process.removeListener('unhandledRejection', handler);
+    }
+  });
+});
+
+describe('Async rejection handling in GET /api/developers/analytics', () => {
+  test('returns 500 when usageEventsRepository.developerOwnsApi throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async developerOwnsApi() {
+        throw new Error('Permissions service unavailable');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28&apiId=api-1')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('returns 500 when usageEventsRepository.findByDeveloper throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async findByDeveloper() {
+        throw new Error('Database read failed');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
+    assert.ok(response.body.requestId); // Verify proper error envelope
+  });
+
+  test('does not emit unhandledRejection event when repository throws', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async findByDeveloper() {
+        throw new Error('Repository unavailable');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    let unhandledRejectionEmitted = false;
+    const handler = () => {
+      unhandledRejectionEmitted = true;
+    };
+
+    process.on('unhandledRejection', handler);
+
+    try {
+      const response = await request(app)
+        .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28')
+        .set('Authorization', authBearer('dev-1'));
+
+      assert.equal(response.status, 500);
+      // Give the event loop a chance to emit the event
+      await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(unhandledRejectionEmitted, false);
+    } finally {
+      process.removeListener('unhandledRejection', handler);
+    }
+  });
+
+  test('returns proper error envelope with requestId on async errors', async () => {
+    const throwingUsageRepository: UsageEventsRepository = {
+      ...new InMemoryUsageEventsRepository(),
+      async findByDeveloper() {
+        throw new Error('Query execution error');
+      },
+    };
+
+    const app = createApp({
+      usageEventsRepository: throwingUsageRepository,
+      developerRepository: createDeveloperRepository(developerProfile),
+    });
+
+    const response = await request(app)
+      .get('/api/developers/analytics?from=2026-02-01&to=2026-02-28')
+      .set('Authorization', authBearer('dev-1'));
+
+    assert.equal(response.status, 500);
+    assert.ok(response.body.requestId);
+    assert.equal(typeof response.body.requestId, 'string');
+    const errorMsg = response.body.error?.message ?? response.body.message;
+    assert.ok(errorMsg);
   });
 });

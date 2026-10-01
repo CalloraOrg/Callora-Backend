@@ -1,4 +1,4 @@
--- Revert idempotency key scoping.
+-- Rollback: 0025_idempotency_store_scope
 --
 -- NOTE: the global primary key can only be restored if no (scope, key)
 -- collision remains, so keep the earliest row per key and drop the rest.

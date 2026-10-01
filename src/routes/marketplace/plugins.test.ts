@@ -95,7 +95,7 @@ describe('InMemoryPluginRepository', () => {
 
   describe('register', () => {
     it('registers a plugin and sets status=available', () => {
-      const record = repo.register(validManifest);
+      const record = repo.register(validManifest, 'user-1');
       expect(record.status).toBe('available');
       expect(record.installed_by).toBeNull();
       expect(record.installed_at).toBeNull();
@@ -103,8 +103,8 @@ describe('InMemoryPluginRepository', () => {
     });
 
     it('throws ConflictError on duplicate id', () => {
-      repo.register(validManifest);
-      expect(() => repo.register(validManifest)).toThrow(/already registered/);
+      repo.register(validManifest, 'user-1');
+      expect(() => repo.register(validManifest, 'user-1')).toThrow(/already registered/);
     });
   });
 
@@ -114,8 +114,8 @@ describe('InMemoryPluginRepository', () => {
     });
 
     it('returns all registered plugins', () => {
-      repo.register(validManifest);
-      repo.register({ ...validManifest, id: 'plugin-two' });
+      repo.register(validManifest, 'user-1');
+      repo.register({ ...validManifest, id: 'plugin-two' }, 'user-1');
       expect(repo.list()).toHaveLength(2);
     });
   });
@@ -126,14 +126,14 @@ describe('InMemoryPluginRepository', () => {
     });
 
     it('returns the record for a known id', () => {
-      repo.register(validManifest);
+      repo.register(validManifest, 'user-1');
       expect(repo.findById(validManifest.id)).toBeDefined();
     });
   });
 
   describe('install', () => {
     it('transitions status to installed', () => {
-      repo.register(validManifest);
+      repo.register(validManifest, 'user-1');
       const record = repo.install(validManifest.id, 'user-1');
       expect(record.status).toBe('installed');
       expect(record.installed_by).toBe('user-1');
@@ -145,7 +145,7 @@ describe('InMemoryPluginRepository', () => {
     });
 
     it('throws ConflictError when already installed', () => {
-      repo.register(validManifest);
+      repo.register(validManifest, 'user-1');
       repo.install(validManifest.id, 'user-1');
       expect(() => repo.install(validManifest.id, 'user-2')).toThrow(/already installed/);
     });
@@ -153,7 +153,7 @@ describe('InMemoryPluginRepository', () => {
 
   describe('uninstall', () => {
     it('transitions installed plugin back to available', () => {
-      repo.register(validManifest);
+      repo.register(validManifest, 'user-1');
       repo.install(validManifest.id, 'user-1');
       const record = repo.uninstall(validManifest.id, 'user-1');
       expect(record.status).toBe('available');
@@ -165,20 +165,20 @@ describe('InMemoryPluginRepository', () => {
     });
 
     it('throws BadRequestError when plugin not installed', () => {
-      repo.register(validManifest);
+      repo.register(validManifest, 'user-1');
       expect(() => repo.uninstall(validManifest.id, 'user-1')).toThrow(/not installed/);
     });
   });
 
   describe('delete', () => {
     it('removes a registered plugin', () => {
-      repo.register(validManifest);
-      repo.delete(validManifest.id);
+      repo.register(validManifest, 'user-1');
+      repo.delete(validManifest.id, 'user-1');
       expect(repo.findById(validManifest.id)).toBeUndefined();
     });
 
     it('throws NotFoundError for unknown plugin', () => {
-      expect(() => repo.delete('ghost')).toThrow(/not found/);
+      expect(() => repo.delete('ghost', 'user-1')).toThrow(/not found/);
     });
   });
 });
@@ -193,7 +193,7 @@ describe('executeHook', () => {
 
   beforeEach(() => {
     repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     record = repo.install(validManifest.id, 'user-1');
   });
 
@@ -229,7 +229,7 @@ describe('GET /api/marketplace/plugins', () => {
 
   it('lists registered plugins', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo)).get('/api/marketplace/plugins');
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
@@ -260,17 +260,19 @@ describe('POST /api/marketplace/plugins', () => {
       .send(validManifest);
     expect(res.status).toBe(201);
     expect(res.body.manifest.id).toBe(validManifest.id);
+    expect(res.body.owner_id).toBe('user-1');
     expect(res.body.status).toBe('available');
   });
 
   it('returns 409 when registering a duplicate plugin', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo))
       .post('/api/marketplace/plugins')
       .set('x-user-id', 'user-1')
       .send(validManifest);
     expect(res.status).toBe(409);
+    expect(repo.findById(validManifest.id)?.owner_id).toBe('user-1');
   });
 });
 
@@ -282,7 +284,7 @@ describe('GET /api/marketplace/plugins/:id', () => {
 
   it('returns the plugin record', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo)).get(`/api/marketplace/plugins/${validManifest.id}`);
     expect(res.status).toBe(200);
     expect(res.body.manifest.id).toBe(validManifest.id);
@@ -292,7 +294,7 @@ describe('GET /api/marketplace/plugins/:id', () => {
 describe('POST /api/marketplace/plugins/:id/install', () => {
   it('returns 401 without auth', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo))
       .post(`/api/marketplace/plugins/${validManifest.id}/install`);
     expect(res.status).toBe(401);
@@ -307,7 +309,7 @@ describe('POST /api/marketplace/plugins/:id/install', () => {
 
   it('installs the plugin and fires hook', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo))
       .post(`/api/marketplace/plugins/${validManifest.id}/install`)
       .set('x-user-id', 'user-1');
@@ -322,7 +324,7 @@ describe('POST /api/marketplace/plugins/:id/install', () => {
 
   it('returns 409 when already installed', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     repo.install(validManifest.id, 'user-1');
     const res = await request(buildApp(repo))
       .post(`/api/marketplace/plugins/${validManifest.id}/install`)
@@ -333,7 +335,7 @@ describe('POST /api/marketplace/plugins/:id/install', () => {
   it('returns null hook when plugin does not declare before_charge', async () => {
     const repo = new InMemoryPluginRepository();
     const noBeforeCharge: PluginManifest = { ...validManifest, id: 'refund-plugin', hooks: ['on_refund'] };
-    repo.register(noBeforeCharge);
+    repo.register(noBeforeCharge, 'user-1');
     const res = await request(buildApp(repo))
       .post(`/api/marketplace/plugins/${noBeforeCharge.id}/install`)
       .set('x-user-id', 'user-1');
@@ -345,7 +347,7 @@ describe('POST /api/marketplace/plugins/:id/install', () => {
 describe('DELETE /api/marketplace/plugins/:id/install', () => {
   it('returns 401 without auth', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     repo.install(validManifest.id, 'user-1');
     const res = await request(buildApp(repo))
       .delete(`/api/marketplace/plugins/${validManifest.id}/install`);
@@ -354,7 +356,7 @@ describe('DELETE /api/marketplace/plugins/:id/install', () => {
 
   it('uninstalls an installed plugin', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     repo.install(validManifest.id, 'user-1');
     const res = await request(buildApp(repo))
       .delete(`/api/marketplace/plugins/${validManifest.id}/install`)
@@ -365,7 +367,7 @@ describe('DELETE /api/marketplace/plugins/:id/install', () => {
 
   it('returns 400 when plugin is not installed', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo))
       .delete(`/api/marketplace/plugins/${validManifest.id}/install`)
       .set('x-user-id', 'user-1');
@@ -383,7 +385,7 @@ describe('DELETE /api/marketplace/plugins/:id/install', () => {
 describe('DELETE /api/marketplace/plugins/:id', () => {
   it('returns 401 without auth', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo))
       .delete(`/api/marketplace/plugins/${validManifest.id}`);
     expect(res.status).toBe(401);
@@ -391,12 +393,47 @@ describe('DELETE /api/marketplace/plugins/:id', () => {
 
   it('removes the plugin and returns 204', async () => {
     const repo = new InMemoryPluginRepository();
-    repo.register(validManifest);
+    repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo))
       .delete(`/api/marketplace/plugins/${validManifest.id}`)
       .set('x-user-id', 'user-1');
     expect(res.status).toBe(204);
     expect(repo.findById(validManifest.id)).toBeUndefined();
+  });
+
+  it('returns 403 and preserves the plugin when a non-owner tries to delete it', async () => {
+    const repo = new InMemoryPluginRepository();
+    repo.register(validManifest, 'owner-1');
+
+    const res = await request(buildApp(repo))
+      .delete(`/api/marketplace/plugins/${validManifest.id}`)
+      .set('x-user-id', 'user-2');
+
+    expect(res.status).toBe(403);
+    expect(repo.findById(validManifest.id)).toMatchObject({
+      owner_id: 'owner-1',
+      manifest: validManifest,
+      status: 'available',
+    });
+  });
+
+  it('allows an admin to delete another user\'s plugin', async () => {
+    const previousAdminKey = process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    try {
+      const repo = new InMemoryPluginRepository();
+      repo.register(validManifest, 'owner-1');
+
+      const res = await request(buildApp(repo))
+        .delete(`/api/marketplace/plugins/${validManifest.id}`)
+        .set('x-admin-api-key', 'test-admin-key');
+
+      expect(res.status).toBe(204);
+      expect(repo.findById(validManifest.id)).toBeUndefined();
+    } finally {
+      if (previousAdminKey === undefined) delete process.env.ADMIN_API_KEY;
+      else process.env.ADMIN_API_KEY = previousAdminKey;
+    }
   });
 
   it('returns 404 for unknown plugin', async () => {

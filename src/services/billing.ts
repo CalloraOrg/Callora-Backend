@@ -32,6 +32,7 @@
 import { createHash } from "crypto";
 import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
+import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
 import { logger } from "../middleware/logging.js";
 
@@ -109,7 +110,17 @@ export interface SorobanClient {
 }
 
 export interface BillingServiceOptions {
+  /**
+   * Per-attempt backoff schedule. Each entry is an upper bound: the actual
+   * sleep is jittered within `[0, entry]` so concurrent callers do not retry
+   * against Soroban in lockstep.
+   */
   retryDelaysMs?: number[];
+  /**
+   * Random source in [0, 1) used to jitter retry delays.
+   * Inject a seeded generator in tests for deterministic delays.
+   */
+  random?: RandomSource;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,22 +147,75 @@ export function parseUsdcToContractUnits(amountUsdc: string): bigint {
   return result;
 }
 
-export function isTransientSorobanError(error: unknown): boolean {
+/**
+ * Classifies an error as transient based on type and category, not substring matching.
+ *
+ * An error is transient if:
+ * 1. It's a SorobanRpcError with category TIMEOUT or NETWORK_ERROR
+ * 2. It's a system error with errno in {ECONNRESET, ECONNREFUSED, ETIMEDOUT, EHOSTUNREACH}
+ * 3. It's a plain Error matching word-boundary regex patterns (fallback only)
+ *
+ * This prevents false positives like "insufficient: 1503 units" (contains "503")
+ * or "contract address 429xyz" (contains "429").
+ */
+function classifyTransientError(error: unknown): boolean {
+  // Import SorobanRpcError dynamically to avoid circular dependency
+  // If error is SorobanRpcError, check its category
+  if (error && typeof error === "object" && "category" in error) {
+    const category = (error as { category?: unknown }).category;
+    if (category === "TIMEOUT" || category === "NETWORK_ERROR") {
+      return true;
+    }
+    // INSUFFICIENT_BALANCE and CONTRACT_ERROR are not transient
+    if (category === "INSUFFICIENT_BALANCE" || category === "CONTRACT_ERROR") {
+      return false;
+    }
+  }
+
+  // Check for system error errno (Node.js system errors)
+  if (error && typeof error === "object" && "errno" in error) {
+    const errno = (error as { errno?: unknown }).errno;
+    // Common transient errno values
+    const transientErrnos = [
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENOTFOUND",
+    ];
+    if (typeof errno === "string" && transientErrnos.includes(errno)) {
+      return true;
+    }
+  }
+
+  // Fallback: plain Error with word-boundary regex patterns
   const message = normalizeErrorMessage(error).toLowerCase();
-  return [
-    "timeout",
-    "timed out",
-    "socket hang up",
-    "temporarily unavailable",
-    "temporary outage",
-    "econnreset",
-    "econnrefused",
-    "503",
-    "429",
-    "rate limit",
-    "network error",
-    "transport error",
-  ].some((token) => message.includes(token));
+
+  // Use word-boundary regexes to avoid matching numbers in error messages
+  const transientPatterns = [
+    /\btimeout\b/,
+    /\btimed\s+out\b/,
+    /\bsocket\s+hang\s+up\b/,
+    /\btemporarily\s+unavailable\b/,
+    /\btemporary\s+outage\b/,
+    /\beconnreset\b/,
+    /\beconnrefused\b/,
+    /\betimedout\b/,
+    /\behostunreach\b/,
+    /\brate\s+(limit|limited)\b/,
+    /\bnetwork\s+error\b/,
+    /\btransport\s+error\b/,
+    /\btemporarily\s+down\b/,
+    /\bservice\s+unavailable\b/,
+    /\bgateway\s+timeout\b/,
+  ];
+
+  return transientPatterns.some((pattern) => pattern.test(message));
+}
+
+export function isTransientSorobanError(error: unknown): boolean {
+  return classifyTransientError(error);
 }
 
 export function formatContractUnitsToUsdc(amount: bigint): string {
@@ -408,6 +472,7 @@ async function runPhase1Bulk(
 
 export class BillingService {
   private readonly retryDelaysMs: number[];
+  private readonly random: RandomSource;
 
   constructor(
     private readonly pool: Pool,
@@ -415,6 +480,7 @@ export class BillingService {
     options: BillingServiceOptions = {},
   ) {
     this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    this.random = options.random ?? Math.random;
   }
 
   async deduct(request: BillingDeductRequest): Promise<BillingDeductResult> {
@@ -570,13 +636,17 @@ export class BillingService {
 
     // Idempotent early return — event already existed
     if (phase1.alreadyExists) {
+      const hasTx = Boolean(phase1.stellarTxHash);
       return {
-        success: true,
+        success: hasTx,
         usageEventId: phase1.usageEventId!,
         stellarTxHash: phase1.stellarTxHash,
         alreadyProcessed: true,
-        deductionApplied: Boolean(phase1.stellarTxHash),
-        reconciliationRequired: phase1.stellarTxHash === undefined,
+        deductionApplied: hasTx,
+        reconciliationRequired: !hasTx,
+        error: hasTx
+          ? undefined
+          : "Previous deduction attempt pending reconciliation",
       };
     }
 
@@ -865,14 +935,18 @@ export class BillingService {
     );
 
     if (result.rows.length === 0) return null;
+    const hasTx = Boolean(result.rows[0].stellar_tx_hash);
 
     return {
-      success: true,
+      success: hasTx,
       usageEventId: result.rows[0].id.toString(),
       stellarTxHash: result.rows[0].stellar_tx_hash ?? undefined,
       alreadyProcessed: true,
-      deductionApplied: Boolean(result.rows[0].stellar_tx_hash),
-      reconciliationRequired: result.rows[0].stellar_tx_hash === null,
+      deductionApplied: hasTx,
+      reconciliationRequired: !hasTx,
+      error: hasTx
+        ? undefined
+        : "Previous deduction attempt pending reconciliation",
     };
   }
 
@@ -900,7 +974,16 @@ export class BillingService {
           break;
         }
 
-        await sleep(this.retryDelaysMs[attempt]);
+        // Full jitter bounded by the scheduled delay: retries stay spread out
+        // across callers but never wait longer than the configured backoff.
+        const scheduledDelay = this.retryDelaysMs[attempt];
+        await sleep(
+          computeJitteredDelay(scheduledDelay, {
+            strategy: "full",
+            random: this.random,
+            maxDelayMs: scheduledDelay,
+          }),
+        );
       }
     }
 

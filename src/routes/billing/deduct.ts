@@ -1,33 +1,26 @@
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
-import type { Pool } from "pg";
 
 import {
   BadGatewayError,
   BadRequestError,
   GatewayTimeoutError,
-  InternalServerError,
   NotFoundError,
   PaymentRequiredError,
+  SimulationFailedError,
   UnauthorizedError,
 } from "../../errors/index.js";
+import { logger } from "../../logger.js";
 import {
   requireAuth,
   type AuthenticatedLocals,
 } from "../../middleware/requireAuth.js";
 import { idempotencyMiddleware } from "../../middleware/idempotency.js";
 import { billingDeductHistogramMiddleware } from "../../middleware/metricsHistogram.js";
-import {
-  BillingService,
-  type BillingDeductResult,
-} from "../../services/billing.js";
-import {
-  createSorobanRpcBillingClient,
-  SorobanRpcError,
-} from "../../services/sorobanBilling.js";
+import { SorobanRpcError } from "../../services/sorobanBilling.js";
 import { redactSimulationDetails } from "../../lib/simulationDiagnostics.js";
+import { getBillingService } from "./billingService.js";
 import bulkDeductRouter from "./deduct/bulk.js";
-import { logger } from '../../logger.js';
 
 const router = Router();
 
@@ -39,25 +32,6 @@ interface BillingDeductBody {
   apiKeyId?: unknown;
   amountUsdc?: unknown;
   idempotencyKey?: unknown;
-}
-
-function createRouteBillingService(pool: Pool): BillingService {
-  const sorobanClient = createSorobanRpcBillingClient({
-    rpcUrl:
-      process.env.SOROBAN_BILLING_RPC_URL ??
-      process.env.SOROBAN_RPC_URL ??
-      "http://localhost:8000",
-    contractId: process.env.SOROBAN_BILLING_CONTRACT_ID ?? "vault_contract",
-    sourceAccount: process.env.SOROBAN_BILLING_SOURCE_ACCOUNT,
-    networkPassphrase: process.env.SOROBAN_BILLING_NETWORK_PASSPHRASE,
-    requestTimeoutMs: Number(
-      process.env.SOROBAN_BILLING_RPC_TIMEOUT_MS ?? 5_000,
-    ),
-    balanceFunctionName: process.env.SOROBAN_BILLING_BALANCE_FN ?? "balance",
-    deductFunctionName: process.env.SOROBAN_BILLING_DEDUCT_FN ?? "deduct",
-  });
-
-  return new BillingService(pool, sorobanClient);
 }
 
 function requireString(value: unknown, field: string): string {
@@ -77,14 +51,6 @@ function requirePositiveAmount(value: unknown): string {
   return amount;
 }
 
-function getPool(req: Request): Pool {
-  const pool = req.app?.locals?.dbPool as Pool | undefined;
-  if (!pool) {
-    throw new InternalServerError("Database pool is not configured");
-  }
-  return pool;
-}
-
 // idempotencyMiddleware declares an optional 4th `opts` parameter, giving it
 // an arity of 4. Express treats any 4-arg middleware function as an
 // error handler (function(err, req, res, next)), so registering it directly
@@ -97,16 +63,35 @@ const idempotencyHandler = (
   next: NextFunction,
 ) => idempotencyMiddleware(req, res, next);
 
-function sendSimulationFailure(
-  res: Response,
-  result: Pick<BillingDeductResult, "error" | "simulationDetails">,
-): void {
-  logger.warn("Soroban simulation diagnostics:", result.simulationDetails);
-  res.status(502).json({
-    error: "Soroban simulation failed",
-    code: "SIMULATION_FAILED",
-    simulationDetails: redactSimulationDetails(result.simulationDetails),
-  });
+/**
+ * Record a simulation failure server-side with redacted diagnostics.
+ *
+ * Raw RPC payloads contain account addresses, balances, XDR and signatures,
+ * so they are never logged verbatim — only the summary produced by
+ * {@link redactSimulationDetails} is emitted.
+ */
+function logSimulationFailure(details: unknown): void {
+  logger.warn({
+    simulationDetails: redactSimulationDetails(details),
+  }, "[billing/deduct] Soroban simulation failed");
+}
+
+/**
+ * Build the error that carries a simulation failure out of the route.
+ *
+ * `SimulationFailedError` is a `BadGatewayError` (502) with the canonical
+ * `SIMULATION_FAILED` code and redacted `simulationDetails`. Because it is
+ * thrown rather than written directly to the response, the global error
+ * handler renders it with {@link buildErrorEnvelope}, so clients always
+ * receive the standard envelope and a `requestId` they can correlate with
+ * support.
+ */
+function simulationFailureError(
+  message: string,
+  details: unknown,
+): SimulationFailedError {
+  logSimulationFailure(details);
+  return new SimulationFailedError(message, details);
 }
 
 router.post(
@@ -144,7 +129,7 @@ router.post(
         ? requireString(body.developerId, "developerId")
         : user.id;
 
-      const billingService = createRouteBillingService(getPool(req));
+      const billingService = getBillingService(req);
       const result = await billingService.deduct({
         requestId,
         userId: developerId,
@@ -157,7 +142,22 @@ router.post(
 
       if (!result.success) {
         if (result.simulationDetails) {
-          sendSimulationFailure(res, result);
+          next(
+            simulationFailureError(
+              result.error ?? "Soroban simulation failed",
+              result.simulationDetails,
+            ),
+          );
+          return;
+        }
+
+        if (result.reconciliationRequired) {
+          res.status(409).json({
+            error: "Billing deduction pending reconciliation",
+            code: "RECONCILIATION_REQUIRED",
+            reconciliationRequired: true,
+            usageEventId: result.usageEventId,
+          });
           return;
         }
 
@@ -179,15 +179,9 @@ router.post(
     } catch (error) {
       if (error instanceof SorobanRpcError) {
         if (error.simulationDetails) {
-          logger.warn(
-            "Soroban simulation diagnostics:",
-            error.simulationDetails,
+          next(
+            simulationFailureError(error.message, error.simulationDetails),
           );
-          res.status(502).json({
-            error: "Soroban simulation failed",
-            code: "SIMULATION_FAILED",
-            simulationDetails: redactSimulationDetails(error.simulationDetails),
-          });
           return;
         }
 
@@ -227,7 +221,7 @@ router.get(
       }
 
       const requestId = requireString(req.params.requestId, "requestId");
-      const billingService = createRouteBillingService(getPool(req));
+      const billingService = getBillingService(req);
       const result = await billingService.getByRequestId(requestId);
 
       if (!result) {
