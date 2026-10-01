@@ -3,7 +3,7 @@ import { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 import { SorobanSettlementClient } from './sorobanSettlement.js';
 import { randomUUID } from 'node:crypto';
 import { calloraEvents } from '../events/event.emitter.js';
-import { logger } from '../logger.js';
+import { logger } from '../middleware/logging.js';
 import {
   RETRIABLE_HTTP_STATUSES,
   TransientError,
@@ -152,10 +152,7 @@ export class RevenueSettlementService {
         await this.settlementStore.create(settlement);
       } catch (error) {
         errors++;
-        logger.error(
-          `Settlement ${settlementId} failed for dev ${developerId}:`,
-          this.getErrorMessage(error)
-        );
+        logger.error({ settlementId, developerId, error: this.getErrorMessage(error) }, 'Settlement failed for dev');
         continue;
       }
 
@@ -439,16 +436,10 @@ export class RevenueSettlementService {
         clearTxHash ? null : undefined,
       );
     } catch (statusError) {
-      logger.error(
-        `Settlement ${settlementId} failed for dev ${developerId} and could not persist failure status:`,
-        this.getErrorMessage(statusError),
-      );
+      logger.error({ settlementId, developerId, error: this.getErrorMessage(statusError) }, 'Settlement failed for dev and could not persist failure status');
     }
 
-    logger.error(
-      `Settlement ${settlementId} failed for dev ${developerId}:`,
-      errorMessage ?? 'Unknown settlement failure',
-    );
+    logger.error({ settlementId, developerId, error: errorMessage ?? 'Unknown settlement failure' }, 'Settlement failed for dev');
   }
 
   private getErrorMessage(error: unknown): string {

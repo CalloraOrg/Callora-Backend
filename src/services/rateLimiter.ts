@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import type { RateLimiter, RateLimitResult } from '../types/gateway.js';
-import { logger } from '../logger.js';
+import { logger } from '../middleware/logging.js';
 import {
   recordRateLimiterStoreOutage,
   recordRateLimiterStoreRecovery,

@@ -33,7 +33,7 @@ import { createHash } from "crypto";
 import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
-import { logger } from "../logger.js";
+import { logger } from "../middleware/logging.js";
 
 const USDC_7_DECIMAL_FACTOR = 10_000_000n;
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
@@ -617,8 +617,8 @@ export class BillingService {
       // caller — the charge happened.  Log and return success; the
       // reconciliation job will back-fill the hash.
       logger.error(
-        `[BillingService] Phase 3 UPDATE failed for usageEventId=${usageEventId} ` +
-          `txHash=${deductResult.txHash}: ${normalizeErrorMessage(error)}`,
+        { usageEventId, txHash: deductResult.txHash, error: normalizeErrorMessage(error) },
+        '[BillingService] Phase 3 UPDATE failed',
       );
     }
 
@@ -821,9 +821,12 @@ export class BillingService {
       );
     } catch (error) {
       logger.error(
-        `[BillingService] Bulk Phase 3 UPDATE failed for usageEventIds=` +
-          `${phase1.inserted.map((entry) => entry.usageEventId).join(",")} ` +
-          `txHash=${deductResult.txHash}: ${normalizeErrorMessage(error)}`,
+        { 
+          usageEventIds: phase1.inserted.map((entry) => entry.usageEventId),
+          txHash: deductResult.txHash,
+          error: normalizeErrorMessage(error)
+        },
+        '[BillingService] Bulk Phase 3 UPDATE failed'
       );
     }
 

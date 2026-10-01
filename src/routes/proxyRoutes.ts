@@ -30,7 +30,7 @@ import { CircuitBreaker } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
-import { logger } from '../logger.js';
+import { logger } from '../middleware/logging.js';
 
 /**
  * Headers that must never be forwarded to the upstream server.
