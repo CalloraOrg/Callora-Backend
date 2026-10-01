@@ -10,6 +10,37 @@ const baseEnv = {
   METRICS_API_KEY: "test-metrics-key",
 };
 
+describe("production secret strength", () => {
+  it("rejects weak and placeholder secrets in production", () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      NODE_ENV: "production",
+      SOROBAN_BILLING_CONTRACT_ID: "contract",
+      UPSTREAM_HOST_ALLOWLIST: "api.example.com",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.filter((issue) =>
+        ["JWT_SECRET", "ADMIN_API_KEY", "METRICS_API_KEY"].includes(String(issue.path[0])),
+      )).toHaveLength(3);
+    }
+  });
+
+  it("accepts 32-byte production secrets", () => {
+    const secret = "a".repeat(32);
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      JWT_SECRET: secret,
+      ADMIN_API_KEY: "b".repeat(32),
+      METRICS_API_KEY: "c".repeat(32),
+      NODE_ENV: "production",
+      SOROBAN_BILLING_CONTRACT_ID: "contract",
+      UPSTREAM_HOST_ALLOWLIST: "api.example.com",
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("env schema — Soroban billing", () => {
   it("requires a nonempty contract ID in production", () => {
     for (const contractId of [undefined, "", "   "]) {
@@ -30,6 +61,9 @@ describe("env schema — Soroban billing", () => {
   it("accepts a valid production billing configuration", () => {
     const result = envSchema.safeParse({
       ...baseEnv,
+      JWT_SECRET: "j".repeat(32),
+      ADMIN_API_KEY: "a".repeat(32),
+      METRICS_API_KEY: "m".repeat(32),
       NODE_ENV: "production",
       SOROBAN_BILLING_CONTRACT_ID: "contract_123",
       SOROBAN_BILLING_RPC_URL: "https://soroban.example.com",

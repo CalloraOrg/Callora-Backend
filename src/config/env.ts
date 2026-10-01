@@ -543,6 +543,30 @@ export const envSchema = z
       .default(345_600_000), // 96h = 4 days, the slow-burn window
   })
   .superRefine((values, ctx) => {
+    const secretFields = [
+      ["JWT_SECRET", values.JWT_SECRET, "JWT_SECRET"],
+      ["ADMIN_API_KEY", values.ADMIN_API_KEY, "ADMIN_API_KEY"],
+      ["METRICS_API_KEY", values.METRICS_API_KEY, "METRICS_API_KEY"],
+    ] as const;
+    const placeholders = new Set([
+      "your-jwt-secret-here",
+      "your-admin-api-key-here",
+      "your-metrics-api-key-here",
+    ]);
+    for (const [path, value, name] of secretFields) {
+      const weak = new TextEncoder().encode(value).length < 32;
+      const placeholder = placeholders.has(value.trim().toLowerCase());
+      if (values.NODE_ENV === "production" && (weak || placeholder)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [path],
+          message: `${name} must contain at least 32 bytes of entropy and must not use a placeholder value in production`,
+        });
+      } else if (values.NODE_ENV === "development" && (weak || placeholder)) {
+        console.warn(`${name} is weak or uses a placeholder; use a random value of at least 32 bytes before production`);
+      }
+    }
+
     if (values.NODE_ENV === "production" && !values.SOROBAN_BILLING_CONTRACT_ID) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
