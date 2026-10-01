@@ -28,6 +28,7 @@ import type { Socket } from "net";
 import { createDeveloperRouter } from "./routes/developerRoutes.js";
 import { createGatewayRouter } from "./routes/gatewayRoutes.js";
 import { createProxyRouter } from "./routes/proxyRoutes.js";
+import { createWebhooksRouter } from "./routes/webhooks.js";
 import adminRouter from "./routes/admin.js";
 import logsRouter from "./routes/logs.js";
 import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
@@ -134,6 +135,9 @@ app.get("/api/health", (_req, res) => {
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
+
+// Webhook management routes
+app.use('/api/webhooks', createWebhooksRouter());
 
 // Check if fil is being run directly (CommonJS / ESM compatibility trick for ts-jest)
 
@@ -270,9 +274,6 @@ if (isDirectExecution) {
   app.use("/api/refunds", refundsRouter);
   app.use("/api/logs", logsRouter);
   app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
-
-  // Webhook management routes
-  app.use('/api/webhooks', createWebhooksRouter());
 
   app.use('/api/admin', adminRouter);
 

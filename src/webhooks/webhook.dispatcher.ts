@@ -3,7 +3,7 @@ import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
-import { getEffectiveRetryPolicy } from '../services/webhookRetry.js';
+import { getEffectiveRetryPolicy, calculateBackoff } from '../services/webhookRetry.js';
 import { computeJitteredDelay, type RandomSource } from '../lib/retry.js';
 
 let acceptingDispatches = true;
@@ -137,7 +137,7 @@ export async function dispatchWebhook(
                 // Jitter keeps concurrent deliveries from retrying in lockstep.
                 // The exponential value is also the ceiling, so a delivery never
                 // waits longer than its configured backoff.
-                const scheduledDelay = baseDelayMs * Math.pow(2, attempt);
+                const scheduledDelay = calculateBackoff(attempt, baseDelayMs);
                 const delay = computeJitteredDelay(scheduledDelay, {
                     strategy: 'full',
                     random: jitterRandom,

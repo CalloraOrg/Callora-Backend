@@ -146,22 +146,75 @@ export function parseUsdcToContractUnits(amountUsdc: string): bigint {
   return result;
 }
 
-export function isTransientSorobanError(error: unknown): boolean {
+/**
+ * Classifies an error as transient based on type and category, not substring matching.
+ *
+ * An error is transient if:
+ * 1. It's a SorobanRpcError with category TIMEOUT or NETWORK_ERROR
+ * 2. It's a system error with errno in {ECONNRESET, ECONNREFUSED, ETIMEDOUT, EHOSTUNREACH}
+ * 3. It's a plain Error matching word-boundary regex patterns (fallback only)
+ *
+ * This prevents false positives like "insufficient: 1503 units" (contains "503")
+ * or "contract address 429xyz" (contains "429").
+ */
+function classifyTransientError(error: unknown): boolean {
+  // Import SorobanRpcError dynamically to avoid circular dependency
+  // If error is SorobanRpcError, check its category
+  if (error && typeof error === "object" && "category" in error) {
+    const category = (error as { category?: unknown }).category;
+    if (category === "TIMEOUT" || category === "NETWORK_ERROR") {
+      return true;
+    }
+    // INSUFFICIENT_BALANCE and CONTRACT_ERROR are not transient
+    if (category === "INSUFFICIENT_BALANCE" || category === "CONTRACT_ERROR") {
+      return false;
+    }
+  }
+
+  // Check for system error errno (Node.js system errors)
+  if (error && typeof error === "object" && "errno" in error) {
+    const errno = (error as { errno?: unknown }).errno;
+    // Common transient errno values
+    const transientErrnos = [
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENOTFOUND",
+    ];
+    if (typeof errno === "string" && transientErrnos.includes(errno)) {
+      return true;
+    }
+  }
+
+  // Fallback: plain Error with word-boundary regex patterns
   const message = normalizeErrorMessage(error).toLowerCase();
-  return [
-    "timeout",
-    "timed out",
-    "socket hang up",
-    "temporarily unavailable",
-    "temporary outage",
-    "econnreset",
-    "econnrefused",
-    "503",
-    "429",
-    "rate limit",
-    "network error",
-    "transport error",
-  ].some((token) => message.includes(token));
+
+  // Use word-boundary regexes to avoid matching numbers in error messages
+  const transientPatterns = [
+    /\btimeout\b/,
+    /\btimed\s+out\b/,
+    /\bsocket\s+hang\s+up\b/,
+    /\btemporarily\s+unavailable\b/,
+    /\btemporary\s+outage\b/,
+    /\beconnreset\b/,
+    /\beconnrefused\b/,
+    /\betimedout\b/,
+    /\behostunreach\b/,
+    /\brate\s+(limit|limited)\b/,
+    /\bnetwork\s+error\b/,
+    /\btransport\s+error\b/,
+    /\btemporarily\s+down\b/,
+    /\bservice\s+unavailable\b/,
+    /\bgateway\s+timeout\b/,
+  ];
+
+  return transientPatterns.some((pattern) => pattern.test(message));
+}
+
+export function isTransientSorobanError(error: unknown): boolean {
+  return classifyTransientError(error);
 }
 
 export function formatContractUnitsToUsdc(amount: bigint): string {
@@ -582,13 +635,17 @@ export class BillingService {
 
     // Idempotent early return — event already existed
     if (phase1.alreadyExists) {
+      const hasTx = Boolean(phase1.stellarTxHash);
       return {
-        success: true,
+        success: hasTx,
         usageEventId: phase1.usageEventId!,
         stellarTxHash: phase1.stellarTxHash,
         alreadyProcessed: true,
-        deductionApplied: Boolean(phase1.stellarTxHash),
-        reconciliationRequired: phase1.stellarTxHash === undefined,
+        deductionApplied: hasTx,
+        reconciliationRequired: !hasTx,
+        error: hasTx
+          ? undefined
+          : "Previous deduction attempt pending reconciliation",
       };
     }
 
@@ -874,14 +931,18 @@ export class BillingService {
     );
 
     if (result.rows.length === 0) return null;
+    const hasTx = Boolean(result.rows[0].stellar_tx_hash);
 
     return {
-      success: true,
+      success: hasTx,
       usageEventId: result.rows[0].id.toString(),
       stellarTxHash: result.rows[0].stellar_tx_hash ?? undefined,
       alreadyProcessed: true,
-      deductionApplied: Boolean(result.rows[0].stellar_tx_hash),
-      reconciliationRequired: result.rows[0].stellar_tx_hash === null,
+      deductionApplied: hasTx,
+      reconciliationRequired: !hasTx,
+      error: hasTx
+        ? undefined
+        : "Previous deduction attempt pending reconciliation",
     };
   }
 

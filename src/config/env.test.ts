@@ -8,6 +8,67 @@ const baseEnv = {
   METRICS_API_KEY: "test-metrics-key",
 };
 
+describe("env schema — Soroban billing", () => {
+  it("requires a nonempty contract ID in production", () => {
+    for (const contractId of [undefined, "", "   "]) {
+      const result = envSchema.safeParse({
+        ...baseEnv,
+        NODE_ENV: "production",
+        SOROBAN_BILLING_CONTRACT_ID: contractId,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((issue) =>
+          issue.path[0] === "SOROBAN_BILLING_CONTRACT_ID",
+        )).toBe(true);
+      }
+    }
+  });
+
+  it("accepts a valid production billing configuration", () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      NODE_ENV: "production",
+      SOROBAN_BILLING_CONTRACT_ID: "contract_123",
+      SOROBAN_BILLING_RPC_URL: "https://soroban.example.com",
+      SOROBAN_BILLING_SOURCE_ACCOUNT: "source_123",
+      SOROBAN_BILLING_NETWORK_PASSPHRASE: "Test network",
+      SOROBAN_BILLING_BACKEND_SECRET_KEY: "secret_123",
+      SOROBAN_BILLING_RPC_TIMEOUT_MS: "7500",
+      SOROBAN_BILLING_BALANCE_FN: "get_balance",
+      SOROBAN_BILLING_DEDUCT_FN: "charge",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.SOROBAN_BILLING_CONTRACT_ID).toBe("contract_123");
+      expect(result.data.SOROBAN_BILLING_RPC_TIMEOUT_MS).toBe(7500);
+      expect(result.data.SOROBAN_BILLING_BALANCE_FN).toBe("get_balance");
+      expect(result.data.SOROBAN_BILLING_DEDUCT_FN).toBe("charge");
+    }
+  });
+
+  it("allows omitted billing configuration in development and test", () => {
+    for (const nodeEnv of ["development", "test"]) {
+      const result = envSchema.safeParse({ ...baseEnv, NODE_ENV: nodeEnv });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.SOROBAN_BILLING_CONTRACT_ID).toBeUndefined();
+        expect(result.data.SOROBAN_BILLING_RPC_TIMEOUT_MS).toBe(5000);
+      }
+    }
+  });
+
+  it("rejects invalid billing RPC settings", () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      SOROBAN_BILLING_RPC_URL: "not-a-url",
+      SOROBAN_BILLING_RPC_TIMEOUT_MS: "0",
+      SOROBAN_BILLING_BALANCE_FN: "",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("env schema - BCRYPT_COST_FACTOR", () => {
   describe("unit tests", () => {
     it("defaults to 12 when BCRYPT_COST_FACTOR is omitted", () => {
@@ -246,6 +307,77 @@ describe('env schema — revenue ledger indexer config', () => {
       ...baseEnv,
       REVENUE_LEDGER_INDEXER_INTERVAL_MS: '0',
       REVENUE_LEDGER_INDEXER_BATCH_SIZE: '-10',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('env schema — upstream host allowlist', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('defaults to an empty allowlist in production', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires UPSTREAM_ALLOWED_HOSTS in production', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      UPSTREAM_ALLOWED_HOSTS: 'api.example.com',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toBe('api.example.com');
+    }
+  });
+
+  it('defaults to loopback hosts in development', () => {
+    process.env.NODE_ENV = 'development';
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('127.0.0.1');
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('::1');
+    }
+  });
+
+  it('defaults to loopback hosts in test', () => {
+    process.env.NODE_ENV = 'test';
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
+    }
+  });
+
+  it('parses a comma-separated allowlist into an array', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      UPSTREAM_ALLOWED_HOSTS: 'api.example.com, api2.example.com',
+    });
+    expect(result.success).toBe((true));
+    if (result.success) {
+      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toEqual(['api.example.com', 'api2.example.com']);
+    }
+  });
+
+  it('rejects an empty UPSTREAM_ALLOWED_HOSTS in production', () => {
+    process.env.NODE_ENV = 'production';
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      UPSTREAM_ALLOWED_HOSTS : '',
     });
     expect(result.success).toBe(false);
   });

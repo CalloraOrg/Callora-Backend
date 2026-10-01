@@ -84,6 +84,33 @@ describe('CORS Integration Tests', () => {
         .set('Origin', 'https://api.callora.com');
       expect(res2.header['access-control-allow-origin']).toBe('https://api.callora.com');
     });
+
+    it('should expose the expected headers', async () => {
+      const app = createApp();
+      const res = await request(app)
+        .get('/api/health')
+        .set('Origin', 'https://app.callora.com');
+
+      expect(res.header['access-control-expose-headers']).toContain('Retry-After');
+      expect(res.header['access-control-expose-headers']).toContain('ETag');
+      expect(res.header['access-control-expose-headers']).toContain('X-Correlation-Id');
+      expect(res.header['access-control-expose-headers']).toContain('RateLimit-Limit');
+      expect(res.header['access-control-expose-headers']).toContain('RateLimit-Remaining');
+      expect(res.header['access-control-expose-headers']).toContain('RateLimit-Reset');
+    });
+
+    it('should allow the expected headers in preflight', async () => {
+      const app = createApp();
+      const res = await request(app)
+        .options('/api/health')
+        .set('Origin', 'https://app.callora.com')
+        .set('Access-Control-Request-Method', 'GET');
+
+      expect(res.header['access-control-allow-headers']).toContain('Idempotency-Key');
+      expect(res.header['access-control-allow-headers']).toContain('If-None-Match');
+      expect(res.header['access-control-allow-headers']).toContain('X-Correlation-Id');
+      expect(res.header['access-control-allow-headers']).not.toContain('x-admin-api-key');
+    });
   });
 
   describe('Development Mode', () => {

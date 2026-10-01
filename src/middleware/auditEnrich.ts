@@ -93,6 +93,30 @@ export function computeBodyHash(
 }
 
 /**
+ * Resolves the acting admin identity for audit attribution.
+ *
+ * adminAuth sets `req.adminActor` (or `res.locals.adminActor`) after
+ * verifying the admin key. We surface it here so audit rows produced by
+ * admin-scoped routes can attribute mutations to the acting admin rather
+ * than leaving the actor blank.
+ *
+ * Returns null when the request is not admin-authenticated.
+ */
+export function resolveAdminActor(req: Request): string | null {
+  const fromReq = (req as Request & { adminActor?: string }).adminActor;
+  if (typeof fromReq === 'string' && fromReq.length > 0) {
+    return fromReq;
+  }
+  const locals = (req as Request & { res?: Response }).res?.locals as
+    | { adminActor?: string }
+    | undefined;
+  if (locals && typeof locals.adminActor === 'string' && locals.adminActor.length > 0) {
+    return locals.adminActor;
+  }
+  return null;
+}
+
+/**
  * Sanitise the User-Agent header: trim whitespace and truncate to
  * USER_AGENT_MAX_LENGTH to prevent log-flooding.
  */
@@ -118,6 +142,12 @@ export interface AuditContext {
    * Null for unauthenticated requests and admin-key paths.
    */
   tenantId: string | null;
+  /**
+   * Acting admin identity for admin-scoped mutations, set by adminAuth.
+   * Null for non-admin requests. Used to attribute audit rows on
+   * PUT/DELETE /api/audit/:id so mutations are traceable to an admin.
+   */
+  adminActor: string | null;
   /** X-Request-Id correlation token for joining audit rows to access logs. */
   correlationId: string | undefined;
   /**
@@ -171,6 +201,8 @@ export function auditEnrichMiddleware(
   // authenticate must include it when calling logger.audit().
   const tenantId: string | null = (req as Request & { developerId?: string }).developerId ?? null;
 
+  const adminActor = resolveAdminActor(req);
+
   // bodyHash: compute now so the hash covers the body as parsed — before any
   // route handler might mutate req.body.
   const bodyHash = computeBodyHash(req.body, secret);
@@ -179,6 +211,7 @@ export function auditEnrichMiddleware(
     clientIp,
     userAgent,
     tenantId,
+    adminActor,
     correlationId,
     bodyHash,
   };
