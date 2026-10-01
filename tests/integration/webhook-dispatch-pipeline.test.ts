@@ -1,6 +1,14 @@
 import { WebhookStore } from '../../src/webhooks/webhook.store.js';
 import { calloraEvents } from '../../src/events/event.emitter.js';
 
+jest.mock('dns/promises', () => ({
+  __esModule: true,
+  default: {
+    lookup: jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]),
+  },
+  lookup: jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]),
+}));
+
 async function flushAsyncEventHandlers(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();

@@ -1,16 +1,3 @@
-/**
- * Contract tests for src/openapi.yaml — /api/tenants surface.
- *
- * Validates that the examples added for GrantFox FWC26 cover:
- *   - POST /api/tenants  (create with Zod validation + structured 400s)
- *   - GET  /api/tenants  (list with ETag support)
- *   - PATCH /api/tenants/{tenantId}  (update with per-field + param errors)
- *
- * Follows the same pattern used by src/routes/spike.openapi.test.ts:
- * read the YAML file as a string and assert the presence of key strings so
- * the tests remain stable without a full YAML parse dependency.
- */
-
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -25,10 +12,28 @@ import type { CreateTenantInput, UpdateTenantInput } from '../validators/tenants
 // Helpers
 // ---------------------------------------------------------------------------
 
-const yamlPath = path.join(process.cwd(), 'src', 'openapi.yaml');
+type JsonObject = Record<string, unknown>;
 
-function readOpenApiYaml(): string {
-  return fs.readFileSync(yamlPath, 'utf8');
+const openApiPath = path.join(process.cwd(), 'docs', 'openapi.json');
+
+function readSpec(): JsonObject {
+  return JSON.parse(fs.readFileSync(openApiPath, 'utf8')) as JsonObject;
+}
+
+function asObject(value: unknown): JsonObject {
+  return value as JsonObject;
+}
+
+function responseExamples(operation: JsonObject, status: string): JsonObject {
+  const response = asObject(asObject(operation.responses)[status]);
+  const content = asObject(response.content);
+  return asObject(asObject(content['application/json']).examples);
+}
+
+function requestExamples(operation: JsonObject): JsonObject {
+  const requestBody = asObject(operation.requestBody);
+  const content = asObject(requestBody.content);
+  return asObject(asObject(content['application/json']).examples);
 }
 
 class MockTenantRepository implements TenantRepository {
@@ -81,93 +86,108 @@ function buildApp(repository = new MockTenantRepository()) {
 }
 
 // ---------------------------------------------------------------------------
-// Group 1 — OpenAPI YAML contract (string-presence assertions)
+// Group 1 — OpenAPI JSON contract
 // ---------------------------------------------------------------------------
 
-describe('src/openapi.yaml — /api/tenants surface', () => {
+describe('docs/openapi.json — /api/tenants surface', () => {
   test('documents /api/tenants and /api/tenants/{tenantId} paths', () => {
-    const content = readOpenApiYaml();
+    const paths = asObject(readSpec().paths);
 
-    expect(content).toContain('/api/tenants:');
-    expect(content).toContain('/api/tenants/{tenantId}:');
+    expect(asObject(paths['/api/tenants'])).toHaveProperty('get');
+    expect(asObject(paths['/api/tenants'])).toHaveProperty('post');
+    expect(asObject(paths['/api/tenants/{tenantId}'])).toHaveProperty('patch');
   });
 
   test('documents GET /api/tenants list and ETag examples', () => {
-    const content = readOpenApiYaml();
+    const paths = asObject(readSpec().paths);
+    const operation = asObject(asObject(paths['/api/tenants']).get);
+    const examples = responseExamples(operation, '200');
+    const responses = asObject(operation.responses);
 
-    expect(content).toContain('List tenants');
-    expect(content).toContain('withTenants:');
-    expect(content).toContain('empty:');
-    // ETag conditional-GET
-    expect(content).toContain('If-None-Match');
-    expect(content).toContain('304');
+    expect(operation.summary).toBe('List tenants');
+    expect(examples).toHaveProperty('withTenants');
+    expect(examples).toHaveProperty('empty');
+    expect((operation.parameters as JsonObject[]).map((parameter) => parameter.name)).toContain('If-None-Match');
+    expect(responses).toHaveProperty('304');
   });
 
   test('documents POST /api/tenants create request and success example', () => {
-    const content = readOpenApiYaml();
+    const operation = asObject(asObject(asObject(readSpec().paths)['/api/tenants']).post);
+    const examples = requestExamples(operation);
+    const successExamples = responseExamples(operation, '201');
 
-    expect(content).toContain('Create a tenant');
-    expect(content).toContain('createFull:');
-    expect(content).toContain('createMinimal:');
-    expect(content).toContain('created:');
-    // Zod-validation callout in description
-    expect(content).toContain('Zod-validated');
+    expect(operation.summary).toBe('Create a tenant');
+    expect(operation.description).toContain('Zod-validated');
+    expect(examples).toHaveProperty('createFull');
+    expect(examples).toHaveProperty('createMinimal');
+    expect(successExamples).toHaveProperty('created');
   });
 
   test('documents structured 400 validation-error examples for POST', () => {
-    const content = readOpenApiYaml();
+    const operation = asObject(asObject(asObject(readSpec().paths)['/api/tenants']).post);
+    const examples = responseExamples(operation, '400');
 
-    expect(content).toContain('missingName:');
-    expect(content).toContain('VALIDATION_ERROR');
-    expect(content).toContain('name is required');
-    expect(content).toContain('invalidEmail:');
-    expect(content).toContain('contactEmail must be a valid email address');
-    expect(content).toContain('unknownKey:');
-    expect(content).toContain('UNRECOGNIZED_KEYS');
-    expect(content).toContain('invalidPlan:');
-    expect(content).toContain('INVALID_ENUM_VALUE');
+    for (const name of ['missingName', 'invalidEmail', 'unknownKey', 'invalidPlan']) {
+      expect(examples[name]).toBeDefined();
+      expect(asObject(asObject(examples[name]).value).error).toEqual(
+        expect.objectContaining({ code: 'VALIDATION_ERROR' }),
+      );
+    }
+    expect(JSON.stringify(examples.missingName)).toContain('name is required');
+    expect(JSON.stringify(examples.invalidEmail)).toContain('contactEmail must be a valid email address');
+    expect(JSON.stringify(examples.unknownKey)).toContain('UNRECOGNIZED_KEYS');
+    expect(JSON.stringify(examples.invalidPlan)).toContain('INVALID_ENUM_VALUE');
   });
 
   test('documents PATCH /api/tenants/{tenantId} update request and success example', () => {
-    const content = readOpenApiYaml();
+    const operation = asObject(asObject(asObject(readSpec().paths)['/api/tenants/{tenantId}']).patch);
+    const examples = requestExamples(operation);
+    const successExamples = responseExamples(operation, '200');
 
-    expect(content).toContain('Update a tenant');
-    expect(content).toContain('updatePlan:');
-    expect(content).toContain('updateContactEmail:');
-    expect(content).toContain('updateMultiple:');
-    expect(content).toContain('updated:');
+    expect(operation.summary).toBe('Update a tenant');
+    for (const name of ['updatePlan', 'updateContactEmail', 'updateMultiple']) {
+      expect(examples[name]).toBeDefined();
+    }
+    expect(successExamples).toHaveProperty('updated');
   });
 
   test('documents combined param + body 400 example for PATCH', () => {
-    const content = readOpenApiYaml();
+    const operation = asObject(asObject(asObject(readSpec().paths)['/api/tenants/{tenantId}']).patch);
+    const examples = responseExamples(operation, '400');
 
-    expect(content).toContain('invalidParamAndEmptyBody:');
-    expect(content).toContain('At least one tenant field must be provided');
-    expect(content).toContain('params.tenantId');
-    expect(content).toContain('unknownKey:');
+    expect(JSON.stringify(examples.invalidParamAndEmptyBody)).toContain('At least one tenant field must be provided');
+    expect(JSON.stringify(examples.invalidParamAndEmptyBody)).toContain('params.tenantId');
+    expect(examples).toHaveProperty('unknownKey');
   });
 
   test('documents 401 examples for all tenant operations', () => {
-    const content = readOpenApiYaml();
+    const paths = asObject(readSpec().paths);
+    const getExamples = responseExamples(asObject(asObject(paths['/api/tenants']).get), '401');
+    const postExamples = responseExamples(asObject(asObject(paths['/api/tenants']).post), '401');
+    const patchExamples = responseExamples(asObject(asObject(paths['/api/tenants/{tenantId}']).patch), '401');
 
-    // Multiple 401 blocks — one per operation
-    const matches = [...content.matchAll(/code: UNAUTHORIZED/g)];
-    // At minimum POST, GET, and PATCH each contribute one UNAUTHORIZED block
-    expect(matches.length).toBeGreaterThanOrEqual(3);
+    for (const examples of [getExamples, postExamples, patchExamples]) {
+      expect(asObject(asObject(examples.unauthorized).value).error).toEqual(
+        expect.objectContaining({ code: 'UNAUTHORIZED' }),
+      );
+    }
   });
 
   test('defines typed tenant schemas in components', () => {
-    const content = readOpenApiYaml();
+    const schemas = asObject(asObject(readSpec().components).schemas);
 
-    expect(content).toContain('TenantRecord:');
-    expect(content).toContain('TenantCreateRequest:');
-    expect(content).toContain('TenantUpdateRequest:');
-    expect(content).toContain('TenantResponse:');
-    expect(content).toContain('TenantListResponse:');
-    expect(content).toContain('TenantPlan:');
-    expect(content).toContain('TenantMetadata:');
-    // Plan enum values
-    expect(content).toContain('enum: [starter, growth, enterprise]');
+    for (const name of [
+      'TenantRecord',
+      'TenantCreateRequest',
+      'TenantUpdateRequest',
+      'TenantResponse',
+      'TenantListResponse',
+      'TenantPlan',
+      'TenantMetadata',
+    ]) {
+      expect(schemas[name]).toBeDefined();
+    }
+    expect(asObject(schemas.TenantPlan).enum).toEqual(['starter', 'growth', 'enterprise']);
   });
 });
 

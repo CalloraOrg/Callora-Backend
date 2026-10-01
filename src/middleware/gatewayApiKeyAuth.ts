@@ -91,6 +91,8 @@ export interface DatabaseGatewayApiKeyRow {
 
 const SHA256_HEX_LENGTH = 64;
 
+const VERIFICATION_CACHE_MAX_ENTRIES = 1000;
+
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -122,6 +124,50 @@ function matchesStoredHash(apiKey: string, storedHash: string): boolean {
   }
 
   return candidates.some((candidate) => timingSafeStringEqual(candidate, storedHash));
+}
+
+interface VerificationCacheEntry {
+  keyHash: string;
+  expiresAt: number;
+}
+
+const verificationCache = new Map<string, VerificationCacheEntry>();
+const VERIFICATION_CACHE_TTL_MS = 30_000;
+
+function getCachedVerification(apiKey: string): string | null {
+  const cacheKey = sha256Hex(apiKey);
+  const entry = verificationCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAt <= Date.now()) {
+    verificationCache.delete(cacheKey);
+    return null;
+  }
+  // refresh LRU ordering
+  verificationCache.delete(cacheKey);
+  verificationCache.set(cacheKey, entry);
+  return entry.keyHash;
+}
+
+function setCachedVerification(apiKey: string, keyHash: string): void {
+  const cacheKey = sha256Hex(apiKey);
+  verificationCache.delete(cacheKey);
+  verificationCache.set(cacheKey, {
+    keyHash,
+    expiresAt: Date.now() + VERIFICATION_CACHE_TTL_MS,
+  });
+  while (verificationCache.size > VERIFICATION_CACHE_MAX_ENTRIES) {
+    const oldest = verificationCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    verificationCache.delete(oldest);
+  }
+}
+
+export function evictCachedVerification(apiKey: string): void {
+  verificationCache.delete(sha256Hex(apiKey));
 }
 
 function unauthorized(next: NextFunction, message: string): void {
@@ -202,10 +248,21 @@ export function createGatewayApiKeyAuthMiddleware<
     }
 
     let matchedCandidate: GatewayAuthCandidate<TUser, TVault> | null = null;
-    for (const candidate of candidates) {
-      if (matchesStoredHash(extracted.apiKey, candidate.apiKeyRecord.keyHash)) {
-        matchedCandidate = candidate;
-        break;
+    const cachedKeyHash = getCachedVerification(extracted.apiKey);
+    if (cachedKeyHash) {
+      matchedCandidate =
+        candidates.find(
+          (candidate) =>
+            !candidate.apiKeyRecord.revoked &&
+            timingSafeStringEqual(candidate.apiKeyRecord.keyHash, cachedKeyHash),
+        ) ?? null;
+    }
+    if (!matchedCandidate) {
+      for (const candidate of candidates) {
+        if (matchesStoredHash(extracted.apiKey, candidate.apiKeyRecord.keyHash)) {
+          matchedCandidate = candidate;
+          break;
+        }
       }
     }
 
@@ -217,15 +274,19 @@ export function createGatewayApiKeyAuthMiddleware<
 
     if (matchedCandidate.apiKeyRecord.revoked) {
       // The key exists but was explicitly revoked by the developer
+      evictCachedVerification(extracted.apiKey);
       recordApiKeyLookup('revoked');
       handleForbidden(next, 'Unauthorized: API key has been revoked');
       return;
     }
 
+    setCachedVerification(extracted.apiKey, matchedCandidate.apiKeyRecord.keyHash);
+
     if (matchedCandidate.apiKeyRecord.expiresAt) {
       const expiresAt = new Date(matchedCandidate.apiKeyRecord.expiresAt);
       if (expiresAt.getTime() < Date.now()) {
         // The key exists but its expiration timestamp has passed
+        evictCachedVerification(extracted.apiKey);
         recordApiKeyLookup('expired');
         handleUnauthorized(next, 'Unauthorized: API key has expired');
         return;

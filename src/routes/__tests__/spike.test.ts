@@ -1,8 +1,15 @@
 import request from 'supertest';
 import express from 'express';
-import { createSpikeRouter, type SpikeRecord } from '../spike.js';
+import { createSpikeRouter, type SpikeRecord, MAX_SPIKE_DELAY_MS } from '../spike.js';
 import type { AuditService, AuditRecordInput } from '../../services/auditService.js';
 import { CircuitBreaker, InMemoryCircuitBreakerStore } from '../../lib/circuitBreaker.js';
+
+jest.mock('../../middleware/adminAuth.js', () => ({
+  adminAuth: (_req: unknown, res: { locals: Record<string, unknown> }, next: () => void) => {
+    res.locals.adminActor = 'test-admin';
+    next();
+  },
+}));
 
 const mockRecord = jest.fn<AuditService['record']>();
 const mockAuditService: AuditService = { record: mockRecord };
@@ -229,6 +236,15 @@ describe('Spike Router — Mutation Audit Logging with Circuit Breaker', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.delay).toBe(50);
+    });
+
+    it('clamps excessive delays below the request timeout', async () => {
+      const started = Date.now();
+      const res = await request(app).get('/spike?delay=60000');
+
+      expect(res.status).toBe(200);
+      expect(res.body.delay).toBe(MAX_SPIKE_DELAY_MS);
+      expect(Date.now() - started).toBeLessThan(1000);
     });
   });
 

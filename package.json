@@ -1,17 +1,29 @@
 {
   "name": "callora-backend",
   "version": "0.0.1",
-  "private": true,
+  "type": "module",
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "prebuild": "npm run error-codes:check && npm run validate:openapi",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
     "lint": "eslint .",
-    "test": "jest --config jest.config.cjs",
-    "test:unit": "jest --config jest.config.cjs --selectProjects unit",
-    "test:integration": "jest --config jest.config.cjs --selectProjects integration",
-    "test:coverage": "jest --config jest.config.cjs --coverage",
-    "coverage:repos": "vitest run --coverage",
-    "dev": "tsx src/index.ts"
+    "db:generate": "drizzle-kit generate:sqlite",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "seed:dev": "tsx scripts/seed-dev.ts",
+    "typecheck": "tsc --noEmit",
+    "validate:issue-9": "node scripts/validate-issue-9.mjs",
+    "validate:openapi": "node scripts/validate-openapi-contract.mjs",
+    "db:check-migrations": "npx tsx scripts/check-migrations.ts",
+    "error-codes:generate": "node scripts/generate-error-codes.mjs",
+    "error-codes:check": "node scripts/generate-error-codes.mjs --check",
+    "pretest": "npm run error-codes:check",
+    "test": "jest --forceExit",
+    "test:serial": "jest --runInBand --forceExit",
+    "test:unit": "jest --runInBand --forceExit --testPathIgnorePatterns tests/integration",
+    "test:integration": "jest --runInBand --forceExit tests/integration",
+    "test:coverage": "jest --runInBand --coverage --forceExit --testPathIgnorePatterns tests/integration"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
@@ -66,5 +78,8 @@
     "tsx": "^4.7.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1"
+  },
+  "overrides": {
+    "ajv": "8.17.1"
   }
 }
