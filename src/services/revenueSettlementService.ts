@@ -3,8 +3,8 @@ import { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 import { SorobanSettlementClient } from './sorobanSettlement.js';
 import { randomUUID } from 'node:crypto';
 import { calloraEvents } from '../events/event.emitter.js';
-import {
 import { logger } from '../logger.js';
+import {
   RETRIABLE_HTTP_STATUSES,
   TransientError,
   isTransientNetworkError,
