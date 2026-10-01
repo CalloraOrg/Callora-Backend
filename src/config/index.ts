@@ -101,6 +101,10 @@ const validatedUpstreamUrl = validateUpstreamBaseUrl(env.UPSTREAM_URL, {
 export const config = {
   port: env.PORT,
   nodeEnv: env.NODE_ENV,
+  corsAllowedOrigins: env.CORS_ALLOWED_ORIGINS
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
   version: env.APP_VERSION,
   accessLog: {
     sampleRate: env.ACCESS_LOG_SAMPLE_RATE,
