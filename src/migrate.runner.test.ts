@@ -301,6 +301,40 @@ describe('Runner idempotency', () => {
     expect(names).toHaveLength(2);
     expect(names).toContain('0001_b.sql');
   });
+
+  it('rejects an unprefixed migration descriptively before recording any migration', () => {
+    writeSQL(dir, 'add_refresh_tokens.sql', '-- add refresh tokens');
+
+    expect(() => runMigrations(dir, store)).toThrow(
+      'Migration file "add_refresh_tokens.sql" has no numeric prefix.',
+    );
+    expect(store.all()).toHaveLength(0);
+  });
+
+  it('reports both files when duplicate numeric prefixes are present', () => {
+    writeSQL(dir, '0001_create_users.sql', '-- users');
+    writeSQL(dir, '0001_create_sessions.sql', '-- sessions');
+
+    expect(() => runMigrations(dir, store)).toThrow(
+      /Duplicate migration prefix 1: "0001_create_(users|sessions)\.sql" and "0001_create_(users|sessions)\.sql"/,
+    );
+    expect(store.all()).toHaveLength(0);
+  });
+
+  it('applies valid migrations in numeric order and ignores down migrations', () => {
+    writeSQL(dir, '0001_create_sessions.sql', '-- sessions');
+    writeSQL(dir, '0000_create_users.sql', '-- users');
+    writeSQL(dir, '0000_create_users.down.sql', '-- rollback users');
+    writeSQL(dir, '0001_create_sessions.down.sql', '-- rollback sessions');
+    writeSQL(dir, 'orphan.down.sql', '-- orphan rollback');
+
+    runMigrations(dir, store);
+
+    expect(store.all().map(row => row.name)).toEqual([
+      '0000_create_users.sql',
+      '0001_create_sessions.sql',
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -18,11 +18,13 @@ const BLOCKED_IP_RANGES = [
   'fe80::/10',
 ] as const;
 
-export const DEFAULT_UPSTREAM_HOST_ALLOWLIST = [
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1'] as const;
+
+export const DEFAULT_UPSTREAM_HOST_ALLOWLIST: readonly string[] = [];
+
+export const DEVELOPMENT_UPSTREAM_HOST_ALLOWLIST: readonly string[] = [
   '*',
-  'localhost',
-  '127.0.0.1',
-  '::1',
+  ...LOOPBACK_HOSTS,
 ] as const;
 
 export interface UpstreamTargetValidationOptions {
@@ -35,6 +37,16 @@ export interface ValidatedUpstreamTarget {
   addresses: LookupAddress[];
 }
 
+function isDevelopmentOrTestEnvironment(): boolean {
+  const nodeEnv = process.env.NODE_ENV ?? 'development';
+  return nodeEnv === 'development' || nodeEnv === 'test';
+}
+
+export function getDefaultUpstreamHostAllowlist(): readonly string[] {
+  return isDevelopmentOrTestEnvironment()
+    ? DEVELOPMENT_UPSTREAM_HOST_ALLOWLIST
+    : DEFAULT_UPSTREAM_HOST_ALLOWLIST;
+}
 function normalizeHost(host: string): string {
   const trimmed = host.trim().toLowerCase();
 
@@ -56,16 +68,16 @@ export function parseUpstreamHostAllowlist(rawValue: string | undefined): string
     .filter(Boolean);
 
   if (entries.length === 0) {
-    return [...DEFAULT_UPSTREAM_HOST_ALLOWLIST];
+    return [...getDefaultUpstreamHostAllowlist()];
   }
 
   return [...new Set(entries)];
 }
 
 function getAllowedHosts(options?: UpstreamTargetValidationOptions): readonly string[] {
-  return options?.allowedHosts?.length
+  return options?.allowedHosts !== undefined
     ? options.allowedHosts.map((entry) => normalizeAllowEntry(entry))
-    : DEFAULT_UPSTREAM_HOST_ALLOWLIST;
+    : getDefaultUpstreamHostAllowlist();
 }
 
 function matchesAllowEntry(host: string, entry: string): boolean {
@@ -91,6 +103,10 @@ function isAllowedHost(host: string, allowlist: readonly string[]): boolean {
 
 function isBlockedIpAddress(host: string): boolean {
   return isIP(host) !== 0 && ipRangeCheck(host, [...BLOCKED_IP_RANGES]);
+}
+
+function isLoopbackHost(host: string): boolean {
+  return (LOOPBACK_HOSTS as readonly string[]).includes(host);
 }
 
 function parseAndValidateBaseUrl(
@@ -134,6 +150,12 @@ function parseAndValidateBaseUrl(
   if (isBlockedIpAddress(normalizedHost) && !isExplicitlyAllowed(normalizedHost, allowlist)) {
     throw new Error(
       `base_url host "${normalizedHost}" resolves to a private or loopback IP range and is not allowed.`,
+    );
+  }
+
+  if (isLoopbackHost(normalizedHost) && !isDevelopmentOrTestEnvironment()) {
+    throw new Error(
+      `base_url host "${normalizedHost}" is a loopback host and is not allowed in this environment.`,
     );
   }
 

@@ -252,7 +252,8 @@ export const config = {
   },
 
   bcrypt: {
-    costFactor: env.BCRYPT_COST_FACTOR,
+    // Number of bcrypt hashing rounds (BCRYPT_COST_FACTOR, defaults to 12).
+    rounds: env.BCRYPT_COST_FACTOR,
   },
   billingTimeoutMs: env.BILLING_TIMEOUT_MS,
 

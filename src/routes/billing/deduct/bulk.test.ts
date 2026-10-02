@@ -13,17 +13,8 @@ jest.mock('better-sqlite3', () => {
   };
 });
 
-// Mock the soroban billing client creator
-jest.mock('../../../services/sorobanBilling.js', () => ({
-  createSorobanRpcBillingClient: jest.fn().mockReturnValue({
-    getBalance: jest.fn(),
-    deductBalance: jest.fn(),
-  }),
-}));
-
 describe('Bulk Deduct API', () => {
   let mockPool: jest.Mocked<Pool>;
-  let mockBillingService: jest.Mocked<BillingService>;
 
   beforeEach(() => {
     mockPool = {
@@ -31,30 +22,22 @@ describe('Bulk Deduct API', () => {
       query: jest.fn(),
     } as unknown as jest.Mocked<Pool>;
 
-    mockBillingService = {
-      deduct: jest.fn(),
-    } as unknown as jest.Mocked<BillingService>;
-
-    // Mock createRouteBillingService internal resolution
-    jest.spyOn(BillingService.prototype, 'deduct');
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  function buildApp(pool: Pool | null = mockPool, _service: BillingService = mockBillingService) {
+  function buildApp(pool: Pool | null = mockPool, service?: BillingService) {
     const app = express();
     app.use(express.json());
     if (pool) {
       app.locals.dbPool = pool;
+      app.locals.billingService = service ?? new BillingService(pool, {
+        getBalance: jest.fn(),
+        deductBalance: jest.fn(),
+      });
     }
-    
-    // Middleware to set mock billing service on the route
-    app.use((req, res, next) => {
-      // Intercept service creation or assign the mock
-      next();
-    });
 
     app.use('/api/billing/deduct/bulk', bulkRouter);
     app.use(errorHandler);
@@ -76,8 +59,8 @@ describe('Bulk Deduct API', () => {
       .send({ items: [] });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details[0].message).toContain('At least one item is required');
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].message).toContain('At least one item is required');
   });
 
   it('returns 400 when items array exceeds 100 limit', async () => {
@@ -95,8 +78,8 @@ describe('Bulk Deduct API', () => {
       .send({ items });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details[0].message).toContain('Batch size limit of 100 items exceeded');
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].message).toContain('Batch size limit of 100 items exceeded');
   });
 
   it('returns 400 for invalid item fields (negative amount)', async () => {
@@ -116,8 +99,8 @@ describe('Bulk Deduct API', () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details[0].message).toContain('amountUsdc must be a positive decimal');
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].message).toContain('amountUsdc must be a positive decimal');
   });
 
   it('returns 400 for invalid item fields (zero amount)', async () => {
@@ -137,8 +120,8 @@ describe('Bulk Deduct API', () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details[0].message).toContain('amountUsdc must be greater than zero');
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details[0].message).toContain('amountUsdc must be greater than zero');
   });
 
   it('successfully processes multiple deductions sequentially', async () => {
@@ -258,6 +241,38 @@ describe('Bulk Deduct API', () => {
     expect(deductSpy).toHaveBeenCalledTimes(2);
   });
 
+  it('reuses an injected service across bulk requests', async () => {
+    const fakeService = {
+      deduct: jest.fn().mockResolvedValue({
+        success: true,
+        usageEventId: 'evt_1',
+        stellarTxHash: 'tx_1',
+        alreadyProcessed: false,
+      }),
+    };
+    const app = buildApp(mockPool, fakeService as unknown as BillingService);
+    const payload = {
+      items: [{
+        requestId: 'req_1',
+        apiId: 'api_1',
+        endpointId: 'ep_1',
+        apiKeyId: 'key_1',
+        amountUsdc: '1.0',
+      }],
+    };
+
+    for (let index = 0; index < 2; index += 1) {
+      const res = await request(app)
+        .post('/api/billing/deduct/bulk')
+        .set('x-user-id', 'user_123')
+        .send(payload);
+      expect(res.status).toBe(200);
+    }
+
+    expect(fakeService.deduct).toHaveBeenCalledTimes(2);
+    expect(app.locals.billingService).toBe(fakeService);
+  });
+
   it('returns 500 when database pool is not configured', async () => {
     const res = await request(buildApp(null))
       .post('/api/billing/deduct/bulk')
@@ -275,6 +290,6 @@ describe('Bulk Deduct API', () => {
       });
 
     expect(res.status).toBe(500);
-    expect(res.body.message).toContain('Database pool is not configured');
+    expect(res.body.error.message).toContain('Database pool is not configured');
   });
 });

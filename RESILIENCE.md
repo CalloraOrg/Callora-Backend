@@ -448,7 +448,7 @@ src/
 
 ## Admin Circuit Breaker Endpoints
 
-Administrators can inspect and manage circuit breaker state via the admin API. These endpoints are protected by IP allowlist and admin authentication (API key or JWT).
+The admin circuit-breaker router implements the endpoints below and is protected by the admin IP allowlist and authentication (API key or JWT) when mounted. It is **not currently mounted** in `src/routes/admin.ts`. In addition, its default registry is separate from the `/v1/call` proxy's breaker instance. Do not use these routes to reset gateway upstream traffic until the router is mounted and wired to the same breaker instance. See [the stuck breaker operator runbook](./docs/circuit-breaker-stuck-open.md) for current operational guidance.
 
 ### Endpoints
 

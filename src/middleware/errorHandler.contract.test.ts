@@ -5,9 +5,12 @@ import { ValidationError } from './validate.js';
 import { errorHandler } from './errorHandler.js';
 
 function response() {
-  const result = { statusCode: 200, body: undefined as unknown, sent: false };
+  const result = { statusCode: 200, body: undefined as unknown, sent: false, destroyedWith: undefined as unknown };
   const value = {
     headersSent: false,
+    writableEnded: false,
+    destroyed: false,
+    destroy(err?: unknown) { result.destroyedWith = err; value.destroyed = true; return value; },
     status(code: number) { result.statusCode = code; return value; },
     json(body: unknown) { result.body = body; result.sent = true; return value; },
   } as unknown as Response;
@@ -113,8 +116,11 @@ describe('errorHandler contract', () => {
   it('does not overwrite a response that already sent headers', () => {
     const output = response();
     (output.value as Response).headersSent = true;
-    errorHandler(new Error('already handled'), request(), output.value, jest.fn() as unknown as NextFunction);
+    const failure = new Error('already handled');
+    errorHandler(failure, request(), output.value, jest.fn() as unknown as NextFunction);
     expect(output.result.sent).toBe(false);
+    // Nothing can be written after headers, so the stream is terminated instead.
+    expect(output.result.destroyedWith).toBe(failure);
   });
 
   it('keeps error responses JSON-compatible for null and non-Error throws', () => {

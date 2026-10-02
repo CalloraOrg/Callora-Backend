@@ -254,7 +254,7 @@ export class AuthController {
    */
   async getTokenInfo(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const userId = req.developerId || res.locals.authenticatedUser?.id;
+      const userId = req.developerId || res.locals?.authenticatedUser?.id;
 
       if (!userId) {
         next(new UnauthorizedError('User not authenticated', 'NOT_AUTHENTICATED'));
