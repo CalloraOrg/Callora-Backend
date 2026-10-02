@@ -1,4 +1,5 @@
 import express from 'express';
+import { logger } from './logger.js';
 import cors from 'cors';
 import helmet from 'helmet';
 import adminRouter from './routes/admin.js';

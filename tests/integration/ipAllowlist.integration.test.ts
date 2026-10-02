@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { app } from '../../src/index.js';
 import { createIpAllowlist } from '../../src/middleware/ipAllowlist.js';
+import { logger } from '../../src/logger.js';
 import express from 'express';
 
 describe('IP Allowlist Integration Tests', () => {
@@ -216,8 +217,8 @@ describe('IP Allowlist Integration Tests', () => {
 
       // Mock logger to capture logs
       const mockLogs: any[] = [];
-      const originalWarn = console.warn;
-      console.warn = (message: string, data: any) => {
+      const originalWarn = logger.warn;
+      logger.warn = (message: string, data?: any) => {
         mockLogs.push({ message, data });
       };
 
@@ -242,7 +243,7 @@ describe('IP Allowlist Integration Tests', () => {
         expect(securityLog.data.timestamp).toBeDefined();
 
       } finally {
-        console.warn = originalWarn;
+        logger.warn = originalWarn;
       }
     });
   });

@@ -1,8 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
-import {
+import { ENVELOPE_REQUIRED_FIELDS } from '../types/ResponseEnvelope.js';
 import { logger } from '../logger.js';
-  ENVELOPE_REQUIRED_FIELDS,
-} from '../types/ResponseEnvelope.js';
 
 /**
  * Validates that every response sent through res.json() conforms
