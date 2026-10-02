@@ -93,7 +93,7 @@ const SHA256_HEX_LENGTH = 64;
 
 const VERIFICATION_CACHE_MAX_ENTRIES = 1000;
 
-function sha256Hex(value: string): string {
+export function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
@@ -276,7 +276,7 @@ export function createGatewayApiKeyAuthMiddleware<
       // The key exists but was explicitly revoked by the developer
       evictCachedVerification(extracted.apiKey);
       recordApiKeyLookup('revoked');
-      handleForbidden(next, 'Unauthorized: API key has been revoked');
+      handleUnauthorized(next, 'Unauthorized: API key has been revoked');
       return;
     }
 

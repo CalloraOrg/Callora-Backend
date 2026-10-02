@@ -30,6 +30,8 @@ import jwt from 'jsonwebtoken';
 import { createApp } from '../../src/app.js';
 import { defaultApiRepository } from '../../src/repositories/apiRepository.js';
 import { defaultDeveloperRepository } from '../../src/repositories/developerRepository.js';
+import { getTokenRevocationService } from '../../src/services/tokenRevocation.js';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,6 +68,13 @@ let testContext: TestContext | null = null;
 function generateTestApiKey(): string {
   const randomPart = Math.random().toString(16).substring(2, 50);
   return `ck_live_${randomPart}`;
+}
+
+/**
+ * Helper: Compute sha256 hash of an API key (matches gateway/revocation keying)
+ */
+function sha256Hex(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
 }
 
 /**
@@ -159,6 +168,7 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
   let testUser: TestUser;
   let otherUser: TestUser;
   let testApiId: number;
+  let upstreamRequests: Array<{ url: string; method: string; at: number }>;
 
   /**
    * Setup: Start PostgreSQL container, run migrations, seed test data
@@ -233,6 +243,9 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
     // Create test APIs
     testApiId = await createTestApi(testContext.pool, testUser.developerId!, 'My API');
     await createTestApi(testContext.pool, otherUser.developerId!, "Other's API");
+
+    // Reset upstream request recorder
+    upstreamRequests = [];
   }, 60000); // Allow 60s for container startup
 
   /**
@@ -256,6 +269,9 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
          )`,
         [testUser.developerId]
       );
+      // Clear revocation entries so tests remain independent
+      const revocationService = getTokenRevocationService();
+      await revocationService.clear?.();
     }
   });
 
@@ -795,6 +811,110 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
       expect(requestId1).toBeDefined();
       expect(requestId2).toBeDefined();
       expect(requestId1).not.toBe(requestId2);
+    });
+  });
+
+  // ========================================================================
+  // Test: Immediate Revocation Enforced at Gateway
+  // ========================================================================
+
+  describe('Gateway: Immediate revocation of API keys', () => {
+    it('should reject a revoked key at the gateway with 401 and never call upstream', async () => {
+      const token = signTestToken(testUser.userId, testUser.walletAddress);
+
+      // 1. Create a key via the API key router
+      const create = await request(app)
+        .post(`/apis/${testApiId}/keys`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scopes: ['read'] });
+
+      expect(create.status).toBe(201);
+      const keyId = create.body.id;
+      const rawKey = create.body.key as string;
+      expect(rawKey).toMatch(/^ck_live_/);
+
+      // 2. Call the gateway successfully before revocation
+      upstreamRequests = [];
+      const beforeRevocation = await request(app)
+        .get('/gateway/echo')
+        .set('Authorization', `Bearer ${rawKey}`)
+        .set('X-Upstream-Recorder', 'test');
+
+      // Gateway should have reached the upstream stub (2xx) before revocation
+      expect(beforeRevocation.status).toBeGreaterThanOrEqual(200);
+      expect(beforeRevocation.status).toBeLessThan(300);
+      expect(upstreamRequests.length).toBeGreaterThan(0);
+      const requestsBeforeRevocation = upstreamRequests.length;
+
+      // 3. Revoke the key via DELETE /keys/:id
+      const revoke = await request(app)
+        .delete(`/keys/${keyId}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(revoke.status).toBe(204);
+
+      // 4. Confirm the revocation service entry is keyed by sha256 hash, not plaintext
+      const revocationService = getTokenRevocationService();
+      const expectedHash = sha256Hex(rawKey);
+      const isRevokedByHash = await revocationService.isRevoked(expectedHash);
+      expect(isRevokedByHash).toBe(true);
+
+      // The plaintext key must NOT be the revocation key
+      const isRevokedByPlaintext = await revocationService.isRevoked(rawKey);
+      expect(isRevokedByPlaintext).toBe(false);
+
+      // 5. Call the gateway again with the revoked key
+      const afterRevocation = await request(app)
+        .get('/gateway/echo')
+        .set('Authorization', `Bearer ${rawKey}`)
+        .set('X-Upstream-Recorder', 'test');
+
+      // Must be rejected with 401
+      expect(afterRevocation.status).toBe(401);
+      expect(afterRevocation.body).toHaveProperty('error');
+
+      // 6. Upstream stub must NOT have recorded any new request after revocation
+      expect(upstreamRequests.length).toBe(requestsBeforeRevocation);
+    });
+
+    it('should not revoke other keys when one key is deleted', async () => {
+      const token = signTestToken(testUser.userId, testUser.walletAddress);
+
+      // Create two keys
+      const createA = await request(app)
+        .post(`/apis/${testApiId}/keys`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scopes: ['read'] });
+      const createB = await request(app)
+        .post(`/apis/${testApiId}/keys`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scopes: ['read'] });
+
+      expect(createA.status).toBe(201);
+      expect(createB.status).toBe(201);
+
+      const keyA = createA.body.key as string;
+      const keyB = createB.body.key as string;
+      const keyAId = createA.body.id;
+
+      // Revoke only key A
+      const revoke = await request(app)
+        .delete(`/keys/${keyAId}`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(revoke.status).toBe(204);
+
+      // Key A must be rejected
+      const callA = await request(app)
+        .get('/gateway/echo')
+        .set('Authorization', `Bearer ${keyA}`);
+      expect(callA.status).toBe(401);
+
+      // Key B must still succeed
+      const callB = await request(app)
+        .get('/gateway/echo')
+        .set('Authorization', `Bearer ${keyB}`);
+      expect(callB.status).toBeGreaterThanOrEqual(200);
+      expect(callB.status).toBeLessThan(300);
     });
   });
 });

@@ -16,22 +16,14 @@ export class TokenRevocationService {
     this.startSweeper();
   }
 
-  revoke(tokenHash: string, expiresAt?: number): void {
+  revoke(tokenZero: string, expiresAt?: number): void {
     const now = Date.now();
     const effectiveExpiresAt = expiresAt && expiresAt > 0 ? expiresAt : now + this.defaultTtlMs;
 
-    this.revokedTokens.set(tokenHash, {
-      revokedAt: now,
-      expiresAt: effectiveExpiresAt,
-    });
-
-    logger.info('[TokenRevocation] Token revoked', {
-      tokenHash,
-      expiresAt: effectiveExpiresAt,
-    });
+    this.revokedTokens.set(tokenHash, expiresAt);
   }
 
-  isRevoked(tokenHash: string): boolean {
+  isRevoked(tokenZero: string): boolean {
     const entry = this.revokedTokens.get(tokenHash);
     if (!entry) {
       return false;
@@ -45,12 +37,12 @@ export class TokenRevocationService {
     return true;
   }
 
-  reinstate(tokenHash: string): void {
-    this.revokedTokens.delete(tokenHash);
+  reinstate(tokenZero: string): void {
+    this.revokedTokens.delete(tokenZero);
     logger.info('[TokenRevocation] Token reinstated', { tokenHash });
   }
 
-  revokeAll(developerId: string, tokenHashes: string[]): number {
+  revokeAll(developerId: string, tokenZeros: string[]): number {
     let revokedCount = 0;
     for (const tokenHash of tokenHashes) {
       this.revoke(tokenHash);
@@ -83,7 +75,7 @@ export class TokenRevocationService {
     const now = Date.now();
     for (const [tokenHash, entry] of this.revokedTokens) {
       if (entry.expiresAt < now) {
-        this.revokedTokens.delete(tokenHash);
+        this.revokedTokens.delete(tokenZero);
       }
     }
   }
