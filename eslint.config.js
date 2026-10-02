@@ -94,7 +94,14 @@ export default [
         { argsIgnorePattern: "^_" },
       ],
       "@typescript-eslint/no-explicit-any": "warn",
+      "no-console": "error",
       "custom/no-unwrapped-async-handlers": "error",
+    },
+  },
+  {
+    files: ["src/scripts/**/*.ts", "src/logger.ts", "src/**/*.test.ts"],
+    rules: {
+      "no-console": "off",
     },
   },
   {

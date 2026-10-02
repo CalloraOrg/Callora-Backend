@@ -6,6 +6,7 @@
 
 import request from 'supertest';
 import { createApp } from '../app.js';
+import { logger } from '../logger.js';
 
 // Mock better-sqlite3 to prevent native binding errors
 jest.mock('better-sqlite3', () => {
@@ -289,20 +290,20 @@ describe('Security Headers and CORS Configuration', () => {
       process.env.NODE_ENV = 'production';
       delete process.env.CORS_ALLOWED_ORIGINS;
       
-      // Mock console.warn to capture warning
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      // Mock logger.warn to capture warning
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation();
       
       try {
         const app = createApp();
         await request(app).get('/api/health');
         
         // Should have logged a warning
-        expect(consoleSpy).toHaveBeenCalledWith(
+        expect(loggerSpy).toHaveBeenCalledWith(
           expect.stringContaining('WARNING: No CORS_ALLOWED_ORIGINS configured in production')
         );
       } finally {
         process.env = originalEnv;
-        consoleSpy.mockRestore();
+        loggerSpy.mockRestore();
       }
     });
 

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import { logger } from '../logger.js';
 
 const stellarNetworkSchema = z.enum(["testnet", "mainnet"]);
 
@@ -587,9 +588,9 @@ export const envSchema = z
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
-  console.error("❌ Invalid environment configuration:");
+  logger.error("❌ Invalid environment configuration:");
   parsed.error.issues.forEach((issue) => {
-    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
+    logger.error(`  - ${issue.path.join(".")}: ${issue.message}`);
   });
   process.exit(1);
 }

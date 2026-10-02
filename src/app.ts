@@ -1,4 +1,5 @@
 import express from 'express';
+import { logger } from './logger.js';
 import cors from 'cors';
 import helmet from 'helmet';
 import adminRouter from './routes/admin.js';
@@ -130,6 +131,7 @@ interface AppDependencies extends SorobanBillingDependencies {
  * @example Wire into shutdown handler
  * ```ts
  * import { quotasDrainTracker } from './app.js';
+import { logger } from './logger.js';
  *
  * const shutdown = createGracefulShutdownHandler({
  *   server,
@@ -273,7 +275,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   // Validate origins in production
   if (isProduction && allowedOrigins.length === 0) {
-    console.warn("WARNING: No CORS_ALLOWED_ORIGINS configured in production");
+    logger.warn("WARNING: No CORS_ALLOWED_ORIGINS configured in production");
   }
 
   // Regex for localhost with optional port (e.g., http://localhost:5173)
@@ -302,7 +304,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
         // Log blocked attempts in production
         if (isProduction) {
-          console.warn(`CORS blocked origin: ${origin}`);
+          logger.warn(`CORS blocked origin: ${origin}`);
         }
 
         // Pass false instead of Error to prevent Express from returning 500

@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import type { RateLimiter, RateLimitResult } from '../types/gateway.js';
-import { logger } from '../logger.js';
+import { logger } from '../middleware/logging.js';
 import {
   recordRateLimiterStoreOutage,
   recordRateLimiterStoreRecovery,
@@ -444,7 +444,7 @@ export class StoreBackedRateLimiter implements RateLimiter {
   private resolvePolicy(tier?: string): TierPolicy {
     if (!tier || !(tier in this.tierPolicies)) {
       if (tier) {
-        console.warn(`[rateLimiter] Unknown tier "${tier}", using default`);
+        logger.warn(`[rateLimiter] Unknown tier "${tier}", using default`);
       }
       return { maxRequests: this.maxRequests, windowMs: this.windowMs };
     }

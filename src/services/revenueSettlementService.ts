@@ -3,6 +3,7 @@ import { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 import { SorobanSettlementClient } from './sorobanSettlement.js';
 import { randomUUID } from 'node:crypto';
 import { calloraEvents } from '../events/event.emitter.js';
+import { logger } from '../middleware/logging.js';
 import {
   RETRIABLE_HTTP_STATUSES,
   TransientError,
@@ -151,10 +152,7 @@ export class RevenueSettlementService {
         await this.settlementStore.create(settlement);
       } catch (error) {
         errors++;
-        console.error(
-          `Settlement ${settlementId} failed for dev ${developerId}:`,
-          this.getErrorMessage(error)
-        );
+        logger.error({ settlementId, developerId, error: this.getErrorMessage(error) }, 'Settlement failed for dev');
         continue;
       }
 
@@ -264,7 +262,7 @@ export class RevenueSettlementService {
             completed++;
           } catch (updateError) {
             errors++;
-            console.warn(
+            logger.warn(
               { settlementId: settlement.id, error: updateError },
               'Failed to update settlement to completed — skipping',
             );
@@ -279,7 +277,7 @@ export class RevenueSettlementService {
                 failed++;
               } catch (updateError) {
                 errors++;
-                console.warn(
+                logger.warn(
                   { settlementId: settlement.id, error: updateError },
                   'Failed to update settlement to failed — skipping',
                 );
@@ -292,7 +290,7 @@ export class RevenueSettlementService {
                 retried++;
               } catch (updateError) {
                 errors++;
-                console.warn(
+                logger.warn(
                   { settlementId: settlement.id, error: updateError },
                   'Failed to schedule retry for settlement — skipping',
                 );
@@ -305,14 +303,14 @@ export class RevenueSettlementService {
               failed++;
             } catch (updateError) {
               errors++;
-              console.warn(
+              logger.warn(
                 { settlementId: settlement.id, error: updateError },
                 'Failed to update settlement to failed — skipping',
               );
             }
 
             if (!transactionCode) {
-              console.warn(
+              logger.warn(
                 { settlementId: settlement.id },
                 'Horizon returned tx_failed but missing result_codes',
               );
@@ -325,20 +323,20 @@ export class RevenueSettlementService {
             failed++;
           } catch (updateError) {
             errors++;
-            console.warn(
+            logger.warn(
               { settlementId: settlement.id, error: updateError },
               'Failed to update settlement to failed (not found) — skipping',
             );
           }
 
-          console.warn(
+          logger.warn(
             { settlementId: settlement.id },
             'Horizon did not find transaction',
           );
         } else {
           // Unexpected response shape; leave as pending and log warning
           errors++;
-          console.warn(
+          logger.warn(
             { settlementId: settlement.id },
             'Unexpected Horizon response shape — leaving settlement pending',
           );
@@ -346,7 +344,7 @@ export class RevenueSettlementService {
       } catch (error) {
         // Catch any exception during per-settlement processing to continue batch
         errors++;
-        console.warn(
+        logger.warn(
           { settlementId: settlement.id, error },
           'Failed to sync settlement status — skipping',
         );
@@ -438,16 +436,10 @@ export class RevenueSettlementService {
         clearTxHash ? null : undefined,
       );
     } catch (statusError) {
-      console.error(
-        `Settlement ${settlementId} failed for dev ${developerId} and could not persist failure status:`,
-        this.getErrorMessage(statusError),
-      );
+      logger.error({ settlementId, developerId, error: this.getErrorMessage(statusError) }, 'Settlement failed for dev and could not persist failure status');
     }
 
-    console.error(
-      `Settlement ${settlementId} failed for dev ${developerId}:`,
-      errorMessage ?? 'Unknown settlement failure',
-    );
+    logger.error({ settlementId, developerId, error: errorMessage ?? 'Unknown settlement failure' }, 'Settlement failed for dev');
   }
 
   private getErrorMessage(error: unknown): string {

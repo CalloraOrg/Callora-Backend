@@ -17,6 +17,7 @@ import type { VaultRepository } from '../repositories/vaultRepository.js';
 import { config } from '../config/index.js';
 import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
 import { successEnvelope, errorEnvelope, getRequestId } from '../lib/envelope.js';
+import { logger } from '../middleware/logging.js';
 
 export interface DepositPrepareRequest {
   amount_usdc: string;
@@ -242,7 +243,7 @@ export class DepositController {
       });
     } else if (error instanceof SimulationError) {
       // Log full diagnostics at warning level, but only expose a redacted summary.
-      console.warn('Soroban simulation diagnostics:', error.simulationDetails);
+      logger.warn('Soroban simulation diagnostics:', error.simulationDetails);
       const redacted = redactSimulationDetails(error.simulationDetails);
       res.status(502).json({
         error: 'Soroban simulation failed. See diagnostics for details.',

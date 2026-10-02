@@ -71,9 +71,9 @@ const idempotencyHandler = (
  * {@link redactSimulationDetails} is emitted.
  */
 function logSimulationFailure(details: unknown): void {
-  logger.warn("[billing/deduct] Soroban simulation failed", {
+  logger.warn({
     simulationDetails: redactSimulationDetails(details),
-  });
+  }, "[billing/deduct] Soroban simulation failed");
 }
 
 /**

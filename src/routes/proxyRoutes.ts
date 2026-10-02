@@ -428,16 +428,16 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                 // before (idempotency guard inside usageStore.record).
                 if (recorded && endpoint.priceUsdc > 0) {
                   billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
-                    console.error('Background billing deduction failed:', err);
+                    logger.error({ error: err }, 'Background billing deduction failed');
                   });
                 }
               } catch (err) {
                 recordUsageRecordFailure();
-                logger.error('Background usage recording failed', {
+                logger.error({
                   requestId,
                   apiId: String(apiEntry.id),
                   error: err,
-                });
+                }, 'Background usage recording failed');
               }
             })();
           });

@@ -1,7 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
-import {
-  ENVELOPE_REQUIRED_FIELDS,
-} from '../types/ResponseEnvelope.js';
+import { ENVELOPE_REQUIRED_FIELDS } from '../types/ResponseEnvelope.js';
+import { logger } from '../logger.js';
 
 /**
  * Validates that every response sent through res.json() conforms
@@ -27,7 +26,7 @@ export function envelopeValidator(
           // Fail fast in development so violations are caught immediately
           throw new Error(message);
         } else {
-          console.warn(message);
+          logger.warn(message);
         }
       }
     }
