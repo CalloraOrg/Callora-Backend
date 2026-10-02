@@ -21,6 +21,7 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../logger.js';
 import { getRequestId } from '../logger.js';
+import { BadRequestError } from '../errors/index.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,6 +141,28 @@ export function hashSecret(rawSecret: string): string {
   return crypto.createHash('sha256').update(rawSecret).digest('hex');
 }
 
+/**
+ * Validate a per-rotation grace-window override.
+ * Returns the validated value, or null when no override was supplied.
+ * Throws BadRequestError for out-of-range overrides (<= 0, NaN, non-finite)
+ * so invalid operator input fails fast instead of silently falling back.
+ */
+export function validateGraceWindowOverride(
+  override?: number,
+): number | null {
+  if (override === undefined) return null;
+  if (
+    typeof override !== 'number' ||
+    !Number.isFinite(override) ||
+    override <= 0
+  ) {
+    throw new BadRequestError(
+      `graceWindowMs must be a positive finite number of milliseconds (got ${String(override)})`,
+    );
+  }
+  return override;
+}
+
 /** Read grace window from env (ms). Returns parsed int or default. */
 export function resolveGraceWindowMs(override?: number): number {
   if (override !== undefined && Number.isFinite(override) && override > 0) {
@@ -177,12 +200,22 @@ export class WebhookSignerService {
    *   5. Fire-and-forget admin notification.
    *
    * @param actor  - Admin identifier from `res.locals.adminActor`.
+   * @param graceWindowOverrideMs - Optional one-off grace window in ms for THIS
+   *        rotation only. Must be a positive finite number; invalid values throw
+   *        BadRequestError. The service-level default is unchanged for future calls.
    * @returns      RotationResult containing the raw secret (one-time exposure).
    */
-  async rotateKey(actor: string): Promise<RotationResult> {
+  async rotateKey(
+    actor: string,
+    graceWindowOverrideMs?: number,
+  ): Promise<RotationResult> {
+    // Fail fast on invalid operator input before any state is mutated.
+    const validatedOverride = validateGraceWindowOverride(graceWindowOverrideMs);
+
     const now = this.clock();
     const correlationId = getRequestId() ?? null;
-    const expiresAt = new Date(now.getTime() + this.graceWindowMs);
+    const effectiveGraceWindowMs = validatedOverride ?? this.graceWindowMs;
+    const expiresAt = new Date(now.getTime() + effectiveGraceWindowMs);
 
     // 1. Generate new key material
     const rawSecret = generateSigningSecret();
@@ -207,7 +240,7 @@ export class WebhookSignerService {
       id: uuidv4(),
       new_key_id: newKeyId,
       previous_key_id: previousKey?.id ?? null,
-      grace_window_ms: this.graceWindowMs,
+      grace_window_ms: effectiveGraceWindowMs,
       expires_at: expiresAt.toISOString(),
       rotated_by: actor,
       rotated_at: now.toISOString(),
@@ -218,7 +251,7 @@ export class WebhookSignerService {
     logger.audit('WEBHOOK_KEY_ROTATED', actor, {
       newKeyId,
       previousKeyId: previousKey?.id ?? null,
-      graceWindowMs: this.graceWindowMs,
+      graceWindowMs: effectiveGraceWindowMs,
       previousKeyExpiresAt: expiresAt.toISOString(),
       correlationId,
     });
@@ -227,7 +260,7 @@ export class WebhookSignerService {
       newKey,
       rawSecret,
       previousKey: previousKey ?? null,
-      graceWindowMs: this.graceWindowMs,
+      graceWindowMs: effectiveGraceWindowMs,
       previousKeyExpiresAt: previousKey ? expiresAt.toISOString() : null,
     };
 

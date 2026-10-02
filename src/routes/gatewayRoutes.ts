@@ -122,6 +122,50 @@ function mapBreakerState(state: CircuitBreakerState): 'closed' | 'open' | 'half-
   }
 }
 
+export function createGatewayHealthRouter(
+  deps: Pick<GatewayDeps, 'registry' | 'breakerRegistry'> = {},
+): Router {
+  const router = Router();
+  const breakerRegistry = deps.breakerRegistry ?? getDefaultBreakerRegistry();
+
+  router.get('/health/:apiSlug', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { apiSlug } = req.params;
+      let apiId = apiSlug;
+      if (deps.registry) {
+        const entry = deps.registry.resolve(apiSlug);
+        if (!entry) {
+          next(new NotFoundError('API not found'));
+          return;
+        }
+        apiId = entry.id;
+      }
+
+      const cached = healthCache.get(apiSlug);
+      if (cached && Date.now() - cached.timestamp < HEALTH_CACHE_TTL_MS) {
+        res.json(cached.data);
+        return;
+      }
+
+      const rawLatency = await getUpstreamHealth(apiId);
+      const data = {
+        apiSlug,
+        latency: {
+          p50: rawLatency.p50 === null ? null : Math.round(rawLatency.p50 * 100000) / 100,
+          p95: rawLatency.p95 === null ? null : Math.round(rawLatency.p95 * 100000) / 100,
+        },
+        breaker: { state: mapBreakerState(await breakerRegistry.getState(apiSlug)) },
+      };
+      healthCache.set(apiSlug, { data, timestamp: Date.now() });
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  return router;
+}
+
 export function createGatewayRouter(deps: GatewayDeps): Router {
   const { billing, rateLimiter, usageStore, upstreamUrl, registry } = deps;
   const breakerRegistry = deps.breakerRegistry ?? getDefaultBreakerRegistry();

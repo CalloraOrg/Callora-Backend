@@ -7,7 +7,7 @@
  */
 
 import { z } from 'zod';
-import { ConflictError, NotFoundError, BadRequestError } from '../errors/index.js';
+import { ConflictError, NotFoundError, BadRequestError, ForbiddenError } from '../errors/index.js';
 
 // ---------------------------------------------------------------------------
 // Manifest schema (Zod)
@@ -49,6 +49,8 @@ export type PluginStatus = 'available' | 'installed';
 
 export interface PluginRecord {
   manifest: PluginManifest;
+  /** User ID of the plugin registrant. */
+  owner_id: string;
   status: PluginStatus;
   /** User ID of the installer, or null if not yet installed */
   installed_by: string | null;
@@ -64,10 +66,10 @@ export interface PluginRecord {
 export interface PluginRepository {
   list(): PluginRecord[];
   findById(id: string): PluginRecord | undefined;
-  register(manifest: PluginManifest): PluginRecord;
+  register(manifest: PluginManifest, ownerId: string): PluginRecord;
   install(id: string, userId: string): PluginRecord;
   uninstall(id: string, userId: string): PluginRecord;
-  delete(id: string): void;
+  delete(id: string, requesterId: string, isAdmin?: boolean): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,12 +87,13 @@ export class InMemoryPluginRepository implements PluginRepository {
     return this.store.get(id);
   }
 
-  register(manifest: PluginManifest): PluginRecord {
+  register(manifest: PluginManifest, ownerId: string): PluginRecord {
     if (this.store.has(manifest.id)) {
       throw new ConflictError(`Plugin '${manifest.id}' is already registered`, 'CONFLICT');
     }
     const record: PluginRecord = {
       manifest,
+      owner_id: ownerId,
       status: 'available',
       installed_by: null,
       installed_at: null,
@@ -136,9 +139,13 @@ export class InMemoryPluginRepository implements PluginRepository {
     return updated;
   }
 
-  delete(id: string): void {
-    if (!this.store.has(id)) {
+  delete(id: string, requesterId: string, isAdmin = false): void {
+    const record = this.store.get(id);
+    if (!record) {
       throw new NotFoundError(`Plugin '${id}' not found`);
+    }
+    if (!isAdmin && record.owner_id !== requesterId) {
+      throw new ForbiddenError(`You do not have permission to delete plugin '${id}'`);
     }
     this.store.delete(id);
   }

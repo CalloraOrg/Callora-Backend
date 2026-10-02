@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   api:
     build:
@@ -7,6 +5,12 @@ services:
       target: runner
     ports:
       - "3000:3000"
+    # Required secrets are supplied through the untracked .env file:
+    #   cp .env.example .env && edit JWT_SECRET, ADMIN_API_KEY, METRICS_API_KEY
+    # The app refuses to serve authenticated traffic without them, so they are
+    # loaded here rather than baked into the image.
+    env_file:
+      - .env
     environment:
       - PORT=3000
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/callora?schema=public
@@ -14,6 +18,8 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # The healthcheck defined in the Dockerfile is inherited from the image and
+    # is what `docker compose ps` reports as the container's health.
 
   postgres:
     image: postgres:15-alpine

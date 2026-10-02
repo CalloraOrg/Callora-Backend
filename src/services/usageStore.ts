@@ -239,17 +239,16 @@ export class PostgresUsageStore implements UsageAdminStore {
             api_id,
             endpoint_id,
             api_key_id,
-            api_key,
             developer_id,
             amount_usdc,
             request_id,
             status_code,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, (
+          VALUES ($1, $2, $3, $4, (
             SELECT COALESCE(a.developer_id::text, '')
             FROM apis a WHERE a.id = $2 LIMIT 1
-          ), $6, $7, $8, $9)
+          ), $5, $6, $7, $8)
           ON CONFLICT (request_id, developer_id) DO NOTHING
           RETURNING id
         `,
@@ -258,7 +257,6 @@ export class PostgresUsageStore implements UsageAdminStore {
           event.apiId,
           event.endpointId,
           event.apiKeyId,
-          event.apiKey,
           event.amountUsdc,
           event.requestId,
           event.statusCode,
