@@ -1,6 +1,7 @@
 {
   "name": "callora-backend",
-  "version": "0.0.1",
+  "version": "1.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc",
@@ -19,7 +20,7 @@
     "error-codes:generate": "node scripts/generate-error-codes.mjs",
     "error-codes:check": "node scripts/generate-error-codes.mjs --check",
     "pretest": "npm run error-codes:check",
-    "test": "jest --forceExit",
+    "test": "node --test scripts/*.test.mjs",
     "test:serial": "jest --runInBand --forceExit",
     "test:unit": "jest --runInBand --forceExit --testPathIgnorePatterns tests/integration",
     "test:integration": "jest --runInBand --forceExit tests/integration",
