@@ -1,5 +1,10 @@
 # /api/auth — Authentication Endpoints
 
+> **See [Authentication modes and trust boundaries](#authentication-modes-and-trust-boundaries)**
+> below for the complete table of route prefixes, accepted credentials, JWT claims,
+> algorithms, expiry, and revocation behaviour across the whole API. The rest of this
+> document covers request/response shapes for the `/api/auth` route group only.
+
 This document describes request validation, success shapes, and error shapes for the
 `/api/auth` route group.  All routes apply Zod-validated request schemas via
 `bodyValidator` from `src/middleware/validate.ts`.  Any validation failure produces a
@@ -53,6 +58,84 @@ returns a structured 400:
 | `error.details[].message` | Per-field message from the Zod schema |
 | `error.details[].code` | Zod issue code uppercased (e.g., `TOO_SMALL`, `INVALID_TYPE`) |
 | `requestId` | Propagated or generated request correlation ID |
+
+---
+
+## Authentication modes and trust boundaries
+
+The API accepts several distinct credential types. They are **not** interchangeable:
+each route prefix is guarded by a specific middleware, and each middleware trusts a
+specific credential. The table below is the authoritative mapping.
+
+### Route prefixes vs accepted credentials
+
+| Route prefix | Middleware | Accepted credentials | Trust boundary |
+|---|---|---|---|
+| `/api/auth/wallet`, `/api/auth/refresh`, `/api/auth/revoke` | none (public) | None — request body carries wallet signature or refresh token | Untrusted; rate-limited |
+| `/api/auth/revoke-all`, `/api/auth/tokens` | `requireAuth` | `Authorization: Bearer <accessToken>` **or** `x-user-id: <userId>` | Bearer token is user-authenticated; `x-user-id` is **server-to-server only** (see below) |
+| `/api/admin/*` | `adminAuth` | `x-admin-api-key: <key>` **or** `Authorization: Bearer <accessToken>` with `role === "admin"` | Admin-only; API key is a shared secret, admin JWT is per-operator |
+| `/api/gateway/*` | gateway key check | `x-api-key: <key>` | Service-to-service; key is a shared secret scoped to the gateway |
+| `/api/metrics` | metrics key check | `METRICS_API_KEY` (via `x-api-key` or `Authorization: Bearer`) | Ops/monitoring only; not user-facing |
+| All other `/api/*` routes | `requireAuth` | `Authorization: Bearer <accessToken>` **or** `x-user-id: <userId>` | Same as `/api/auth/revoke-all` |
+
+> **`x-user-id` is a legacy server-to-server escape hatch.** It is accepted by
+> `requireAuth` for internal callers that have already authenticated the user
+> upstream. It is **not** a user-facing credential, it is **not** validated against
+> any signature, and any client that can reach the API directly can impersonate an
+> arbitrary user by setting it. Treat it as a trusted-network-only mechanism and
+> prefer Bearer tokens for all external traffic. Removal is tracked separately.
+
+### JWT access tokens
+
+Access tokens are signed JWTs issued by `POST /auth/wallet` and `POST /auth/refresh`.
+
+| Property | Value |
+|---|---|
+| Algorithms accepted | `HS256` (default). `alg: none` and asymmetric algorithms are rejected. |
+| Required claims | `sub` (user ID) **or** `userId` (legacy alias); `role` (optional, defaults to `"user"`) |
+| `role` values | `"user"`, `"admin"` — `adminAuth` requires `"admin"` |
+| Expiry | `exp` claim; default TTL is configured via `JWT_ACCESS_TTL` (see `src/config`). Expired tokens are rejected with `EXPIRED_TOKEN`. |
+| Revocation | Access tokens are **stateless** and cannot be individually revoked. Revoking refresh tokens (below) prevents new access tokens from being minted, but an already-issued access token remains valid until `exp`. Keep access TTLs short. |
+| Transport | `Authorization: Bearer <token>` header only. Query-string tokens are not accepted. |
+
+### Refresh tokens
+
+Refresh tokens are opaque, single-use, and stored server-side.
+
+| Property | Value |
+|---|---|
+| Format | Opaque string (not a JWT); validated by `refreshTokenSchema` |
+| Rotation | `POST /auth/refresh` consumes the presented token and issues a new one. The consumed token is marked revoked. |
+| Replay detection | Presenting an already-consumed token is treated as a theft signal: **all** refresh tokens for that user are revoked and the request fails with `REVOKED_TOKEN`. |
+| Revocation | `POST /auth/revoke` revokes one token; `POST /auth/revoke-all` revokes every token for the authenticated user. Revocation is immediate and server-side. |
+| Expiry | Each token has a server-side expiry; expired tokens fail with `EXPIRED_TOKEN`. |
+| Enumeration | `POST /auth/revoke` returns 200 whether or not the token existed, to prevent enumeration. |
+
+### Admin API keys
+
+`adminAuth` accepts `x-admin-api-key` as a shared secret. API keys are compared in
+constant time and are **not** individually revocable via the API — rotating the key
+requires updating the server configuration and redeploying. Prefer admin-role JWTs
+where per-operator revocation is required.
+
+### Gateway and metrics keys
+
+`x-api-key` (gateway) and `METRICS_API_KEY` (metrics) are static shared secrets read
+from configuration. They have no per-caller identity, no expiry, and no API-driven
+revocation; rotate them by changing the environment variable and restarting the
+service. Because they are bearer-style secrets, they must only be transmitted over
+TLS and must never be embedded in client-side code.
+
+### Failure modes
+
+| Condition | Result |
+|---|---|
+| Missing credential on a protected route | HTTP 401 `UNAUTHORIZED` |
+| Malformed or wrong-scheme `Authorization` header | HTTP 401 `UNAUTHORIZED` |
+| Expired access token | HTTP 401 `EXPIRED_TOKEN` |
+| Valid token but insufficient `role` | HTTP 403 `FORBIDDEN` |
+| Invalid admin API key or gateway key | HTTP 401 `UNAUTHORIZED` |
+| `x-user-id` present but empty | HTTP 401 `UNAUTHORIZED` |
 
 ---
 
@@ -245,7 +328,8 @@ Revokes **all** refresh tokens for the authenticated user.
 ### Authentication
 
 Requires `Authorization: Bearer <accessToken>` (or `x-user-id` header in
-server-to-server flows).
+server-to-server flows — see
+[Authentication modes and trust boundaries](#authentication-modes-and-trust-boundaries)).
 
 ### Request body
 
@@ -270,7 +354,9 @@ Returns the count of active refresh tokens for the authenticated user.
 
 ### Authentication
 
-Requires `Authorization: Bearer <accessToken>`.
+Requires `Authorization: Bearer <accessToken>`. See
+[Authentication modes and trust boundaries](#authentication-modes-and-trust-boundaries)
+for the full credential matrix.
 
 ### Success response (200)
 

@@ -2,6 +2,13 @@
 
 This directory contains complete, runnable examples showing how to use the Callora backend subsystems end-to-end.
 
+## Prerequisites
+
+- Node.js 20 or newer (see `package.json` engines)
+- `npm install` has been run in the repository root
+- [`tsx`](https://tsx.is-p.org/) is available via `npx tsx` for running the TypeScript examples directly
+- No database, Stellar node, or other external service is required for the in-memory examples
+
 ## Files
 
 ### 1. complete-integration.ts
@@ -39,7 +46,7 @@ npx tsx examples/complete-integration.ts
 **Features**:
 - Health check monitoring
 - Billing deduction with automatic retry
-- Idempotency demonstration
+- Idempotency demonstration using the `Idempotency-Key` request header
 - Concurrent request handling
 - Error handling and exponential backoff
 
@@ -74,7 +81,7 @@ nano .env
 Required variables:
 ```bash
 DB_HOST=localhost
-DB_PORT=5432
+DB_PORT=NUMBER_PLACEHOLDER
 DB_USER=postgres
 DB_PASSWORD=postgres
 DB_NAME=callora
@@ -123,12 +130,16 @@ curl http://localhost:3000/api/health
 
 ### Billing Deduction
 
+Billing deduction requests carry the idempotency key in the `Idempotency-Key`
+header. The body is the documented request shape and the response is wrapped in
+the standard success envelope.
+
 ```bash
 # Deduct balance
 curl -X POST http://localhost:3000/api/billing/deduct \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: req_abc123" \
   -d '{
-    "requestId": "req_abc123",
     "userId": "user_alice",
     "apiId": "api_weather",
     "endpointId": "endpoint_forecast",
@@ -138,16 +149,22 @@ curl -X POST http://localhost:3000/api/billing/deduct \
 
 # Response (201 Created)
 {
-  "usageEventId": "1",
-  "stellarTxHash": "tx_stellar_abc...",
-  "alreadyProcessed": false
+  "success": true,
+  "data": {
+    "usageEventId": "1",
+    "stellarTxHash": "tx_stellar_abc...",
+    "alreadyProcessed": false
+  }
 }
 
-# Retry with same request_id (200 OK)
+# Retry with the same Idempotency-Key (200 OK)
 {
-  "usageEventId": "1",
-  "stellarTxHash": "tx_stellar_abc...",
-  "alreadyProcessed": true
+  "success": true,
+  "data": {
+    "usageEventId": "1",
+    "stellarTxHash": "tx_stellar_abc...",
+    "alreadyProcessed": true
+  }
 }
 ```
 
@@ -159,9 +176,26 @@ curl http://localhost:3000/api/billing/status/req_abc123
 
 # Response (200 OK)
 {
-  "usageEventId": "1",
-  "stellarTxHash": "tx_stellar_abc...",
-  "processed": true
+  "success": true,
+  "data": {
+    "usageEventId": "1",
+    "stellarTxHash": "tx_stellar_abc...",
+    "processed": true
+  }
+}
+```
+
+## Error Envelope
+
+Error responses use the documented error envelope:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request body is invalid"
+  }
 }
 ```
 
@@ -180,21 +214,26 @@ if (healthCheck.status === 503) {
 ### 2. Billing with Retry Logic
 
 ```typescript
+import { randomUUID } from 'crypto';
+
 async function chargeUser(userId: string, amount: string) {
-  const requestId = `req_${uuidv4()}`;
-  
+  const idempotencyKey = `req_${randomUUID()}`;
+
   for (let i = 0; i < 3; i++) {
     try {
-      const result = await billingService.deduct({
-        requestId,
-        userId,
-        apiId: 'api_123',
-        endpointId: 'endpoint_456',
-        apiKeyId: 'key_789',
-        amountUsdc: amount,
-      });
-      
-      return result;
+      const response = await axios.post(
+        '/api/billing/deduct',
+        {
+          userId,
+          apiId: 'api_123',
+          endpointId: 'endpoint_456',
+          apiKeyId: 'key_789',
+          amountUsdc: amount,
+        },
+        { headers: { 'Idempotency-Key': idempotencyKey } },
+      );
+
+      return response.data.data;
     } catch (error) {
       if (i === 2) throw error;
       await sleep(Math.pow(2, i) * 1000);
@@ -206,20 +245,20 @@ async function chargeUser(userId: string, amount: string) {
 ### 3. Idempotency Key Generation
 
 ```typescript
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 // Option 1: UUID (recommended for client-side)
-const requestId = `req_${uuidv4()}`;
+const idempotencyKey = `req_${randomUUID()}`;
 
 // Option 2: Hash of request data (for deterministic keys)
-function generateRequestId(userId: string, apiId: string, timestamp: number) {
+function generateIdempotencyKey(userId: string, apiId: string, timestamp: number) {
   const data = `${userId}:${apiId}:${timestamp}`;
   const hash = createHash('sha256').update(data).digest('hex').substring(0, 16);
   return `req_${hash}`;
 }
 
 // Option 3: Combination (user-specific + timestamp)
-const requestId = `req_${userId}_${Date.now()}`;
+const idempotencyKey = `req_${userId}_${Date.now()}`;
 ```
 
 ### 4. Monitoring Integration
@@ -252,7 +291,7 @@ billingDuration.observe(duration);
 ```typescript
 try {
   const health = await checkHealth();
-  
+
   if (health.status === 'degraded') {
     console.warn('System degraded:', health.checks);
     // Alert monitoring system
@@ -269,17 +308,19 @@ try {
 
 ```typescript
 try {
-  const result = await billingService.deduct(request);
-  
-  if (!result.success) {
-    console.error('Billing failed:', result.error);
+  const response = await axios.post('/api/billing/deduct', request, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+
+  if (!response.data.success) {
+    console.error('Billing failed:', response.data.error);
     // Handle failure (retry, alert, etc.)
   }
 } catch (error) {
   if (error.code === '23505') {
     // Unique constraint violation (race condition)
     // Query existing record
-    const existing = await billingService.getByRequestId(request.requestId);
+    const existing = await billingService.getByIdempotencyKey(idempotencyKey);
     return existing;
   }
   throw error;
@@ -298,6 +339,15 @@ npm run test:unit
 
 ```bash
 npm run test:integration
+```
+
+### Typecheck
+
+Examples are included in the `typecheck` tsconfig so they cannot drift from the
+current API:
+
+```bash
+npm run typecheck
 ```
 
 ### Manual Testing
@@ -325,7 +375,7 @@ APP_VERSION=1.0.0
 
 # Database
 DB_HOST=prod-db.example.com
-DB_PORT=5432
+DB_PORT=NUMBER_PLACEHOLDER
 DB_USER=callora_prod
 DB_PASSWORD=<secure-password>
 DB_NAME=callora_prod
@@ -409,12 +459,12 @@ spec:
 
 ## Best Practices
 
-1. **Always use request_id** for billing operations
-2. **Generate request_id once** and reuse for retries
+1. **Always send an `Idempotency-Key`** for billing operations
+2. **Generate the idempotency key once** and reuse it for retries
 3. **Implement exponential backoff** for retries
 4. **Monitor health check status** continuously
 5. **Alert on degraded status**, page on down status
-6. **Log all billing operations** with request_id
+#6. **Log all billing operations** with the idempotency key
 7. **Track duplicate request rate** for monitoring
 8. **Use connection pooling** for database
 9. **Implement graceful shutdown** for zero-downtime deploys
@@ -432,7 +482,7 @@ spec:
 ### Billing Duplicate Rate High
 
 1. Check client retry logic
-2. Verify request_id generation
+2. Verify idempotency key generation
 3. Monitor network latency
 4. Check for client bugs
 

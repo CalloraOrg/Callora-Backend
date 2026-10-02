@@ -6,6 +6,9 @@ import { defaultAuditService, type AuditService } from '../services/auditService
 import { logger } from '../logger.js';
 import { NotFoundError, BadRequestError, ServiceUnavailableError } from '../errors/index.js';
 import { CircuitBreaker, CircuitBreakerOpenError } from '../lib/circuitBreaker.js';
+import { adminAuth } from '../middleware/adminAuth.js';
+
+export const MAX_SPIKE_DELAY_MS = 500;
 
 export interface SpikeRecord {
   id: string;
@@ -43,6 +46,7 @@ type SpikeUpdateInput = z.infer<typeof SpikeUpdateSchema>;
 
 export function createSpikeRouter(deps: SpikeRouterDeps = {}): Router {
   const router = Router();
+  router.use(adminAuth);
   const auditService = deps.auditService ?? defaultAuditService;
 
   /**
@@ -122,7 +126,7 @@ export function createSpikeRouter(deps: SpikeRouterDeps = {}): Router {
       if (typeof req.query.delay === 'string') {
         const parsed = parseInt(req.query.delay, 10);
         if (!isNaN(parsed) && parsed > 0) {
-          delay = parsed;
+          delay = Math.min(parsed, MAX_SPIKE_DELAY_MS);
         }
       }
 

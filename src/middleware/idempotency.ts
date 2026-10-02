@@ -182,11 +182,6 @@ export async function idempotencyMiddleware(
   const requestHash = calculateRequestHash(userId, req.body, req.method, req.path, bodyExcludingKeys);
 
   try {
-    if (opts?.cleanExpiredTTL ?? true) {
-      await db.query('DELETE FROM idempotency_store WHERE expires_at < NOW()::timestamp', []);
-    }
-    await db.query('DELETE FROM idempotency_store WHERE expires_at < $1', [new Date().toISOString()]);
-
     const handleExistingRecord = (record: {
       request_hash: string;
       status: string;
@@ -263,7 +258,9 @@ export async function idempotencyMiddleware(
     };
 
     const result = await db.query(
-      'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2',
+      `SELECT request_hash, status, response_status, response_body, expires_at
+       FROM idempotency_store
+       WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
       [scope, idempotencyKey]
     );
 
@@ -279,14 +276,23 @@ export async function idempotencyMiddleware(
     const insertResult = await db.query(
       `INSERT INTO idempotency_store (scope, idempotency_key, request_hash, status, expires_at, created_at)
        VALUES ($1, $2, $3, $4, $5, NOW()::timestamp)
-       ON CONFLICT (scope, idempotency_key) DO NOTHING`,
+       ON CONFLICT (scope, idempotency_key) DO UPDATE
+       SET request_hash = EXCLUDED.request_hash,
+           status = EXCLUDED.status,
+           response_status = NULL,
+           response_body = NULL,
+           expires_at = EXCLUDED.expires_at,
+           created_at = EXCLUDED.created_at
+       WHERE idempotency_store.expires_at <= NOW()::timestamp`,
       [scope, idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
     );
 
     if (insertResult && insertResult.rowCount === 0) {
       const existing = await db.query(
-        'SELECT request_hash, status, response_status, response_body, expires_at FROM idempotency_store WHERE idempotency_key = $1',
-        [idempotencyKey]
+        `SELECT request_hash, status, response_status, response_body, expires_at
+         FROM idempotency_store
+         WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
+        [scope, idempotencyKey]
       );
       if (existing.rows.length > 0 && handleExistingRecord(existing.rows[0])) {
         return;
@@ -384,4 +390,3 @@ export function createIdempotencyMiddleware(opts?: IdempotencyConfig): RequestHa
     idempotencyMiddleware(req, res, next, opts);
   };
 }
-
