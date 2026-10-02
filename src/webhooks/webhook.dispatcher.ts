@@ -1,9 +1,11 @@
 import crypto from 'crypto';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
 import { getEffectiveRetryPolicy, calculateBackoff } from '../services/webhookRetry.js';
+import { resolveUpstreamTarget, isBlockedAddress } from '../lib/upstreamTarget.js';
 import { computeJitteredDelay, type RandomSource } from '../lib/retry.js';
 import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
 
@@ -68,7 +70,6 @@ export async function consumeCappedResponseBody(
         return '';
     }
 }
-
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
 
@@ -84,6 +85,37 @@ function sleep(ms: number): Promise<void> {
 
 function signPayload(secret: string, body: string): string {
     return crypto.createHmac('sha256', secret).update(body).digest('hex');
+}
+
+/**
+ * Builds an undici Agent whose connect.lookup returns only the previously
+ * validated address. This pins the TCP connection to the exact IP that passed
+ * SSRF validation, defeating DNS rebinding between validation and connect.
+ * TLS SNI/Host verification still uses the original hostname because the
+ * request URL is unchanged.
+ */
+function createPinnedAgent(hostname: string, pinnedAddress: string, pinnedFamily: number): Agent {
+    return new Agent({
+        connect: {
+            lookup: (_host, _options, callback) => {
+                // Ignore the resolver entirely; always return the validated IP.
+                callback(null, [{ address: pinnedAddress, family: pinnedFamily }]);
+            },
+        },
+    });
+}
+
+async function resolvePinnedTarget(url: string): Promise<{ address: string; family: number }> {
+    const parsed = new URL(url);
+    const resolved = await resolveUpstreamTarget(parsed.hostname);
+    if (!resolved || resolved.addresses.length === 0) {
+        throw new Error(`Unable to resolve upstream target for ${parsed.hostname}`);
+    }
+    const chosen = resolved.addresses[0];
+    if (isBlockedAddress(chosen.address)) {
+        throw new Error(`Blocked upstream address for ${parsed.hostname}: ${chosen.address}`);
+    }
+    return { address: chosen.address, family: chosen.family };
 }
 
 function trackDispatch<T>(operation: Promise<T>): Promise<T> {
@@ -196,14 +228,20 @@ export async function dispatchWebhook(
         }
 
         for (let attempt = 0; attempt < maxRetries; attempt++) {
+let agent: Agent | undefined;
             attemptsMade = attempt + 1;
             try {
-                const response = await fetch(config.url, {
+                const pinned = await resolvePinnedTarget(config.url);
+                const parsed = new URL(config.url);
+                agent = createPinnedAgent(parsed.hostname, pinned.address, pinned.family);
+
+                const response = await undiciFetch(config.url, {
                     method: 'POST',
                     body,
                     headers,
                     redirect: 'manual',
                     signal: AbortSignal.timeout(10_000), // 10s timeout per attempt
+                    dispatcher: agent,
                 });
 
                 const isRedirect =
@@ -250,6 +288,10 @@ export async function dispatchWebhook(
                     `[webhook] Error delivering to ${config.url}, attempt ${attempt + 1}:`,
                     (err as Error).message
                 );
+            } finally {
+                if (agent) {
+                    await agent.close().catch(() => {});
+                }
             }
 
             if (attempt < maxRetries - 1) {

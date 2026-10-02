@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
+import { Agent } from 'undici';
 import { ProxyDeps, ProxyConfig, ApiRegistryEntry, EndpointPricing } from '../types/gateway.js';
 import { resolveEndpointPrice } from '../data/apiRegistry.js';
 import {
@@ -16,6 +17,7 @@ import { buildHopByHopSet } from '../lib/hopByHop.js';
 import {
   buildUpstreamTargetUrl,
   DEFAULT_UPSTREAM_HOST_ALLOWLIST,
+  resolveUpstreamAddresses,
   validateResolvedUpstreamTarget,
 } from '../lib/upstreamTarget.js';
 import {
@@ -106,6 +108,9 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   const { billing, rateLimiter, usageStore, registry, circuitBreakerStore, drainState } = deps;
   const config = resolveConfig(deps.proxyConfig);
   const router = Router();
+  // Cache of pinned undici Agents keyed by `${hostname}:${port}` so that the
+  // connection reuses the exact IP that passed validation (defeats DNS rebinding).
+  const pinnedAgentCache = new Map<string, Agent>();
   const circuitBreaker = new CircuitBreaker({
     failureThreshold: env.PROXY_BREAKER_FAILURE_THRESHOLD,
     cooldownMs: env.PROXY_BREAKER_COOLDOWN_MS,
@@ -192,9 +197,26 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       const wildcardPath = req.params[0] ?? '';
       const upstreamTarget = buildUpstreamTargetUrl(apiEntry.base_url, wildcardPath);
       let safeUpstreamTarget: string;
+      let pinnedAddresses: string[];
 
       try {
         safeUpstreamTarget = await validateResolvedUpstreamTarget(upstreamTarget, {
+          allowedHosts: config.allowedHosts,
+        });
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Configured upstream target is not allowed.';
+        throw new BadGatewayError(message, 'UPSTREAM_TARGET_BLOCKED');
+      }
+
+      // Re-resolve once more, but this time keep the exact addresses so we can
+      // pin them into the undici Agent's lookup hook.  Any subsequent DNS
+      // answer returned to the connection layer is ignored — the connection
+      // will only ever dial the addresses captured here.
+      try {
+        const parsed = new URL(safeUpstreamTarget);
+        pinnedAddresses = await resolveUpstreamAddresses(parsed.hostname, {
           allowedHosts: config.allowedHosts,
         });
       } catch (error) {
@@ -226,6 +248,39 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       let upstreamStatus = 502;
       const timer = startUpstreamTimer(apiEntry.id, req.method);
 
+      // Build (or reuse) a pinned undici Agent whose lookup hook returns only
+      // the addresses that passed validation.  TLS SNI/Host remain the
+      // original hostname because we never rewrite the URL — only the DNS
+      // resolution step is overridden.
+      const parsedTarget = new URL(safeUpstreamTarget);
+      const pinnedPort = parsedTarget.port
+        ? Number(parsedTarget.port)
+        : (parsedTarget.protocol === 'https:' ? 443 : 80);
+      const agentKey = `${parsedTarget.hostname}:${pinnedPort}`;
+      let pinnedAgent = pinnedAgentCache.get(agentKey);
+      if (!pinnedAgent) {
+        const addresses = pinnedAddresses.slice();
+        let cursor = 0;
+        pinnedAgent = new Agent({
+          connect: {
+            // undici calls lookup(hostname, options, callback).  We ignore the
+            // hostname and hand back one of the pre-validated addresses,
+            // rotating through them for basic failover.
+            lookup: (_hostname, options, callback) => {
+              const addr = addresses[cursor % addresses.length];
+              cursor += 1;
+              const family = addr.includes(':') ? 6 : 4;
+              if (typeof options === 'object' && options !== null && options.all) {
+                callback(null, [{ address: addr, family }]);
+              } else {
+                callback(null, addr, family);
+              }
+            },
+          },
+        });
+        pinnedAgentCache.set(agentKey, pinnedAgent);
+      }
+
       try {
         const executeWithRetry = async (attempt = 1): Promise<Response> => {
           try {
@@ -234,6 +289,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
               headers: forwardHeaders,
               body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
               signal: AbortSignal.timeout(config.timeoutMs),
+              // @ts-expect-error undici's fetch accepts a dispatcher option
+              dispatcher: pinnedAgent,
             });
           } catch (e) {
             if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) && attempt < 3) {
