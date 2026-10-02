@@ -591,6 +591,7 @@ describe('Webhook Signature Verification Tests', () => {
         'X-Callora-Timestamp': testPayload.timestamp,
         'X-Callora-Signature': `sha256=${expectedSignature}`,
       }),
+      redirect: 'manual',
       signal: expect.any(AbortSignal),
     });
   });

@@ -49,6 +49,9 @@ const API_ID       = 'api_weather';
 // For real contract IDs see: https://github.com/CalloraOrg/callora-contracts
 const CONTRACT_ID = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4';
 
+// Idempotency key used for mutating requests (vault create/fund, settlement)
+const IDEMPOTENCY_KEY = 'demo-idempotency-key-0001';
+
 // Consumer starts with 100 credits in the billing ledger
 const INITIAL_CREDITS = 100;
 
@@ -163,22 +166,31 @@ function createMainApp(upstreamUrl: string): express.Express {
     const { userId, contractId, network } = req.body;
 
     if (!userId || !contractId || !network) {
-      res.status(400).json({ error: 'userId, contractId, and network are required' });
+      res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'userId, contractId, and network are required' },
+      });
       return;
     }
 
     try {
       const vault = await vaultRepo.create(userId, contractId, network);
       res.status(201).json({
-        id: vault.id,
-        userId: vault.userId,
-        contractId: vault.contractId,
-        network: vault.network,
-        balanceSnapshot: vault.balanceSnapshot.toString(),
+        success: true,
+        data: {
+          id: vault.id,
+          userId: vault.userId,
+          contractId: vault.contractId,
+          network: vault.network,
+          balanceSnapshot: vault.balanceSnapshot.toString(),
+        },
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(409).json({ error: message });
+      res.status(409).json({
+        success: false,
+        error: { code: 'CONFLICT', message },
+      });
     }
   });
 
@@ -194,21 +206,30 @@ function createMainApp(upstreamUrl: string): express.Express {
     const network = (req.query.network as string) ?? NETWORK;
 
     if (!userId) {
-      res.status(400).json({ error: 'userId query parameter is required' });
+      res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'userId query parameter is required' },
+      });
       return;
     }
 
     const vault = await vaultRepo.findByUserId(userId, network);
     if (!vault) {
-      res.status(404).json({ error: `No vault for user "${userId}" on ${network}` });
+      res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: `No vault for user "${userId}" on ${network}` },
+      });
       return;
     }
 
     res.json({
-      id: vault.id,
-      balanceSnapshot: vault.balanceSnapshot.toString(),
-      network: vault.network,
-      lastSyncedAt: vault.lastSyncedAt?.toISOString() ?? null,
+      success: true,
+      data: {
+        id: vault.id,
+        balanceSnapshot: vault.balanceSnapshot.toString(),
+        network: vault.network,
+        lastSyncedAt: vault.lastSyncedAt?.toISOString() ?? null,
+      },
     });
   });
 
@@ -226,13 +247,19 @@ function createMainApp(upstreamUrl: string): express.Express {
     const { userId, network, amountStroops } = req.body;
 
     if (!userId || amountStroops === undefined) {
-      res.status(400).json({ error: 'userId and amountStroops are required' });
+      res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'userId and amountStroops are required' },
+      });
       return;
     }
 
     const vault = await vaultRepo.findByUserId(userId, network ?? NETWORK);
     if (!vault) {
-      res.status(404).json({ error: 'Vault not found — create one first' });
+      res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Vault not found — create one first' },
+      });
       return;
     }
 
@@ -244,9 +271,12 @@ function createMainApp(upstreamUrl: string): express.Express {
     );
 
     res.json({
-      id: updated.id,
-      balanceSnapshot: updated.balanceSnapshot.toString(),
-      lastSyncedAt: updated.lastSyncedAt?.toISOString() ?? null,
+      success: true,
+      data: {
+        id: updated.id,
+        balanceSnapshot: updated.balanceSnapshot.toString(),
+        lastSyncedAt: updated.lastSyncedAt?.toISOString() ?? null,
+      },
     });
   });
 
@@ -276,7 +306,10 @@ function createMainApp(upstreamUrl: string): express.Express {
 
   app.get('/api/usage/events', (_req, res) => {
     const events = usageStore.getEvents();
-    res.json({ count: events.length, events });
+    res.json({
+      success: true,
+      data: { count: events.length, events },
+    });
   });
 
   // -- Settlement: trigger batch --------------------------------------------
@@ -290,13 +323,19 @@ function createMainApp(upstreamUrl: string): express.Express {
    */
   app.post('/api/settlement/run', async (_req, res) => {
     const result = await settlementService.runBatch();
-    res.json(result);
+    res.json({
+      success: true,
+      data: result,
+    });
   });
 
   // -- 404 fallback ---------------------------------------------------------
 
   app.use((_req, res) => {
-    res.status(404).json({ error: 'Not found' });
+    res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Not found' },
+    });
   });
 
   return app;
@@ -320,7 +359,7 @@ async function runDemo(baseUrl: string): Promise<void> {
   console.log('STEP 2 · Create vault for developer on testnet');
   const vault = await fetch(`${baseUrl}/api/vault`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': IDEMPOTENCY_KEY },
     body: JSON.stringify({
       userId: DEVELOPER_ID,
       contractId: CONTRACT_ID,
@@ -334,7 +373,7 @@ async function runDemo(baseUrl: string): Promise<void> {
   console.log('STEP 3 · Fund vault (simulate 50 USDC on-chain deposit)');
   const funded = await fetch(`${baseUrl}/api/vault/fund`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': IDEMPOTENCY_KEY },
     body: JSON.stringify({
       userId: DEVELOPER_ID,
       network: NETWORK,
@@ -358,7 +397,7 @@ async function runDemo(baseUrl: string): Promise<void> {
   divider();
   console.log('STEP 5 · Inspect usage events');
   let usage = await fetch(`${baseUrl}/api/usage/events`).then((r) => r.json());
-  console.log(`  ${usage.count} event(s) recorded so far`);
+  console.log(`  ${usage.data.count} event(s) recorded so far`);
 
   // Send four more calls so the settlement threshold (1 USDC) is easily met
   for (let i = 0; i < 4; i++) {
@@ -368,13 +407,14 @@ async function runDemo(baseUrl: string): Promise<void> {
     });
   }
   usage = await fetch(`${baseUrl}/api/usage/events`).then((r) => r.json());
-  console.log(`  ${usage.count} event(s) after 4 additional calls`);
+  console.log(`  ${usage.data.count} event(s) after 4 additional calls`);
 
   // Step 6 — Revenue settlement
   divider();
   console.log('STEP 6 · Revenue settlement (pay developer from usage fees)');
   const batch = await fetch(`${baseUrl}/api/settlement/run`, {
     method: 'POST',
+    headers: { 'Idempotency-Key': IDEMPOTENCY_KEY },
   }).then((r) => r.json());
   console.log(batch);
 
@@ -385,7 +425,7 @@ async function runDemo(baseUrl: string): Promise<void> {
   const devBalance = await fetch(
     `${baseUrl}/api/vault/balance?userId=${DEVELOPER_ID}&network=${NETWORK}`,
   ).then((r) => r.json());
-  console.log(`  Developer vault : ${devBalance.balanceSnapshot} stroops`);
+  console.log(`  Developer vault : ${devBalance.data.balanceSnapshot} stroops`);
 
   const consumerCredits = await billing.checkBalance(CONSUMER_ID);
   console.log(`  Consumer credits: ${consumerCredits} (started with ${INITIAL_CREDITS})`);

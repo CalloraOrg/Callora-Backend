@@ -1,10 +1,15 @@
 import {
   getRequestId,
+  getCorrelationId,
   runWithRequestContext,
   type RequestContext,
 } from './utils/asyncContext.js';
 
-export { getRequestId, getCorrelationId, setCorrelationId, runWithRequestContext, type RequestContext };
+// `getCorrelationId` was re-exported without being imported, and
+// `setCorrelationId` does not exist in `utils/asyncContext` at all. Under ESM
+// that is a link-time failure — the server could not start — so the list is
+// kept in sync with the module's actual exports.
+export { getRequestId, getCorrelationId, runWithRequestContext, type RequestContext };
 
 export const REDACTED_LOG_VALUE = '[REDACTED]';
 
