@@ -1,4 +1,5 @@
 -- Migration: namespace idempotency keys per authenticated scope
+-- destructive-approved: #1273
 --
 -- Keys were previously unique globally (`idempotency_key` PRIMARY KEY), so two
 -- users choosing the same key collided: the second saw
