@@ -218,8 +218,8 @@ describe('IP Allowlist Integration Tests', () => {
       // Mock logger to capture logs
       const mockLogs: any[] = [];
       const originalWarn = logger.warn;
-      logger.warn = (message: string, data?: any) => {
-        mockLogs.push({ message, data });
+      logger.warn = (...args: any[]) => {
+        mockLogs.push({ message: args[0], data: args[1] });
       };
 
       try {
