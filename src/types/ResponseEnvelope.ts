@@ -12,12 +12,26 @@ export interface SuccessEnvelope<T = unknown> {
   timestamp: string; // ISO 8601
 }
 
+/**
+ * Redacted Soroban simulation diagnostics attached to a `SIMULATION_FAILED`
+ * error. Only these four fields are ever published; raw simulation payloads
+ * (addresses, balances, XDR, signatures) are redacted before reaching here.
+ */
+export interface SimulationDetailsSummary {
+  errorCode?: string | number;
+  errorMessage?: string;
+  eventCount?: number;
+  footprintPresent?: boolean;
+}
+
 export interface ErrorEnvelope {
   success: false;
   error: {
     code: string;
     message: string;
     details?: unknown;
+    /** Present only for simulation failures; additive and optional. */
+    simulationDetails?: SimulationDetailsSummary;
   };
   requestId: string;
   timestamp: string;

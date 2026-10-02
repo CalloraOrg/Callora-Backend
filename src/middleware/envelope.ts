@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { z, ZodSchema, ZodError } from 'zod';
 import type { ValidationErrorDetail } from './validate.js';
 import { InternalServerError } from '../errors/index.js';
+import { safeSimulationDetails } from '../errors/errorEnvelopePolicy.js';
+import type { RedactedSimulationDetailsSummary } from '../errors/errorEnvelopePolicy.js';
 import { logger } from '../logger.js';
 
 const SKIP_CONTENT_TYPES = [
@@ -26,6 +28,19 @@ export const successEnvelopeSchema = z.object({
   timestamp: z.string().datetime(),
 });
 
+/**
+ * Optional, additive member of `error` describing a failed Soroban
+ * simulation. Only the redacted summary fields are representable here, so a
+ * client can rely on `error.simulationDetails` never containing addresses,
+ * balances, XDR or signatures.
+ */
+export const simulationDetailsSchema = z.object({
+  errorCode: z.union([z.string(), z.number()]).optional(),
+  errorMessage: z.string().optional(),
+  eventCount: z.number().optional(),
+  footprintPresent: z.boolean().optional(),
+});
+
 export const errorEnvelopeSchema = z.object({
   success: z.literal(false),
   error: z.object({
@@ -37,6 +52,7 @@ export const errorEnvelopeSchema = z.object({
       code: z.string(),
     })).optional(),
     retryAfterMs: z.number().optional(),
+    simulationDetails: simulationDetailsSchema.optional(),
   }),
   requestId: z.string(),
   timestamp: z.string().datetime(),
@@ -83,6 +99,7 @@ export function buildErrorEnvelope(
   requestId: string,
   details?: ValidationErrorDetail[],
   retryAfterMs?: number,
+  simulationDetails?: RedactedSimulationDetailsSummary,
 ): ErrorEnvelope {
   const envelope: ErrorEnvelope = {
     success: false,
@@ -98,6 +115,10 @@ export function buildErrorEnvelope(
   }
   if (retryAfterMs !== undefined) {
     envelope.error.retryAfterMs = retryAfterMs;
+  }
+  const safeDetails = safeSimulationDetails(simulationDetails);
+  if (safeDetails) {
+    envelope.error.simulationDetails = safeDetails;
   }
   return envelope;
 }
@@ -135,6 +156,7 @@ export function envelopeMiddleware(req: Request, res: Response, next: NextFuncti
       let message = 'Request failed';
       let details: ValidationErrorDetail[] | undefined;
       let retryAfterMs: number | undefined;
+      let simulationDetails: RedactedSimulationDetailsSummary | undefined;
 
       if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
         const bodyObj = body as Record<string, unknown>;
@@ -154,9 +176,15 @@ export function envelopeMiddleware(req: Request, res: Response, next: NextFuncti
         if (typeof bodyObj.retryAfterMs === 'number') {
           retryAfterMs = bodyObj.retryAfterMs;
         }
+        // Preserve a redacted simulation summary when a route (or an upstream
+        // proxy) emits the canonical SIMULATION_FAILED shape directly. The
+        // whitelist keeps raw diagnostics out of the envelope.
+        if (bodyObj.simulationDetails !== undefined) {
+          simulationDetails = safeSimulationDetails(bodyObj.simulationDetails);
+        }
       }
 
-      return buildErrorEnvelope(code, message, requestId, details, retryAfterMs);
+      return buildErrorEnvelope(code, message, requestId, details, retryAfterMs, simulationDetails);
     }
 
     let data = body;

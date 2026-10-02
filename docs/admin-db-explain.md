@@ -80,29 +80,42 @@ All errors follow the standard envelope:
 
 ---
 
-## Query allowlist
+## Query allowlist & safety guards
 
-Only `SELECT` and `WITH` (CTE) queries are allowed.  The check is applied **before**
-the query is sent to the database:
+Only read-only `SELECT` and `WITH` (CTE) queries are allowed. Multi-layered defences prevent accidental or malicious data modification and connection exhaustion:
 
-- Queries that do not start with `SELECT` or `WITH` (case-insensitive) are rejected.
-- Multi-statement queries (containing `;` outside of string literals or comments) are
-  rejected, regardless of what the first statement is.
+1. **Static keyword inspection (defence in depth)**:
+   - Queries that do not start with `SELECT` or `WITH` (case-insensitive) are rejected.
+   - Multi-statement queries (containing `;` outside of string literals or comments) are rejected.
+   - Data-modifying statements (`DELETE`, `UPDATE`, `INSERT`, `MERGE`, `DROP`, `ALTER`, `TRUNCATE`, etc.) inside CTEs (e.g. `WITH d AS (DELETE FROM users RETURNING 1) SELECT * FROM d`) are detected and rejected at the boundary.
+
+2. **Dedicated read-only transaction**:
+   - Every EXPLAIN query runs on a dedicated client checked out from the pool.
+   - Executes inside `BEGIN READ ONLY; SET LOCAL statement_timeout = ...; EXPLAIN ...; ROLLBACK`.
+   - PostgreSQL enforces read-only mode at the transaction level; any mutating query that attempts execution fails with a read-only transaction error (`25006`).
+   - Every transaction is unconditionally rolled back (`ROLLBACK`) and the client is released back to the pool.
+
+3. **Statement timeout**:
+   - Sets a local statement timeout (default 5000 ms, configurable via router deps, `ADMIN_EXPLAIN_TIMEOUT_MS`, or request body `statementTimeoutMs`).
+   - Runaway queries and `pg_sleep` calls are aborted and return HTTP `400`.
 
 Rejected examples:
 
 ```sql
-INSERT INTO …          -- rejected: not SELECT/WITH
-UPDATE … SET …         -- rejected: not SELECT/WITH
-SELECT 1; DROP TABLE … -- rejected: multi-statement
+INSERT INTO …                                                   -- rejected: not SELECT/WITH
+UPDATE … SET …                                                  -- rejected: not SELECT/WITH
+SELECT 1; DROP TABLE …                                          -- rejected: multi-statement
+WITH d AS (DELETE FROM users RETURNING 1) SELECT * FROM d       -- rejected: CTE contains DELETE
+WITH u AS (UPDATE users SET active = false) SELECT * FROM u     -- rejected: CTE contains UPDATE
 ```
 
 Allowed examples:
 
 ```sql
 SELECT * FROM apis WHERE status = $1
-WITH cte AS (SELECT …) SELECT * FROM cte
-SELECT 'hello; world'  -- semicolon inside string literal is fine
+WITH cte AS (SELECT * FROM users) SELECT * FROM cte
+SELECT 'hello; world'                                           -- semicolon inside string literal is fine
+SELECT * FROM audit_logs WHERE action = 'DELETE'                -- keyword inside string literal is fine
 ```
 
 ---
@@ -118,7 +131,8 @@ Every call emits a structured Pino audit event with channel label `admin_action`
   "clientIp": "10.0.0.5",
   "userAgent": "curl/8.4.0",
   "query": "SELECT * FROM usage_events WHERE developer_id = $1",
-  "paramCount": 1
+  "paramCount": 1,
+  "statementTimeoutMs": 5000
 }
 ```
 
@@ -144,13 +158,15 @@ curl -s -X POST https://api.callora.io/api/admin/db/explain \
 
 ## Security considerations
 
-- The endpoint only executes `EXPLAIN (ANALYZE, FORMAT JSON) <query>`.  It does **not**
-  run the query outside of an EXPLAIN context.  However, `EXPLAIN ANALYZE` does execute
-  the query — `SELECT` queries on large tables will consume real I/O and CPU.
+- The endpoint executes `EXPLAIN (ANALYZE, FORMAT JSON) <query>` inside a dedicated
+  read-only transaction (`BEGIN READ ONLY ... ROLLBACK`).  Because `ANALYZE` executes
+  statements to gather runtime metrics, read-only transactions and keyword allowlists
+  ensure that no mutations can take place and no rows are modified.
+- Queries are protected by `SET LOCAL statement_timeout` to prevent connection pinning
+  or denial-of-service via long-running queries or `pg_sleep`.
+- The database client is guaranteed to be rolled back and released back to the pool in
+  all failure and success scenarios.
 - Parameters are passed as positional bindings (`pg` parameterised queries), so SQL
   injection through the `params` field is not possible.
-- The allowlist and multi-statement guard defend against accidental or malicious DML
-  being smuggled through the `query` field, but the endpoint should still be treated as
-  a sensitive admin capability and kept behind a strict IP allowlist in production.
-- Do not expose this endpoint to untrusted networks.  A well-crafted `SELECT` against a
-  very large table can act as a denial-of-service against the database.
+- The endpoint is gated behind `adminAuth` and admin IP allowlists.
+
