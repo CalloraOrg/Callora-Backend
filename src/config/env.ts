@@ -79,6 +79,30 @@ export const envSchema = z
     JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
     ADMIN_API_KEY: z.string().min(1, "ADMIN_API_KEY is required"),
     METRICS_API_KEY: z.string().min(1, "METRICS_API_KEY is required"),
+    /**
+     * TRUST_PROXY_HOPS — number of trusted reverse-proxy hops in front of the
+     * application. When greater than zero, the client IP is derived from the
+     * X-Forwarded-For header by selecting the entry that many positions from
+     * the right (matching Express `trust proxy` semantics). When zero (the
+     * default), the socket address is used and X-Forwarded-For is ignored.
+     *
+     * Example: TRUST_PROXY_HOPS=1 with "X-Forwarded-For: 1.1.1.1, 2.2.2.2"
+     * yields 2.2.2.2 (the rightmost entry, i.e. the address appended by the
+     * single trusted proxy). The leftmost entry is fully client-controlled
+     * and must never be trusted.
+     */
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+    /**
+     * TRUST_PROXY_HEADERS — legacy boolean flag. Retained for backwards
+     * compatibility: when true and TRUST_PROXY_HOPS is unset/zero, it is
+     * treated as a single trusted hop. New deployments should prefer
+     * TRUST_PROXY_HOPS.
+     */
+    TRUST_PROXY_HEADERS: z
+      .string()
+      .optional()
+      .transform((v) => v === "true")
+      .default(false),
     TRUST_FORWARDED_USER_ID: z
       .string()
       .optional()

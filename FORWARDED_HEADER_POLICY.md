@@ -40,7 +40,7 @@ All other headers not in the strip list are forwarded to upstream services, incl
 - `content-length` - Length of the request body
 - `accept` - Preferred response media types
 - `user-agent` - Client software identification
-- `accept-encoding` - Preferred content encodings
+- `accept-encoding` - Preferred response encodings
 - `accept-language` - Preferred response languages
 - Custom application headers (e.g., `x-custom-*`)
 
@@ -75,6 +75,22 @@ Header stripping is performed case-insensitively. All header name variations (e.
 - Request IDs are included in error responses for debugging
 - UUID v4 format ensures global uniqueness
 
+## Client IP Trust Boundary
+
+When the service sits behind one or more reverse proxies, client IP resolution follows Express's `trust proxy` semantics:
+
+- **No trust (default)**: all forwarded headers are ignored and the direct socket address is used. This is spoof-proof.
+- **Hop count**: the client address is taken N entries from the right of the forwarded chain. With one trusted hop, `X-Forwarded-For: 1.1.1.1, 2.2.2.2` yields `2.2.2.2`. The leftmost entry is fully client-controlled and must not be trusted.
+- **Trust all** (`true`):? legacy behaviour that trusts every hop. Only use this when every proxy in the chain is controlled by the operator.
+
+### Configuration
+
+- `TRUST_PROXY_HEADERS=true`: trust all hops (legacy).
+- `TRUST_PROXY_HOPS=N<number>`: trust the last N hops. Takes precedence over `TRUST_PROXY_HEADERS` when set to a positive integer.
+- Unset: no trust; the socket address is used.
+
+The IP-allowlist middleware and the request logger both call the same `helper in `src/lib/clientIp.ts`, so the trust boundary is applied consistently across the stack.
+
 ## Implementation Details
 
 The header policy is implemented in `src/routes/proxyRoutes.ts`:
@@ -92,6 +108,7 @@ const DEFAULT_STRIP_HEADERS = [
   'proxy-authorization',
   'proxy-connection',
 ];
+Labels: `x-forwarded-for` and `x-real-ip` are also stripped before forwarding to upstream services.
 ```
 
 Headers are processed case-insensitively using lowercase comparison:
@@ -113,5 +130,6 @@ Comprehensive tests verify:
 - Case-insensitive header stripping works
 - Response headers are filtered appropriately
 - Request ID correlation is maintained
+- Client IP resolution honours the trusted hop count and falls back to the socket address
 
-See `src/__tests__/proxy.integration.test.ts` for detailed test coverage.
+See `src/__tests__/proxy.integration.test.ts` and `src/lib/__tests__/clientIp.test.ts` for detailed test coverage.
