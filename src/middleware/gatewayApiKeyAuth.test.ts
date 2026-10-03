@@ -565,4 +565,28 @@ describe('gatewayApiKeyAuth middleware', () => {
     );
     expect(await getMetricValue('miss')).toBe(1);
   });
+
+  describe('verification cache', () => {
+    it('evicts revoked keys from the cache immediately', async () => {
+      const app = buildApp();
+
+      const first = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(first.status).toBe(200);
+
+      const revokedApp = buildApp({
+        candidates: [
+          {
+            ...baseCandidate,
+            apiKeyRecord: {
+              ...baseCandidate.apiKeyRecord,
+              revoked: true,
+            },
+          },
+        ],
+      });
+
+      const second = await request(revokedApp).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(second.status).toBe(403);
+    });
+  });
 });

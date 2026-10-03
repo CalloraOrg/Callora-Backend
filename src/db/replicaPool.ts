@@ -13,7 +13,7 @@
  * the primary pool so callers require no conditional logic.
  */
 
-import { Pool, type QueryResult } from 'pg';
+import { Pool, type PoolClient, type QueryResult } from 'pg';
 import { env } from '../config/env.js';
 import { logger } from '../logger.js';
 import { getRequestId } from '../logger.js';
@@ -36,7 +36,7 @@ export interface Queryable {
 }
 
 /** Result type identical to pg.QueryResult for compatibility. */
-export type { QueryResult };
+export type { PoolClient, QueryResult };
 
 // ── Replica URL parsing ───────────────────────────────────────────────────────
 
@@ -202,6 +202,36 @@ export class ReplicaPool {
   async write<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }> {
     recordPrimaryQuery();
     return (this.primary.query(text, params as never) as unknown) as Promise<{ rows: T[] }>;
+  }
+
+  /**
+   * Acquire a dedicated client for read-only transactional operations
+   * (e.g. EXPLAIN ANALYZE inside a read-only transaction).
+   *
+   * Prefers a read replica (round-robin) when available, falling back
+   * to the primary pool if replica connection fails or no replicas exist.
+   */
+  async getReadClient(): Promise<PoolClient> {
+    if (!this.hasReplicas) {
+      return this.primary.connect();
+    }
+
+    const replica = this.nextReplica();
+    const replicaIndex = this.currentReplicaIndex();
+    const requestId = getRequestId();
+
+    try {
+      return await replica.connect();
+    } catch (err) {
+      recordReplicaFailure();
+      logger.warn({
+        msg: '[db] replica client connection failed, falling back to primary',
+        replicaIndex,
+        error: err instanceof Error ? err.message : String(err),
+        ...(requestId ? { requestId } : {}),
+      });
+      return this.primary.connect();
+    }
   }
 
   /**
