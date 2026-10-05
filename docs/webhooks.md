@@ -288,12 +288,12 @@ idempotency for replay defense, and treat X-Callora-Timestamp as advisory
 metadata only. A future change will be versioned and documented here before
 receivers are required to adopt it.
 
-Inbound deliver route (platform-internal)
-POST /api/webhooks/deliver/:developerId uses a separate scheme
-(X-Callora-Signature-256 over <timestamp>.<nonce>.<rawBody> with nonce
-replay checks in src/webhooks/webhook.signature.ts). That path authenticates
-traffic into Callora. Third-party endpoints that receive Callora events
-must implement the outbound contract above, not the inbound one.
+Inbound deliver example (test-only)
+POST /api/webhooks/deliver/:developerId is a test fixture and is only
+registered when NODE_ENV === 'test'; it returns 404 in production builds.
+For a runnable receiver that verifies Callora deliveries, see
+examples/webhook-receiver.ts. Third-party endpoints that receive Callora
+events must implement the outbound contract above, not the inbound scheme.
 
 Retry Policy
 Failed deliveries (non-2xx, timeout, DNS failure) are retried with exponential backoff:
@@ -333,9 +333,9 @@ PATCH	/api/webhooks/:developerId/retry-policy	Update retry policy
 DELETE	/api/webhooks/:developerId	Remove webhook
 Rate Limiting
 The webhook management endpoints (POST /, GET /:developerId, DELETE /:developerId) are
-protected by an IP-based rate limiter. The signed inbound delivery route
-(POST /deliver/:developerId) is not rate-limited here because it is
-protected independently by HMAC signature verification.
+protected by an IP-based rate limiter. The signed inbound delivery example
+(POST /deliver/:developerId) is test-only and not registered in production,
+so it is not rate-limited here.
 
 Env variable	Default (fallback)	Description
 WEBHOOK_RATE_LIMIT_WINDOW_MS	REST_RATE_LIMIT_WINDOW_MS (60 000)	Window length in milliseconds

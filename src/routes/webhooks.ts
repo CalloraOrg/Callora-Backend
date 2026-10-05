@@ -417,8 +417,12 @@ router.patch('/:developerId/retry-policy', webhookMgmtRateLimit, express.json(),
   }
 });
 
-router.post(
-  '/deliver/:developerId',
+// POST /api/webhooks/deliver/:developerId is a test fixture only.
+// It must never be reachable in production: it acts as a signature oracle
+// and reflects request bodies. Register it only when NODE_ENV === 'test'.
+if (process.env.NODE_ENV === 'test') {
+  router.post(
+    '/deliver/:developerId',
   captureRawBody,
   (req: Request & { webhookSecrets?: string[] }, res: Response, next) => {
     const config = WebhookStore.get(req.params.developerId);
@@ -437,7 +441,8 @@ router.post(
   (req: Request, res: Response) => {
     return res.status(200).json({ message: 'Webhook delivery accepted.', body: req.body });
   }
-);
+  );
+}
 
 export function createWebhooksRouter(): Router {
   return router;

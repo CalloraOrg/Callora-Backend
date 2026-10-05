@@ -70,7 +70,7 @@ available through one entrypoint and absent from the other. Rows marked
 | POST | /api/webhooks/:developerId/rotate-secret | src/routes/webhooks.ts | route-specific | webhook management limiter |
 | DELETE | /api/webhooks/:developerId | src/routes/webhooks.ts | route-specific | webhook management limiter |
 | PATCH | /api/webhooks/:developerId/retry-policy | src/routes/webhooks.ts | route-specific | webhook management limiter |
-| POST | /api/webhooks/deliver/:developerId | src/routes/webhooks.ts | route-specific | webhook management limiter |
+| POST | /api/webhooks/deliver/:developerId | src/routes/webhooks.ts (registered only when `NODE_ENV === 'test'`; 404 in production) | route-specific | webhook management limiter |
 | GET | /api/health/db/ | src/routes/health.ts | route-specific | none |
 | GET | /api/health/health/ | src/routes/health.ts | route-specific | none |
 | GET | /api/plans/ | src/routes/plans.ts | route-specific | none |

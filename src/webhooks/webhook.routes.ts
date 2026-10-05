@@ -234,8 +234,12 @@ router.patch('/:developerId/retry-policy', webhookMgmtRateLimit, express.json(),
  *   3. verifyWebhookSignature — enforces HMAC + replay-window check
  *   4. express.json()  — parses the verified body for the handler
  */
-router.post(
-  '/deliver/:developerId',
+// Test fixture only: never mounted in production. In non-test environments
+// this route is not registered, so requests fall through to a 404 and no
+// request body is ever echoed back.
+if (process.env.NODE_ENV === 'test') {
+  router.post(
+    '/deliver/:developerId',
   validate({ params: webhookDeveloperParamsSchema }),
   captureRawBody,
   // Attach the stored secret so verifyWebhookSignature can read it
@@ -258,6 +262,7 @@ router.post(
     // Payload has been verified — safe to process
     return res.status(200).json({ message: 'Webhook delivery accepted.', body: req.body });
   }
-);
+  );
+}
 
 export default router;
