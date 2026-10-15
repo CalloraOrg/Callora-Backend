@@ -44,6 +44,8 @@ export interface CircuitBreakerMetrics {
 export interface CircuitBreakerStore {
   get(breakerKey: string): Promise<CircuitBreakerMetrics | null>;
   set(breakerKey: string, metrics: CircuitBreakerMetrics): Promise<void>;
+  recordSuccess(breakerKey: string, apply: (current: CircuitBreakerMetrics) => CircuitBreakerMetrics): Promise<CircuitBreakerMetrics>;
+  recordFailure(breakerKey: string, apply: (current: CircuitBreakerMetrics) => CircuitBreakerMetrics): Promise<CircuitBreakerMetrics>;
 }
 
 export class InMemoryCircuitBreakerStore implements CircuitBreakerStore {
@@ -55,6 +57,20 @@ export class InMemoryCircuitBreakerStore implements CircuitBreakerStore {
 
   async set(breakerKey: string, metrics: CircuitBreakerMetrics): Promise<void> {
     this.store.set(breakerKey, metrics);
+  }
+
+  async recordSuccess(breakerKey: string, apply: (current: CircuitBreakerMetrics) => CircuitBreakerMetrics): Promise<CircuitBreakerMetrics> {
+    const current = this.store.get(breakerKey) || { ...DEFAULT_METRICS };
+    const nextMetrics = apply(current);
+    this.store.set(breakerKey, nextMetrics);
+    return nextMetrics;
+  }
+
+  async recordFailure(breakerKey: string, apply: (current: CircuitBreakerMetrics) => CircuitBreakerMetrics): Promise<CircuitBreakerMetrics> {
+    const current = this.store.get(breakerKey) || { ...DEFAULT_METRICS };
+    const nextMetrics = apply(current);
+    this.store.set(breakerKey, nextMetrics);
+    return nextMetrics;
   }
 
   reset(): void {
@@ -105,6 +121,27 @@ function validateConfig(config: Partial<CircuitBreakerConfig>): void {
   if (config.successThreshold !== undefined && (typeof config.successThreshold !== 'number' || config.successThreshold <= 0 || !Number.isInteger(config.successThreshold))) {
     throw new BadRequestError('successThreshold must be a positive integer');
   }
+}
+
+function metricsFromRow(row: {
+  breaker_key: string;
+  state: string;
+  consecutive_failures: number;
+  consecutive_successes: number;
+  total_failures: number;
+  total_successes: number;
+  last_failure_time: number | null;
+  last_state_change: number;
+}): CircuitBreakerMetrics {
+  return {
+    state: row.state as CircuitBreakerState,
+    consecutiveFailures: row.consecutive_failures,
+    consecutiveSuccesses: row.consecutive_successes,
+    totalFailures: row.total_failures,
+    totalSuccesses: row.total_successes,
+    lastFailureTime: row.last_failure_time,
+    lastStateChange: row.last_state_change,
+  };
 }
 
 function stateToNumber(state: CircuitBreakerState): number {
@@ -160,16 +197,7 @@ export class PostgresCircuitBreakerStore implements CircuitBreakerStore {
       if (!result.rows[0]) {
         return null;
       }
-      const row = result.rows[0];
-      return {
-        state: row.state as CircuitBreakerState,
-        consecutiveFailures: row.consecutive_failures,
-        consecutiveSuccesses: row.consecutive_successes,
-        totalFailures: row.total_failures,
-        totalSuccesses: row.total_successes,
-        lastFailureTime: row.last_failure_time,
-        lastStateChange: row.last_state_change,
-      };
+      return metricsFromRow(result.rows[0]);
     } finally {
       client.release();
     }
@@ -212,6 +240,164 @@ export class PostgresCircuitBreakerStore implements CircuitBreakerStore {
         ],
       );
       await client.query('COMMIT');
+    } catch (error) {
+      await rollbackQuietly(client);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordSuccess(
+    breakerKey: string,
+    apply: (current: CircuitBreakerMetrics) => CircuitBreakerMetrics,
+  ): Promise<CircuitBreakerMetrics> {
+    await this.ensureTable();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query<{
+        breaker_key: string;
+        state: string;
+        consecutive_failures: number;
+        consecutive_successes: number;
+        total_failures: number;
+        total_successes: number;
+        last_failure_time: number | null;
+        last_state_change: number;
+      }>(
+        `SELECT breaker_key, state, consecutive_failures, consecutive_successes, total_failures, total_successes, last_failure_time, last_state_change
+         FROM ${this.tableName}
+         WHERE breaker_key = $1
+         FOR UPDATE`,
+        [breakerKey],
+      );
+
+      const current = result.rows[0] ? metricsFromRow(result.rows[0]) : { ...DEFAULT_METRICS };
+      const nextMetrics = apply(current);
+      const updated = await client.query<{
+        breaker_key: string;
+        state: string;
+        consecutive_failures: number;
+        consecutive_successes: number;
+        total_failures: number;
+        total_successes: number;
+        last_failure_time: number | null;
+        last_state_change: number;
+      }>(
+        `INSERT INTO ${this.tableName} (
+           breaker_key,
+           state,
+           consecutive_failures,
+           consecutive_successes,
+           total_failures,
+           total_successes,
+           last_failure_time,
+           last_state_change
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (breaker_key) DO UPDATE SET
+           state = EXCLUDED.state,
+           consecutive_failures = EXCLUDED.consecutive_failures,
+           consecutive_successes = EXCLUDED.consecutive_successes,
+           total_failures = EXCLUDED.total_failures,
+           total_successes = EXCLUDED.total_successes,
+           last_failure_time = EXCLUDED.last_failure_time,
+           last_state_change = EXCLUDED.last_state_change,
+           updated_at = NOW()
+         RETURNING breaker_key, state, consecutive_failures, consecutive_successes, total_failures, total_successes, last_failure_time, last_state_change`,
+        [
+          breakerKey,
+          nextMetrics.state,
+          nextMetrics.consecutiveFailures,
+          nextMetrics.consecutiveSuccesses,
+          nextMetrics.totalFailures,
+          nextMetrics.totalSuccesses,
+          nextMetrics.lastFailureTime,
+          nextMetrics.lastStateChange,
+        ],
+      );
+
+      await client.query('COMMIT');
+      return metricsFromRow(updated.rows[0]);
+    } catch (error) {
+      await rollbackQuietly(client);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordFailure(
+    breakerKey: string,
+    apply: (current: CircuitBreakerMetrics) => CircuitBreakerMetrics,
+  ): Promise<CircuitBreakerMetrics> {
+    await this.ensureTable();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query<{
+        breaker_key: string;
+        state: string;
+        consecutive_failures: number;
+        consecutive_successes: number;
+        total_failures: number;
+        total_successes: number;
+        last_failure_time: number | null;
+        last_state_change: number;
+      }>(
+        `SELECT breaker_key, state, consecutive_failures, consecutive_successes, total_failures, total_successes, last_failure_time, last_state_change
+         FROM ${this.tableName}
+         WHERE breaker_key = $1
+         FOR UPDATE`,
+        [breakerKey],
+      );
+
+      const current = result.rows[0] ? metricsFromRow(result.rows[0]) : { ...DEFAULT_METRICS };
+      const nextMetrics = apply(current);
+      const updated = await client.query<{
+        breaker_key: string;
+        state: string;
+        consecutive_failures: number;
+        consecutive_successes: number;
+        total_failures: number;
+        total_successes: number;
+        last_failure_time: number | null;
+        last_state_change: number;
+      }>(
+        `INSERT INTO ${this.tableName} (
+           breaker_key,
+           state,
+           consecutive_failures,
+           consecutive_successes,
+           total_failures,
+           total_successes,
+           last_failure_time,
+           last_state_change
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (breaker_key) DO UPDATE SET
+           state = EXCLUDED.state,
+           consecutive_failures = EXCLUDED.consecutive_failures,
+           consecutive_successes = EXCLUDED.consecutive_successes,
+           total_failures = EXCLUDED.total_failures,
+           total_successes = EXCLUDED.total_successes,
+           last_failure_time = EXCLUDED.last_failure_time,
+           last_state_change = EXCLUDED.last_state_change,
+           updated_at = NOW()
+         RETURNING breaker_key, state, consecutive_failures, consecutive_successes, total_failures, total_successes, last_failure_time, last_state_change`,
+        [
+          breakerKey,
+          nextMetrics.state,
+          nextMetrics.consecutiveFailures,
+          nextMetrics.consecutiveSuccesses,
+          nextMetrics.totalFailures,
+          nextMetrics.totalSuccesses,
+          nextMetrics.lastFailureTime,
+          nextMetrics.lastStateChange,
+        ],
+      );
+
+      await client.query('COMMIT');
+      return metricsFromRow(updated.rows[0]);
     } catch (error) {
       await rollbackQuietly(client);
       throw error;
@@ -316,12 +502,10 @@ export class CircuitBreaker {
 
     try {
       const result = await operation();
-      metrics = this.onSuccess(metrics, now, breakerKey);
-      await this.store.set(breakerKey, metrics);
+      metrics = await this.store.recordSuccess(breakerKey, (current) => this.onSuccess(current, now, breakerKey));
       return result;
     } catch (error) {
-      metrics = this.onFailure(metrics, now, breakerKey);
-      await this.store.set(breakerKey, metrics);
+      metrics = await this.store.recordFailure(breakerKey, (current) => this.onFailure(current, now, breakerKey));
       throw error;
     } finally {
       if (metrics.state === CircuitBreakerState.HALF_OPEN) {
