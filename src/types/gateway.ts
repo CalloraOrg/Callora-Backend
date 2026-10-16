@@ -18,7 +18,8 @@ export interface UsageEvent {
   apiKeyId: string;
   apiId: string;
   endpointId: string;
-  userId: string;         // developerId of the caller
+  userId: string;         // userId of the caller
+  developerId?: string;   // developerId of the API owner (if pre-resolved)
   amountUsdc: number;     // endpoint price charged
   statusCode: number;
   timestamp: string;      // ISO-8601
@@ -80,7 +81,8 @@ export interface UsageStore {
   record(event: UsageEvent): Awaitable<boolean>;
   hasEvent(requestId: string): Awaitable<boolean>;
   getEvents(apiKey?: string): Awaitable<UsageEvent[]>;
-  getUnsettledEvents(): Awaitable<UsageEvent[]>;
+  getUnsettledEvents(developerId?: string): Awaitable<UsageEvent[]>;
+  getUnsettledRevenueForDeveloper?(developerId: string): Awaitable<string>;
   markAsSettled(eventIds: string[], settlementId: string): Awaitable<void>;
 }
 

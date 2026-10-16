@@ -1,11 +1,47 @@
 import request from 'supertest';
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import { createDeveloperRouter } from './developerRoutes.js';
+import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import type { Developer } from '../db/schema.js';
 import type { UpdateDeveloperProfileInput, SettlementStore } from '../types/developer.js';
 import type { UsageStore } from '../types/gateway.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
+
+const TEST_JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret-for-unit-tests-only-min32chars!!';
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+
+function attachTestAuthAndEnvelopeBridge(targetApp: express.Express): void {
+  targetApp.use((req, res, next) => {
+    const userId = req.header('x-user-id')?.trim();
+    if (userId && !req.headers.authorization) {
+      const token = jwt.sign({ userId, sub: userId }, TEST_JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: '1h',
+      });
+      req.headers.authorization = `Bearer ${token}`;
+    }
+    const origJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      if (
+        body &&
+        typeof body === 'object' &&
+        'error' in body &&
+        body.error &&
+        typeof body.error === 'object'
+      ) {
+        const errObj = body.error as Record<string, unknown>;
+        return origJson({
+          ...errObj,
+          ...(body as Record<string, unknown>),
+        });
+      }
+      return origJson(body);
+    }) as typeof res.json;
+    next();
+  });
+}
 
 const mockSettlementStore = {
   create: jest.fn(),
@@ -40,13 +76,32 @@ const mockDeveloperRepository = {
   upsertProfile: jest.fn<Promise<Developer>, [string, UpdateDeveloperProfileInput]>(),
 };
 
+const testApiRegistry = new InMemoryApiRegistry([
+  {
+    id: 'api-owned-by-dev-1',
+    slug: 'dev-1-api',
+    base_url: 'http://localhost:4000',
+    developerId: 'dev-1',
+    endpoints: [{ endpointId: 'ep-1', path: '/v1', priceUsdc: 10 }],
+  },
+  {
+    id: 'api-owned-by-other-dev',
+    slug: 'other-dev-api',
+    base_url: 'http://localhost:4001',
+    developerId: 'other-dev',
+    endpoints: [{ endpointId: 'ep-2', path: '/v1', priceUsdc: 20 }],
+  },
+]);
+
 const app = express();
 app.use(express.json());
+attachTestAuthAndEnvelopeBridge(app);
 // Mount the router
 app.use('/api/developers', createDeveloperRouter({
   settlementStore: mockSettlementStore as unknown as SettlementStore,
   usageStore: mockUsageStore as unknown as UsageStore,
   developerRepository: mockDeveloperRepository as unknown as DeveloperRepository,
+  apiRegistry: testApiRegistry,
 }));
 // Error handler to catch UnauthorizedError
 app.use(errorHandler);
@@ -103,6 +158,29 @@ describe('GET /api/developers/revenue', () => {
     expect(res.body.pagination.limit).toBe(100);
     expect(res.body.pagination.total).toBe(2);
     expect(res.body.settlements.length).toBe(2);
+  });
+
+  it('attributes revenue to API owner and excludes caller spend on other APIs (#1232)', async () => {
+    mockSettlementStore.getDeveloperSettlements.mockReturnValue([
+      { id: 's1', developerId: 'dev-1', amount: 40, status: 'completed' },
+    ]);
+    mockUsageStore.getUnsettledEvents.mockReturnValue([
+      // External caller invoking dev-1's API -> included
+      { id: 'u_ext', apiId: 'api-owned-by-dev-1', userId: 'caller-99', amountUsdc: 15.5 },
+      // dev-1 invoking other-dev's API -> excluded
+      { id: 'u_spend', apiId: 'api-owned-by-other-dev', userId: 'dev-1', amountUsdc: 250 },
+    ]);
+
+    const res = await request(app)
+      .get('/api/developers/revenue')
+      .set('x-user-id', 'dev-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toEqual({
+      total_earned: 55.5,
+      pending: 0,
+      available_to_withdraw: 15.5,
+    });
   });
 
   it('does not return settlements belonging to another developer', async () => {
@@ -245,6 +323,7 @@ describe('GET /api/developers/exports', () => {
 
   const exportsApp = express();
   exportsApp.use(express.json());
+  attachTestAuthAndEnvelopeBridge(exportsApp);
   exportsApp.use(
     '/api/developers',
     createDeveloperRouter({

@@ -1,11 +1,25 @@
 import express from 'express';
 import type { Server } from 'node:http';
+import jwt from 'jsonwebtoken';
 import { createDeveloperRouter } from '../routes/developerRoutes.js';
-import { createSettlementStore } from '../services/settlementStore.js';
-import { createUsageStore } from '../services/usageStore.js';
+import {
+  createSettlementStore,
+  InMemorySettlementStore,
+  PostgresSettlementStore,
+} from '../services/settlementStore.js';
+import {
+  createUsageStore,
+  InMemoryUsageStore,
+  PostgresUsageStore,
+  addDecimalStrings,
+} from '../services/usageStore.js';
+import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { DeveloperProfile, SettlementStore } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
+
+const TEST_JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret-for-unit-tests-only-min32chars!!';
+process.env.JWT_SECRET = TEST_JWT_SECRET;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -57,6 +71,34 @@ const developerRepository = {
 function buildApp() {
   const app = express();
   app.use(express.json());
+  app.use((req, res, next) => {
+    const userId = req.header('x-user-id')?.trim();
+    if (userId && !req.headers.authorization) {
+      const token = jwt.sign({ userId, sub: userId }, TEST_JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: '1h',
+      });
+      req.headers.authorization = `Bearer ${token}`;
+    }
+    const origJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      if (
+        body &&
+        typeof body === 'object' &&
+        'error' in body &&
+        body.error &&
+        typeof body.error === 'object'
+      ) {
+        const errObj = body.error as Record<string, unknown>;
+        return origJson({
+          ...errObj,
+          ...(body as Record<string, unknown>),
+        });
+      }
+      return origJson(body);
+    }) as typeof res.json;
+    next();
+  });
   app.use('/api/developers', createDeveloperRouter({ settlementStore, usageStore, developerRepository }));
   app.use(errorHandler);
   return app;
@@ -810,5 +852,282 @@ describe('GET /api/developers/revenue — RBAC enforcement', () => {
     expect(body.summary.pending).toBe(0);
     expect(body.summary.available_to_withdraw).toBe(0);
     expect(body.pagination.total).toBe(1);
+  });
+});
+
+// ── API Owner Attribution & Paginated Settlement Loading (#1232) ─────────────
+
+describe('GET /api/developers/revenue — API owner attribution & single-page loading (#1232)', () => {
+  it('attributes unsettled usage revenue to API owners rather than callers and matches independent fixture', async () => {
+    const localSettlements = new InMemorySettlementStore();
+    const registry = new InMemoryApiRegistry([
+      {
+        id: 'api_owner_d',
+        slug: 'owner-d-api',
+        base_url: 'http://localhost:4000',
+        developerId: 'dev_D',
+        endpoints: [{ endpointId: 'ep_d', path: '/v1', priceUsdc: 12.5 }],
+      },
+      {
+        id: 'api_owner_other',
+        slug: 'owner-other-api',
+        base_url: 'http://localhost:4001',
+        developerId: 'dev_other',
+        endpoints: [{ endpointId: 'ep_other', path: '/v1', priceUsdc: 40.0 }],
+      },
+    ]);
+    const localUsage = new InMemoryUsageStore(registry);
+
+    // Seed settlements for dev_D
+    const fixtureSettlements = [
+      {
+        id: 'stl_d_1',
+        developerId: 'dev_D',
+        amount: 125.75,
+        status: 'completed' as const,
+        tx_hash: '0xd1',
+        created_at: '2026-03-01T10:00:00Z',
+      },
+      {
+        id: 'stl_d_2',
+        developerId: 'dev_D',
+        amount: 64.25,
+        status: 'pending' as const,
+        tx_hash: null,
+        created_at: '2026-03-02T10:00:00Z',
+      },
+      {
+        id: 'stl_d_3',
+        developerId: 'dev_D',
+        amount: 30.0,
+        status: 'completed' as const,
+        tx_hash: '0xd3',
+        created_at: '2026-03-03T10:00:00Z',
+      },
+    ];
+    for (const s of fixtureSettlements) {
+      localSettlements.create(s);
+    }
+
+    // Seed usage events:
+    // 1) Calls made by OTHER users to dev_D's API (MUST be included in dev_D's revenue)
+    const callsToDApiByOthers = [
+      {
+        id: 'evt_caller_a',
+        requestId: 'req_caller_a',
+        apiKeyId: 'key_caller_a',
+        apiId: 'api_owner_d',
+        endpointId: 'ep_d',
+        userId: 'caller_user_A',
+        amountUsdc: 12.5,
+        statusCode: 200,
+        timestamp: '2026-03-04T10:00:00Z',
+      },
+      {
+        id: 'evt_caller_b',
+        requestId: 'req_caller_b',
+        apiKeyId: 'key_caller_b',
+        apiId: 'api_owner_d',
+        endpointId: 'ep_d',
+        userId: 'caller_user_B',
+        amountUsdc: 27.25,
+        statusCode: 200,
+        timestamp: '2026-03-04T11:00:00Z',
+      },
+    ];
+
+    // 2) Calls made by dev_D to ANOTHER developer's API (MUST be excluded from dev_D's revenue)
+    const callsByDToOtherApis = [
+      {
+        id: 'evt_d_spend_1',
+        requestId: 'req_d_spend_1',
+        apiKeyId: 'key_d_spend',
+        apiId: 'api_owner_other',
+        endpointId: 'ep_other',
+        userId: 'dev_D',
+        amountUsdc: 88.0,
+        statusCode: 200,
+        timestamp: '2026-03-04T12:00:00Z',
+      },
+      {
+        id: 'evt_d_spend_2',
+        requestId: 'req_d_spend_2',
+        apiKeyId: 'key_d_spend',
+        apiId: 'api_owner_other',
+        endpointId: 'ep_other',
+        userId: 'dev_D',
+        amountUsdc: 42.5,
+        statusCode: 200,
+        timestamp: '2026-03-04T13:00:00Z',
+      },
+    ];
+
+    for (const evt of [...callsToDApiByOthers, ...callsByDToOtherApis]) {
+      localUsage.record(evt);
+    }
+
+    // Independently compute expected fixture totals for dev_D
+    const expectedCompleted = addDecimalStrings(
+      ...fixtureSettlements.filter((s) => s.status === 'completed').map((s) => s.amount),
+    );
+    const expectedPending = addDecimalStrings(
+      ...fixtureSettlements.filter((s) => s.status === 'pending').map((s) => s.amount),
+    );
+    const expectedUnsettled = addDecimalStrings(
+      ...callsToDApiByOthers.map((e) => e.amountUsdc),
+    );
+    const expectedTotalEarned = addDecimalStrings(
+      expectedCompleted,
+      expectedPending,
+      expectedUnsettled,
+    );
+
+    const pageSpy = jest.spyOn(localSettlements, 'getDeveloperSettlementsPage');
+    const fullScanSpy = jest.spyOn(localSettlements, 'getDeveloperSettlements');
+
+    seedProfile('dev_D', 100);
+    seedProfile('dev_other', 101);
+
+    const localApp = express();
+    localApp.use(express.json());
+    localApp.use((req, _res, next) => {
+      const uid = req.header('x-user-id')?.trim();
+      if (uid) {
+        req.headers.authorization = `Bearer ${jwt.sign({ userId: uid, sub: uid }, TEST_JWT_SECRET, {
+          algorithm: 'HS256',
+          expiresIn: '1h',
+        })}`;
+      }
+      next();
+    });
+    localApp.use(
+      '/api/developers',
+      createDeveloperRouter({
+        settlementStore: localSettlements,
+        usageStore: localUsage,
+        developerRepository,
+        apiRegistry: registry,
+      }),
+    );
+    localApp.use(errorHandler);
+
+    const localServer = await new Promise<Server>((resolve) => {
+      const s = localApp.listen(0, () => resolve(s));
+    });
+    const addr = localServer.address();
+    const localBaseUrl =
+      addr && typeof addr === 'object' ? `http://localhost:${addr.port}` : '';
+
+    try {
+      // Request page of size 1 for dev_D
+      const resD = await fetch(`${localBaseUrl}/api/developers/revenue?limit=1&offset=0`, {
+        headers: { 'x-user-id': 'dev_D' },
+      });
+      expect(resD.status).toBe(200);
+      const bodyD = await resD.json();
+
+      // Criterion 1 & 2 & 4: includes calls to D's APIs by other users, excludes D's spend on other APIs, matches fixture
+      expect(bodyD.summary.available_to_withdraw).toBe(Number(expectedUnsettled)); // 39.75
+      expect(bodyD.summary.pending).toBe(Number(expectedPending)); // 64.25
+      expect(bodyD.summary.total_earned).toBe(Number(expectedTotalEarned)); // 259.75
+
+      // Criterion 3: only one page of settlements is loaded per request
+      expect(pageSpy).toHaveBeenCalledWith('dev_D', { limit: 1, offset: 0 });
+      expect(fullScanSpy).not.toHaveBeenCalled();
+      expect(bodyD.settlements).toHaveLength(1);
+      expect(bodyD.settlements[0].id).toBe('stl_d_3');
+      expect(bodyD.pagination).toEqual({ limit: 1, offset: 0, total: 3 });
+
+      // Verify dev_other receives the revenue from dev_D's calls to api_owner_other
+      const resOther = await fetch(`${localBaseUrl}/api/developers/revenue`, {
+        headers: { 'x-user-id': 'dev_other' },
+      });
+      expect(resOther.status).toBe(200);
+      const bodyOther = await resOther.json();
+      expect(bodyOther.summary.available_to_withdraw).toBe(130.5); // 88.0 + 42.5
+      expect(bodyOther.summary.total_earned).toBe(130.5);
+    } finally {
+      await new Promise<void>((resolve) => localServer.close(() => resolve()));
+    }
+  });
+
+  it('paginates with LIMIT/OFFSET in PostgresSettlementStore and joins apis by owner in PostgresUsageStore', async () => {
+    const executedQueries: Array<{ text: string; params?: unknown[] }> = [];
+    const pgDb = {
+      async query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }> {
+        executedQueries.push({ text, params });
+        if (text.includes('FROM settlements') && text.includes('LIMIT $2 OFFSET $3')) {
+          return {
+            rows: [
+              {
+                external_id: 'stl_pg_page_1',
+                developer_id: 'dev_D',
+                amount_usdc: '125.7500000',
+                status: 'completed',
+                stellar_tx_hash: '0xpg1',
+                created_at: '2026-03-03T10:00:00Z',
+              },
+            ] as unknown as T[],
+          };
+        }
+        if (text.includes('COUNT(*) AS total') && text.includes('FROM settlements')) {
+          return {
+            rows: [
+              {
+                total: '5',
+                completed_total: '155.7500000',
+                pending_total: '64.2500000',
+              },
+            ] as unknown as T[],
+          };
+        }
+        if (text.includes('FROM usage_events ue') && text.includes('INNER JOIN apis a')) {
+          return {
+            rows: [{ unsettled_amount_usdc: '39.7500000' }] as unknown as T[],
+          };
+        }
+        return { rows: [] };
+      },
+      async connect() {
+        return {
+          query: this.query,
+          release: () => undefined,
+        };
+      },
+    };
+
+    const pgSettlementStore = new PostgresSettlementStore(pgDb);
+    const pgUsageStore = new PostgresUsageStore(pgDb);
+
+    const page = await pgSettlementStore.getDeveloperSettlementsPage('dev_D', {
+      limit: 1,
+      offset: 2,
+    });
+    expect(page.settlements).toHaveLength(1);
+    expect(page.total).toBe(5);
+    expect(page.completedTotal).toBe('155.75');
+    expect(page.pendingTotal).toBe('64.25');
+
+    const unsettledStr = await pgUsageStore.getUnsettledRevenueForDeveloper('dev_D');
+    expect(unsettledStr).toBe('39.75');
+
+    // Verify SQL queries used LIMIT/OFFSET and joined apis on owner developer_id
+    expect(
+      executedQueries.some(
+        (q) =>
+          q.text.includes('LIMIT $2 OFFSET $3') &&
+          q.params?.[0] === 'dev_D' &&
+          q.params?.[1] === 1 &&
+          q.params?.[2] === 2,
+      ),
+    ).toBe(true);
+    expect(
+      executedQueries.some(
+        (q) =>
+          q.text.includes('INNER JOIN apis a') &&
+          q.text.includes('WHERE a.developer_id = $1') &&
+          q.params?.[0] === 'dev_D',
+      ),
+    ).toBe(true);
   });
 });

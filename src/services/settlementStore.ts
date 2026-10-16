@@ -1,4 +1,10 @@
-import { Settlement, SettlementStore } from '../types/developer.js';
+import {
+  Settlement,
+  SettlementStore,
+  SettlementPageOptions,
+  PaginatedDeveloperSettlements,
+} from '../types/developer.js';
+import { addDecimalStrings, toDecimalString } from './usageStore.js';
 
 export class InMemorySettlementStore implements SettlementStore {
   private settlements: Settlement[] = [];
@@ -21,10 +27,45 @@ export class InMemorySettlementStore implements SettlementStore {
     }
   }
 
-  getDeveloperSettlements(developerId: string): Settlement[] {
-    return this.settlements
+  getDeveloperSettlements(developerId: string, options?: SettlementPageOptions): Settlement[] {
+    const sorted = this.settlements
       .filter((s) => s.developerId === developerId)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    if (options?.limit !== undefined || options?.offset !== undefined) {
+      const offset = Math.max(0, options?.offset ?? 0);
+      const limit = options?.limit !== undefined ? Math.max(0, options.limit) : sorted.length;
+      return sorted.slice(offset, offset + limit);
+    }
+
+    return sorted;
+  }
+
+  getDeveloperSettlementsPage(
+    developerId: string,
+    options: { limit: number; offset: number },
+  ): PaginatedDeveloperSettlements {
+    const sorted = this.settlements
+      .filter((s) => s.developerId === developerId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const offset = Math.max(0, options.offset);
+    const limit = Math.max(0, options.limit);
+    const settlements = sorted.slice(offset, offset + limit);
+
+    const completedTotal = addDecimalStrings(
+      ...sorted.filter((s) => s.status === 'completed' && s.amount > 0).map((s) => s.amount),
+    );
+    const pendingTotal = addDecimalStrings(
+      ...sorted.filter((s) => s.status === 'pending' && s.amount > 0).map((s) => s.amount),
+    );
+
+    return {
+      settlements,
+      total: sorted.length,
+      completedTotal,
+      pendingTotal,
+    };
   }
 
   scheduleRetry(id: string, retryAfter: string): void {
@@ -75,8 +116,8 @@ interface SettlementStoreRow {
   status: Settlement['status'];
   stellar_tx_hash: string | null;
   created_at: Date | string;
-  retry_after: string | null;
-  retry_count: number | null;
+  retry_after?: string | null;
+  retry_count?: number | null;
 }
 
 export interface SettlementStoreQueryable {
@@ -161,18 +202,29 @@ export class PostgresSettlementStore implements SettlementStore {
     );
   }
 
-  async getDeveloperSettlements(developerId: string): Promise<Settlement[]> {
+  async getDeveloperSettlements(
+    developerId: string,
+    options?: SettlementPageOptions,
+  ): Promise<Settlement[]> {
+    if (options?.limit !== undefined || options?.offset !== undefined) {
+      const limit = Math.max(0, options?.limit ?? 20);
+      const offset = Math.max(0, options?.offset ?? 0);
+      const result = await this.db.query<SettlementStoreRow>(
+        `
+          SELECT *
+          FROM settlements
+          WHERE developer_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT $2 OFFSET $3
+        `,
+        [developerId, limit, offset],
+      );
+      return result.rows.map(mapSettlementRow);
+    }
+
     const result = await this.db.query<SettlementStoreRow>(
       `
-        SELECT
-          external_id,
-          developer_id,
-          amount_usdc,
-          status,
-          stellar_tx_hash,
-          created_at,
-          retry_after,
-          retry_count
+        SELECT *
         FROM settlements
         WHERE developer_id = $1
         ORDER BY created_at DESC, id DESC
@@ -183,18 +235,54 @@ export class PostgresSettlementStore implements SettlementStore {
     return result.rows.map(mapSettlementRow);
   }
 
+  async getDeveloperSettlementsPage(
+    developerId: string,
+    options: { limit: number; offset: number },
+  ): Promise<PaginatedDeveloperSettlements> {
+    const limit = Math.max(0, options.limit);
+    const offset = Math.max(0, options.offset);
+
+    const [pageResult, totalsResult] = await Promise.all([
+      this.db.query<SettlementStoreRow>(
+        `
+          SELECT *
+          FROM settlements
+          WHERE developer_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT $2 OFFSET $3
+        `,
+        [developerId, limit, offset],
+      ),
+      this.db.query<{
+        total: string | number;
+        completed_total: string | number | null;
+        pending_total: string | number | null;
+      }>(
+        `
+          SELECT
+            COUNT(*) AS total,
+            COALESCE(SUM(amount_usdc::numeric) FILTER (WHERE status = 'completed' AND amount_usdc > 0), 0) AS completed_total,
+            COALESCE(SUM(amount_usdc::numeric) FILTER (WHERE status = 'pending' AND amount_usdc > 0), 0) AS pending_total
+          FROM settlements
+          WHERE developer_id = $1
+        `,
+        [developerId],
+      ),
+    ]);
+
+    const summaryRow = totalsResult.rows[0];
+    return {
+      settlements: pageResult.rows.map(mapSettlementRow),
+      total: toNumber(summaryRow?.total ?? 0),
+      completedTotal: toDecimalString(summaryRow?.completed_total ?? '0'),
+      pendingTotal: toDecimalString(summaryRow?.pending_total ?? '0'),
+    };
+  }
+
   async getPendingSettlements(): Promise<Settlement[]> {
     const result = await this.db.query<SettlementStoreRow>(
       `
-        SELECT
-          external_id,
-          developer_id,
-          amount_usdc,
-          status,
-          stellar_tx_hash,
-          created_at,
-          retry_after,
-          retry_count
+        SELECT *
         FROM settlements
         WHERE status = 'pending'
            OR (status = 'retryable' AND (retry_after IS NULL OR retry_after <= NOW()))

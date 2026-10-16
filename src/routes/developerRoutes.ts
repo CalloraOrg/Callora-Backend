@@ -7,7 +7,8 @@ import {
   DeveloperRevenueResponse,
   SettlementStore,
 } from '../types/developer.js';
-import { UsageStore } from '../types/gateway.js';
+import { UsageStore, ApiRegistry } from '../types/gateway.js';
+import { addDecimalStrings, InMemoryUsageStore } from '../services/usageStore.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { UsageEventsRepository } from '../repositories/usageEventsRepository.js';
@@ -20,14 +21,19 @@ export interface DeveloperRoutesDeps {
   settlementStore: SettlementStore;
   usageStore: UsageStore;
   developerRepository: DeveloperRepository;
+  apiRegistry?: ApiRegistry;
   usageEventsRepository?: UsageEventsRepository;
   reportExporterService?: ReportExporterService;
 }
 
 export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
   const router = Router();
-  const { settlementStore, usageStore, developerRepository, reportExporterService } = deps;
+  const { settlementStore, usageStore, developerRepository, apiRegistry, reportExporterService } = deps;
   const usageEventsRepository = deps.usageEventsRepository ?? new InMemoryUsageEventsRepository();
+
+  if (apiRegistry && usageStore instanceof InMemoryUsageStore) {
+    usageStore.setApiRegistry(apiRegistry);
+  }
 
   router.use(
     '/me/usage',
@@ -171,33 +177,65 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
         offset = (parsedQuery.page - 1) * limit;
       }
 
-      // Fetch settlements scoped to the verified developer
-      const allSettlements = await settlementStore.getDeveloperSettlements(developerId);
-      const settlements = allSettlements.slice(offset, offset + limit);
-      const total = allSettlements.length;
+      // Fetch a single page of settlements and database-computed totals for the verified developer
+      let settlements;
+      let total: number;
+      let completedTotalStr: string;
+      let pendingTotalStr: string;
 
-      // Calculate aggregated revenue — only positive amounts count
-      const completedTotal = allSettlements
-        .filter((s) => s.status === 'completed' && s.amount > 0)
-        .reduce((sum, s) => sum + s.amount, 0);
+      if (typeof settlementStore.getDeveloperSettlementsPage === 'function') {
+        const page = await settlementStore.getDeveloperSettlementsPage(developerId, {
+          limit,
+          offset,
+        });
+        settlements = page.settlements;
+        total = page.total;
+        completedTotalStr = page.completedTotal;
+        pendingTotalStr = page.pendingTotal;
+      } else {
+        const allSettlements = await settlementStore.getDeveloperSettlements(developerId);
+        settlements = allSettlements.slice(offset, offset + limit);
+        total = allSettlements.length;
+        completedTotalStr = addDecimalStrings(
+          ...allSettlements
+            .filter((s) => s.status === 'completed' && s.amount > 0)
+            .map((s) => s.amount),
+        );
+        pendingTotalStr = addDecimalStrings(
+          ...allSettlements
+            .filter((s) => s.status === 'pending' && s.amount > 0)
+            .map((s) => s.amount),
+        );
+      }
 
-      const pendingTotal = allSettlements
-        .filter((s) => s.status === 'pending' && s.amount > 0)
-        .reduce((sum, s) => sum + s.amount, 0);
+      // Unsettled usage revenue attributed to the API owner (not the consuming caller)
+      let unsettledRevenueStr: string;
+      if (typeof usageStore.getUnsettledRevenueForDeveloper === 'function') {
+        unsettledRevenueStr = await usageStore.getUnsettledRevenueForDeveloper(developerId);
+      } else {
+        const rawUnsettled = await usageStore.getUnsettledEvents(developerId);
+        const ownerUnsettled = rawUnsettled.filter((e) => {
+          if (!(e.amountUsdc > 0)) return false;
+          const ownerId =
+            (e.apiId ? apiRegistry?.resolve(e.apiId)?.developerId : undefined) ??
+            e.developerId ??
+            e.userId;
+          return ownerId === developerId;
+        });
+        unsettledRevenueStr = addDecimalStrings(...ownerUnsettled.map((e) => e.amountUsdc));
+      }
 
-      // Unsettled usage events scoped to the verified developer
-      const unsettledEvents = (await usageStore.getUnsettledEvents()).filter(
-        (e) => e.userId === developerId && e.amountUsdc > 0,
+      const totalEarnedStr = addDecimalStrings(
+        completedTotalStr,
+        unsettledRevenueStr,
+        pendingTotalStr,
       );
-      const unsettledRevenue = unsettledEvents.reduce((sum, e) => sum + e.amountUsdc, 0);
-
-      const totalEarned = completedTotal + unsettledRevenue + pendingTotal;
 
       const body: DeveloperRevenueResponse = {
         summary: {
-          total_earned: totalEarned,
-          pending: pendingTotal,
-          available_to_withdraw: unsettledRevenue,
+          total_earned: Number(totalEarnedStr),
+          pending: Number(pendingTotalStr),
+          available_to_withdraw: Number(unsettledRevenueStr),
         },
         settlements,
         pagination: { limit, offset, total },

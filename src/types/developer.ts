@@ -58,11 +58,27 @@ export interface UpdateDeveloperProfileInput {
   category?: DeveloperCategory | null;
 }
 
+export interface SettlementPageOptions {
+  limit?: number;
+  offset?: number;
+}
+
+export interface PaginatedDeveloperSettlements {
+  settlements: Settlement[];
+  total: number;
+  completedTotal: string;
+  pendingTotal: string;
+}
+
 export interface SettlementStore {
   create(settlement: Settlement): Awaitable<void>;
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Awaitable<void>;
   scheduleRetry(id: string, retryAfter: string): Awaitable<void>;
-  getDeveloperSettlements(developerId: string): Awaitable<Settlement[]>;
+  getDeveloperSettlements(developerId: string, options?: SettlementPageOptions): Awaitable<Settlement[]>;
+  getDeveloperSettlementsPage?(
+    developerId: string,
+    options: { limit: number; offset: number },
+  ): Awaitable<PaginatedDeveloperSettlements>;
   getPendingSettlements(): Awaitable<Settlement[]>;
   listPending?(): Awaitable<Settlement[]>;
 }

@@ -1,4 +1,45 @@
-import { UsageStore, UsageEvent } from '../types/gateway.js';
+import { UsageStore, UsageEvent, ApiRegistry } from '../types/gateway.js';
+
+const DECIMAL_SCALE = 18;
+const DECIMAL_FACTOR = 10n ** BigInt(DECIMAL_SCALE);
+
+function parseToScaledBigInt(value: string | number | null | undefined): bigint {
+  if (value === null || value === undefined) return 0n;
+  const raw = typeof value === 'number'
+    ? (Number.isFinite(value) ? value.toFixed(DECIMAL_SCALE) : '0')
+    : String(value).trim();
+  if (!raw || raw === '0') return 0n;
+
+  const negative = raw.startsWith('-');
+  const unsigned = negative || raw.startsWith('+') ? raw.slice(1) : raw;
+  const [intPartRaw = '0', fracPartRaw = ''] = unsigned.split('.');
+  const intPart = intPartRaw.replace(/[^0-9]/g, '') || '0';
+  const fracPart = fracPartRaw.replace(/[^0-9]/g, '').slice(0, DECIMAL_SCALE).padEnd(DECIMAL_SCALE, '0');
+  const scaled = BigInt(intPart) * DECIMAL_FACTOR + BigInt(fracPart || '0');
+  return negative ? -scaled : scaled;
+}
+
+function formatScaledBigInt(scaled: bigint): string {
+  if (scaled === 0n) return '0';
+  const negative = scaled < 0n;
+  const abs = negative ? -scaled : scaled;
+  const intPart = abs / DECIMAL_FACTOR;
+  const fracPart = (abs % DECIMAL_FACTOR).toString().padStart(DECIMAL_SCALE, '0').replace(/0+$/, '');
+  const formatted = fracPart.length > 0 ? `${intPart.toString()}.${fracPart}` : intPart.toString();
+  return negative ? `-${formatted}` : formatted;
+}
+
+export function toDecimalString(value: string | number | null | undefined): string {
+  return formatScaledBigInt(parseToScaledBigInt(value));
+}
+
+export function addDecimalStrings(...values: Array<string | number | null | undefined>): string {
+  let total = 0n;
+  for (const val of values) {
+    total += parseToScaledBigInt(val);
+  }
+  return formatScaledBigInt(total);
+}
 
 export interface UsageAggregateSnapshot {
   developerId: string;
@@ -23,7 +64,7 @@ export interface UsageAdminStore extends UsageStore {
 const emptyStatusCounts = (): Record<string, number> => ({});
 
 const sumAmounts = (events: UsageEvent[]): number =>
-  events.reduce((total, event) => total + event.amountUsdc, 0);
+  Number(addDecimalStrings(...events.map((event) => event.amountUsdc)));
 
 const toIsoOrNull = (value: Date | string | null | undefined): string | null => {
   if (!value) {
@@ -39,6 +80,35 @@ const toIsoOrNull = (value: Date | string | null | undefined): string | null => 
 export class InMemoryUsageStore implements UsageAdminStore {
   private events: UsageEvent[] = [];
   private requestIds = new Set<string>();
+  private apiOwners = new Map<string, string>();
+  private apiRegistry?: ApiRegistry;
+
+  constructor(apiRegistry?: ApiRegistry) {
+    this.apiRegistry = apiRegistry;
+  }
+
+  setApiRegistry(apiRegistry: ApiRegistry): void {
+    this.apiRegistry = apiRegistry;
+  }
+
+  registerApiOwner(apiId: string, developerId: string): void {
+    this.apiOwners.set(apiId, developerId);
+  }
+
+  resolveEventOwnerId(event: UsageEvent): string {
+    const ownerFromMap = this.apiOwners.get(event.apiId);
+    if (ownerFromMap !== undefined) {
+      return ownerFromMap;
+    }
+    const ownerFromRegistry = this.apiRegistry?.resolve(event.apiId)?.developerId;
+    if (ownerFromRegistry !== undefined) {
+      return ownerFromRegistry;
+    }
+    if (event.developerId !== undefined) {
+      return event.developerId;
+    }
+    return event.userId;
+  }
 
   /**
    * Record a usage event.
@@ -49,7 +119,13 @@ export class InMemoryUsageStore implements UsageAdminStore {
       return false; // duplicate — skip
     }
     this.requestIds.add(event.requestId);
-    this.events.push(event);
+    const resolvedOwner =
+      this.apiOwners.get(event.apiId) ??
+      this.apiRegistry?.resolve(event.apiId)?.developerId ??
+      event.developerId;
+    this.events.push(
+      resolvedOwner !== undefined ? { ...event, developerId: resolvedOwner } : event,
+    );
     return true;
   }
 
@@ -66,7 +142,7 @@ export class InMemoryUsageStore implements UsageAdminStore {
   }
 
   getDeveloperUsageSnapshot(developerId: string): UsageAggregateSnapshot | undefined {
-    const events = this.events.filter((event) => event.userId === developerId);
+    const events = this.events.filter((event) => this.resolveEventOwnerId(event) === developerId);
     if (events.length === 0) {
       return undefined;
     }
@@ -105,15 +181,40 @@ export class InMemoryUsageStore implements UsageAdminStore {
       return undefined;
     }
 
-    const retainedEvents = this.events.filter((event) => event.userId !== developerId);
+    const retainedEvents = this.events.filter((event) => this.resolveEventOwnerId(event) !== developerId);
     this.events = retainedEvents;
     this.requestIds = new Set(retainedEvents.map((event) => event.requestId));
     return priorSnapshot;
   }
 
-  /** Retrieve all usage events that haven't been settled yet and have a non-zero price. */
-  getUnsettledEvents(): UsageEvent[] {
-    return this.events.filter((e) => !e.settlementId && e.amountUsdc > 0);
+  /**
+   * Retrieve usage events that haven't been settled yet and have a positive price.
+   * When developerId is provided, joins/filters by API owner developerId rather than caller userId.
+   */
+  getUnsettledEvents(developerId?: string): UsageEvent[] {
+    return this.events
+      .filter((e) => {
+        if (e.settlementId || !(e.amountUsdc > 0)) {
+          return false;
+        }
+        if (developerId !== undefined) {
+          return this.resolveEventOwnerId(e) === developerId;
+        }
+        return true;
+      })
+      .map((e) => ({
+        ...e,
+        developerId: this.resolveEventOwnerId(e),
+      }));
+  }
+
+  /**
+   * Compute total unsettled revenue for an API owner as an exact decimal string.
+   * Joins unsettled events against the API registry / owner map by apiId -> developerId.
+   */
+  getUnsettledRevenueForDeveloper(developerId: string): string {
+    const matching = this.getUnsettledEvents(developerId);
+    return addDecimalStrings(...matching.map((e) => e.amountUsdc));
   }
 
   /** Mark a specific set of events as settled. */
@@ -133,8 +234,8 @@ export class InMemoryUsageStore implements UsageAdminStore {
   }
 }
 
-export function createUsageStore(): InMemoryUsageStore {
-  return new InMemoryUsageStore();
+export function createUsageStore(apiRegistry?: ApiRegistry): InMemoryUsageStore {
+  return new InMemoryUsageStore(apiRegistry);
 }
 
 interface UsageStoreClient {
@@ -155,6 +256,7 @@ interface UsageEventRow {
   api_id: string;
   endpoint_id: string;
   user_id: string;
+  developer_id?: string;
   amount_usdc: string | number;
   status_code: number;
   created_at: Date | string;
@@ -193,6 +295,7 @@ const mapUsageEventRow = (row: UsageEventRow): UsageEvent => ({
   apiId: row.api_id,
   endpointId: row.endpoint_id,
   userId: row.user_id,
+  developerId: row.developer_id ?? row.user_id,
   amountUsdc: toNumber(row.amount_usdc),
   statusCode: row.status_code,
   timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
@@ -207,13 +310,16 @@ const usageEventSelect = `
     ue.api_key_id,
     ue.api_id,
     ue.endpoint_id,
-    rl.developer_id AS user_id,
+    a.developer_id AS user_id,
+    a.developer_id AS developer_id,
     ue.amount_usdc,
     ue.status_code,
     ue.created_at,
     s.external_id AS settlement_external_id
   FROM usage_events ue
-  INNER JOIN revenue_ledger rl
+  INNER JOIN apis a
+    ON a.id = ue.api_id
+  LEFT JOIN revenue_ledger rl
     ON rl.usage_event_id = ue.id
   LEFT JOIN settlements s
     ON s.id = rl.settlement_id
@@ -239,17 +345,14 @@ export class PostgresUsageStore implements UsageAdminStore {
             api_id,
             endpoint_id,
             api_key_id,
-            developer_id,
+            api_key,
             amount_usdc,
             request_id,
             status_code,
             created_at
           )
-          VALUES ($1, $2, $3, $4, (
-            SELECT COALESCE(a.developer_id::text, '')
-            FROM apis a WHERE a.id = $2 LIMIT 1
-          ), $5, $6, $7, $8)
-          ON CONFLICT (request_id, developer_id) DO NOTHING
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (request_id) DO NOTHING
           RETURNING id
         `,
         [
@@ -257,6 +360,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           event.apiId,
           event.endpointId,
           event.apiKeyId,
+          event.apiKey ?? event.apiKeyId,
           event.amountUsdc,
           event.requestId,
           event.statusCode,
@@ -334,17 +438,46 @@ export class PostgresUsageStore implements UsageAdminStore {
     return result.rows.map(mapUsageEventRow);
   }
 
-  async getUnsettledEvents(): Promise<UsageEvent[]> {
+  async getUnsettledEvents(developerId?: string): Promise<UsageEvent[]> {
+    const params: unknown[] = [];
+    let ownerClause = '';
+    if (developerId !== undefined) {
+      params.push(developerId);
+      ownerClause = `AND a.developer_id = $1`;
+    }
+
     const result = await this.db.query<UsageEventRow>(
       `
         ${usageEventSelect}
         WHERE rl.settlement_id IS NULL
           AND ue.amount_usdc > 0
+          ${ownerClause}
         ORDER BY ue.created_at ASC, ue.id ASC
       `,
+      params,
     );
 
     return result.rows.map(mapUsageEventRow);
+  }
+
+  async getUnsettledRevenueForDeveloper(developerId: string): Promise<string> {
+    const result = await this.db.query<{ unsettled_amount_usdc: string | number | null }>(
+      `
+        SELECT
+          COALESCE(SUM(ue.amount_usdc::numeric), 0) AS unsettled_amount_usdc
+        FROM usage_events ue
+        INNER JOIN apis a
+          ON a.id = ue.api_id
+        LEFT JOIN revenue_ledger rl
+          ON rl.usage_event_id = ue.id
+        WHERE a.developer_id = $1
+          AND rl.settlement_id IS NULL
+          AND ue.amount_usdc > 0
+      `,
+      [developerId],
+    );
+
+    return toDecimalString(result.rows[0]?.unsettled_amount_usdc ?? '0');
   }
 
   async getDeveloperUsageSnapshot(developerId: string): Promise<UsageAggregateSnapshot | undefined> {
