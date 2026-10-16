@@ -176,6 +176,15 @@ export function resolveGraceWindowMs(override?: number): number {
 // Service
 // ---------------------------------------------------------------------------
 
+/** Compute raw HMAC-SHA256 hex digest for a webhook payload body. */
+export function signWithSecret(secret: string, body: string): string {
+  return crypto.createHmac('sha256', secret).update(body).digest('hex');
+}
+
+// Module-level map of keyId -> rawSecret for in-process signing & verification
+// without persisting raw secrets in WebhookKeyStore rows.
+const runtimeRawSecrets = new Map<string, string>();
+
 export class WebhookSignerService {
   private readonly store: WebhookKeyStore;
   private readonly notifyAdmin: (result: RotationResult) => Promise<void>;
@@ -232,8 +241,9 @@ export class WebhookSignerService {
     // 2. Demote existing active key
     const previousKey = await this.store.demoteActiveKey(expiresAt);
 
-    // 3. Persist new active key
+    // 3. Persist new active key and cache raw secret in memory for signing
     await this.store.insertKey(newKey);
+    runtimeRawSecrets.set(newKeyId, rawSecret);
 
     // 4. Audit log
     const auditEntry: WebhookKeyRotationAudit = {
@@ -270,6 +280,63 @@ export class WebhookSignerService {
     });
 
     return result;
+  }
+
+  /**
+   * Sign a serialized webhook payload with the currently active managed key.
+   * Returns `{ keyId, signature: "sha256=<hex>" }`, or `null` if no managed key is active.
+   */
+  async signPayload(
+    body: string,
+    now?: Date,
+  ): Promise<{ keyId: string; signature: string } | null> {
+    const ts = now ?? this.clock();
+    await this.store.expireStaleKeys(ts);
+
+    const active = await this.store.getActiveKey();
+    if (!active) return null;
+
+    const secret = runtimeRawSecrets.get(active.id) ?? active.key_hash;
+    const digest = signWithSecret(secret, body);
+    return {
+      keyId: active.id,
+      signature: `sha256=${digest}`,
+    };
+  }
+
+  /**
+   * Verify a webhook signature against the active key and any unexpired previous
+   * keys still within their rotation grace window.
+   */
+  async verifyPayloadSignature(
+    body: string,
+    signatureHeader: string,
+    now?: Date,
+  ): Promise<{ valid: boolean; keyId: string | null }> {
+    const ts = now ?? this.clock();
+    await this.store.expireStaleKeys(ts);
+
+    const normalizedSig = signatureHeader.startsWith('sha256=')
+      ? signatureHeader.slice('sha256='.length)
+      : signatureHeader;
+
+    const active = await this.store.getActiveKey();
+    const previous = await this.store.getValidPreviousKeys(ts);
+    const candidates: WebhookSigningKey[] = [];
+    if (active) candidates.push(active);
+    candidates.push(...previous);
+
+    for (const key of candidates) {
+      const secret = runtimeRawSecrets.get(key.id) ?? key.key_hash;
+      const expected = signWithSecret(secret, body);
+      const a = Buffer.from(normalizedSig, 'utf8');
+      const b = Buffer.from(expected, 'utf8');
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        return { valid: true, keyId: key.id };
+      }
+    }
+
+    return { valid: false, keyId: null };
   }
 
   /**
@@ -326,6 +393,12 @@ export class InMemoryWebhookKeyStore implements WebhookKeyStore {
   async demoteActiveKey(expiresAt: Date): Promise<WebhookSigningKey | null> {
     const idx = this.keys.findIndex((k) => k.status === 'active');
     if (idx === -1) return null;
+    // Expire any older 'previous' keys so only the most recently demoted key stays in 'previous'
+    for (const k of this.keys) {
+      if (k.status === 'previous') {
+        k.status = 'expired';
+      }
+    }
     this.keys[idx] = {
       ...this.keys[idx],
       status: 'previous',
@@ -342,6 +415,7 @@ export class InMemoryWebhookKeyStore implements WebhookKeyStore {
         new Date(key.expires_at).getTime() < now.getTime()
       ) {
         key.status = 'expired';
+        runtimeRawSecrets.delete(key.id);
       }
     }
   }
@@ -362,7 +436,15 @@ export class InMemoryWebhookKeyStore implements WebhookKeyStore {
 
   /** Test helper — reset state. */
   _reset(): void {
+    for (const k of this.keys) {
+      runtimeRawSecrets.delete(k.id);
+    }
     this.keys = [];
     this.auditLog = [];
   }
 }
+
+export const defaultWebhookKeyStore = new InMemoryWebhookKeyStore();
+export const defaultWebhookSignerService = new WebhookSignerService({
+  store: defaultWebhookKeyStore,
+});

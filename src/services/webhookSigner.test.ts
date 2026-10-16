@@ -553,4 +553,39 @@ describe('Grace window — dual-key verification', () => {
     const hashes = await service.getActiveKeyHashes();
     expect(hashes).toContain(hashSecret(r1.rawSecret));
   });
+
+  it('signs payloads with the active key and verifies both active and previous signatures during the grace window (#1234)', async () => {
+    const store = new InMemoryWebhookKeyStore();
+    const clock = { value: new Date('2025-06-01T10:00:00Z') };
+    const service = new WebhookSignerService({
+      store,
+      graceWindowMs: 60_000,
+      now: () => clock.value,
+    });
+
+    const body = JSON.stringify({ event: 'new_api_call', data: { apiId: 'api-1' } });
+    expect(await service.signPayload(body)).toBeNull();
+
+    const r1 = await service.rotateKey('admin');
+    const sig1 = await service.signPayload(body);
+    expect(sig1?.keyId).toBe(r1.newKey.id);
+
+    const r2 = await service.rotateKey('admin');
+    const sig2 = await service.signPayload(body);
+    expect(sig2?.keyId).toBe(r2.newKey.id);
+    expect(sig2?.signature).not.toBe(sig1?.signature);
+
+    // During grace window, both sig1 (previous key) and sig2 (new key) verify
+    const v1During = await service.verifyPayloadSignature(body, sig1!.signature, clock.value);
+    const v2During = await service.verifyPayloadSignature(body, sig2!.signature, clock.value);
+    expect(v1During).toEqual({ valid: true, keyId: r1.newKey.id });
+    expect(v2During).toEqual({ valid: true, keyId: r2.newKey.id });
+
+    // After grace window expires, sig1 is rejected while sig2 remains valid
+    const afterGrace = new Date(clock.value.getTime() + 60_001);
+    const v1After = await service.verifyPayloadSignature(body, sig1!.signature, afterGrace);
+    const v2After = await service.verifyPayloadSignature(body, sig2!.signature, afterGrace);
+    expect(v1After).toEqual({ valid: false, keyId: null });
+    expect(v2After).toEqual({ valid: true, keyId: r2.newKey.id });
+  });
 });

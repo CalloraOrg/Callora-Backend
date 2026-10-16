@@ -30,24 +30,13 @@ import { sendMail } from '../../lib/mailer.js';
 import { validate } from '../../middleware/validate.js';
 import {
   WebhookSignerService,
-  InMemoryWebhookKeyStore,
+  defaultWebhookKeyStore,
   resolveGraceWindowMs,
   type WebhookSignerDeps,
   type RotationResult,
 } from '../../services/webhookSigner.js';
 
-// ---------------------------------------------------------------------------
-// Shared service instance
-// ---------------------------------------------------------------------------
-//
-// In a single-process deploy the in-memory store is sufficient.
-// For multi-replica deployments, replace `InMemoryWebhookKeyStore` with a
-// Postgres/SQLite-backed implementation that satisfies `WebhookKeyStore`.
-//
-// The instance is module-level so it is created once per process and shared
-// across requests, preserving key state between rotations.
-
-const defaultStore = new InMemoryWebhookKeyStore();
+const defaultStore = defaultWebhookKeyStore;
 
 /**
  * Build the admin notification callback.
@@ -178,13 +167,20 @@ export function createWebhookKeysRouter(
       // Note: only express.json() is mounted, so a non-JSON body never reaches
       // req.body — this guard covers misconfigured parsers on the parent app.
       const contentType = req.get('Content-Type') ?? '';
+      const contentLength = parseInt(req.get('Content-Length') ?? '0', 10);
       const rawBody: unknown = req.body;
       const hasBody =
-        rawBody !== undefined &&
-        rawBody !== null &&
-        !(typeof rawBody === 'object' && Object.keys(rawBody as object).length === 0);
+        (Number.isFinite(contentLength) && contentLength > 0) ||
+        (rawBody !== undefined &&
+          rawBody !== null &&
+          !(typeof rawBody === 'object' && Object.keys(rawBody as object).length === 0));
       if (hasBody && !contentType.includes('application/json')) {
-        next(new BadRequestError('Content-Type must be application/json when a body is supplied'));
+        res.status(400).json({
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'Content-Type must be application/json when a body is supplied',
+          },
+        });
         return;
       }
 

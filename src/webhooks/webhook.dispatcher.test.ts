@@ -804,5 +804,70 @@ describe('Webhook Dispatcher', () => {
             expect(callerA).not.toEqual(callerB);
         });
     });
+
+    describe('managed rotation key signing (#1234)', () => {
+        it('signs deliveries with managed active key, emits X-Callora-Key-Id, and switches to new key after rotation while keeping previous key verifiable during grace window', async () => {
+            const {
+                InMemoryWebhookKeyStore,
+                WebhookSignerService,
+                signWithSecret,
+            } = await import('../services/webhookSigner.js');
+            const { setWebhookSignerService } = await import('./webhook.dispatcher.js');
+
+            const keyStore = new InMemoryWebhookKeyStore();
+            let now = new Date('2026-06-01T12:00:00.000Z');
+            const signer = new WebhookSignerService({
+                store: keyStore,
+                graceWindowMs: 60_000,
+                now: () => now,
+            });
+            setWebhookSignerService(signer);
+
+            const fetchMock = jest.fn().mockResolvedValue({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+            } as Response);
+            global.fetch = fetchMock as unknown as typeof fetch;
+
+            const rotation1 = await signer.rotateKey('admin-1');
+            await dispatchWebhook(config, payload);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            const firstHeaders = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+            const firstBody = fetchMock.mock.calls[0][1].body as string;
+            expect(firstHeaders['X-Callora-Key-Id']).toBe(rotation1.newKey.id);
+            expect(firstHeaders['X-Callora-Signature']).toBe(
+                `sha256=${signWithSecret(rotation1.rawSecret, firstBody)}`,
+            );
+
+            // Rotate key again; subsequent delivery uses the new active key
+            now = new Date(now.getTime() + 1_000);
+            const rotation2 = await signer.rotateKey('admin-1');
+            await dispatchWebhook(config, payload);
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            const secondHeaders = fetchMock.mock.calls[1][1].headers as Record<string, string>;
+            const secondBody = fetchMock.mock.calls[1][1].body as string;
+            expect(secondHeaders['X-Callora-Key-Id']).toBe(rotation2.newKey.id);
+            expect(secondHeaders['X-Callora-Signature']).toBe(
+                `sha256=${signWithSecret(rotation2.rawSecret, secondBody)}`,
+            );
+
+            // Both first (previous key) and second (active key) deliveries verify during grace window
+            const verifyFirst = await signer.verifyPayloadSignature(
+                firstBody,
+                firstHeaders['X-Callora-Signature'],
+                now,
+            );
+            const verifySecond = await signer.verifyPayloadSignature(
+                secondBody,
+                secondHeaders['X-Callora-Signature'],
+                now,
+            );
+            expect(verifyFirst).toEqual({ valid: true, keyId: rotation1.newKey.id });
+            expect(verifySecond).toEqual({ valid: true, keyId: rotation2.newKey.id });
+        });
+    });
 });
 

@@ -6,6 +6,12 @@ import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
 import { getEffectiveRetryPolicy, calculateBackoff } from '../services/webhookRetry.js';
 import { computeJitteredDelay, type RandomSource } from '../lib/retry.js';
 import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
+import {
+    defaultWebhookKeyStore,
+    defaultWebhookSignerService,
+    signWithSecret,
+    type WebhookSignerService,
+} from '../services/webhookSigner.js';
 
 export const MAX_WEBHOOK_RESPONSE_BYTES = 64 * 1024;
 
@@ -71,6 +77,7 @@ export async function consumeCappedResponseBody(
 
 let acceptingDispatches = true;
 const inFlightDispatches = new Set<Promise<void>>();
+let activeSignerService: WebhookSignerService = defaultWebhookSignerService;
 
 /**
  * Random source used for retry backoff jitter. Injectable so tests can supply
@@ -80,10 +87,6 @@ let jitterRandom: RandomSource = Math.random;
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function signPayload(secret: string, body: string): string {
-    return crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
 function trackDispatch<T>(operation: Promise<T>): Promise<T> {
@@ -105,10 +108,16 @@ export async function awaitWebhookDispatcherIdle(): Promise<void> {
     }
 }
 
+export function setWebhookSignerService(signer: WebhookSignerService): void {
+    activeSignerService = signer;
+}
+
 export function resetWebhookDispatcherForTests(): void {
     acceptingDispatches = true;
     inFlightDispatches.clear();
     jitterRandom = Math.random;
+    activeSignerService = defaultWebhookSignerService;
+    defaultWebhookKeyStore._reset();
 }
 
 /**
@@ -160,8 +169,18 @@ export async function dispatchWebhook(
             headers['X-Correlation-Id'] = correlationId;
         }
 
-        if (config.secret) {
-            headers['X-Callora-Signature'] = `sha256=${signPayload(config.secret, body)}`;
+        const managedSig = await activeSignerService.signPayload(body);
+        if (managedSig) {
+            headers['X-Callora-Signature'] = managedSig.signature;
+            headers['X-Callora-Key-Id'] = managedSig.keyId;
+        } else {
+            const subSecret = config.secret_current ?? config.secret;
+            if (subSecret) {
+                headers['X-Callora-Signature'] = `sha256=${signWithSecret(subSecret, body)}`;
+                if (config.id) {
+                    headers['X-Callora-Key-Id'] = config.id;
+                }
+            }
         }
 
         let lastError: unknown;
