@@ -8,6 +8,7 @@ import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import {
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   UnauthorizedError,
@@ -135,6 +136,74 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
         }));
 
         res.json({ keys });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    '/keys/:id/rotate',
+    requireAuth,
+    validate({ params: keyIdParamsSchema }),
+    keyIdempotency,
+    async (req, res: import('express').Response<unknown, AuthenticatedLocals>, next) => {
+      try {
+        const user = res.locals.authenticatedUser;
+        if (!user) {
+          next(new UnauthorizedError());
+          return;
+        }
+
+        const { id } = keyIdParamsSchema.parse(req.params);
+
+        // Capture old SHA-256 hash BEFORE rotating so it can be added to the
+        // in-memory revocation list immediately.
+        const oldSha256Hash = apiKeyRepository.getSha256Hash(id);
+
+        const result = await apiKeyRepository.rotate(id, user.id);
+
+        if (!result.success) {
+          if (result.error === 'not_found') {
+            next(new NotFoundError('API key not found', 'API_KEY_NOT_FOUND'));
+            return;
+          }
+          if (result.error === 'forbidden') {
+            next(
+              new ForbiddenError(
+                'Forbidden: API key does not belong to authenticated developer',
+                'API_KEY_FORBIDDEN',
+              ),
+            );
+            return;
+          }
+          next(
+            new ConflictError(
+              'API key has been revoked and cannot be rotated',
+              'CONFLICT',
+            ),
+          );
+          return;
+        }
+
+        if (oldSha256Hash) {
+          getTokenRevocationService().revoke(oldSha256Hash);
+        }
+
+        const updatedRecord = apiKeyRepository
+          .list({ userId: user.id })
+          .find((record) => record.id === id);
+
+        res.status(200).json({
+          id,
+          apiId: updatedRecord?.apiId,
+          key: result.newKey,
+          prefix: result.prefix,
+          scopes: updatedRecord?.scopes ?? ['*'],
+          rateLimitPerMinute: updatedRecord?.rateLimitPerMinute ?? null,
+          createdAt: updatedRecord?.createdAt.toISOString(),
+          revoked: false,
+        });
       } catch (error) {
         next(error);
       }

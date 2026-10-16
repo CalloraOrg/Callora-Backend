@@ -50,9 +50,8 @@ function generatePlainKey(): string {
   return `ck_live_${randomBytes(24).toString("hex")}`;
 }
 
-async function toHash(value: string): Promise<string> {
-  // Use the async bcrypt API so the event loop is not blocked during hashing.
-  return bcrypt.hash(value, config.bcrypt.rounds);
+function toHash(value: string): string {
+  return bcrypt.hashSync(value, config.bcrypt.rounds);
 }
 
 async function verifyHash(value: string, hash: string): Promise<boolean> {
@@ -152,18 +151,21 @@ function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
 }
 
 export const apiKeyRepository = {
-   async create(params: {
+   create(params: {
      apiId: string;
      userId: string;
      scopes: string[];
      rateLimitPerMinute: number | null;
-    }): Promise<ApiKeyCreateResult> {
+    }): ApiKeyCreateResult {
+      if (!params || typeof params !== 'object') {
+        throw new TypeError('params must be an object');
+      }
       const key = generatePlainKey();
       const prefix = key.slice(0, 16);
       const id = randomBytes(8).toString('hex');
       const createdAt = new Date();
       const sha256Hash = sha256Hex(key);
-      const keyHash = await toHash(key);
+      const keyHash = toHash(key);
 
     apiKeys.push({
       id,
@@ -283,30 +285,17 @@ export const apiKeyRepository = {
     // No records share this prefix — key does not exist at all.
     if (candidates.length === 0) return null;
 
-    // High-entropy keys are exact-matched by their sha256 digest using a
-    // constant-time comparison. This avoids the costly bcrypt path for the
-    // common case while still falling back to bcrypt for legacy records.
     for (const candidate of candidates) {
-      if (constantTimeCompare(candidate.sha256Hash, keySha256)) {
+      const shaMatched = candidate.sha256Hash
+        ? constantTimeCompare(candidate.sha256Hash, keySha256)
+        : true;
+      const bcryptMatched = await verifyHash(key, candidate.keyHash);
+      if (shaMatched && bcryptMatched) {
         if (candidate.revoked) {
           // A revoked key is not valid — treat it exactly like an unknown key
           // so callers cannot distinguish "revoked" from "never existed".
           return null;
         }
-        verifyCache.set(keySha256, candidate);
-        return redactRecord(candidate);
-      }
-    }
-
-    for (const candidate of candidates) {
-      if (await verifyHash(key, candidate.keyHash)) {
-        if (candidate.revoked) {
-          // A revoked key is not valid — treat it exactly like an unknown key
-          // so callers cannot distinguish "revoked" from "never existed".
-          return null;
-        }
-        // Backfill the sha256 digest for legacy records so future calls can
-        // use the constant-time exact-match fast path.
         if (!candidate.sha256Hash) {
           candidate.sha256Hash = keySha256;
         }
@@ -320,7 +309,7 @@ export const apiKeyRepository = {
     // prefix exists via a distinct error path (timing/oracle safety).
     return null;
   },
-  async rotate(id: string, userId: string): Promise<{ success: true; newKey: string; prefix: string } | { success: false; error: 'not_found' | 'forbidden' | 'revoked' }> {
+  rotate(id: string, userId: string): { success: true; newKey: string; prefix: string } | { success: false; error: 'not_found' | 'forbidden' | 'revoked' } {
     const index = apiKeys.findIndex(k => k.id === id);
     if (index === -1) return { success: false, error: 'not_found' };
     if (apiKeys[index].userId !== userId) return { success: false, error: 'forbidden' };
@@ -330,7 +319,7 @@ export const apiKeyRepository = {
     const newKey = generatePlainKey();
     const newPrefix = newKey.slice(0, 16);
     const newSha256Hash = sha256Hex(newKey);
-    const newKeyHash = await toHash(newKey);
+    const newKeyHash = toHash(newKey);
 
     // Update existing record
     apiKeys[index].keyHash = newKeyHash;

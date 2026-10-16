@@ -7,6 +7,17 @@ import { requestIdMiddleware } from '../middleware/requestId.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { Api, Developer } from '../db/schema.js';
+import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+
+function getErrorCode(body: Record<string, any>): string | undefined {
+  return body?.error?.code ?? body?.code;
+}
+
+function getErrorDetails(body: Record<string, any>): unknown[] | undefined {
+  return body?.error?.details ?? body?.details;
+}
 
 const developerProfile: Developer = {
   id: 11,
@@ -100,6 +111,14 @@ function createTestApp(apis: Api[] = [ownedApi]) {
   const app = express();
   app.use(express.json());
   app.use(requestIdMiddleware);
+  // Bridge test-only x-user-id header to signed JWT Bearer token for requireAuth
+  app.use((req, _res, next) => {
+    const userId = req.headers['x-user-id'];
+    if (typeof userId === 'string' && userId.trim() && !req.headers['authorization']) {
+      req.headers['authorization'] = `Bearer ${signTestToken({ userId: userId.trim() })}`;
+    }
+    next();
+  });
   app.use(
     '/api',
     createApiKeyRouter({
@@ -207,7 +226,7 @@ describe('API key lifecycle routes', () => {
 
     const [record] = apiKeyRepository.list({ userId: 'dev-1', apiId: '101' });
     expect(record.revoked).toBe(true);
-    expect(apiKeyRepository.verify(created.key)).toBeNull();
+    expect(await apiKeyRepository.verify(created.key)).toBeNull();
   });
 
   it('returns 403 when attempting to create or list keys for an API the developer does not own', async () => {
@@ -219,14 +238,14 @@ describe('API key lifecycle routes', () => {
       .send({});
 
     expect(createResponse.status).toBe(403);
-    expect(createResponse.body.code).toBe('API_ACCESS_FORBIDDEN');
+    expect(getErrorCode(createResponse.body)).toBe('API_ACCESS_FORBIDDEN');
 
     const listResponse = await request(app)
       .get('/api/apis/202/keys')
       .set('x-user-id', 'dev-1');
 
     expect(listResponse.status).toBe(403);
-    expect(listResponse.body.code).toBe('API_ACCESS_FORBIDDEN');
+    expect(getErrorCode(listResponse.body)).toBe('API_ACCESS_FORBIDDEN');
   });
 
   it('returns 404 when revoking a missing key', async () => {
@@ -237,7 +256,7 @@ describe('API key lifecycle routes', () => {
       .set('x-user-id', 'dev-1');
 
     expect(response.status).toBe(404);
-    expect(response.body.code).toBe('API_KEY_NOT_FOUND');
+    expect(getErrorCode(response.body)).toBe('API_KEY_NOT_FOUND');
   });
 
   it('returns 400 validation details for invalid create payloads', async () => {
@@ -252,8 +271,8 @@ describe('API key lifecycle routes', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.code).toBe('VALIDATION_ERROR');
-    expect(response.body.details).toEqual(expect.arrayContaining([
+    expect(getErrorCode(response.body)).toBe('VALIDATION_ERROR');
+    expect(getErrorDetails(response.body)).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'body.scopes[0]' }),
       expect.objectContaining({ field: 'body.rateLimitPerMinute' }),
     ]));
@@ -264,7 +283,7 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app).get('/api/apis/101/keys');
     expect(response.status).toBe(401);
-    expect(response.body.code).toBe('UNAUTHORIZED');
+    expect(getErrorCode(response.body)).toBe('UNAUTHORIZED');
   });
 
   it('adds revoked key to in-memory revocation list', async () => {
@@ -296,5 +315,101 @@ describe('API key lifecycle routes', () => {
     expect(tokenRevocation.isRevoked(keyHash)).toBe(true);
 
     resetTokenRevocationService();
+  });
+
+  describe('POST /api/keys/:id/rotate (#1205)', () => {
+    it('rotates an owned API key, returns the new key and prefix, and invalidates the old key immediately', async () => {
+      const app = createTestApp();
+      const { resetTokenRevocationService, getTokenRevocationService } = await import('../services/tokenRevocation.js');
+      const { createHash } = await import('node:crypto');
+      resetTokenRevocationService();
+      const tokenRevocation = getTokenRevocationService({ defaultTtlMs: 60000 });
+
+      const created = apiKeyRepository.create({
+        apiId: '101',
+        userId: 'dev-1',
+        scopes: ['read', 'write'],
+        rateLimitPerMinute: 250,
+      });
+
+      const oldKeySha256 = createHash('sha256').update(created.key).digest('hex');
+      expect(tokenRevocation.isRevoked(oldKeySha256)).toBe(false);
+
+      const response = await request(app)
+        .post(`/api/keys/${created.id}/rotate`)
+        .set('x-user-id', 'dev-1');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(expect.objectContaining({
+        id: created.id,
+        apiId: '101',
+        key: expect.stringMatching(/^ck_live_/),
+        prefix: expect.any(String),
+        scopes: ['read', 'write'],
+        rateLimitPerMinute: 250,
+        revoked: false,
+      }));
+      expect(response.body.key).not.toBe(created.key);
+      expect(response.body.prefix).toBe(response.body.key.slice(0, 16));
+
+      // Old key is invalidated in both repository verification and in-memory revocation service
+      expect(await apiKeyRepository.verify(created.key)).toBeNull();
+      expect(tokenRevocation.isRevoked(oldKeySha256)).toBe(true);
+
+      // New key verifies cleanly and preserves metadata
+      const verifiedNew = await apiKeyRepository.verify(response.body.key);
+      expect(verifiedNew).not.toBeNull();
+      expect(verifiedNew?.id).toBe(created.id);
+      expect(verifiedNew?.scopes).toEqual(['read', 'write']);
+      expect(verifiedNew?.rateLimitPerMinute).toBe(250);
+
+      resetTokenRevocationService();
+    });
+
+    it('returns 404 when rotating a non-existent key', async () => {
+      const app = createTestApp();
+
+      const response = await request(app)
+        .post('/api/keys/non-existent-id/rotate')
+        .set('x-user-id', 'dev-1');
+
+      expect(response.status).toBe(404);
+      expect(getErrorCode(response.body)).toBe('API_KEY_NOT_FOUND');
+    });
+
+    it('returns 403 when rotating a key owned by another developer', async () => {
+      const app = createTestApp();
+      const created = apiKeyRepository.create({
+        apiId: '101',
+        userId: 'dev-other',
+        scopes: ['*'],
+        rateLimitPerMinute: null,
+      });
+
+      const response = await request(app)
+        .post(`/api/keys/${created.id}/rotate`)
+        .set('x-user-id', 'dev-1');
+
+      expect(response.status).toBe(403);
+      expect(getErrorCode(response.body)).toBe('API_KEY_FORBIDDEN');
+    });
+
+    it('returns 409 when rotating an already revoked key', async () => {
+      const app = createTestApp();
+      const created = apiKeyRepository.create({
+        apiId: '101',
+        userId: 'dev-1',
+        scopes: ['*'],
+        rateLimitPerMinute: null,
+      });
+      apiKeyRepository.revoke(created.id, 'dev-1');
+
+      const response = await request(app)
+        .post(`/api/keys/${created.id}/rotate`)
+        .set('x-user-id', 'dev-1');
+
+      expect(response.status).toBe(409);
+      expect(getErrorCode(response.body)).toBe('CONFLICT');
+    });
   });
 });
