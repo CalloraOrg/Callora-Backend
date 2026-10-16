@@ -222,6 +222,74 @@ describe('InMemoryApiRegistry.list (cursor pagination)', () => {
     assert.equal(result.entries.length, 1);
     assert.equal(result.nextCursor, null);
   });
+
+  test('deleting the cursor entry between calls still returns the next page without duplicates', () => {
+    const entries = [
+      mkEntry('api_1', 'slug-1', new Date(now.getTime() - 4000)),
+      mkEntry('api_2', 'slug-2', new Date(now.getTime() - 3000)),
+      mkEntry('api_3', 'slug-3', new Date(now.getTime() - 2000)),
+      mkEntry('api_4', 'slug-4', new Date(now.getTime() - 1000)),
+      mkEntry('api_5', 'slug-5', now),
+    ];
+    const registry = new InMemoryApiRegistry(entries);
+
+    // Fetch page 1: [api_5, api_4], cursor points to api_4
+    const page1 = registry.list(null, 2);
+    assert.deepEqual(page1.entries.map((e) => e.id), ['api_5', 'api_4']);
+    assert.ok(page1.nextCursor);
+
+    // Delete the cursor entry (api_4) before fetching page 2
+    assert.equal(registry.delete('api_4'), true);
+
+    // Page 2 must resume strictly after api_4 -> [api_3, api_2], NOT restart at api_5
+    const page2 = registry.list(page1.nextCursor, 2);
+    assert.deepEqual(page2.entries.map((e) => e.id), ['api_3', 'api_2']);
+    assert.ok(page2.nextCursor);
+
+    // Page 3 -> [api_1]
+    const page3 = registry.list(page2.nextCursor, 2);
+    assert.deepEqual(page3.entries.map((e) => e.id), ['api_1']);
+    assert.equal(page3.nextCursor, null);
+  });
+
+  test('iterating all pages yields every remaining entry exactly once even with same-timestamp ties and deletions', () => {
+    const sameTime = new Date(now.getTime() - 1000);
+    const entries = [
+      { ...mkEntry('api_1', 'slug-a', sameTime), id: 'api_a' },
+      { ...mkEntry('api_2', 'slug-b', sameTime), id: 'api_b' },
+      { ...mkEntry('api_3', 'slug-c', sameTime), id: 'api_c' },
+      { ...mkEntry('api_4', 'slug-d', now), id: 'api_d' },
+    ];
+    const registry = new InMemoryApiRegistry(entries);
+
+    const seen: string[] = [];
+    const first = registry.list(null, 2);
+    seen.push(...first.entries.map((e) => e.id));
+    // Delete the second item ('api_c') whose cursor was just emitted
+    registry.delete('api_c');
+
+    let cursor = first.nextCursor;
+    while (cursor) {
+      const next = registry.list(cursor, 2);
+      seen.push(...next.entries.map((e) => e.id));
+      cursor = next.nextCursor;
+    }
+
+    assert.deepEqual(seen, ['api_d', 'api_c', 'api_b', 'api_a']);
+  });
+
+  test('rejects an undecodable cursor with a 400 BadRequestError', () => {
+    const registry = new InMemoryApiRegistry([mkEntry('api_1', 'slug-1', now)]);
+
+    assert.throws(
+      () => registry.list('!!!not-a-valid-cursor!!!', 10),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.equal((err as { statusCode?: number }).statusCode, 400);
+        return true;
+      },
+    );
+  });
 });
 
 // ── resolveEndpointPrice ────────────────────────────────────────────────────
@@ -311,5 +379,40 @@ describe('resolveEndpointPrice', () => {
 
     assert.equal(result.endpointId, 'default');
     assert.equal(result.priceUsdc, 0);
+  });
+
+  test('matches only on path-segment boundaries and normalizes trailing slashes and query strings (#1225)', () => {
+    const weatherEndpoints: EndpointPricing[] = [
+      { endpointId: 'ep_current', path: '/current', priceUsdc: 0.01 },
+      { endpointId: 'ep_forecast', path: '/forecast/', priceUsdc: 0.05 },
+      { endpointId: 'ep_forecast_hourly', path: '/forecast/hourly', priceUsdc: 0.08 },
+      { endpointId: 'ep_wild', path: '*', priceUsdc: 0.005 },
+    ];
+
+    const cases: Array<{ path: string; expectedId: string; expectedPrice: number }> = [
+      { path: '/current', expectedId: 'ep_current', expectedPrice: 0.01 },
+      { path: '/current/', expectedId: 'ep_current', expectedPrice: 0.01 },
+      { path: '/current/extra', expectedId: 'ep_current', expectedPrice: 0.01 },
+      { path: '/current?units=metric', expectedId: 'ep_current', expectedPrice: 0.01 },
+      { path: '/currently', expectedId: 'ep_wild', expectedPrice: 0.005 },
+      { path: '/currently-premium', expectedId: 'ep_wild', expectedPrice: 0.005 },
+      { path: '/forecast', expectedId: 'ep_forecast', expectedPrice: 0.05 },
+      { path: '/forecast/', expectedId: 'ep_forecast', expectedPrice: 0.05 },
+      { path: '/forecast/daily', expectedId: 'ep_forecast', expectedPrice: 0.05 },
+      { path: '/forecast/hourly', expectedId: 'ep_forecast_hourly', expectedPrice: 0.08 },
+      { path: '/forecast/hourly/', expectedId: 'ep_forecast_hourly', expectedPrice: 0.08 },
+      { path: '/forecast/hourly-extended', expectedId: 'ep_forecast', expectedPrice: 0.05 },
+      { path: '/forecastXL', expectedId: 'ep_wild', expectedPrice: 0.005 },
+    ];
+
+    for (const tc of cases) {
+      const resolved = resolveEndpointPrice(weatherEndpoints, tc.path);
+      assert.equal(
+        resolved.endpointId,
+        tc.expectedId,
+        `Expected path "${tc.path}" to resolve to ${tc.expectedId}, got ${resolved.endpointId}`,
+      );
+      assert.equal(resolved.priceUsdc, tc.expectedPrice);
+    }
   });
 });
