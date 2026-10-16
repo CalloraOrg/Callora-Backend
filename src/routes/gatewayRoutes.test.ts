@@ -50,8 +50,9 @@ describe("gateway route - rate limiting", () => {
     expect(res.status).toBe(429);
     // Retry-After header is in seconds, rounded up
     expect(res.headers["retry-after"]).toBe(String(Math.ceil(windowMs / 1000)));
-    expect(res.body).toHaveProperty("code", "TOO_MANY_REQUESTS");
-    expect(res.body).toHaveProperty("message", "Too Many Requests");
+    const errBody0 = res.body.error ?? res.body;
+    expect(errBody0).toHaveProperty("code", "TOO_MANY_REQUESTS");
+    expect(errBody0).toHaveProperty("message", "Too Many Requests");
     expect(res.body).toHaveProperty("requestId");
   });
 });
@@ -195,8 +196,9 @@ describe("gateway route - body size limits", () => {
 
     expect(res.status).toBe(413);
     expect(res.headers["content-type"]).toMatch(/application\/json/);
-    expect(res.body).toHaveProperty("code", "REQUEST_BODY_TOO_LARGE");
-    expect(res.body).toHaveProperty("message", "Request body too large");
+    const errBody413 = res.body.error ?? res.body;
+    expect(errBody413).toHaveProperty("code", "REQUEST_BODY_TOO_LARGE");
+    expect(errBody413).toHaveProperty("message", "Request body too large");
   });
 });
 
@@ -303,9 +305,10 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
 
     // Must be 401, never 500.
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
+    const errBody1 = res.body.error ?? res.body;
+    expect(errBody1).toHaveProperty("code", "UNAUTHORIZED");
     // Generic message — must not reveal whether the prefix was found.
-    expect(res.body.message).toMatch(/invalid API key/i);
+    expect(errBody1.message).toMatch(/invalid API key/i);
   });
 
   test("returns 401 when prefix does not exist at all (no-prefix path)", async () => {
@@ -321,8 +324,9 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", "totally-unknown-key-xyz");
 
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
-    expect(res.body.message).toMatch(/invalid API key/i);
+    const errBody2 = res.body.error ?? res.body;
+    expect(errBody2).toHaveProperty("code", "UNAUTHORIZED");
+    expect(errBody2.message).toMatch(/invalid API key/i);
   });
 
   test("happy path — exact key match passes auth and reaches billing", async () => {
@@ -355,7 +359,8 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", validKey);
 
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
+    const errBody3 = res.body.error ?? res.body;
+    expect(errBody3).toHaveProperty("code", "UNAUTHORIZED");
   });
 
   test("returns 403 when key is revoked (prefix + hash match a revoked key)", async () => {
@@ -375,7 +380,8 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", validKey);
 
     expect(res.status).toBe(403);
-    expect(res.body).toHaveProperty("code", "FORBIDDEN");
+    const errBody4 = res.body.error ?? res.body;
+    expect(errBody4).toHaveProperty("code", "FORBIDDEN");
   });
 
   test("returns 403 when key is in revocation list", async () => {
@@ -404,7 +410,8 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
         .set("x-api-key", validKey);
 
       expect(res.status).toBe(403);
-      expect(res.body).toHaveProperty("code", "FORBIDDEN");
+      const errBody5 = res.body.error ?? res.body;
+      expect(errBody5).toHaveProperty("code", "FORBIDDEN");
     } finally {
       resetTokenRevocationService();
     }
@@ -431,8 +438,10 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
     expect(unknownRes.status).toBe(401);
 
     // Response codes must be identical — client must not be able to distinguish.
-    expect(mismatchRes.body.code).toBe(unknownRes.body.code);
-    expect(mismatchRes.body.message).toBe(unknownRes.body.message);
+    const mismatchErr = mismatchRes.body.error ?? mismatchRes.body;
+    const unknownErr = unknownRes.body.error ?? unknownRes.body;
+    expect(mismatchErr.code).toBe(unknownErr.code);
+    expect(mismatchErr.message).toBe(unknownErr.message);
   });
 });
 
@@ -506,7 +515,8 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
       .set("x-api-key", VALID_KEY);
 
     expect(res.status).toBe(429);
-    expect(res.body.code).toBe("TOO_MANY_REQUESTS");
+    const errBody429 = res.body.error ?? res.body;
+    expect(errBody429.code).toBe("TOO_MANY_REQUESTS");
     // Billing must NOT have been called — the handler returned before reaching it
     // (confirmed by absence of a 402 status)
     expect(res.status).not.toBe(402);
@@ -555,9 +565,117 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
       .get(`/gateway/${API_ID}`)
       .set("x-api-key", VALID_KEY);
     expect(second.status).toBe(429);
-    expect(second.body.code).toBe("TOO_MANY_REQUESTS");
+    const secondErr = second.body.error ?? second.body;
+    expect(secondErr.code).toBe("TOO_MANY_REQUESTS");
     expect(second.headers["retry-after"]).toBeDefined();
     expect(Number(second.headers["retry-after"])).toBeGreaterThan(0);
     expect(second.body.retryAfterMs).toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// proxyRoutes.ts — per-HTTP-method pricing resolution (issue #1226)
+// ---------------------------------------------------------------------------
+describe("proxy route - per-HTTP-method pricing (issue #1226)", () => {
+  test("charges method-specific price for GET vs POST and falls back to default price", async () => {
+    const { createProxyRouter } = await import("./proxyRoutes.js");
+    const { createApiRegistry } = await import("../data/apiRegistry.js");
+    const originalFetch = global.fetch;
+
+    const testApiId = "method-priced-test-api";
+    const validKey = "test-method-price-key-123456";
+    const apiKeys = new Map<string, ApiKey>();
+    apiKeys.set(validKey, { key: "k-mp", apiId: testApiId, developerId: "dev-mp" });
+
+    const registry = createApiRegistry([
+      {
+        id: testApiId,
+        slug: testApiId,
+        name: "Method Priced API",
+        base_url: "http://93.184.216.34",
+        developerId: "dev-mp",
+        defaultPriceUsdc: 0.01,
+        endpoints: [
+          {
+            endpointId: "ep-items",
+            path: "/items",
+            priceUsdc: 0.01,
+            pricePerMethodUsdc: {
+              GET: 0.005,
+              POST: 0.025,
+            },
+          },
+        ],
+      },
+    ]);
+
+    const deductedAmounts: number[] = [];
+    const recordedAmounts: number[] = [];
+
+    const deps = {
+      billing: {
+        checkBalance: async () => 100,
+        getBalance: async () => 100,
+        deductCredit: async (_devId: string, amount: number) => {
+          deductedAmounts.push(amount);
+          return { success: true, balance: 100 };
+        },
+      },
+      rateLimiter: { check: async () => ({ allowed: true }) },
+      usageStore: {
+        record: async (evt: { amountUsdc?: number }) => {
+          if (typeof evt.amountUsdc === "number") {
+            recordedAmounts.push(evt.amountUsdc);
+          }
+          return true;
+        },
+      },
+      registry,
+      apiKeys,
+      proxyConfig: {
+        allowedHosts: ["93.184.216.34"],
+      },
+    } as any;
+
+    global.fetch = jest.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+
+    try {
+      const app = express();
+      app.use(requestIdMiddleware);
+      app.use("/v1/call", createProxyRouter(deps));
+      app.use(errorHandler);
+
+      const getRes = await request(app)
+        .get(`/v1/call/${testApiId}/items`)
+        .set("x-api-key", validKey);
+      expect(getRes.status).toBe(200);
+      await new Promise((r) => setImmediate(r));
+
+      const postRes = await request(app)
+        .post(`/v1/call/${testApiId}/items`)
+        .set("x-api-key", validKey)
+        .send({ name: "item" });
+      expect(postRes.status).toBe(200);
+      await new Promise((r) => setImmediate(r));
+
+      const putRes = await request(app)
+        .put(`/v1/call/${testApiId}/items`)
+        .set("x-api-key", validKey)
+        .send({ name: "updated" });
+      expect(putRes.status).toBe(200);
+      await new Promise((r) => setImmediate(r));
+
+      expect(deductedAmounts).toEqual([0.005, 0.025, 0.01]);
+      expect(recordedAmounts).toEqual([0.005, 0.025, 0.01]);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});
+
+

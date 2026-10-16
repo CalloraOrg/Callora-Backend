@@ -57,7 +57,11 @@ export interface EndpointPricing {
   endpointId: string;
   /** Path pattern to match (e.g. "/data", "/translate"). Use "*" as default. */
   path: string;
+  /** Optional HTTP method (e.g. "GET", "POST"). When omitted, matches all HTTP methods. */
+  method?: string;
   priceUsdc: number;
+  /** Optional per-HTTP-method price overrides (e.g. { GET: 0.005, POST: 0.025 }). */
+  pricePerMethodUsdc?: Record<string, number>;
 }
 
 /** Interface for billing / credit deduction (e.g. Soroban). */

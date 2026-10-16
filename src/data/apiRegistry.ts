@@ -71,35 +71,104 @@ export class InMemoryApiRegistry implements ApiRegistry {
 }
 
 /**
- * Find the price for a given path in an API entry's endpoints.
+ * Find the price for a given path (and optional HTTP method) in an API entry's endpoints.
+ * Prefers longer path prefix matches first, and for equal path specificity prefers
+ * method-specific matches over method-agnostic ones.
  * Falls back to the wildcard "*" endpoint if no exact match, or 0 if none defined.
  */
 export function resolveEndpointPrice(
   endpoints: EndpointPricing[],
   path: string,
+  method?: string,
 ): EndpointPricing {
   const normalisePath = (value: string): string =>
     value.startsWith('/') ? value : `/${value}`;
   const normalised = normalisePath(path);
+  const normalisedMethod = method?.trim().toUpperCase();
 
-  // Try exact prefix match (longest first)
+  const matchesMethod = (ep: EndpointPricing): boolean => {
+    if (!ep.method) return true;
+    if (!normalisedMethod) return false;
+    return ep.method.trim().toUpperCase() === normalisedMethod;
+  };
+
+  const isExactMethodMatch = (ep: EndpointPricing): boolean =>
+    Boolean(ep.method && normalisedMethod && ep.method.trim().toUpperCase() === normalisedMethod);
+
+  // Try prefix matches (longest path first; method-specific before method-agnostic at equal length)
   const sorted = [...endpoints]
-    .filter((e) => e.path !== '*')
-    .sort((a, b) => normalisePath(b.path).length - normalisePath(a.path).length);
+    .filter((e) => e.path !== '*' && matchesMethod(e))
+    .sort((a, b) => {
+      const lenDiff = normalisePath(b.path).length - normalisePath(a.path).length;
+      if (lenDiff !== 0) return lenDiff;
+      return Number(isExactMethodMatch(b)) - Number(isExactMethodMatch(a));
+    });
+
+  const applyMethodOverride = (ep: EndpointPricing): EndpointPricing => {
+    if (!normalisedMethod || !ep.pricePerMethodUsdc) return ep;
+    for (const [m, p] of Object.entries(ep.pricePerMethodUsdc)) {
+      if (m.trim().toUpperCase() === normalisedMethod && typeof p === 'number') {
+        return { ...ep, priceUsdc: p };
+      }
+    }
+    return ep;
+  };
 
   for (const ep of sorted) {
     const epPath = normalisePath(ep.path);
     if (normalised.startsWith(epPath)) {
-      return ep;
+      return applyMethodOverride(ep);
     }
   }
 
-  // Fall back to wildcard
-  const wildcard = endpoints.find((e) => e.path === '*');
-  if (wildcard) return wildcard;
+  // Fall back to wildcard (prefer method-specific wildcard over method-agnostic wildcard)
+  if (normalisedMethod) {
+    const methodWildcard = endpoints.find(
+      (e) => e.path === '*' && isExactMethodMatch(e),
+    );
+    if (methodWildcard) return applyMethodOverride(methodWildcard);
+  }
+  const wildcard = endpoints.find((e) => e.path === '*' && !e.method);
+  if (wildcard) return applyMethodOverride(wildcard);
 
   // No pricing configured — default free
   return { endpointId: 'default', path: '*', priceUsdc: 0 };
+}
+
+/**
+ * Convert an ApiWithEndpoints record from apiRepository into an ApiRegistryEntry,
+ * preserving each endpoint's HTTP method and price.
+ */
+export function toApiRegistryEntry(api: {
+  id: number | string;
+  name: string;
+  base_url: string;
+  developer_id: number | string;
+  created_at?: Date;
+  endpoints: Array<{
+    id: number | string;
+    path: string;
+    method?: string | null;
+    price_per_call_usdc: string | number;
+  }>;
+}): ApiRegistryEntry {
+  const slug = api.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return {
+    id: String(api.id),
+    slug: slug || String(api.id),
+    base_url: api.base_url,
+    developerId: String(api.developer_id),
+    ...(api.created_at ? { created_at: api.created_at } : {}),
+    endpoints: api.endpoints.map((ep) => ({
+      endpointId: String(ep.id),
+      path: ep.path,
+      ...(ep.method ? { method: ep.method.trim().toUpperCase() } : {}),
+      priceUsdc: Number(ep.price_per_call_usdc),
+    })),
+  };
 }
 
 // ── Mock data for development / testing ─────────────────────────────────────

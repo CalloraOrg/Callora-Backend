@@ -312,4 +312,49 @@ describe('resolveEndpointPrice', () => {
     assert.equal(result.endpointId, 'default');
     assert.equal(result.priceUsdc, 0);
   });
+
+  test('resolves POST and GET on the same path to their respective prices', () => {
+    const methodEndpoints: EndpointPricing[] = [
+      { endpointId: 'ep_items_get', path: '/items', method: 'GET', priceUsdc: 0.01 },
+      { endpointId: 'ep_items_post', path: '/items', method: 'POST', priceUsdc: 0.05 },
+    ];
+
+    const getRes = resolveEndpointPrice(methodEndpoints, '/items', 'GET');
+    const postRes = resolveEndpointPrice(methodEndpoints, '/items', 'POST');
+
+    assert.equal(getRes.endpointId, 'ep_items_get');
+    assert.equal(getRes.priceUsdc, 0.01);
+    assert.equal(postRes.endpointId, 'ep_items_post');
+    assert.equal(postRes.priceUsdc, 0.05);
+  });
+
+  test('prefers method-specific match over method-agnostic entry on the same path', () => {
+    const mixedEndpoints: EndpointPricing[] = [
+      { endpointId: 'ep_any', path: '/items', priceUsdc: 0.01 },
+      { endpointId: 'ep_post', path: '/items', method: 'POST', priceUsdc: 0.05 },
+    ];
+
+    assert.equal(resolveEndpointPrice(mixedEndpoints, '/items', 'POST').endpointId, 'ep_post');
+    assert.equal(resolveEndpointPrice(mixedEndpoints, '/items', 'GET').endpointId, 'ep_any');
+    assert.equal(resolveEndpointPrice(mixedEndpoints, '/items').endpointId, 'ep_any');
+  });
+
+  test('populates method when converting apiRepository records via toApiRegistryEntry', async () => {
+    const { toApiRegistryEntry } = await import('./apiRegistry.js');
+    const entry = toApiRegistryEntry({
+      id: 42,
+      name: 'Items Service',
+      base_url: 'http://localhost:5000',
+      developer_id: 7,
+      endpoints: [
+        { id: 1, path: '/items', method: 'get', price_per_call_usdc: '0.01' },
+        { id: 2, path: '/items', method: 'POST', price_per_call_usdc: '0.05' },
+      ],
+    });
+
+    assert.equal(entry.endpoints[0].method, 'GET');
+    assert.equal(entry.endpoints[1].method, 'POST');
+    assert.equal(resolveEndpointPrice(entry.endpoints, '/items', 'GET').priceUsdc, 0.01);
+    assert.equal(resolveEndpointPrice(entry.endpoints, '/items', 'POST').priceUsdc, 0.05);
+  });
 });

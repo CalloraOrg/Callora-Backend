@@ -120,7 +120,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       }
 
       const wildcardPath = req.params[0] ?? '';
-      const endpoint = resolveEndpointPrice(api.endpoints, wildcardPath);
+      const endpoint = resolveEndpointPrice(api.endpoints, wildcardPath, req.method);
       return { api, endpoint };
     },
     getApiId(api) {
