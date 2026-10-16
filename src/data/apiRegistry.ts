@@ -1,6 +1,7 @@
 import { ApiRegistry, ApiRegistryEntry, EndpointPricing, PaginatedApiList } from '../types/gateway.js';
 import { validateUpstreamBaseUrl } from '../lib/upstreamTarget.js';
 import { decodeCursor, encodeCursor } from '../lib/cursorPagination.js';
+import { BadRequestError } from '../errors/index.js';
 
 /**
  * In-memory API registry.
@@ -26,12 +27,26 @@ export class InMemoryApiRegistry implements ApiRegistry {
     this.bySlug.set(normalizedEntry.slug, normalizedEntry);
   }
 
+  delete(slugOrId: string): boolean {
+    const existing = this.byId.get(slugOrId) ?? this.bySlug.get(slugOrId);
+    if (!existing) {
+      return false;
+    }
+    this.byId.delete(existing.id);
+    this.bySlug.delete(existing.slug);
+    return true;
+  }
+
+  unregister(slugOrId: string): boolean {
+    return this.delete(slugOrId);
+  }
+
   resolve(slugOrId: string): ApiRegistryEntry | undefined {
     return this.byId.get(slugOrId) ?? this.bySlug.get(slugOrId);
   }
 
   list(cursor?: string | null, limit = 20): PaginatedApiList {
-    // Collect all entries sorted by created_at (desc), then id for stability
+    // Collect all entries sorted by created_at (desc), then id (desc) for stability
     const sorted = [...this.byId.values()].sort((a, b) => {
       const aTime = a.created_at?.getTime() ?? 0;
       const bTime = b.created_at?.getTime() ?? 0;
@@ -39,19 +54,21 @@ export class InMemoryApiRegistry implements ApiRegistry {
       return b.id.localeCompare(a.id);
     });
 
-    // If cursor is provided, skip entries until we find the cursor position
+    // If cursor is provided, advance to the first entry strictly after (timestamp, id)
+    // in keyset order so deleting the cursor entry between calls never restarts pagination.
     let startIndex = 0;
-    if (cursor) {
+    if (cursor !== undefined && cursor !== null && cursor !== '') {
       const decoded = decodeCursor(cursor);
-      if (decoded) {
-        startIndex = sorted.findIndex(
-          (e) =>
-            (e.created_at?.getTime() ?? 0) === decoded.timestamp.getTime() &&
-            e.id === decoded.id,
-        );
-        if (startIndex === -1) startIndex = 0;
-        else startIndex += 1; // skip past the cursor entry
+      if (!decoded) {
+        throw new BadRequestError('Invalid pagination cursor', 'INVALID_CURSOR');
       }
+      const cursorTime = decoded.timestamp.getTime();
+      const nextIndex = sorted.findIndex((e) => {
+        const eTime = e.created_at?.getTime() ?? 0;
+        if (eTime !== cursorTime) return eTime < cursorTime;
+        return e.id.localeCompare(decoded.id) < 0;
+      });
+      startIndex = nextIndex === -1 ? sorted.length : nextIndex;
     }
 
     const page = sorted.slice(startIndex, startIndex + limit);
