@@ -57,6 +57,19 @@ export const resolveDisputeSchema = z.object({
 export type OpenDisputeInput = z.infer<typeof openDisputeSchema>;
 export type ResolveDisputeInput = z.infer<typeof resolveDisputeSchema>;
 
+export interface UsageEventRecord {
+  id: string;
+  user_id?: string;
+  userId?: string;
+  developerId?: string;
+}
+
+export type UsageEventLookup =
+  | ((usageEventId: string) => UsageEventRecord | undefined | null)
+  | {
+      findById(usageEventId: string): UsageEventRecord | undefined | null;
+    };
+
 // ---------------------------------------------------------------------------
 // Repository interface
 // ---------------------------------------------------------------------------
@@ -65,6 +78,7 @@ export interface DisputeRepository {
   create(input: OpenDisputeInput, openedBy: string): Dispute;
   findById(id: string): Dispute | undefined;
   findByUsageEventId(usageEventId: string): Dispute | undefined;
+  findOpenByUsageEventId?(usageEventId: string): Dispute | undefined;
   findByUser(userId: string): Dispute[];
   listAll(): Dispute[];
   resolve(id: string, resolution: 'REFUNDED' | 'UPHELD', resolvedBy: string): Dispute;
@@ -86,8 +100,8 @@ export class InMemoryDisputeRepository implements DisputeRepository {
   private readonly events: DisputeEvent[] = [];
 
   create(input: OpenDisputeInput, openedBy: string): Dispute {
-    // One open dispute per usage_event_id
-    const existing = this.findByUsageEventId(input.usage_event_id);
+    // Enforce partial unique constraint: one OPEN dispute per usage_event_id
+    const existing = this.findOpenByUsageEventId(input.usage_event_id);
     if (existing) {
       throw new ConflictError(
         `A dispute already exists for usage_event_id '${input.usage_event_id}'`,
@@ -116,6 +130,13 @@ export class InMemoryDisputeRepository implements DisputeRepository {
   findByUsageEventId(usageEventId: string): Dispute | undefined {
     for (const d of this.disputes.values()) {
       if (d.usage_event_id === usageEventId) return d;
+    }
+    return undefined;
+  }
+
+  findOpenByUsageEventId(usageEventId: string): Dispute | undefined {
+    for (const d of this.disputes.values()) {
+      if (d.usage_event_id === usageEventId && d.status === 'OPEN') return d;
     }
     return undefined;
   }
@@ -165,9 +186,44 @@ export class InMemoryDisputeRepository implements DisputeRepository {
 // ---------------------------------------------------------------------------
 
 export class DisputeService {
-  constructor(private readonly repo: DisputeRepository) {}
+  constructor(
+    private readonly repo: DisputeRepository,
+    private readonly usageEventLookup?: UsageEventLookup,
+  ) {}
+
+  private resolveUsageEvent(usageEventId: string): UsageEventRecord | undefined | null {
+    if (!this.usageEventLookup) {
+      return undefined;
+    }
+    if (typeof this.usageEventLookup === 'function') {
+      return this.usageEventLookup(usageEventId);
+    }
+    return this.usageEventLookup.findById(usageEventId);
+  }
 
   openDispute(input: OpenDisputeInput, openedBy: string): Dispute {
+    if (this.usageEventLookup) {
+      const usageEvent = this.resolveUsageEvent(input.usage_event_id);
+      if (!usageEvent) {
+        throw new NotFoundError(`Usage event '${input.usage_event_id}' not found`);
+      }
+
+      const ownerId = usageEvent.user_id ?? usageEvent.userId ?? usageEvent.developerId;
+      if (ownerId !== openedBy) {
+        throw new ForbiddenError('You cannot open a dispute for another user\'s usage event');
+      }
+    }
+
+    const existingOpen = this.repo.findOpenByUsageEventId
+      ? this.repo.findOpenByUsageEventId(input.usage_event_id)
+      : this.repo.findByUsageEventId(input.usage_event_id);
+    if (existingOpen && existingOpen.status === 'OPEN') {
+      throw new ConflictError(
+        `A dispute already exists for usage_event_id '${input.usage_event_id}'`,
+        'CONFLICT',
+      );
+    }
+
     const dispute = this.repo.create(input, openedBy);
     this.repo.appendEvent({
       dispute_id: dispute.id,
@@ -224,3 +280,4 @@ export class DisputeService {
 
 export const defaultDisputeRepository = new InMemoryDisputeRepository();
 export const defaultDisputeService = new DisputeService(defaultDisputeRepository);
+

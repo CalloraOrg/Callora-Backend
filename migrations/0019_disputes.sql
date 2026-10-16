@@ -14,10 +14,12 @@ CREATE TABLE IF NOT EXISTS `disputes` (
   CHECK (`status` IN ('OPEN', 'REFUNDED', 'UPHELD'))
 );
 
--- Enforce: only one non-resolved dispute per usage_event_id
+-- Enforce: only one OPEN dispute per usage_event_id (duplicate claim prevention;
+-- resolved disputes may exist in history while active OPEN claims are unique).
 CREATE UNIQUE INDEX IF NOT EXISTS `idx_disputes_usage_event_open`
   ON `disputes` (`usage_event_id`)
   WHERE `status` = 'OPEN';
+
 
 CREATE INDEX IF NOT EXISTS `idx_disputes_opened_by`      ON `disputes` (`opened_by`);
 CREATE INDEX IF NOT EXISTS `idx_disputes_usage_event_id` ON `disputes` (`usage_event_id`);

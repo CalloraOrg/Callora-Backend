@@ -21,16 +21,25 @@ import {
   openDisputeSchema,
   resolveDisputeSchema,
   DisputeService,
+  defaultDisputeRepository,
   defaultDisputeService,
+  type DisputeRepository,
+  type UsageEventLookup,
 } from '../../services/disputeService.js';
 
 export interface DisputesRouterDeps {
   disputeService?: DisputeService;
+  disputeRepository?: DisputeRepository;
+  usageEventLookup?: UsageEventLookup;
 }
 
 export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
   const router = Router();
-  const svc = deps.disputeService ?? defaultDisputeService;
+  const svc = deps.disputeService
+    ?? (deps.usageEventLookup || deps.disputeRepository
+      ? new DisputeService(deps.disputeRepository ?? defaultDisputeRepository, deps.usageEventLookup)
+      : defaultDisputeService);
+
 
   // ── POST /  — developer opens a dispute ──────────────────────────────────
   router.post(

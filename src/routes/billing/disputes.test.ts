@@ -17,6 +17,22 @@ jest.mock('better-sqlite3', () => {
   };
 });
 
+jest.mock('../../middleware/requireAuth.js', () => {
+  const { UnauthorizedError } = jest.requireActual('../../errors/index.js');
+  return {
+    requireAuth: (req: any, res: any, next: any) => {
+      const userId = req.header('x-user-id')?.trim();
+      if (!userId) {
+        next(new UnauthorizedError());
+        return;
+      }
+      res.locals.authenticatedUser = { id: userId };
+      req.developerId = userId;
+      next();
+    },
+  };
+});
+
 import express from 'express';
 import request from 'supertest';
 import { errorHandler } from '../../middleware/errorHandler.js';
@@ -366,3 +382,67 @@ describe('GET /api/billing/disputes/admin/all', () => {
     expect(res.body.total).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #1231 — Validate dispute ownership and prevent duplicate claims
+// ---------------------------------------------------------------------------
+
+describe('Dispute ownership and duplicate claim validation (#1231)', () => {
+  const usageEvents = new Map<string, { id: string; user_id: string }>([
+    ['evt-alice-1', { id: 'evt-alice-1', user_id: 'user-alice' }],
+    ['evt-bob-1', { id: 'evt-bob-1', user_id: 'user-bob' }],
+  ]);
+
+  function makeOwnershipSvc() {
+    const repo = new InMemoryDisputeRepository();
+    const svc = new DisputeService(repo, (id) => usageEvents.get(id));
+    return { svc, repo };
+  }
+
+  it('returns 404 when disputing a non-existent usage event', async () => {
+    const { svc } = makeOwnershipSvc();
+
+    expect(() =>
+      svc.openDispute({ usage_event_id: 'evt-missing', reason: 'wrong charge' }, 'user-alice'),
+    ).toThrow(/not found/i);
+
+    const res = await request(buildApp(svc))
+      .post('/api/billing/disputes')
+      .set('x-user-id', 'user-alice')
+      .send({ usage_event_id: 'evt-missing', reason: 'wrong charge' });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 403 when disputing another user\'s usage event', async () => {
+    const { svc } = makeOwnershipSvc();
+
+    expect(() =>
+      svc.openDispute({ usage_event_id: 'evt-bob-1', reason: 'wrong charge' }, 'user-alice'),
+    ).toThrow(/another user/i);
+
+    const res = await request(buildApp(svc))
+      .post('/api/billing/disputes')
+      .set('x-user-id', 'user-alice')
+      .send({ usage_event_id: 'evt-bob-1', reason: 'wrong charge' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 409 when a second OPEN dispute is opened for the same usage event', async () => {
+    const { svc } = makeOwnershipSvc();
+
+    const firstRes = await request(buildApp(svc))
+      .post('/api/billing/disputes')
+      .set('x-user-id', 'user-alice')
+      .send({ usage_event_id: 'evt-alice-1', reason: 'wrong charge' });
+    expect(firstRes.status).toBe(201);
+
+    const duplicateRes = await request(buildApp(svc))
+      .post('/api/billing/disputes')
+      .set('x-user-id', 'user-alice')
+      .send({ usage_event_id: 'evt-alice-1', reason: 'duplicate claim' });
+    expect(duplicateRes.status).toBe(409);
+  });
+});
+
