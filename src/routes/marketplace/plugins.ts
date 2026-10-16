@@ -18,6 +18,7 @@ import { adminAuth } from '../../middleware/adminAuth.js';
 import { bodyValidator } from '../../middleware/validate.js';
 import { logger } from '../../logger.js';
 import { NotFoundError } from '../../errors/index.js';
+import { successEnvelope, getRequestId } from '../../lib/envelope.js';
 import {
   pluginManifestSchema,
   defaultPluginRepository,
@@ -45,10 +46,10 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
   const repo = deps.pluginRepository ?? defaultPluginRepository;
 
   // ── GET /  — list all plugins ────────────────────────────────────────────
-  router.get('/', (_req, res, next) => {
+  router.get('/', (req, res, next) => {
     try {
       const plugins = repo.list();
-      res.json({ plugins, total: plugins.length });
+      res.json(successEnvelope({ plugins, total: plugins.length }, getRequestId(req)));
     } catch (err) {
       next(err);
     }
@@ -70,7 +71,7 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
           version: manifest.version,
         });
 
-        res.status(201).json(record);
+        res.status(201).json(successEnvelope(record, getRequestId(req)));
       } catch (err) {
         next(err);
       }
@@ -84,7 +85,7 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
       if (!record) {
         return next(new NotFoundError(`Plugin '${req.params.id}' not found`));
       }
-      res.json(record);
+      res.json(successEnvelope(record, getRequestId(req)));
     } catch (err) {
       next(err);
     }
@@ -111,7 +112,7 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
           sandboxed: hookResult?.sandboxed ?? false,
         });
 
-        res.status(200).json({ plugin: record, hook: hookResult });
+        res.status(200).json(successEnvelope({ plugin: record, hook: hookResult }, getRequestId(req)));
       } catch (err) {
         next(err);
       }
@@ -129,7 +130,7 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
 
         logger.audit('PLUGIN_UNINSTALLED', actor, { pluginId: req.params.id });
 
-        res.status(200).json(record);
+        res.status(200).json(successEnvelope(record, getRequestId(req)));
       } catch (err) {
         next(err);
       }

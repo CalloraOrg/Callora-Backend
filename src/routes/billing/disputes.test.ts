@@ -18,6 +18,7 @@ jest.mock('better-sqlite3', () => {
 });
 
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { createDisputesRouter } from './disputes.js';
@@ -37,6 +38,13 @@ const ADMIN_KEY = 'test-admin-key';
 function buildApp(svc?: DisputeService) {
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    const uid = req.headers['x-user-id'];
+    if (typeof uid === 'string' && !req.headers.authorization) {
+      req.headers.authorization = `Bearer ${jwt.sign({ userId: uid, sub: uid }, process.env.JWT_SECRET ?? 'test-jwt-secret')}`;
+    }
+    next();
+  });
   app.use('/api/billing/disputes', createDisputesRouter({ disputeService: svc }));
   app.use(errorHandler);
   return app;
@@ -211,8 +219,11 @@ describe('POST /api/billing/disputes', () => {
       .set('x-user-id', 'u1')
       .send({ usage_event_id: 'evt-1', reason: 'wrong charge' });
     expect(res.status).toBe(201);
-    expect(res.body.status).toBe('OPEN');
-    expect(res.body.opened_by).toBe('u1');
+    expect(res.body.success).toBe(true);
+    expect(typeof res.body.requestId).toBe('string');
+    expect(typeof res.body.timestamp).toBe('string');
+    expect(res.body.data.status).toBe('OPEN');
+    expect(res.body.data.opened_by).toBe('u1');
   });
 
   it('returns 409 for duplicate usage_event_id', async () => {
@@ -240,8 +251,9 @@ describe('GET /api/billing/disputes', () => {
       .get('/api/billing/disputes')
       .set('x-user-id', 'u1');
     expect(res.status).toBe(200);
-    expect(res.body.total).toBe(1);
-    expect(res.body.disputes[0].opened_by).toBe('u1');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.total).toBe(1);
+    expect(res.body.data.disputes[0].opened_by).toBe('u1');
   });
 });
 
@@ -269,8 +281,9 @@ describe('GET /api/billing/disputes/:id', () => {
       .get(`/api/billing/disputes/${d.id}`)
       .set('x-user-id', 'u1');
     expect(res.status).toBe(200);
-    expect(res.body.dispute.id).toBe(d.id);
-    expect(Array.isArray(res.body.events)).toBe(true);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.dispute.id).toBe(d.id);
+    expect(Array.isArray(res.body.data.events)).toBe(true);
   });
 
   it('returns 404 for unknown dispute', async () => {
@@ -300,7 +313,8 @@ describe('POST /api/billing/disputes/:id/resolve', () => {
       .set('x-admin-api-key', ADMIN_KEY)
       .send({ resolution: 'REFUNDED' });
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('REFUNDED');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe('REFUNDED');
   });
 
   it('resolves a dispute as admin (UPHELD)', async () => {
@@ -312,7 +326,8 @@ describe('POST /api/billing/disputes/:id/resolve', () => {
       .set('x-admin-api-key', ADMIN_KEY)
       .send({ resolution: 'UPHELD', notes: 'charge was correct' });
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('UPHELD');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe('UPHELD');
   });
 
   it('returns 400 for invalid resolution value', async () => {
@@ -363,6 +378,7 @@ describe('GET /api/billing/disputes/admin/all', () => {
       .get('/api/billing/disputes/admin/all')
       .set('x-admin-api-key', ADMIN_KEY);
     expect(res.status).toBe(200);
-    expect(res.body.total).toBe(2);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.total).toBe(2);
   });
 });

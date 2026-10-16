@@ -19,6 +19,7 @@ jest.mock('better-sqlite3', () => {
 });
 
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { createPluginsRouter } from './plugins.js';
@@ -47,6 +48,13 @@ const validManifest: PluginManifest = {
 function buildApp(repo?: InMemoryPluginRepository) {
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    const uid = req.headers['x-user-id'];
+    if (typeof uid === 'string' && !req.headers.authorization) {
+      req.headers.authorization = `Bearer ${jwt.sign({ userId: uid, sub: uid }, process.env.JWT_SECRET ?? 'test-jwt-secret')}`;
+    }
+    next();
+  });
   app.use('/api/marketplace/plugins', createPluginsRouter({ pluginRepository: repo }));
   app.use(errorHandler);
   return app;
@@ -223,8 +231,11 @@ describe('GET /api/marketplace/plugins', () => {
   it('returns empty list initially', async () => {
     const res = await request(buildApp()).get('/api/marketplace/plugins');
     expect(res.status).toBe(200);
-    expect(res.body.plugins).toHaveLength(0);
-    expect(res.body.total).toBe(0);
+    expect(res.body.success).toBe(true);
+    expect(typeof res.body.requestId).toBe('string');
+    expect(typeof res.body.timestamp).toBe('string');
+    expect(res.body.data.plugins).toHaveLength(0);
+    expect(res.body.data.total).toBe(0);
   });
 
   it('lists registered plugins', async () => {
@@ -232,8 +243,9 @@ describe('GET /api/marketplace/plugins', () => {
     repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo)).get('/api/marketplace/plugins');
     expect(res.status).toBe(200);
-    expect(res.body.total).toBe(1);
-    expect(res.body.plugins[0].manifest.id).toBe(validManifest.id);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.total).toBe(1);
+    expect(res.body.data.plugins[0].manifest.id).toBe(validManifest.id);
   });
 });
 
@@ -259,9 +271,10 @@ describe('POST /api/marketplace/plugins', () => {
       .set('x-user-id', 'user-1')
       .send(validManifest);
     expect(res.status).toBe(201);
-    expect(res.body.manifest.id).toBe(validManifest.id);
-    expect(res.body.owner_id).toBe('user-1');
-    expect(res.body.status).toBe('available');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.manifest.id).toBe(validManifest.id);
+    expect(res.body.data.owner_id).toBe('user-1');
+    expect(res.body.data.status).toBe('available');
   });
 
   it('returns 409 when registering a duplicate plugin', async () => {
@@ -287,7 +300,8 @@ describe('GET /api/marketplace/plugins/:id', () => {
     repo.register(validManifest, 'user-1');
     const res = await request(buildApp(repo)).get(`/api/marketplace/plugins/${validManifest.id}`);
     expect(res.status).toBe(200);
-    expect(res.body.manifest.id).toBe(validManifest.id);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.manifest.id).toBe(validManifest.id);
   });
 });
 
@@ -314,12 +328,13 @@ describe('POST /api/marketplace/plugins/:id/install', () => {
       .post(`/api/marketplace/plugins/${validManifest.id}/install`)
       .set('x-user-id', 'user-1');
     expect(res.status).toBe(200);
-    expect(res.body.plugin.status).toBe('installed');
-    expect(res.body.plugin.installed_by).toBe('user-1');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.plugin.status).toBe('installed');
+    expect(res.body.data.plugin.installed_by).toBe('user-1');
     // before_charge is declared, so hook should be fired
-    expect(res.body.hook).not.toBeNull();
-    expect(res.body.hook.ok).toBe(true);
-    expect(res.body.hook.sandboxed).toBe(true);
+    expect(res.body.data.hook).not.toBeNull();
+    expect(res.body.data.hook.ok).toBe(true);
+    expect(res.body.data.hook.sandboxed).toBe(true);
   });
 
   it('returns 409 when already installed', async () => {
@@ -340,7 +355,8 @@ describe('POST /api/marketplace/plugins/:id/install', () => {
       .post(`/api/marketplace/plugins/${noBeforeCharge.id}/install`)
       .set('x-user-id', 'user-1');
     expect(res.status).toBe(200);
-    expect(res.body.hook).toBeNull();
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.hook).toBeNull();
   });
 });
 
@@ -362,7 +378,8 @@ describe('DELETE /api/marketplace/plugins/:id/install', () => {
       .delete(`/api/marketplace/plugins/${validManifest.id}/install`)
       .set('x-user-id', 'user-1');
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('available');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe('available');
   });
 
   it('returns 400 when plugin is not installed', async () => {

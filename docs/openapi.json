@@ -2781,18 +2781,42 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "plugins",
-                    "total"
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
                   ],
                   "properties": {
-                    "plugins": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/PluginRecord"
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "plugins",
+                        "total"
+                      ],
+                      "properties": {
+                        "plugins": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/PluginRecord"
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
                       }
                     },
-                    "total": {
-                      "type": "integer"
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
                     }
                   }
                 }
@@ -2825,7 +2849,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PluginRecord"
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/PluginRecord"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 }
               }
             }
@@ -2882,7 +2930,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PluginRecord"
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/PluginRecord"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 }
               }
             }
@@ -2970,29 +3042,53 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "plugin"
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
                   ],
                   "properties": {
-                    "plugin": {
-                      "$ref": "#/components/schemas/PluginRecord"
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
                     },
-                    "hook": {
-                      "nullable": true,
+                    "data": {
                       "type": "object",
+                      "required": [
+                        "plugin"
+                      ],
                       "properties": {
-                        "ok": {
-                          "type": "boolean"
+                        "plugin": {
+                          "$ref": "#/components/schemas/PluginRecord"
                         },
                         "hook": {
-                          "type": "string"
-                        },
-                        "pluginId": {
-                          "type": "string"
-                        },
-                        "sandboxed": {
-                          "type": "boolean"
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "hook": {
+                              "type": "string"
+                            },
+                            "pluginId": {
+                              "type": "string"
+                            },
+                            "sandboxed": {
+                              "type": "boolean"
+                            }
+                          }
                         }
                       }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
                     }
                   }
                 }
@@ -3064,7 +3160,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PluginRecord"
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/PluginRecord"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 }
               }
             }
@@ -3131,7 +3251,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Dispute"
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Dispute"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 }
               }
             }
@@ -3167,18 +3311,42 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "disputes",
-                    "total"
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
                   ],
                   "properties": {
-                    "disputes": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Dispute"
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "disputes",
+                        "total"
+                      ],
+                      "properties": {
+                        "disputes": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Dispute"
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
                       }
                     },
-                    "total": {
-                      "type": "integer"
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
                     }
                   }
                 }
@@ -3222,18 +3390,42 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "dispute",
-                    "events"
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
                   ],
                   "properties": {
-                    "dispute": {
-                      "$ref": "#/components/schemas/Dispute"
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
                     },
-                    "events": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/DisputeEvent"
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "dispute",
+                        "events"
+                      ],
+                      "properties": {
+                        "dispute": {
+                          "$ref": "#/components/schemas/Dispute"
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/DisputeEvent"
+                          }
+                        }
                       }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
                     }
                   }
                 }
@@ -3291,7 +3483,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Dispute"
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Dispute"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 }
               }
             }
@@ -3332,18 +3548,42 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "disputes",
-                    "total"
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
                   ],
                   "properties": {
-                    "disputes": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Dispute"
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "disputes",
+                        "total"
+                      ],
+                      "properties": {
+                        "disputes": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Dispute"
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
                       }
                     },
-                    "total": {
-                      "type": "integer"
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
                     }
                   }
                 }

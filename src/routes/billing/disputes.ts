@@ -17,6 +17,7 @@ import { adminAuth } from '../../middleware/adminAuth.js';
 import { bodyValidator } from '../../middleware/validate.js';
 import { logger } from '../../logger.js';
 import { UnauthorizedError } from '../../errors/index.js';
+import { successEnvelope, getRequestId } from '../../lib/envelope.js';
 import {
   openDisputeSchema,
   resolveDisputeSchema,
@@ -48,7 +49,7 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
           usageEventId: input.usage_event_id,
         });
 
-        res.status(201).json(dispute);
+        res.status(201).json(successEnvelope(dispute, getRequestId(req)));
       } catch (err) {
         next(err);
       }
@@ -63,7 +64,7 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
       try {
         const actor = res.locals.authenticatedUser!.id;
         const disputes = svc.listForDeveloper(actor);
-        res.json({ disputes, total: disputes.length });
+        res.json(successEnvelope({ disputes, total: disputes.length }, getRequestId(req)));
       } catch (err) {
         next(err);
       }
@@ -72,10 +73,10 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
 
   // ── GET /admin/all  — admin lists all disputes ───────────────────────────
   // Registered before /:id so 'admin' is not treated as a dispute id
-  router.get('/admin/all', adminAuth, (_req, res, next) => {
+  router.get('/admin/all', adminAuth, (req, res, next) => {
     try {
       const disputes = svc.listAll();
-      res.json({ disputes, total: disputes.length });
+      res.json(successEnvelope({ disputes, total: disputes.length }, getRequestId(req)));
     } catch (err) {
       next(err);
     }
@@ -90,7 +91,7 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
         const actor = res.locals.authenticatedUser!.id;
         const dispute = svc.getDisputeForDeveloper(req.params.id, actor);
         const events = svc.getEvents(dispute.id);
-        res.json({ dispute, events });
+        res.json(successEnvelope({ dispute, events }, getRequestId(req)));
       } catch (err) {
         next(err);
       }
@@ -119,7 +120,7 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
           notes: input.notes,
         });
 
-        res.json(dispute);
+        res.json(successEnvelope(dispute, getRequestId(req)));
       } catch (err) {
         next(err);
       }
