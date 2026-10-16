@@ -283,3 +283,56 @@ test('beginShutdown prevents new ticks from starting', async () => {
     jest.useRealTimers();
   }
 });
+
+test('createPostgresReconciliationStore persists run rows via parameterized INSERT', async () => {
+  const { createPostgresReconciliationStore } = await import('./billingReconciliationJob.js');
+  const queries: Array<{ sql: string; params: unknown[] | undefined }> = [];
+  const db: ReconciliationQueryable = {
+    async query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> {
+      queries.push({ sql, params });
+      return { rows: [] };
+    },
+  };
+
+  const store = createPostgresReconciliationStore(db);
+  const runAt = new Date('2026-03-01T00:00:00.000Z');
+  await store.insertRun({
+    run_at: runAt,
+    developer_id: 'dev-42',
+    usage_total_usdc: 1200n,
+    ledger_total_usdc: 1000n,
+    delta_usdc: 200n,
+    discrepancy_count: 1,
+    status: 'discrepancy',
+  });
+
+  assert.equal(queries.length, 1);
+  assert.match(queries[0]!.sql, /INSERT INTO reconciliation_runs/i);
+  assert.deepEqual(queries[0]!.params, [
+    runAt,
+    'dev-42',
+    '1200',
+    '1000',
+    '200',
+    1,
+    'discrepancy',
+  ]);
+});
+
+test('BillingReconciliationJob stores configured batchSize, gracePeriodMs, and threshold', () => {
+  const db = makeDb([], []);
+  const { store } = makeStore();
+
+  const job = new BillingReconciliationJob(db, store, {
+    batchSize: 250,
+    gracePeriodMs: 120_000,
+    discrepancyThresholdUsdc: 50n,
+  });
+
+  assert.deepEqual(job.getConfig(), {
+    batchSize: 250,
+    gracePeriodMs: 120_000,
+    threshold: 50n,
+  });
+});
+

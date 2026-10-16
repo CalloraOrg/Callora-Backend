@@ -58,29 +58,16 @@ import {
 import { createSloAlertJob } from "./workers/sloAlertJob.js";
 import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
 import { createSettlementReconWorker } from "./workers/settlementRecon.js";
-import { createDeveloperRouter } from './routes/developerRoutes.js';
-import { createGatewayRouter } from './routes/gatewayRoutes.js';
-import { createProxyRouter } from './routes/proxyRoutes.js';
+import {
+  createBillingReconciliationJob,
+  createPostgresReconciliationStore,
+} from "./services/billingReconciliationJob.js";
 import { createRefreshTokenRouter } from './routes/refresh-token.js';
 import { AuthController } from './controllers/authController.js';
 import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
-import { defaultDeveloperRepository } from './repositories/developerRepository.js';
-import { createBillingService } from './services/billingService.js';
-import { createRateLimiter } from './services/rateLimiter.js';
-import { PgUsageEventsRepository } from './repositories/usageEventsRepository.pg.js';
-import { createRevenueLedgerIndexerJob } from './services/revenueLedgerIndexer.js';
-import { RevenueSettlementService } from './services/revenueSettlementService.js';
-import { createSettlementStatusSyncJob } from './services/settlementStatusSyncJob.js';
-import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-import { createIdempotencySweeperJob } from './services/idempotencySweeper.js';
-import { createPostgresUsageStore } from './services/usageStore.js';
-import { createPostgresSettlementStore } from './services/settlementStore.js';
-import { createApiRegistry } from './data/apiRegistry.js';
-import { ApiKey } from './types/gateway.js';
-import { listingsCache } from './lib/listingsCache.js';
-import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
-import { createAnomalyDetectorJob } from './workers/anomalyDetector.js';
+import { createApiKeyRouter } from './routes/apiKeyRoutes.js';
+import { defaultApiRepository } from './repositories/apiRepository.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -209,6 +196,16 @@ if (isDirectExecution) {
     horizonUrl: config.stellar.horizonUrl,
     horizonRequestTimeoutMs: config.settlementSync.timeoutMs,
   });
+
+  const billingReconJob = createBillingReconciliationJob(
+    pool,
+    createPostgresReconciliationStore(pool),
+    {
+      intervalMs: config.billingRecon.intervalMs,
+      batchSize: config.billingRecon.batchSize,
+      gracePeriodMs: config.billingRecon.gracePeriodMs,
+    },
+  );
 
   const idempotencySweeperJob = createIdempotencySweeperJob(pool, {
     intervalMs: config.idempotency.sweeperIntervalMs,
@@ -357,6 +354,11 @@ if (isDirectExecution) {
       beginShutdown: () => settlementReconJob.beginShutdown(),
       awaitIdle: () => settlementReconJob.awaitIdle(),
     },
+    {
+      name: "billing-reconciliation",
+      beginShutdown: () => billingReconJob.beginShutdown(),
+      awaitIdle: () => billingReconJob.awaitIdle(),
+    },
   ];
 
   // Mount the refresh-token router. The drain middleware is applied inside the
@@ -381,6 +383,7 @@ if (isDirectExecution) {
     revenueLedgerIndexerJob.stop();
     settlementStatusSyncJob.stop();
     settlementReconJob.stop();
+    billingReconJob.stop();
     idempotencySweeperJob.stop();
     slowQueryAlerterJob?.stop();
     anomalyDetectorJob?.stop();
@@ -423,6 +426,7 @@ if (isDirectExecution) {
       revenueLedgerIndexerJob.start();
       settlementStatusSyncJob.start();
       settlementReconJob.start();
+      billingReconJob.start();
       idempotencySweeperJob.start();
       slowQueryAlerterJob?.start();
       anomalyDetectorJob?.start();

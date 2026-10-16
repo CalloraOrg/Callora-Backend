@@ -230,6 +230,11 @@ export const config = {
   settlementRecon: {
     intervalMs: env.SETTLEMENT_RECON_INTERVAL_MS,
   },
+  billingRecon: {
+    intervalMs: env.BILLING_RECON_INTERVAL_MS,
+    batchSize: env.BILLING_RECON_BATCH_SIZE,
+    gracePeriodMs: env.BILLING_RECON_GRACE_PERIOD_MS,
+  },
   revenueLedgerIndexer: {
     intervalMs: env.REVENUE_LEDGER_INDEXER_INTERVAL_MS,
     batchSize: env.REVENUE_LEDGER_INDEXER_BATCH_SIZE,

@@ -242,6 +242,21 @@ export const envSchema = z
       .int()
       .positive()
       .default(86_400_000),
+    BILLING_RECON_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(86_400_000),
+    BILLING_RECON_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(500),
+    BILLING_RECON_GRACE_PERIOD_MS: z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .default(300_000),
     REVENUE_LEDGER_INDEXER_INTERVAL_MS: z.coerce
       .number()
       .int()

@@ -24,6 +24,35 @@ export interface ReconciliationStore {
   insertRun(run: ReconciliationRunInput): Promise<void>;
 }
 
+export function createPostgresReconciliationStore(
+  db: ReconciliationQueryable,
+): ReconciliationStore {
+  return {
+    async insertRun(run: ReconciliationRunInput): Promise<void> {
+      await db.query(
+        `INSERT INTO reconciliation_runs (
+           run_at,
+           developer_id,
+           usage_total_usdc,
+           ledger_total_usdc,
+           delta_usdc,
+           discrepancy_count,
+           status
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          run.run_at,
+          run.developer_id,
+          run.usage_total_usdc.toString(),
+          run.ledger_total_usdc.toString(),
+          run.delta_usdc.toString(),
+          run.discrepancy_count,
+          run.status,
+        ],
+      );
+    },
+  };
+}
+
 export interface ReconciliationRunInput {
   run_at: Date;
   developer_id: string;
@@ -61,6 +90,10 @@ export interface ReconciliationRunSummary {
 export interface BillingReconciliationJobOptions {
   /** Amount (in smallest USDC units) above which a delta is an error. Default 0 = any delta. */
   discrepancyThresholdUsdc?: bigint;
+  /** Maximum number of developers/events processed per reconciliation pass. Default 500. */
+  batchSize?: number;
+  /** Grace period (ms) before newly recorded usage events are eligible for reconciliation. Default 300_000. */
+  gracePeriodMs?: number;
   logger?: Pick<typeof logger, 'info' | 'warn' | 'error'>;
 }
 
@@ -70,6 +103,8 @@ export interface BillingReconciliationJobOptions {
 
 export class BillingReconciliationJob {
   private readonly threshold: bigint;
+  private readonly batchSize: number;
+  private readonly gracePeriodMs: number;
   private readonly log: Pick<typeof logger, 'info' | 'warn' | 'error'>;
 
   constructor(
@@ -78,7 +113,17 @@ export class BillingReconciliationJob {
     options: BillingReconciliationJobOptions = {},
   ) {
     this.threshold = options.discrepancyThresholdUsdc ?? 0n;
+    this.batchSize = options.batchSize ?? 500;
+    this.gracePeriodMs = options.gracePeriodMs ?? 300_000;
     this.log = options.logger ?? logger;
+  }
+
+  getConfig(): { batchSize: number; gracePeriodMs: number; threshold: bigint } {
+    return {
+      batchSize: this.batchSize,
+      gracePeriodMs: this.gracePeriodMs,
+      threshold: this.threshold,
+    };
   }
 
   /**
