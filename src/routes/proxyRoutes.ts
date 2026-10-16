@@ -264,6 +264,134 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         });
         res.set('x-request-id', requestId);
 
+        // 8. Keep metering and billing consistent — attach 'finish' and 'close'
+        //    listeners BEFORE streaming or sending the response body so we never
+        //    miss a synchronous completion or record usage on a mid-stream abort.
+        let responseFinished = false;
+        let streamErrored = false;
+
+        if (config.recordableStatuses(upstreamStatus)) {
+          res.once('finish', () => {
+            if (streamErrored) {
+              return;
+            }
+            responseFinished = true;
+
+            void (async () => {
+              const timestamp = new Date().toISOString();
+              let chargeSucceeded = false;
+
+              try {
+                if (endpoint.priceUsdc > 0) {
+                  if (typeof billing.chargeUsage === 'function') {
+                    const chargeResult = await billing.chargeUsage({
+                      requestId,
+                      developerId: keyRecord.userId,
+                      apiKey: apiKeyHeader,
+                      apiId: String(apiEntry.id),
+                      endpointId: endpoint.endpointId,
+                      amountUsdc: endpoint.priceUsdc,
+                      statusCode: upstreamStatus,
+                      timestamp,
+                    });
+
+                    if (!chargeResult.success) {
+                      if (chargeResult.reconciliationRequired) {
+                        console.error(
+                          '[proxy billing reconciliation] Billing anchor failed after usage write phase started',
+                          {
+                            requestId,
+                            apiId: String(apiEntry.id),
+                            endpointId: endpoint.endpointId,
+                            developerId: keyRecord.userId,
+                            error: chargeResult.error,
+                          },
+                        );
+                      }
+                      return;
+                    }
+                    chargeSucceeded = true;
+                  }
+                }
+
+                const recorded = await usageStore.record({
+                  id: randomUUID(), // ID of the usage event itself
+                  requestId,        // Idempotency key — prevents double-counts
+                  apiKey: apiKeyHeader,
+                  apiKeyId: keyRecord.id,
+                  apiId: String(apiEntry.id),
+                  endpointId: endpoint.endpointId,
+                  userId: keyRecord.userId,
+                  amountUsdc: endpoint.priceUsdc,
+                  statusCode: upstreamStatus,
+                  timestamp,
+                });
+
+                if (recorded) {
+                  defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
+                    id: randomUUID(),
+                    requestId,
+                    apiKeyId: keyRecord.id,
+                    apiKeyPrefix: maskApiKey(apiKeyHeader),
+                    apiId: String(apiEntry.id),
+                    endpointId: endpoint.endpointId,
+                    userId: keyRecord.userId,
+                    amountUsdc: endpoint.priceUsdc,
+                    statusCode: upstreamStatus,
+                    timestamp,
+                  });
+                }
+
+                recordEndpointThroughputSaturation({
+                  apiId: String(apiEntry.id),
+                  endpointId: endpoint.endpointId,
+                  endpointPath: endpoint.path,
+                  advertisedLimitPerMinute: Number(keyRecord?.rateLimitPerMinute ?? 0),
+                  observedAt: Date.now(),
+                });
+
+                if (
+                  recorded &&
+                  endpoint.priceUsdc > 0 &&
+                  typeof billing.chargeUsage !== 'function'
+                ) {
+                  billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
+                    console.error('Background billing deduction failed:', err);
+                  });
+                }
+              } catch (err) {
+                recordUsageRecordFailure();
+                if (chargeSucceeded) {
+                  console.error(
+                    '[proxy billing reconciliation] Usage view write threw after successful billing charge',
+                    {
+                      requestId,
+                      apiId: String(apiEntry.id),
+                      endpointId: endpoint.endpointId,
+                      developerId: keyRecord.userId,
+                      error: err instanceof Error ? err.message : String(err),
+                    },
+                  );
+                }
+                logger.error('Background usage recording failed', {
+                  requestId,
+                  apiId: String(apiEntry.id),
+                  error: err,
+                });
+              }
+            })();
+          });
+
+          res.once('close', () => {
+            // 'close' fires after 'finish' on a normal response, or on its own
+            // when the socket is destroyed prematurely.  Only treat it as an
+            // abort when 'finish' has NOT already fired.
+            if (!responseFinished) {
+              recordProxyPrematureAbort();
+            }
+          });
+        }
+
         // Stream body back
         res.status(upstreamStatus);
         if (upstreamRes.body) {
@@ -287,6 +415,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           try {
             await pump();
           } catch (streamErr) {
+            streamErrored = true;
             // Mid-stream failure: headers are already flushed, so the error
             // handler cannot send an envelope. Cancel the upstream body so its
             // socket is freed; errorHandler then destroys the client response
@@ -358,99 +487,6 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           setGatewayUpstreamBreakerState(breakerKey, failedStateValue);
           throw new BadGatewayError('Bad Gateway: upstream unreachable');
         }
-      }
-
-      // 8. Keep metering and billing consistent — but ONLY after the response
-      //    has been fully delivered to the caller.
-      //
-      //    We distinguish two response lifecycle events:
-      //      • 'finish' — Node/Express has flushed all data and ended the
-      //                   response normally.  This is the success path; we
-      //                   record usage here.
-      //      • 'close'  — The underlying socket was torn down.  When this
-      //                   fires WITHOUT a prior 'finish' it means the client
-      //                   disconnected mid-stream (premature abort).  In that
-      //                   case we must NOT record usage because the caller
-      //                   never received the response.
-      //
-      //    Using a one-shot 'finish' listener (registered before we start
-      //    streaming) ensures we capture the event even if the stream
-      //    completes synchronously.  The 'close' listener is a guard that
-      //    cancels the deferred work when the socket drops first.
-      if (config.recordableStatuses(upstreamStatus)) {
-        // Track whether the response finished cleanly before the socket closed.
-        let responseFinished = false;
-
-        res.once('finish', () => {
-          responseFinished = true;
-
-          // Run usage recording in a non-blocking microtask so it does not
-          // delay the event loop that is already handling the next request.
-          setImmediate(() => {
-            void (async () => {
-              try {
-                const recorded = await usageStore.record({
-                  id: randomUUID(), // ID of the usage event itself
-                  requestId,        // Idempotency key — prevents double-counts
-                  apiKeyId: keyRecord.id,
-                  apiId: String(apiEntry.id),
-                  endpointId: endpoint.endpointId,
-                  userId: keyRecord.userId,
-                  amountUsdc: endpoint.priceUsdc,
-                  statusCode: upstreamStatus,
-                  timestamp: new Date().toISOString(),
-                });
-
-                if (recorded) {
-                  defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
-                    id: randomUUID(),
-                    requestId,
-                    apiKeyId: keyRecord.id,
-                    apiKeyPrefix: maskApiKey(apiKeyHeader),
-                    apiId: String(apiEntry.id),
-                    endpointId: endpoint.endpointId,
-                    userId: keyRecord.userId,
-                    amountUsdc: endpoint.priceUsdc,
-                    statusCode: upstreamStatus,
-                    timestamp: new Date().toISOString(),
-                  });
-                }
-
-                recordEndpointThroughputSaturation({
-                  apiId: String(apiEntry.id),
-                  endpointId: endpoint.endpointId,
-                  endpointPath: endpoint.path,
-                  advertisedLimitPerMinute: Number(keyRecord?.rateLimitPerMinute ?? 0),
-                  observedAt: Date.now(),
-                });
-
-                // Only deduct billing if this requestId hasn't been processed
-                // before (idempotency guard inside usageStore.record).
-                if (recorded && endpoint.priceUsdc > 0) {
-                  billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
-                    console.error('Background billing deduction failed:', err);
-                  });
-                }
-              } catch (err) {
-                recordUsageRecordFailure();
-                logger.error('Background usage recording failed', {
-                  requestId,
-                  apiId: String(apiEntry.id),
-                  error: err,
-                });
-              }
-            })();
-          });
-        });
-
-        res.once('close', () => {
-          // 'close' fires after 'finish' on a normal response, or on its own
-          // when the socket is destroyed prematurely.  Only treat it as an
-          // abort when 'finish' has NOT already fired.
-          if (!responseFinished) {
-            recordProxyPrematureAbort();
-          }
-        });
       }
     } catch (error) {
       next(error);

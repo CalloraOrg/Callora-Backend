@@ -117,7 +117,7 @@ beforeEach(async () => {
   billing.clear();
   billing.setBalance(TEST_DEVELOPER_ID, 1000);
   rateLimiter.reset();
-  currentProxyConfig = { timeoutMs: 2000 };
+  currentProxyConfig = { timeoutMs: 2000, allowedHosts: ['localhost', '127.0.0.1'] };
   await startProxy();
 
   setUpstreamHandler((_req, res) => {
@@ -215,7 +215,11 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
   });
 
   it('records usage on 500 if configured in recordableStatuses', async () => {
-    currentProxyConfig = { timeoutMs: 2000, recordableStatuses: () => true };
+    currentProxyConfig = {
+      timeoutMs: 2000,
+      allowedHosts: ['localhost', '127.0.0.1'],
+      recordableStatuses: () => true,
+    };
     await startProxy();
 
     setUpstreamHandler((_req, res) => {
@@ -239,6 +243,61 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
   });
 
+  it('records usage reliably for multi-chunk streamed responses', async () => {
+    setUpstreamHandler((_req, res) => {
+      res.status(200);
+      res.setHeader('Content-Type', 'text/plain');
+      res.write('chunk-1:');
+      setTimeout(() => {
+        res.write('chunk-2:');
+        res.end('chunk-3');
+      }, 15);
+    });
+
+    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toBe('chunk-1:chunk-2:chunk-3');
+
+    await yieldTick();
+
+    const events = usageStore.getEvents(TEST_API_KEY);
+    expect(events).toHaveLength(1);
+    expect(events[0].endpointId).toBe('ep_data');
+    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
+  });
+
+  it('does NOT record usage or deduct billing when upstream stream aborts mid-response', async () => {
+    setUpstreamHandler((_req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'Content-Length': '1000',
+      });
+      res.write('partial-body');
+      setTimeout(() => {
+        res.destroy(new Error('upstream connection reset'));
+      }, 10);
+    });
+
+    try {
+      const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
+        method: 'GET',
+        headers: { 'x-api-key': TEST_API_KEY },
+      });
+      await res.text();
+    } catch {
+      // Expected mid-stream termination
+    }
+
+    await yieldTick();
+
+    expect(usageStore.getEvents()).toHaveLength(0);
+    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(1000);
+  });
+
   it('records neither usage nor deduction when anchored charging fails', async () => {
     billing.failNextUsageCharge('pending billing write failed', true);
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -248,6 +307,8 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
       headers: { 'x-api-key': TEST_API_KEY },
     });
     expect(res.status).toBe(200);
+
+    await yieldTick();
 
     expect(usageStore.getEvents()).toHaveLength(0);
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(1000);
@@ -272,26 +333,30 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
         throw new Error('usage store offline');
       });
 
-    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
-      method: 'GET',
-      headers: { 'x-api-key': TEST_API_KEY },
-    });
-    expect(res.status).toBe(200);
+    try {
+      const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
+        method: 'GET',
+        headers: { 'x-api-key': TEST_API_KEY },
+      });
+      expect(res.status).toBe(200);
 
-    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[proxy billing reconciliation] Usage view write threw after successful billing charge',
-      expect.objectContaining({
-        requestId: expect.any(String),
-        apiId: TEST_API_ID,
-        endpointId: 'ep_data',
-        developerId: TEST_DEVELOPER_ID,
-        error: 'usage store offline',
-      }),
-    );
+      await yieldTick();
 
-    recordSpy.mockRestore();
-    errorSpy.mockRestore();
+      expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[proxy billing reconciliation] Usage view write threw after successful billing charge',
+        expect.objectContaining({
+          requestId: expect.any(String),
+          apiId: TEST_API_ID,
+          endpointId: 'ep_data',
+          developerId: TEST_DEVELOPER_ID,
+          error: 'usage store offline',
+        }),
+      );
+    } finally {
+      recordSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it('increments gateway_usage_record_failures_total when usageStore.record throws', async () => {
@@ -302,18 +367,20 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
         throw new Error('usage store offline');
       });
 
-    const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
-      method: 'GET',
-      headers: { 'x-api-key': TEST_API_KEY },
-    });
-    expect(res.status).toBe(200);
+    try {
+      const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
+        method: 'GET',
+        headers: { 'x-api-key': TEST_API_KEY },
+      });
+      expect(res.status).toBe(200);
 
-    await yieldTick();
+      await yieldTick();
 
-    const after = await getUsageRecordFailuresMetric();
-    expect(after).toBeGreaterThan(before);
-
-    recordSpy.mockRestore();
+      const after = await getUsageRecordFailuresMetric();
+      expect(after).toBeGreaterThan(before);
+    } finally {
+      recordSpy.mockRestore();
+    }
   });
 
   it('exposes gateway_usage_record_failures_total at /api/metrics', async () => {
@@ -365,7 +432,8 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
 
     expect(res.status).toBe(402);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/insufficient balance/i);
+    const errorMsg = typeof body.error === 'string' ? body.error : body.error?.message ?? body.message;
+    expect(errorMsg).toMatch(/insufficient balance/i);
 
     await yieldTick();
 
