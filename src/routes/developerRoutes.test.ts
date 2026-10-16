@@ -2,10 +2,24 @@ import request from 'supertest';
 import express from 'express';
 import { createDeveloperRouter } from './developerRoutes.js';
 import { errorHandler } from '../middleware/errorHandler.js';
+import { UnauthorizedError } from '../errors/index.js';
 import type { Developer } from '../db/schema.js';
 import type { UpdateDeveloperProfileInput, SettlementStore } from '../types/developer.js';
 import type { UsageStore } from '../types/gateway.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
+
+jest.mock('../middleware/requireAuth.js', () => ({
+  requireAuth: (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const userId = req.header('x-user-id')?.trim();
+    if (!userId) {
+      next(new UnauthorizedError());
+      return;
+    }
+    res.locals.authenticatedUser = { id: userId };
+    req.developerId = userId;
+    next();
+  },
+}));
 
 const mockSettlementStore = {
   create: jest.fn(),
@@ -77,7 +91,7 @@ describe('GET /api/developers/revenue', () => {
       .set('x-user-id', 'no-profile-user');
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe('DEVELOPER_NOT_FOUND');
+    expect(res.body.error.code).toBe('DEVELOPER_NOT_FOUND');
   });
 
   it('returns correct revenue summary and clamped limit', async () => {
@@ -137,16 +151,30 @@ describe('GET /api/developers/me', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns the authenticated developer profile and auto-creates on first access', async () => {
+  it('returns 404 DEVELOPER_NOT_FOUND for an unknown user without creating a row', async () => {
+    mockDeveloperRepository.findByUserId.mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .get('/api/developers/me')
+      .set('x-user-id', 'unknown-user');
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('DEVELOPER_NOT_FOUND');
+    expect(mockDeveloperRepository.findByUserId).toHaveBeenCalledWith('unknown-user');
+    expect(mockDeveloperRepository.getOrCreateByUserId).not.toHaveBeenCalled();
+  });
+
+  it('returns the existing authenticated developer profile unchanged without writing', async () => {
     const profile = makeDeveloper({ name: 'Callora Dev', category: 'analytics' });
-    mockDeveloperRepository.getOrCreateByUserId.mockResolvedValue(profile);
+    mockDeveloperRepository.findByUserId.mockResolvedValue(profile);
 
     const res = await request(app)
       .get('/api/developers/me')
       .set('x-user-id', 'dev-1');
 
     expect(res.status).toBe(200);
-    expect(mockDeveloperRepository.getOrCreateByUserId).toHaveBeenCalledWith('dev-1');
+    expect(mockDeveloperRepository.findByUserId).toHaveBeenCalledWith('dev-1');
+    expect(mockDeveloperRepository.getOrCreateByUserId).not.toHaveBeenCalled();
     expect(res.body).toMatchObject({
       id: 1,
       user_id: 'dev-1',
@@ -173,8 +201,8 @@ describe('PATCH /api/developers/me', () => {
       .send({ website: 'not-a-url', category: 'unknown' });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details).toEqual(
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'body.website' }),
         expect.objectContaining({ field: 'body.category' }),
@@ -189,8 +217,8 @@ describe('PATCH /api/developers/me', () => {
       .send({});
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details).toEqual(
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'body', message: 'At least one profile field must be provided' }),
       ]),
@@ -278,7 +306,7 @@ describe('GET /api/developers/exports', () => {
       .set('x-user-id', 'no-profile-user');
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe('DEVELOPER_NOT_FOUND');
+    expect(res.body.error.code).toBe('DEVELOPER_NOT_FOUND');
   });
 
   it('returns 200 with paginated data array containing the expected fields', async () => {

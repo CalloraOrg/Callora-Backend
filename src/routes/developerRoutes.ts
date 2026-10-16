@@ -8,7 +8,7 @@ import {
   SettlementStore,
 } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
-import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '../errors/index.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { UsageEventsRepository } from '../repositories/usageEventsRepository.js';
 import { InMemoryUsageEventsRepository } from '../repositories/usageEventsRepository.js';
@@ -78,7 +78,13 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
         throw new UnauthorizedError();
       }
 
-      const profile = await developerRepository.getOrCreateByUserId(user.id);
+      const profile = await developerRepository.findByUserId(user.id);
+      if (!profile) {
+        throw new NotFoundError(
+          'No developer profile found for this account',
+          'DEVELOPER_NOT_FOUND',
+        );
+      }
       res.json(profile);
     }),
   );
