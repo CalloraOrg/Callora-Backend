@@ -100,7 +100,9 @@ function correlationId(req: Request): string {
 
 export function createTenantsRouter(deps: TenantsRouterDeps = {}): Router {
   const router = Router();
-  const tenantRepository = deps.tenantRepository ?? new InMemoryTenantRepository();
+  const defaultTenantRepository = deps.tenantRepository ?? new InMemoryTenantRepository();
+  const getRepo = (req: Request): TenantRepository =>
+    (req.app?.locals?.tenantRepository as TenantRepository | undefined) ?? defaultTenantRepository;
 
   router.post(
     '/',
@@ -110,7 +112,7 @@ export function createTenantsRouter(deps: TenantsRouterDeps = {}): Router {
       try {
         const actorId = res.locals.authenticatedUser!.id;
         const body = createTenantSchema.parse(req.body);
-        const tenant = await tenantRepository.create(body, actorId);
+        const tenant = await getRepo(req).create(body, actorId);
 
         logger.info('[tenants] tenant created', {
           requestId: requestId(req),
@@ -136,7 +138,7 @@ export function createTenantsRouter(deps: TenantsRouterDeps = {}): Router {
         const actorId = res.locals.authenticatedUser!.id;
         const { tenantId } = tenantParamsSchema.parse(req.params);
         const body = updateTenantSchema.parse(req.body);
-        const tenant = await tenantRepository.update(tenantId, body, actorId);
+        const tenant = await getRepo(req).update(tenantId, body, actorId);
 
         logger.info('[tenants] tenant updated', {
           requestId: requestId(req),
@@ -159,7 +161,7 @@ export function createTenantsRouter(deps: TenantsRouterDeps = {}): Router {
     async (req: Request, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actorId = res.locals.authenticatedUser!.id;
-        const tenants = await tenantRepository.list(actorId);
+        const tenants = await getRepo(req).list(actorId);
 
         logger.info('[tenants] tenants listed', {
           requestId: requestId(req),

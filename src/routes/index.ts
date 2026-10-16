@@ -50,6 +50,8 @@ import { InMemoryUsageStore } from "../services/usageStore.js";
 import { requireAuth, type AuthenticatedLocals } from "../middleware/requireAuth.js";
 import { apiKeyRepository } from "../repositories/apiKeyRepository.js";
 import { adminAuth } from "../middleware/adminAuth.js";
+import { createTenantsRouter, type TenantRepository } from "./tenants.js";
+import { createFeatureFlagsRouter } from "./feature-flags.js";
 
 const openApiPath = path.join(process.cwd(), "docs/openapi.json");
 const openApiSpec = JSON.parse(readFileSync(openApiPath, "utf8"));
@@ -70,6 +72,10 @@ export interface ApiRouterDeps
   healthCheckConfig?: HealthCheckConfig;
   /** Credits repository for the /api/credits hot-path lookup. */
   creditsRepository?: CreditsRepository;
+  /** Optional tenant repository for /api/tenants. */
+  tenantRepository?: TenantRepository;
+  /** Optional feature flags map for /api/feature-flags. */
+  featureFlags?: Record<string, boolean>;
 }
 
 export function createApiRouter(deps: ApiRouterDeps = {}): Router {
@@ -77,6 +83,14 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   router.use("/health", healthRouter);
   router.use("/plans", createPlansRouter());
+  router.use("/tenants", createTenantsRouter({ tenantRepository: deps.tenantRepository }));
+  router.use(
+    "/feature-flags",
+    createFeatureFlagsRouter({
+      rateLimit: deps.restRateLimit,
+      flags: deps.featureFlags,
+    }),
+  );
   // Hot-path credits lookup (idx_credits_lookup_hot) — see migrations/credits_index.sql
   router.use(
     "/credits",

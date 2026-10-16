@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import request from 'supertest';
-import { errorHandler } from '../middleware/errorHandler.js';
-import { requestIdMiddleware } from '../middleware/requestId.js';
+import { createApp } from '../app.js';
 import { logger } from '../logger.js';
-import { createTenantsRouter, type TenantRecord, type TenantRepository } from './tenants.js';
+import { type TenantRecord, type TenantRepository } from './tenants.js';
 import type { CreateTenantInput, UpdateTenantInput } from '../validators/tenants.js';
 
 // ---------------------------------------------------------------------------
@@ -77,11 +77,20 @@ class MockTenantRepository implements TenantRepository {
 }
 
 function buildApp(repository = new MockTenantRepository()) {
+  const realApp = createApp();
+  realApp.locals.tenantRepository = repository;
+
   const app = express();
-  app.use(express.json());
-  app.use(requestIdMiddleware);
-  app.use('/api/tenants', createTenantsRouter({ tenantRepository: repository }));
-  app.use(errorHandler);
+  app.use((req, _res, next) => {
+    const userId = req.header('x-user-id');
+    if (userId && !req.header('authorization')) {
+      const secret = process.env.JWT_SECRET ?? 'dev_jwt_secret_minimum_32_characters_long';
+      const token = jwt.sign({ userId, sub: userId }, secret, { algorithm: 'HS256' });
+      req.headers.authorization = `Bearer ${token}`;
+    }
+    next();
+  });
+  app.use(realApp);
   return { app, repository };
 }
 
@@ -468,3 +477,33 @@ describe('GET /api/tenants — list integration', () => {
     expect(res.body.error.code).toBe('UNAUTHORIZED');
   });
 });
+
+describe('GET /api/feature-flags — registered in createApp()', () => {
+  it('returns 200 success envelope with feature flags and ETag support', async () => {
+    const { app } = buildApp();
+
+    const first = await request(app)
+      .get('/api/feature-flags')
+      .set('x-request-id', 'req-flags-ok');
+
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      success: true,
+      requestId: 'req-flags-ok',
+      data: {
+        flags: expect.objectContaining({
+          'sso-login': true,
+          'dark-mode': true,
+        }),
+      },
+    });
+    expect(first.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+
+    const second = await request(app)
+      .get('/api/feature-flags')
+      .set('If-None-Match', first.headers.etag as string);
+
+    expect(second.status).toBe(304);
+  });
+});
+

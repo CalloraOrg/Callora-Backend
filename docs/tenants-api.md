@@ -122,6 +122,7 @@ curl -i http://localhost:3000/api/tenants \
 
 - Middleware: `src/middleware/etag.ts` — `etagMiddleware` + `generateETag` + `etagMatches`
 - Route wiring: `src/routes/tenants.ts` (`GET /` handler)
+- App router registration: `src/routes/index.ts` (`/api/tenants` and `/api/feature-flags`)
 
 ## Validation Errors
 
