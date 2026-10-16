@@ -416,13 +416,9 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     "/api/admin/usage/by-endpoint",
     createAdminUsageByEndpointRouter({ pool }),
   );
-  app.use("/api/admin", adminRouter);
+  app.use("/api/admin/usage/spike", createSpikeRouter({ pool }));
   app.use("/api/admin/db/explain", createExplainRouter({ pool }));
-  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
-  app.use('/api/admin/usage/by-endpoint', createAdminUsageByEndpointRouter({ pool }));
-  app.use('/api/admin/usage/spike', createSpikeRouter({ pool }));
-  app.use('/api/admin', adminRouter);
-  app.use('/api/admin/db/explain', createExplainRouter({ pool }));
+  app.use("/api/admin", adminRouter);
 
   // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
   app.use("/api/quota/requests", quotaRequestsRouter);

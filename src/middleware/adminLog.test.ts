@@ -53,4 +53,31 @@ describe('Admin Logging Middleware', () => {
       done();
     }, 5);
   });
+
+  it('mounts each /api/admin router only once in createApp in specific-before-generic order (#1239)', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const appSource: string = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/app.ts'),
+      'utf8',
+    );
+
+    const anomaliesMatches = appSource.match(/app\.use\(\s*['"]\/api\/admin\/usage\/anomalies['"]/g) ?? [];
+    const byEndpointMatches = appSource.match(/app\.use\(\s*['"]\/api\/admin\/usage\/by-endpoint['"]/g) ?? [];
+    const spikeMatches = appSource.match(/app\.use\(\s*['"]\/api\/admin\/usage\/spike['"]/g) ?? [];
+    const explainMatches = appSource.match(/app\.use\(\s*['"]\/api\/admin\/db\/explain['"]/g) ?? [];
+    const genericAdminMatches = appSource.match(/app\.use\(\s*['"]\/api\/admin['"]\s*,/g) ?? [];
+
+    expect(anomaliesMatches).toHaveLength(1);
+    expect(byEndpointMatches).toHaveLength(1);
+    expect(spikeMatches).toHaveLength(1);
+    expect(explainMatches).toHaveLength(1);
+    expect(genericAdminMatches).toHaveLength(1);
+
+    const genericAdminIndex = appSource.search(/app\.use\(\s*['"]\/api\/admin['"]\s*,/);
+    expect(appSource.search(/app\.use\(\s*['"]\/api\/admin\/usage\/anomalies['"]/)).toBeLessThan(genericAdminIndex);
+    expect(appSource.search(/app\.use\(\s*['"]\/api\/admin\/usage\/by-endpoint['"]/)).toBeLessThan(genericAdminIndex);
+    expect(appSource.search(/app\.use\(\s*['"]\/api\/admin\/usage\/spike['"]/)).toBeLessThan(genericAdminIndex);
+    expect(appSource.search(/app\.use\(\s*['"]\/api\/admin\/db\/explain['"]/)).toBeLessThan(genericAdminIndex);
+  });
 });
