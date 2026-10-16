@@ -304,6 +304,12 @@ export const config = {
     intervalMs: env.MONTHLY_INVOICE_JOB_INTERVAL_MS,
   },
 
+  quotaNotifier: {
+    enabled: env.QUOTA_NOTIFIER_ENABLED,
+    intervalMs: env.QUOTA_NOTIFIER_INTERVAL_MS,
+    defaultMonthlyLimit: env.QUOTA_DEFAULT_MONTHLY_LIMIT,
+  },
+
   sloAlert: {
     enabled:
       Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,

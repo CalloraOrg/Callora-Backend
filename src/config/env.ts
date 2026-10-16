@@ -461,6 +461,22 @@ export const envSchema = z
       .positive()
       .default(86400000),
 
+    // Quota threshold notifier job (issue #1212)
+    QUOTA_NOTIFIER_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((v) => v === "true"),
+    QUOTA_NOTIFIER_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(60_000),
+    QUOTA_DEFAULT_MONTHLY_LIMIT: z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .default(0),
+
     // ────────────────────────────────────────────────────────────────────────
     // SLO burn-rate alerting (issue #706)
     //

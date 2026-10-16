@@ -58,6 +58,11 @@ import {
 import { createSloAlertJob } from "./workers/sloAlertJob.js";
 import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
 import { createSettlementReconWorker } from "./workers/settlementRecon.js";
+import {
+  createQuotaNotifierJob,
+  PgQuotaNotificationStore,
+  loadDeveloperQuotasFromDb,
+} from "./services/quotaNotifier.js";
 import { createDeveloperRouter } from './routes/developerRoutes.js';
 import { createGatewayRouter } from './routes/gatewayRoutes.js';
 import { createProxyRouter } from './routes/proxyRoutes.js';
@@ -239,6 +244,18 @@ if (isDirectExecution) {
     intervalMs: config.monthlyInvoiceJob.intervalMs,
   });
 
+  const quotaNotificationStore = new PgQuotaNotificationStore(pool);
+  const quotaNotifierJob = config.quotaNotifier.enabled
+    ? createQuotaNotifierJob(usageEventsRepository, quotaNotificationStore, {
+        intervalMs: config.quotaNotifier.intervalMs,
+        getDeveloperQuotas: () =>
+          loadDeveloperQuotasFromDb(
+            pool,
+            config.quotaNotifier.defaultMonthlyLimit,
+          ),
+      })
+    : null;
+
   const sloAlertJob = config.sloAlert.enabled
     ? createSloAlertJob({
         webhookUrl: config.sloAlert.webhookUrl!,
@@ -357,6 +374,15 @@ if (isDirectExecution) {
       beginShutdown: () => settlementReconJob.beginShutdown(),
       awaitIdle: () => settlementReconJob.awaitIdle(),
     },
+    ...(quotaNotifierJob
+      ? [
+          {
+            name: "quota-notifier",
+            beginShutdown: () => quotaNotifierJob.beginShutdown(),
+            awaitIdle: () => quotaNotifierJob.awaitIdle(),
+          },
+        ]
+      : []),
   ];
 
   // Mount the refresh-token router. The drain middleware is applied inside the
@@ -385,6 +411,7 @@ if (isDirectExecution) {
     slowQueryAlerterJob?.stop();
     anomalyDetectorJob?.stop();
     monthlyInvoiceJob.stop();
+    quotaNotifierJob?.stop();
     sloAlertJob?.stop();
     await closeDb();
     await Promise.allSettled([
@@ -427,6 +454,7 @@ if (isDirectExecution) {
       slowQueryAlerterJob?.start();
       anomalyDetectorJob?.start();
       monthlyInvoiceJob.start();
+      quotaNotifierJob?.start();
       sloAlertJob?.start();
 
       const server = app.listen(PORT, () => {

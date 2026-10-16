@@ -54,6 +54,8 @@ export interface QuotaNotifierOptions {
 export interface QuotaNotifierJob {
     start(): void;
     stop(): void;
+    beginShutdown(): void;
+    awaitIdle(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,28 +226,48 @@ export function createQuotaNotifierJob(
 
     let timer: NodeJS.Timeout | null = null;
     let running = false;
+    let shuttingDown = false;
+    let activeTick: Promise<void> | null = null;
 
     const tick = async (): Promise<void> => {
-        if (running) return;
+        if (running || shuttingDown) return;
         running = true;
-        try {
-            await runQuotaCheck(deps);
-        } catch (err) {
-            logger.error('[quotaNotifier] Unexpected error during quota check:', err);
-        } finally {
-            running = false;
-        }
+        const runPromise = (async () => {
+            try {
+                await runQuotaCheck(deps);
+            } catch (err) {
+                logger.error('[quotaNotifier] Unexpected error during quota check:', err);
+            } finally {
+                running = false;
+                activeTick = null;
+            }
+        })();
+        activeTick = runPromise;
+        await runPromise;
+    };
+
+    const stopTimer = (): void => {
+        if (!timer) return;
+        clearInterval(timer);
+        timer = null;
     };
 
     return {
         start() {
-            if (timer) return;
+            if (timer || shuttingDown) return;
             timer = setInterval(() => { void tick(); }, options.intervalMs);
         },
         stop() {
-            if (!timer) return;
-            clearInterval(timer);
-            timer = null;
+            stopTimer();
+        },
+        beginShutdown() {
+            shuttingDown = true;
+            stopTimer();
+        },
+        async awaitIdle() {
+            if (activeTick) {
+                await activeTick;
+            }
         },
     };
 }
@@ -306,3 +328,64 @@ export class PgQuotaNotificationStore implements QuotaNotificationStore {
         );
     }
 }
+
+/**
+ * Loads active developer monthly quotas from PostgreSQL.
+ * Checks `developer_quotas` first, then falls back to `developers.plan_overrides`.
+ */
+export async function loadDeveloperQuotasFromDb(
+    db: QuotaNotificationDb,
+    defaultMonthlyLimit = 0,
+): Promise<DeveloperQuota[]> {
+    try {
+        const res = await db.query<{
+            developer_id?: string;
+            id?: string;
+            monthly_limit?: number | string;
+        }>('SELECT developer_id, monthly_limit FROM developer_quotas WHERE monthly_limit > 0');
+        if (Array.isArray(res.rows) && res.rows.length > 0) {
+            return res.rows
+                .map((row) => ({
+                    developerId: String(row.developer_id ?? row.id ?? ''),
+                    monthlyLimit: Number(row.monthly_limit ?? 0),
+                }))
+                .filter((q) => q.developerId.length > 0 && Number.isFinite(q.monthlyLimit) && q.monthlyLimit > 0);
+        }
+    } catch {
+        // Fallback to developers table with plan_overrides JSON
+    }
+
+    try {
+        const devRes = await db.query<{
+            user_id: string;
+            plan_overrides?: string | Record<string, unknown> | null;
+        }>('SELECT user_id, plan_overrides FROM developers');
+
+        const quotas: DeveloperQuota[] = [];
+        for (const row of devRes.rows ?? []) {
+            if (!row.user_id) continue;
+            let limit = defaultMonthlyLimit;
+            if (row.plan_overrides) {
+                try {
+                    const parsed =
+                        typeof row.plan_overrides === 'string'
+                            ? (JSON.parse(row.plan_overrides) as Record<string, unknown>)
+                            : row.plan_overrides;
+                    const rawLimit = parsed.monthly_call_limit ?? parsed.monthlyCallLimit ?? parsed.monthlyLimit;
+                    if (rawLimit !== undefined && Number.isFinite(Number(rawLimit))) {
+                        limit = Number(rawLimit);
+                    }
+                } catch {
+                    // Ignore malformed plan_overrides JSON
+                }
+            }
+            if (limit > 0) {
+                quotas.push({ developerId: row.user_id, monthlyLimit: limit });
+            }
+        }
+        return quotas;
+    } catch {
+        return [];
+    }
+}
+

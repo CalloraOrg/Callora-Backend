@@ -650,4 +650,98 @@ describe('createQuotaNotifierJob', () => {
 
         expect(getDeveloperQuotas).toHaveBeenCalledTimes(1);
     });
+
+    it('beginShutdown() stops future ticks and awaitIdle() waits for in-flight tick', async () => {
+        let resolveQuotas!: (quotas: DeveloperQuota[]) => void;
+        const getDeveloperQuotas = jest.fn(
+            () =>
+                new Promise<DeveloperQuota[]>((resolve) => {
+                    resolveQuotas = resolve;
+                }),
+        );
+        const store = new InMemoryQuotaNotificationStore();
+
+        const job = createQuotaNotifierJob(makeUsageRepo([]), store, {
+            intervalMs: 1000,
+            getDeveloperQuotas,
+        });
+
+        job.start();
+        jest.advanceTimersByTime(1000);
+        await Promise.resolve();
+
+        expect(getDeveloperQuotas).toHaveBeenCalledTimes(1);
+
+        job.beginShutdown();
+        let idleDone = false;
+        const idlePromise = job.awaitIdle().then(() => {
+            idleDone = true;
+        });
+
+        await Promise.resolve();
+        expect(idleDone).toBe(false);
+
+        resolveQuotas([]);
+        await idlePromise;
+        expect(idleDone).toBe(true);
+
+        // No further ticks after beginShutdown
+        jest.advanceTimersByTime(5000);
+        await Promise.resolve();
+        expect(getDeveloperQuotas).toHaveBeenCalledTimes(1);
+    });
 });
+
+// ---------------------------------------------------------------------------
+// PgQuotaNotificationStore & loadDeveloperQuotasFromDb (Issue #1212)
+// ---------------------------------------------------------------------------
+
+describe('PgQuotaNotificationStore & loadDeveloperQuotasFromDb', () => {
+    it('queries and marks sent notifications in Postgres table', async () => {
+        const { PgQuotaNotificationStore } = await import('./quotaNotifier.js');
+        const rows = new Set<string>();
+        const fakeDb = {
+            query: jest.fn(async (sql: string, params?: unknown[]) => {
+                const [dev, period, threshold] = params ?? [];
+                const key = `${dev}|${period}|${threshold}`;
+                if (sql.includes('SELECT EXISTS')) {
+                    return { rows: [{ exists: rows.has(key) }] };
+                }
+                if (sql.includes('INSERT INTO quota_notifications_sent')) {
+                    rows.add(key);
+                    return { rows: [] };
+                }
+                return { rows: [] };
+            }),
+        };
+
+        const store = new PgQuotaNotificationStore(fakeDb as never);
+        expect(await store.hasBeenSent('dev_pg', '2026-06', 80)).toBe(false);
+        await store.markSent('dev_pg', '2026-06', 80);
+        expect(await store.hasBeenSent('dev_pg', '2026-06', 80)).toBe(true);
+    });
+
+    it('loads developer quotas from developers.plan_overrides fallback', async () => {
+        const { loadDeveloperQuotasFromDb } = await import('./quotaNotifier.js');
+        const fakeDb = {
+            query: jest.fn(async (sql: string) => {
+                if (sql.includes('developer_quotas')) {
+                    throw new Error('relation "developer_quotas" does not exist');
+                }
+                return {
+                    rows: [
+                        { user_id: 'dev_a', plan_overrides: JSON.stringify({ monthly_call_limit: 5000 }) },
+                        { user_id: 'dev_b', plan_overrides: null },
+                    ],
+                };
+            }),
+        };
+
+        const quotas = await loadDeveloperQuotasFromDb(fakeDb as never, 1000);
+        expect(quotas).toEqual([
+            { developerId: 'dev_a', monthlyLimit: 5000 },
+            { developerId: 'dev_b', monthlyLimit: 1000 },
+        ]);
+    });
+});
+
