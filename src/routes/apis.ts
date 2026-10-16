@@ -186,7 +186,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         }
 
         res.set('ETag', etag);
-        res.json(cached);
+        res.json({ ...cached });
         return;
       }
 
@@ -264,7 +264,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
       }
 
       res.set('ETag', etag);
-      res.json(response);
+      res.json({ ...response });
     } catch (error) {
       next(error);
     }
@@ -341,13 +341,14 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
         }
 
         const payload = apiRegistrationSchema.parse(req.body);
+        const status = payload.status ?? "active";
         const api = await apiRepository.createWithEndpoints({
           developer_id: developer.id,
           name: payload.name,
           description: payload.description ?? null,
           base_url: payload.base_url,
           category: payload.category,
-          status: "active",
+          status,
           endpoints: payload.endpoints.map((endpoint) => ({
             path: endpoint.path,
             method: endpoint.method,
@@ -356,6 +357,10 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
           })),
         });
 
+        if (status === "active") {
+          cache.invalidateAll();
+        }
+
         await recordApiAudit(req, "API_CREATE", user.id, {
           apiId: api.id,
           before: null,
@@ -363,7 +368,7 @@ export function createApisRouter(deps: ApisRouterDeps = {}): Router {
             name: payload.name,
             base_url: payload.base_url,
             category: payload.category,
-            status: "active",
+            status,
             endpointCount: payload.endpoints.length,
           },
         });

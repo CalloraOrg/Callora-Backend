@@ -59,6 +59,7 @@ import quotaRequestsRouter from "./routes/quota/requests.js";
 import quotaCountsRouter from "./routes/quotas/counts.js";
 import { createQuotasRouter } from "./routes/quotas.js";
 import { parsePagination, paginatedResponse } from "./lib/pagination.js";
+import { listingsCache } from "./lib/listingsCache.js";
 import {
   InMemoryVaultRepository,
   type VaultRepository,
@@ -181,8 +182,19 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
   const vaultRepository =
     dependencies?.vaultRepository ?? new InMemoryVaultRepository();
-  const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
-  const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
+  const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
+  const developerRepository =
+    dependencies?.developerRepository ?? defaultDeveloperRepository;
+  const lookupDeveloper =
+    dependencies?.findDeveloperByUserId ??
+    (dependencies?.developerRepository
+      ? (userId: string) => developerRepository.findByUserId(userId)
+      : findByUserId);
+  const persistApi =
+    dependencies?.createApiWithEndpoints ??
+    (dependencies?.apiRepository
+      ? (input) => apiRepository.createWithEndpoints(input)
+      : createApi);
   const reportExporterService = new ReportExporterService(
     { getEvents: async () => [] },
     new HmacObjectStorageClient(),
@@ -201,9 +213,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     transactionBuilder,
   );
   const vaultController = new VaultController(vaultRepository);
-  const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
-  const developerRepository =
-    dependencies?.developerRepository ?? defaultDeveloperRepository;
 
   // Production-safe security headers with environment-based configuration
   const isProduction = process.env.NODE_ENV === "production";
@@ -736,13 +745,14 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
           return;
         }
 
+        const status = payload.status ?? "active";
         const api = await persistApi({
           developer_id: developer.id,
           name: payload.name,
           description: payload.description ?? null,
           base_url: payload.base_url,
           category: payload.category,
-          status: "active",
+          status,
           endpoints: payload.endpoints.map((ep) => ({
             path: ep.path,
             method: ep.method,
@@ -750,6 +760,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
             description: ep.description ?? null,
           })),
         });
+
+        if (status === "active") {
+          listingsCache.invalidateAll();
+        }
 
         res.status(201).json(successEnvelope(api, requestId));
       } catch (err) {

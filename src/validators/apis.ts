@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { httpMethodEnum } from "../db/schema.js";
+import { apiStatusEnum, httpMethodEnum } from "../db/schema.js";
 
 const pricePerCallUsdcPattern = /^(0|[1-9]\d*)(\.\d+)?$/;
 
@@ -25,6 +25,11 @@ export const apiRegistrationSchema = z.object({
   description: z.string().trim().min(1).optional(),
   base_url: z.url({ protocol: /^https?$/ }),
   category: z.string().trim().min(1, "Category is required"),
+  status: z
+    .enum(apiStatusEnum, {
+      message: `status must be one of: ${apiStatusEnum.join(", ")}`,
+    })
+    .optional(),
   endpoints: z
     .array(apiEndpointRegistrationSchema)
     .min(1, "At least one endpoint is required"),

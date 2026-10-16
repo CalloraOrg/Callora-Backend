@@ -108,4 +108,49 @@ describe("apiRegistrationSchema", () => {
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(["endpoints"]);
   });
+
+  test("accepts optional status in apiStatusEnum ('draft', 'active', 'paused', 'archived')", () => {
+    for (const status of ["draft", "active", "paused", "archived"] as const) {
+      const result = apiRegistrationSchema.safeParse({
+        name: "Weather API",
+        base_url: "https://api.weather.example.com",
+        category: "weather",
+        status,
+        endpoints: [
+          {
+            path: "/forecast",
+            method: "GET",
+            price_per_call_usdc: "0.01",
+          },
+        ],
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.status).toBe(status);
+      }
+    }
+  });
+
+  test("rejects invalid status and lists allowed values", () => {
+    const result = apiRegistrationSchema.safeParse({
+      name: "Weather API",
+      base_url: "https://api.weather.example.com",
+      category: "weather",
+      status: "invalid_status",
+      endpoints: [
+        {
+          path: "/forecast",
+          method: "GET",
+          price_per_call_usdc: "0.01",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["status"]);
+    expect(result.error?.issues[0]?.message).toContain("active");
+    expect(result.error?.issues[0]?.message).toContain("draft");
+    expect(result.error?.issues[0]?.message).toContain("paused");
+    expect(result.error?.issues[0]?.message).toContain("archived");
+  });
 });

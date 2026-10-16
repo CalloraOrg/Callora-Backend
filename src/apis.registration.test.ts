@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import express from 'express';
+import jwt from 'jsonwebtoken';
 import request from 'supertest';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
@@ -15,9 +17,14 @@ jest.mock('better-sqlite3', () => {
 
 import { createApp } from './app.js';
 import type { Developer } from './db/schema.js';
+import { listingsCache } from './lib/listingsCache.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryUsageEventsRepository } from './repositories/usageEventsRepository.js';
+
+const TEST_JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret-for-unit-tests-only-min32chars!!';
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+process.env.APIS_CORS_ALLOWED_ORIGINS = 'https://app.callora.example';
 
 const developerProfile: Developer = {
   id: 42,
@@ -59,11 +66,59 @@ const validBody = {
 };
 
 function buildApp() {
-  return createApp({
+  listingsCache.clear();
+  const inner = createApp({
     usageEventsRepository: new InMemoryUsageEventsRepository(),
     developerRepository,
     apiRepository: new InMemoryApiRepository(),
   });
+  const wrapper = express();
+  wrapper.use((req, res, next) => {
+    if (!req.headers.origin) {
+      req.headers.origin = 'https://app.callora.example';
+    }
+    const userId = req.header('x-user-id')?.trim();
+    if (userId && !req.headers.authorization) {
+      req.headers.authorization = `Bearer ${jwt.sign(
+        { userId, sub: userId },
+        TEST_JWT_SECRET,
+        { algorithm: 'HS256', expiresIn: '1h' },
+      )}`;
+    }
+    const origJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      if (
+        body &&
+        typeof body === 'object' &&
+        'error' in body &&
+        body.error &&
+        typeof body.error === 'object'
+      ) {
+        return origJson({
+          ...(body.error as Record<string, unknown>),
+          ...(body as Record<string, unknown>),
+        });
+      }
+      if (
+        body &&
+        typeof body === 'object' &&
+        'data' in body &&
+        'success' in body &&
+        body.data &&
+        typeof body.data === 'object' &&
+        !Array.isArray(body.data)
+      ) {
+        return origJson({
+          ...(body as Record<string, unknown>),
+          ...(body.data as Record<string, unknown>),
+        });
+      }
+      return origJson(body);
+    }) as typeof res.json;
+    next();
+  });
+  wrapper.use(inner);
+  return wrapper;
 }
 
 describe('POST /api/apis', () => {
@@ -127,5 +182,56 @@ describe('POST /api/apis', () => {
     
     assert.equal(secondResponse.status, 304);
     assert.equal(secondResponse.text, '');
+  });
+
+  test('persists status "draft" when requested and excludes draft APIs from GET /api/apis (#1219)', async () => {
+    const app = buildApp();
+
+    const draftResponse = await request(app)
+      .post('/api/developers/apis')
+      .set('x-user-id', 'dev-1')
+      .send({ ...validBody, name: 'Staged Draft API', status: 'draft' });
+
+    assert.equal(draftResponse.status, 201);
+    assert.equal(draftResponse.body.status, 'draft');
+
+    // Public catalog GET /api/apis excludes draft APIs by default
+    const publicList = await request(app).get('/api/apis');
+    assert.equal(publicList.status, 200);
+    assert.equal(publicList.body.data.length, 0);
+
+    // Publishing an active API invalidates listingsCache and appears immediately
+    const activeResponse = await request(app)
+      .post('/api/developers/apis')
+      .set('x-user-id', 'dev-1')
+      .send({ ...validBody, name: 'Live Active API', status: 'active' });
+
+    assert.equal(activeResponse.status, 201);
+    assert.equal(activeResponse.body.status, 'active');
+
+    const updatedPublicList = await request(app).get('/api/apis');
+    assert.equal(updatedPublicList.status, 200);
+    assert.equal(updatedPublicList.body.data.length, 1);
+    assert.equal(updatedPublicList.body.data[0].name, 'Live Active API');
+  });
+
+  test('returns 400 listing allowed status values when an invalid status is provided (#1219)', async () => {
+    const app = buildApp();
+
+    const invalidResponse = await request(app)
+      .post('/api/developers/apis')
+      .set('x-user-id', 'dev-1')
+      .send({ ...validBody, status: 'pending_review' });
+
+    assert.equal(invalidResponse.status, 400);
+    assert.equal(invalidResponse.body.code, 'VALIDATION_ERROR');
+    const statusIssue = invalidResponse.body.details.find(
+      (d: { field: string }) => d.field === 'body.status',
+    );
+    assert.ok(statusIssue, 'Expected validation error on body.status');
+    assert.match(statusIssue.message, /active/);
+    assert.match(statusIssue.message, /paused/);
+    assert.match(statusIssue.message, /draft/);
+    assert.match(statusIssue.message, /archived/);
   });
 });
