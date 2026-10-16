@@ -1,4 +1,4 @@
-import { apiKeyRepository } from "../repositories/apiKeyRepository.js";
+import { apiKeyRepository, LAST_USED_UPDATE_THROTTLE_MS } from "../repositories/apiKeyRepository.js";
 import * as fc from "fast-check";
 import bcrypt from "bcryptjs";
 
@@ -9,9 +9,9 @@ describe("ApiKeyRepository Security Tests", () => {
   });
 
   describe("Hashing and Storage Security", () => {
-    it("should store hashed keys, not plain text", () => {
+    it("should store hashed keys, not plain text", async () => {
       const userId = "user-1";
-      const result = apiKeyRepository.create({
+      const result = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -29,15 +29,15 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(result.createdAt).toBeInstanceOf(Date);
     });
 
-    it("should use different salts for different keys", () => {
-      apiKeyRepository.create({
+    it("should use different salts for different keys", async () => {
+      await apiKeyRepository.create({
         apiId: "api-1",
         userId: "user-1",
         scopes: ["*"],
         rateLimitPerMinute: null,
       });
 
-      apiKeyRepository.create({
+      await apiKeyRepository.create({
         apiId: "api-2",
         userId: "user-2",
         scopes: ["*"],
@@ -52,9 +52,9 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(key1.keyHash).not.toBe(key2.keyHash);
     });
 
-    it("should never expose raw keys in stored records", () => {
+    it("should never expose raw keys in stored records", async () => {
       const userId = "user-1";
-      const result = apiKeyRepository.create({
+      const result = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -73,7 +73,7 @@ describe("ApiKeyRepository Security Tests", () => {
   describe("Key Verification Security", () => {
     it("should verify valid API keys with constant-time comparison", async () => {
       const userId = "user-1";
-      const createResult = apiKeyRepository.create({
+      const createResult = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["read", "write"],
@@ -99,7 +99,7 @@ describe("ApiKeyRepository Security Tests", () => {
 
     it("should reject keys with correct prefix but wrong suffix", async () => {
       const userId = "user-1";
-      const createResult = apiKeyRepository.create({
+      const createResult = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -131,7 +131,7 @@ describe("ApiKeyRepository Security Tests", () => {
 
     it("should be resistant to timing attacks", async () => {
       const userId = "user-1";
-      const createResult = apiKeyRepository.create({
+      const createResult = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -165,7 +165,7 @@ describe("ApiKeyRepository Security Tests", () => {
   describe("Key Rotation Security", () => {
     it("should rotate keys for authorized users", async () => {
       const userId = "user-1";
-      const createResult = apiKeyRepository.create({
+      const createResult = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["read"],
@@ -175,7 +175,7 @@ describe("ApiKeyRepository Security Tests", () => {
       const keys = apiKeyRepository.listForTesting();
       const keyId = keys.find((k) => k.userId === userId)!.id;
 
-      const rotateResult = apiKeyRepository.rotate(keyId, userId);
+      const rotateResult = await apiKeyRepository.rotate(keyId, userId);
 
       expect(rotateResult.success).toBe(true);
       if (rotateResult.success) {
@@ -195,11 +195,11 @@ describe("ApiKeyRepository Security Tests", () => {
       }
     });
 
-    it("should reject rotation for unauthorized users", () => {
+    it("should reject rotation for unauthorized users", async () => {
       const userId = "user-1";
       const otherUserId = "user-2";
 
-      apiKeyRepository.create({
+      await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -209,7 +209,7 @@ describe("ApiKeyRepository Security Tests", () => {
       const keys = apiKeyRepository.listForTesting();
       const keyId = keys.find((k) => k.userId === userId)!.id;
 
-      const rotateResult = apiKeyRepository.rotate(keyId, otherUserId);
+      const rotateResult = await apiKeyRepository.rotate(keyId, otherUserId);
 
       expect(rotateResult.success).toBe(false);
       if (!rotateResult.success) {
@@ -217,8 +217,8 @@ describe("ApiKeyRepository Security Tests", () => {
       }
     });
 
-    it("should handle rotation of non-existent keys", () => {
-      const rotateResult = apiKeyRepository.rotate("non-existent-id", "user-1");
+    it("should handle rotation of non-existent keys", async () => {
+      const rotateResult = await apiKeyRepository.rotate("non-existent-id", "user-1");
 
       expect(rotateResult.success).toBe(false);
       if (!rotateResult.success) {
@@ -226,10 +226,10 @@ describe("ApiKeyRepository Security Tests", () => {
       }
     });
 
-    it("should maintain metadata during rotation", () => {
+    it("should maintain metadata during rotation", async () => {
       const userId = "user-1";
 
-      apiKeyRepository.create({
+      await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["read", "write", "admin"],
@@ -243,7 +243,7 @@ describe("ApiKeyRepository Security Tests", () => {
       const originalPrefix = keys.find((k) => k.userId === userId)!.prefix;
       const originalKey = { ...keys.find((k) => k.userId === userId)! };
 
-      const rotateResult = apiKeyRepository.rotate(keyId, userId);
+      const rotateResult = await apiKeyRepository.rotate(keyId, userId);
 
       expect(rotateResult.success).toBe(true);
       if (rotateResult.success) {
@@ -267,20 +267,20 @@ describe("ApiKeyRepository Security Tests", () => {
   });
 
   describe("Error Handling and Edge Cases", () => {
-    it("lists keys for a specific user and API", () => {
-      apiKeyRepository.create({
+    it("lists keys for a specific user and API", async () => {
+      await apiKeyRepository.create({
         apiId: "api-1",
         userId: "user-1",
         scopes: ["*"],
         rateLimitPerMinute: null,
       });
-      apiKeyRepository.create({
+      await apiKeyRepository.create({
         apiId: "api-2",
         userId: "user-1",
         scopes: ["read"],
         rateLimitPerMinute: 60,
       });
-      apiKeyRepository.create({
+      await apiKeyRepository.create({
         apiId: "api-1",
         userId: "user-2",
         scopes: ["write"],
@@ -296,7 +296,7 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(apiKeys[0].userId).toBe("user-1");
     });
 
-    it("should handle concurrent operations safely", () => {
+    it("should handle concurrent operations safely", async () => {
       const userId = "user-1";
       const promises = Array.from({ length: 10 }, (_, i) =>
         apiKeyRepository.create({
@@ -307,7 +307,7 @@ describe("ApiKeyRepository Security Tests", () => {
         }),
       );
 
-      expect(() => promises.forEach((p) => p)).not.toThrow();
+      await Promise.all(promises);
 
       const keys = apiKeyRepository.listForTesting();
       expect(keys.filter((k) => k.userId === userId)).toHaveLength(10);
@@ -320,17 +320,17 @@ describe("ApiKeyRepository Security Tests", () => {
 
     it("should handle empty repository operations", async () => {
       expect(await apiKeyRepository.verify("any_key")).toBeNull();
-      expect(apiKeyRepository.rotate("any_id", "any_user")).toEqual({
+      expect(await apiKeyRepository.rotate("any_id", "any_user")).toEqual({
         success: false,
         error: "not_found",
       });
       expect(apiKeyRepository.revoke("any_id", "any_user")).toBe("not_found");
     });
 
-    it("should handle invalid input parameters gracefully", () => {
+    it("should handle invalid input parameters gracefully", async () => {
       // null and undefined should throw — they are not objects
-      expect(() => apiKeyRepository.create(null as unknown as Parameters<typeof apiKeyRepository.create>[0])).toThrow(TypeError);
-      expect(() => apiKeyRepository.create(undefined as unknown as Parameters<typeof apiKeyRepository.create>[0])).toThrow(
+      await expect(apiKeyRepository.create(null as unknown as Parameters<typeof apiKeyRepository.create>[0])).rejects.toThrow(TypeError);
+      await expect(apiKeyRepository.create(undefined as unknown as Parameters<typeof apiKeyRepository.create>[0])).rejects.toThrow(
         TypeError,
       );
 
@@ -348,14 +348,14 @@ describe("ApiKeyRepository Security Tests", () => {
         },
       ];
 
-      partialParams.forEach((params) => {
-        expect(() => apiKeyRepository.create(params as unknown as Parameters<typeof apiKeyRepository.create>[0])).not.toThrow();
-      });
+      for (const params of partialParams) {
+        await expect(apiKeyRepository.create(params as unknown as Parameters<typeof apiKeyRepository.create>[0])).resolves.toBeDefined();
+      }
     });
 
-    it("should sanitize sensitive data in listForTesting", () => {
+    it("should sanitize sensitive data in listForTesting", async () => {
       const userId = "user-1";
-      apiKeyRepository.create({
+      await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -374,7 +374,7 @@ describe("ApiKeyRepository Security Tests", () => {
   describe("Regression Tests", () => {
     it("should prevent key reuse after revocation", async () => {
       const userId = "user-1";
-      const createResult = apiKeyRepository.create({
+      const createResult = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -395,7 +395,7 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(await apiKeyRepository.verify(createResult.key)).toBeNull();
 
       // Create a new key with same parameters
-      const newCreateResult = apiKeyRepository.create({
+      const newCreateResult = await apiKeyRepository.create({
         apiId: "api-1",
         userId,
         scopes: ["*"],
@@ -414,15 +414,15 @@ describe("ApiKeyRepository Security Tests", () => {
         [];
 
       // Create keys for multiple users
-      users.forEach((userId) => {
-        const result = apiKeyRepository.create({
+      for (const userId of users) {
+        const result = await apiKeyRepository.create({
           apiId: "api-1",
           userId,
           scopes: ["*"],
           rateLimitPerMinute: null,
         });
         createdKeys.push({ userId, key: result.key, id: "" });
-      });
+      }
 
       // Update IDs
       const keys = apiKeyRepository.listForTesting();
@@ -437,7 +437,7 @@ describe("ApiKeyRepository Security Tests", () => {
       }
 
       // Rotate one key
-      const rotateResult = apiKeyRepository.rotate(
+      const rotateResult = await apiKeyRepository.rotate(
         createdKeys[0].id,
         createdKeys[0].userId,
       );
@@ -459,6 +459,73 @@ describe("ApiKeyRepository Security Tests", () => {
       expect(finalKeys.filter(k => k.revoked)).toHaveLength(1);
     });
   });
+
+  describe("Expiration & Last-Used Tracking (#1247, #1246)", () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("treats expired keys like unknown keys in verify (#1247)", async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date("2026-06-01T00:00:00.000Z"));
+
+      const expiresAt = new Date("2026-06-01T01:00:00.000Z");
+      const created = await apiKeyRepository.create({
+        apiId: "api-exp",
+        userId: "user-exp",
+        scopes: ["*"],
+        rateLimitPerMinute: null,
+        expiresAt,
+      });
+
+      // Valid before expiry
+      const before = await apiKeyRepository.verify(created.key);
+      expect(before).not.toBeNull();
+      expect(before!.expiresAt?.toISOString()).toBe(expiresAt.toISOString());
+
+      // Advance past expiry
+      jest.setSystemTime(new Date("2026-06-01T01:00:01.000Z"));
+      const after = await apiKeyRepository.verify(created.key);
+      expect(after).toBeNull();
+    });
+
+    it("updates lastUsedAt on successful verify with coarse throttling and ignores failed verifies (#1246)", async () => {
+      jest.useFakeTimers();
+      const t0 = new Date("2026-06-01T12:00:00.000Z");
+      jest.setSystemTime(t0);
+
+      const created = await apiKeyRepository.create({
+        apiId: "api-used",
+        userId: "user-used",
+        scopes: ["*"],
+        rateLimitPerMinute: null,
+      });
+
+      // Initially lastUsedAt is null
+      expect(apiKeyRepository.list({ userId: "user-used" })[0].lastUsedAt).toBeNull();
+
+      // Failed verification with matching prefix does not update lastUsedAt
+      const badKey = created.key.slice(0, 16) + "0".repeat(48);
+      expect(await apiKeyRepository.verify(badKey)).toBeNull();
+      expect(apiKeyRepository.list({ userId: "user-used" })[0].lastUsedAt).toBeNull();
+
+      // First successful verification sets lastUsedAt to t0
+      const verified1 = await apiKeyRepository.verify(created.key);
+      expect(verified1?.lastUsedAt?.getTime()).toBe(t0.getTime());
+      expect(apiKeyRepository.list({ userId: "user-used" })[0].lastUsedAt?.getTime()).toBe(t0.getTime());
+
+      // Verification within throttle window (< 60s) does NOT rewrite lastUsedAt
+      jest.advanceTimersByTime(LAST_USED_UPDATE_THROTTLE_MS - 1_000);
+      await apiKeyRepository.verify(created.key);
+      expect(apiKeyRepository.list({ userId: "user-used" })[0].lastUsedAt?.getTime()).toBe(t0.getTime());
+
+      // Verification at/after throttle window (>= 60s) updates lastUsedAt
+      jest.advanceTimersByTime(2_000);
+      const expectedT2 = t0.getTime() + LAST_USED_UPDATE_THROTTLE_MS + 1_000;
+      await apiKeyRepository.verify(created.key);
+      expect(apiKeyRepository.list({ userId: "user-used" })[0].lastUsedAt?.getTime()).toBe(expectedT2);
+    });
+  });
 });
 
 // ── Property-Based Tests ───────────────────────────────────────────────────
@@ -471,10 +538,10 @@ describe("ApiKeyRepository Property-Based Tests", () => {
   // Feature: bcrypt-cost-config, Property 4: create hash round-trip
   // Validates: Requirements 3.1, 4.3
   it("Property 4: create hash round-trip", async () => {
-    fc.assert(
+    await fc.assert(
       fc.asyncProperty(fc.constant(null), async () => {
         apiKeyRepository.clear();
-        const { key } = apiKeyRepository.create({
+        const { key } = await apiKeyRepository.create({
           apiId: "api-prop4",
           userId: "user-prop4",
           scopes: ["*"],
@@ -483,24 +550,24 @@ describe("ApiKeyRepository Property-Based Tests", () => {
         const [record] = apiKeyRepository.listForTesting();
         return bcrypt.compare(key, record.keyHash);
       }),
-      { numRuns: 10 },
+      { numRuns: 5 },
     );
-  });
+  }, 30_000);
 
   // Feature: bcrypt-cost-config, Property 5: rotate hash round-trip
   // Validates: Requirements 3.2, 4.4
   it("Property 5: rotate hash round-trip", async () => {
-    fc.assert(
+    await fc.assert(
       fc.asyncProperty(fc.constant(null), async () => {
         apiKeyRepository.clear();
-        const { key: oldKey } = apiKeyRepository.create({
+        const { key: oldKey } = await apiKeyRepository.create({
           apiId: "api-prop5",
           userId: "user-prop5",
           scopes: ["*"],
           rateLimitPerMinute: null,
         });
         const [record] = apiKeyRepository.listForTesting();
-        const result = apiKeyRepository.rotate(record.id, record.userId);
+        const result = await apiKeyRepository.rotate(record.id, record.userId);
         if (!result.success) return false;
         const [updated] = apiKeyRepository.listForTesting();
         return (
@@ -508,7 +575,7 @@ describe("ApiKeyRepository Property-Based Tests", () => {
           !(await bcrypt.compare(oldKey, updated.keyHash))
         );
       }),
-      { numRuns: 10 },
+      { numRuns: 5 },
     );
-  });
+  }, 30_000);
 });

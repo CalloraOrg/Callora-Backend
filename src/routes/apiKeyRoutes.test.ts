@@ -3,10 +3,24 @@ import express from 'express';
 import { createApiKeyRouter } from './apiKeyRoutes.js';
 import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
 import { errorHandler } from '../middleware/errorHandler.js';
+import { UnauthorizedError } from '../errors/index.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { Api, Developer } from '../db/schema.js';
+
+jest.mock('../middleware/requireAuth.js', () => ({
+  requireAuth: (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const userId = req.header('x-user-id')?.trim();
+    if (!userId) {
+      next(new UnauthorizedError());
+      return;
+    }
+    res.locals.authenticatedUser = { id: userId };
+    req.developerId = userId;
+    next();
+  },
+}));
 
 const developerProfile: Developer = {
   id: 11,
@@ -137,6 +151,8 @@ describe('API key lifecycle routes', () => {
       scopes: ['read'],
       rateLimitPerMinute: 120,
       createdAt: expect.any(String),
+      expiresAt: null,
+      lastUsedAt: null,
     }));
 
     const stored = apiKeyRepository.list({ userId: 'dev-1', apiId: '101' });
@@ -155,6 +171,8 @@ describe('API key lifecycle routes', () => {
       prefix: response.body.prefix,
       maskedKey: `${response.body.prefix}****************`,
       revoked: false,
+      expiresAt: null,
+      lastUsedAt: null,
     }));
     expect(listResponse.body.keys[0]).not.toHaveProperty('key');
     expect(listResponse.body.keys[0]).not.toHaveProperty('keyHash');
@@ -162,7 +180,7 @@ describe('API key lifecycle routes', () => {
 
   it('lists keys with masked values and revoked status', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['read', 'write'],
@@ -192,7 +210,7 @@ describe('API key lifecycle routes', () => {
 
   it('revokes an API key and revoked keys are no longer verifiable', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],
@@ -207,7 +225,7 @@ describe('API key lifecycle routes', () => {
 
     const [record] = apiKeyRepository.list({ userId: 'dev-1', apiId: '101' });
     expect(record.revoked).toBe(true);
-    expect(apiKeyRepository.verify(created.key)).toBeNull();
+    expect(await apiKeyRepository.verify(created.key)).toBeNull();
   });
 
   it('returns 403 when attempting to create or list keys for an API the developer does not own', async () => {
@@ -219,14 +237,14 @@ describe('API key lifecycle routes', () => {
       .send({});
 
     expect(createResponse.status).toBe(403);
-    expect(createResponse.body.code).toBe('API_ACCESS_FORBIDDEN');
+    expect(createResponse.body.error.code).toBe('API_ACCESS_FORBIDDEN');
 
     const listResponse = await request(app)
       .get('/api/apis/202/keys')
       .set('x-user-id', 'dev-1');
 
     expect(listResponse.status).toBe(403);
-    expect(listResponse.body.code).toBe('API_ACCESS_FORBIDDEN');
+    expect(listResponse.body.error.code).toBe('API_ACCESS_FORBIDDEN');
   });
 
   it('returns 404 when revoking a missing key', async () => {
@@ -237,7 +255,7 @@ describe('API key lifecycle routes', () => {
       .set('x-user-id', 'dev-1');
 
     expect(response.status).toBe(404);
-    expect(response.body.code).toBe('API_KEY_NOT_FOUND');
+    expect(response.body.error.code).toBe('API_KEY_NOT_FOUND');
   });
 
   it('returns 400 validation details for invalid create payloads', async () => {
@@ -252,8 +270,8 @@ describe('API key lifecycle routes', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.code).toBe('VALIDATION_ERROR');
-    expect(response.body.details).toEqual(expect.arrayContaining([
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    expect(response.body.error.details).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'body.scopes[0]' }),
       expect.objectContaining({ field: 'body.rateLimitPerMinute' }),
     ]));
@@ -264,7 +282,7 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app).get('/api/apis/101/keys');
     expect(response.status).toBe(401);
-    expect(response.body.code).toBe('UNAUTHORIZED');
+    expect(response.body.error.code).toBe('UNAUTHORIZED');
   });
 
   it('adds revoked key to in-memory revocation list', async () => {
@@ -274,7 +292,7 @@ describe('API key lifecycle routes', () => {
     resetTokenRevocationService();
     const tokenRevocation = getTokenRevocationService({ defaultTtlMs: 60000 });
     
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],
@@ -296,5 +314,54 @@ describe('API key lifecycle routes', () => {
     expect(tokenRevocation.isRevoked(keyHash)).toBe(true);
 
     resetTokenRevocationService();
+  });
+
+  it('rejects creating a key with a past expiresAt or exceeding max lifetime with 400 (#1247)', async () => {
+    const app = createTestApp();
+    const pastIso = new Date(Date.now() - 60_000).toISOString();
+
+    const pastRes = await request(app)
+      .post('/api/apis/101/keys')
+      .set('x-user-id', 'dev-1')
+      .send({ expiresAt: pastIso });
+
+    expect(pastRes.status).toBe(400);
+    expect(pastRes.body.error.code).toBe('VALIDATION_ERROR');
+
+    const tooFarIso = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString();
+    const tooFarRes = await request(app)
+      .post('/api/apis/101/keys')
+      .set('x-user-id', 'dev-1')
+      .send({ expiresAt: tooFarIso });
+
+    expect(tooFarRes.status).toBe(400);
+    expect(tooFarRes.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('stores future expiresAt and surfaces expiresAt and lastUsedAt in GET /apis/:apiId/keys (#1247, #1246)', async () => {
+    const app = createTestApp();
+    const futureIso = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const createRes = await request(app)
+      .post('/api/apis/101/keys')
+      .set('x-user-id', 'dev-1')
+      .send({ expiresAt: futureIso });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.expiresAt).toBe(futureIso);
+    expect(createRes.body.lastUsedAt).toBeNull();
+
+    // Verify the key once to populate lastUsedAt
+    const verified = await apiKeyRepository.verify(createRes.body.key);
+    expect(verified).not.toBeNull();
+
+    const listRes = await request(app)
+      .get('/api/apis/101/keys')
+      .set('x-user-id', 'dev-1');
+
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.keys).toHaveLength(1);
+    expect(listRes.body.keys[0].expiresAt).toBe(futureIso);
+    expect(typeof listRes.body.keys[0].lastUsedAt).toBe('string');
   });
 });

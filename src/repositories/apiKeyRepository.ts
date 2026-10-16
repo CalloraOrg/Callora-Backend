@@ -35,15 +35,19 @@ export interface ApiKeyRecord {
   revoked: boolean;
   lastUsedAt?: Date | null;
   revokedAt?: Date | null;
+  expiresAt?: Date | null;
 }
 
 const apiKeys: ApiKeyRecord[] = [];
+
+export const LAST_USED_UPDATE_THROTTLE_MS = 60_000;
 
 export interface ApiKeyCreateResult {
   id: string;
   key: string;
   prefix: string;
   createdAt: Date;
+  expiresAt: Date | null;
 }
 
 function generatePlainKey(): string {
@@ -134,6 +138,20 @@ class LruVerifyCache {
 
 const verifyCache = new LruVerifyCache(VERIFY_CACHE_MAX_ENTRIES, VERIFY_CACHE_TTL_MS);
 
+function isExpired(record: ApiKeyRecord, nowMs = Date.now()): boolean {
+  if (!record.expiresAt) return false;
+  return record.expiresAt.getTime() <= nowMs;
+}
+
+function touchLastUsed(record: ApiKeyRecord, nowMs = Date.now()): void {
+  if (
+    !record.lastUsedAt ||
+    nowMs - record.lastUsedAt.getTime() >= LAST_USED_UPDATE_THROTTLE_MS
+  ) {
+    record.lastUsedAt = new Date(nowMs);
+  }
+}
+
 function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
   return {
     id: record.id,
@@ -146,8 +164,9 @@ function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
     rateLimitPerMinute: record.rateLimitPerMinute,
     createdAt: record.createdAt,
     revoked: record.revoked,
-    lastUsedAt: record.lastUsedAt,
-    revokedAt: record.revokedAt,
+    lastUsedAt: record.lastUsedAt ?? null,
+    revokedAt: record.revokedAt ?? null,
+    expiresAt: record.expiresAt ?? null,
   };
 }
 
@@ -157,11 +176,21 @@ export const apiKeyRepository = {
      userId: string;
      scopes: string[];
      rateLimitPerMinute: number | null;
+     expiresAt?: Date | string | null;
     }): Promise<ApiKeyCreateResult> {
+      if (params === null || params === undefined || typeof params !== 'object') {
+        throw new TypeError('params must be an object');
+      }
       const key = generatePlainKey();
       const prefix = key.slice(0, 16);
       const id = randomBytes(8).toString('hex');
       const createdAt = new Date();
+      const expiresAt =
+        params.expiresAt instanceof Date
+          ? params.expiresAt
+          : typeof params.expiresAt === 'string'
+            ? new Date(params.expiresAt)
+            : null;
       const sha256Hash = sha256Hex(key);
       const keyHash = await toHash(key);
 
@@ -177,10 +206,11 @@ export const apiKeyRepository = {
       createdAt,
       revoked: false,
       lastUsedAt: null,
-      revokedAt: null
+      revokedAt: null,
+      expiresAt,
     });
 
-     return { id, key, prefix, createdAt };
+     return { id, key, prefix, createdAt, expiresAt };
    },
   list(params: { userId: string; apiId?: string }): ApiKeyRecord[] {
     const { userId, apiId } = params;
@@ -262,15 +292,17 @@ export const apiKeyRepository = {
     if (typeof key !== 'string') return null;
 
     const keySha256 = sha256Hex(key);
+    const nowMs = Date.now();
 
     // Fast path: a recently verified key is served from the LRU cache
-    // without touching bcrypt. Revoked keys are evicted on revoke.
+    // without touching bcrypt. Revoked or expired keys are evicted.
     const cached = verifyCache.get(keySha256);
     if (cached) {
-      if (cached.revoked) {
+      if (cached.revoked || isExpired(cached, nowMs)) {
         verifyCache.delete(keySha256);
         return null;
       }
+      touchLastUsed(cached, nowMs);
       return redactRecord(cached);
     }
 
@@ -288,28 +320,29 @@ export const apiKeyRepository = {
     // common case while still falling back to bcrypt for legacy records.
     for (const candidate of candidates) {
       if (constantTimeCompare(candidate.sha256Hash, keySha256)) {
-        if (candidate.revoked) {
-          // A revoked key is not valid — treat it exactly like an unknown key
-          // so callers cannot distinguish "revoked" from "never existed".
+        if (candidate.revoked || isExpired(candidate, nowMs)) {
+          // A revoked or expired key is not valid — treat it exactly like an
+          // unknown key so callers cannot distinguish it from "never existed".
           return null;
         }
+        touchLastUsed(candidate, nowMs);
         verifyCache.set(keySha256, candidate);
         return redactRecord(candidate);
       }
     }
 
     for (const candidate of candidates) {
+      if (candidate.sha256Hash) {
+        continue;
+      }
       if (await verifyHash(key, candidate.keyHash)) {
-        if (candidate.revoked) {
-          // A revoked key is not valid — treat it exactly like an unknown key
-          // so callers cannot distinguish "revoked" from "never existed".
+        if (candidate.revoked || isExpired(candidate, nowMs)) {
           return null;
         }
         // Backfill the sha256 digest for legacy records so future calls can
         // use the constant-time exact-match fast path.
-        if (!candidate.sha256Hash) {
-          candidate.sha256Hash = keySha256;
-        }
+        candidate.sha256Hash = keySha256;
+        touchLastUsed(candidate, nowMs);
         verifyCache.set(keySha256, candidate);
         return redactRecord(candidate);
       }
