@@ -3,7 +3,12 @@ import { WebhookConfig, WebhookPayload } from './webhook.types.js';
 import { WebhookStore } from './webhook.store.js';
 import { logger } from '../logger.js';
 import { getCorrelationId, getRequestId } from '../utils/asyncContext.js';
-import { getEffectiveRetryPolicy, calculateBackoff } from '../services/webhookRetry.js';
+import {
+    getEffectiveRetryPolicy,
+    calculateBackoff,
+    isRetryableWebhookStatus,
+    parseRetryAfterMs,
+} from '../services/webhookRetry.js';
 import { computeJitteredDelay, type RandomSource } from '../lib/retry.js';
 import { validateWebhookUrl, WebhookValidationError } from './webhook.validator.js';
 
@@ -197,6 +202,7 @@ export async function dispatchWebhook(
 
         for (let attempt = 0; attempt < maxRetries; attempt++) {
             attemptsMade = attempt + 1;
+            let retryAfterMs: number | null = null;
             try {
                 const response = await fetch(config.url, {
                     method: 'POST',
@@ -239,7 +245,18 @@ export async function dispatchWebhook(
                 if (response.body) {
                     await consumeCappedResponseBody(response);
                 }
+                const retryAfterHeader = response.headers?.get?.('retry-after') ?? null;
+                retryAfterMs = parseRetryAfterMs(retryAfterHeader);
                 lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
+
+                if (!isRetryableWebhookStatus(response.status)) {
+                    logger.warn(
+                        `[webhook] Permanent non-2xx response (${response.status}) for ${config.url}; not retrying`,
+                        `attempt ${attempt + 1}`
+                    );
+                    break;
+                }
+
                 logger.warn(
                     `[webhook] Non-2xx response (${response.status}) for ${config.url}`,
                     `attempt ${attempt + 1}`
@@ -255,13 +272,16 @@ export async function dispatchWebhook(
             if (attempt < maxRetries - 1) {
                 // Jitter keeps concurrent deliveries from retrying in lockstep.
                 // The exponential value is also the ceiling, so a delivery never
-                // waits longer than its configured backoff.
+                // waits longer than its configured backoff unless Retry-After requests more.
                 const scheduledDelay = calculateBackoff(attempt, baseDelayMs);
-                const delay = computeJitteredDelay(scheduledDelay, {
+                const jitteredDelay = computeJitteredDelay(scheduledDelay, {
                     strategy: 'full',
                     random: jitterRandom,
                     maxDelayMs: scheduledDelay,
                 });
+                const delay = retryAfterMs !== null
+                    ? Math.max(jitteredDelay, retryAfterMs)
+                    : jitteredDelay;
                 logger.info(
                     `[webhook] Retrying in ${delay}ms (scheduled ${scheduledDelay}ms)...`
                 );
@@ -274,7 +294,7 @@ export async function dispatchWebhook(
             lastError instanceof Error ? lastError.message : String(lastError);
 
         logger.error(
-            `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after ${maxRetries} attempts.`,
+            `[webhook] ✗ Failed to deliver ${payload.event} to ${config.url} after ${attemptsMade || maxRetries} attempts.`,
             lastError
         );
 

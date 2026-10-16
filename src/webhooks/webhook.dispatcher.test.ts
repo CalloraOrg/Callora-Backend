@@ -804,5 +804,101 @@ describe('Webhook Dispatcher', () => {
             expect(callerA).not.toEqual(callerB);
         });
     });
+
+    describe('status classification and Retry-After (#1233)', () => {
+        it('does not retry on 410 Gone (or 400/401/404) and records a failed delivery with 1 attempt', async () => {
+            for (const status of [400, 401, 404, 410]) {
+                WebhookStore.clearFailedDeliveries();
+                const fetchMock = jest.fn().mockResolvedValue({
+                    ok: false,
+                    status,
+                    statusText: 'Client Error',
+                    headers: new Headers(),
+                } as unknown as Response);
+                global.fetch = fetchMock as unknown as typeof fetch;
+
+                const promise = dispatchWebhook(config, payload);
+                await flushMicrotasks();
+                await promise;
+
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+                const failures = WebhookStore.getRecentFailures();
+                expect(failures).toHaveLength(1);
+                expect(failures[0].attempts).toBe(1);
+                expect(failures[0].lastError).toContain(`HTTP ${status}`);
+            }
+        });
+
+        it('retries 429 Too Many Requests and 408 Request Timeout responses', async () => {
+            const fetchMock = jest.fn()
+                .mockResolvedValueOnce({
+                    ok: false,
+                    status: 429,
+                    statusText: 'Too Many Requests',
+                    headers: new Headers(),
+                } as unknown as Response)
+                .mockResolvedValueOnce({
+                    ok: false,
+                    status: 408,
+                    statusText: 'Request Timeout',
+                    headers: new Headers(),
+                } as unknown as Response)
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    statusText: 'OK',
+                    headers: new Headers(),
+                } as unknown as Response);
+            global.fetch = fetchMock as unknown as typeof fetch;
+
+            const promise = dispatchWebhook(config, payload);
+            for (let i = 0; i < 4; i++) {
+                await flushMicrotasks();
+                jest.runOnlyPendingTimers();
+            }
+            await promise;
+
+            expect(fetchMock).toHaveBeenCalledTimes(3);
+            expect(WebhookStore.getRecentFailures()).toHaveLength(0);
+        });
+
+        it('waits at least 2s on 503 with Retry-After: 2 before the next attempt', async () => {
+            setWebhookJitterRandom(() => 0); // jitteredDelay = 0 so Retry-After governs the wait
+            const fetchMock = jest.fn()
+                .mockResolvedValueOnce({
+                    ok: false,
+                    status: 503,
+                    statusText: 'Service Unavailable',
+                    headers: new Headers({ 'Retry-After': '2' }),
+                } as unknown as Response)
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    statusText: 'OK',
+                    headers: new Headers(),
+                } as unknown as Response);
+            global.fetch = fetchMock as unknown as typeof fetch;
+
+            const promise = dispatchWebhook(
+                { ...config, retryPolicy: { maxRetries: 3, baseDelayMs: 100 } },
+                payload
+            );
+
+            await flushMicrotasks();
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            // Advancing 1999ms must not trigger the second attempt yet
+            jest.advanceTimersByTime(1999);
+            await flushMicrotasks();
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            // Advancing the remaining 1ms reaches 2000ms and fires attempt 2
+            jest.advanceTimersByTime(1);
+            await flushMicrotasks();
+            await promise;
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        });
+    });
 });
+
 

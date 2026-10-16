@@ -63,3 +63,66 @@ export function getEffectiveRetryPolicy(policy?: RetryPolicy): {
 export function calculateBackoff(attempt: number, baseDelayMs: number): number {
     return baseDelayMs * Math.pow(2, attempt);
 }
+
+/**
+ * Upper bound for Retry-After header delays (60 seconds) so a misconfigured
+ * or hostile webhook receiver cannot stall a dispatcher worker indefinitely.
+ */
+export const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * Classifies whether an HTTP status code from a webhook receiver is transient
+ * and should be retried.
+ *
+ * Retryable:
+ *   - 408 Request Timeout
+ *   - 429 Too Many Requests
+ *   - 5xx Server Errors (500-599)
+ *
+ * Non-retryable (permanent failures):
+ *   - All other 4xx responses (e.g. 400, 401, 403, 404, 410, 422)
+ *   - 2xx / 3xx responses
+ */
+export function isRetryableWebhookStatus(status: number): boolean {
+    if (status === 408 || status === 429) {
+        return true;
+    }
+    return status >= 500 && status <= 599;
+}
+
+/**
+ * Parses an HTTP `Retry-After` header value (delta-seconds or HTTP-date) into
+ * a delay in milliseconds, clamped to `[0, maxDelayMs]`.
+ *
+ * Returns `null` when the header is absent or cannot be parsed.
+ */
+export function parseRetryAfterMs(
+    headerValue: string | null | undefined,
+    nowMs: number = Date.now(),
+    maxDelayMs: number = MAX_RETRY_AFTER_MS
+): number | null {
+    if (!headerValue || typeof headerValue !== 'string') {
+        return null;
+    }
+
+    const trimmed = headerValue.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+        const seconds = Number(trimmed);
+        if (!Number.isFinite(seconds) || seconds < 0) {
+            return null;
+        }
+        return Math.min(Math.ceil(seconds * 1000), maxDelayMs);
+    }
+
+    const parsedDateMs = Date.parse(trimmed);
+    if (!Number.isNaN(parsedDateMs)) {
+        const deltaMs = Math.max(0, parsedDateMs - nowMs);
+        return Math.min(deltaMs, maxDelayMs);
+    }
+
+    return null;
+}
