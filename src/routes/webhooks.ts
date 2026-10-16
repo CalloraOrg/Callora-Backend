@@ -219,9 +219,15 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       throw new AppError('URL validation failed.', 500, 'WEBHOOK_URL_VALIDATION_FAILED');
     }
 
-    const before = WebhookStore.get(developerId) ? sanitizeConfig(WebhookStore.get(developerId) as unknown as Record<string, unknown>) : null;
+    const existingForUrl = req.body?.id
+      ? WebhookStore.get(developerId, String(req.body.id))
+      : WebhookStore.getByUrl(developerId, url);
+    const before = existingForUrl
+      ? sanitizeConfig(existingForUrl as unknown as Record<string, unknown>)
+      : null;
 
-    WebhookStore.register({
+    const registered = WebhookStore.register({
+      id: typeof req.body?.id === 'string' ? req.body.id : undefined,
       developerId,
       url,
       events: events as WebhookEventType[],
@@ -230,11 +236,13 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       createdAt: new Date(),
     });
 
-    const after = sanitizeConfig(WebhookStore.get(developerId) as unknown as Record<string, unknown>);
+    const after = sanitizeConfig(registered as unknown as Record<string, unknown>);
 
     await auditStateChange(req, res, 'WEBHOOK_REGISTERED', before, after);
 
     res.status(201).json({
+      id: registered.id,
+      subscriptionId: registered.id,
       message: 'Webhook registered successfully.',
       developerId,
       url,
@@ -245,7 +253,205 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
   }
 });
 
-// GET /api/webhooks/:developerId — Get webhook config
+function toSafeWebhookConfig(config: Record<string, unknown> & { secret?: unknown; secret_current?: unknown; secret_previous?: unknown }) {
+  const {
+    secret: _s,
+    secret_current: _sc,
+    secret_previous: _sp,
+    ...safeConfig
+  } = config;
+  return safeConfig;
+}
+
+// GET /api/webhooks/:developerId/subscriptions — List all webhook subscriptions for a developer
+router.get('/:developerId/subscriptions', webhookMgmtRateLimit, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { developerId } = req.params;
+    if (!isAuthorizedForDeveloper(res, developerId)) {
+      throw new ForbiddenError(
+        'Cannot view webhook for another developer.',
+        'FORBIDDEN'
+      );
+    }
+
+    const subscriptions = WebhookStore.listByDeveloper(developerId).map((cfg) =>
+      toSafeWebhookConfig(cfg as unknown as Record<string, unknown>),
+    );
+    return res.json({ developerId, subscriptions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/webhooks/:developerId/subscriptions/:id — Get a specific webhook subscription
+router.get('/:developerId/subscriptions/:id', webhookMgmtRateLimit, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { developerId, id } = req.params;
+    if (!isAuthorizedForDeveloper(res, developerId)) {
+      throw new ForbiddenError(
+        'Cannot view webhook for another developer.',
+        'FORBIDDEN'
+      );
+    }
+
+    const subscription = WebhookStore.get(developerId, id);
+    if (!subscription) {
+      throw new NotFoundError(
+        'No webhook subscription found with this id.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    return res.json(toSafeWebhookConfig(subscription as unknown as Record<string, unknown>));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/webhooks/:developerId/subscriptions/:id/rotate-secret — Rotate secret for specific subscription
+router.post('/:developerId/subscriptions/:id/rotate-secret', webhookMgmtRateLimit, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { developerId, id } = req.params;
+    if (!isAuthorizedForDeveloper(res, developerId)) {
+      throw new ForbiddenError(
+        'Cannot rotate secret for another developer.',
+        'FORBIDDEN'
+      );
+    }
+
+    const existing = WebhookStore.get(developerId, id);
+    if (!existing) {
+      throw new NotFoundError(
+        'No webhook subscription found with this id.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const before = sanitizeConfig(existing as unknown as Record<string, unknown>);
+    const newSecret = generateWebhookSecret();
+    const previousExpiresAt = new Date(Date.now() + config.webhooks.secretRotationGraceMs);
+    const rotated = WebhookStore.rotateSecret(developerId, newSecret, previousExpiresAt, id);
+
+    if (!rotated) {
+      throw new NotFoundError(
+        'No webhook subscription found with this id.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const after = sanitizeConfig(rotated as unknown as Record<string, unknown>);
+    const actor = getAuthenticatedActor(res) ?? developerId;
+
+    logger.audit('WEBHOOK_SECRET_ROTATED', actor, {
+      developerId,
+      subscriptionId: id,
+      actor,
+      previousExpiresAt: rotated.previous_expires_at?.toISOString(),
+      hadPreviousSecret: Boolean(existing.secret_current ?? existing.secret),
+    });
+
+    void auditStateChange(req, res, 'WEBHOOK_SECRET_ROTATED', before, after);
+
+    return res.status(200).json({
+      message: 'Webhook secret rotated successfully.',
+      id: rotated.id,
+      developerId,
+      secret: newSecret,
+      previous_expires_at: rotated.previous_expires_at?.toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PATCH /api/webhooks/:developerId/subscriptions/:id/retry-policy — Update retry policy for specific subscription
+router.patch('/:developerId/subscriptions/:id/retry-policy', webhookMgmtRateLimit, express.json(), (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { developerId, id } = req.params;
+    if (!isAuthorizedForDeveloper(res, developerId)) {
+      throw new ForbiddenError(
+        'Cannot update retry policy for another developer.',
+        'FORBIDDEN'
+      );
+    }
+
+    const { retryPolicy } = req.body;
+    const validation = validateRetryPolicy(retryPolicy);
+    if (!validation.valid) {
+      throw new BadRequestError(
+        validation.error!,
+        'INVALID_RETRY_POLICY'
+      );
+    }
+
+    const existing = WebhookStore.get(developerId, id);
+    const before = existing ? { retryPolicy: (existing as unknown as Record<string, unknown>).retryPolicy } : null;
+
+    const updated = WebhookStore.updateRetryPolicy(
+      developerId,
+      retryPolicy as RetryPolicy | undefined,
+      id,
+    );
+
+    if (!updated) {
+      throw new NotFoundError(
+        'No webhook subscription found with this id.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const after = { retryPolicy: updated.retryPolicy };
+    const actor = getAuthenticatedActor(res) ?? developerId;
+
+    logger.audit('WEBHOOK_RETRY_POLICY_UPDATED', actor, {
+      developerId,
+      subscriptionId: id,
+      actor,
+      retryPolicy: updated.retryPolicy,
+    });
+
+    void auditStateChange(req, res, 'WEBHOOK_RETRY_POLICY_UPDATED', before, after);
+
+    return res.status(200).json({
+      message: 'Webhook retry policy updated successfully.',
+      ...toSafeWebhookConfig(updated as unknown as Record<string, unknown>),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /api/webhooks/:developerId/subscriptions/:id — Remove a specific subscription
+router.delete('/:developerId/subscriptions/:id', webhookMgmtRateLimit, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { developerId, id } = req.params;
+    if (!isAuthorizedForDeveloper(res, developerId)) {
+      throw new ForbiddenError(
+        'Cannot delete webhook for another developer.',
+        'FORBIDDEN'
+      );
+    }
+
+    const existing = WebhookStore.get(developerId, id);
+    if (!existing) {
+      throw new NotFoundError(
+        'No webhook subscription found with this id.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const before = sanitizeConfig(existing as unknown as Record<string, unknown>);
+    WebhookStore.delete(developerId, id);
+
+    await auditStateChange(req, res, 'WEBHOOK_DELETED', before, null);
+
+    return res.json({ message: 'Webhook subscription removed.', id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/webhooks/:developerId — Legacy alias for the first webhook subscription
 router.get('/:developerId', webhookMgmtRateLimit, (req: Request, res: Response, next: NextFunction) => {
   try {
     const { developerId } = req.params;
@@ -263,13 +469,7 @@ router.get('/:developerId', webhookMgmtRateLimit, (req: Request, res: Response, 
         'WEBHOOK_NOT_FOUND'
       );
     }
-    const {
-      secret: _s,
-      secret_current: _sc,
-      secret_previous: _sp,
-      ...safeConfig
-    } = config;
-    return res.json(safeConfig);
+    return res.json(toSafeWebhookConfig(config as unknown as Record<string, unknown>));
   } catch (error) {
     next(error);
   }
@@ -401,16 +601,9 @@ router.patch('/:developerId/retry-policy', webhookMgmtRateLimit, express.json(),
 
     void auditStateChange(req, res, 'WEBHOOK_RETRY_POLICY_UPDATED', before, after);
 
-    const {
-      secret: _s,
-      secret_current: _sc,
-      secret_previous: _sp,
-      ...safeConfig
-    } = updated;
-
     return res.status(200).json({
       message: 'Webhook retry policy updated successfully.',
-      ...safeConfig,
+      ...toSafeWebhookConfig(updated as unknown as Record<string, unknown>),
     });
   } catch (error) {
     next(error);
@@ -421,15 +614,21 @@ router.post(
   '/deliver/:developerId',
   captureRawBody,
   (req: Request & { webhookSecrets?: string[] }, res: Response, next) => {
-    const config = WebhookStore.get(req.params.developerId);
-    if (!config) {
+    const subscriptions = WebhookStore.listByDeveloper(req.params.developerId);
+    if (subscriptions.length === 0) {
       next(new NotFoundError(
         'No webhook registered for this developer.',
         'WEBHOOK_NOT_FOUND'
       ));
       return;
     }
-    req.webhookSecrets = WebhookStore.getActiveSecrets(config);
+    const activeSecrets = new Set<string>();
+    for (const sub of subscriptions) {
+      for (const secret of WebhookStore.getActiveSecrets(sub)) {
+        activeSecrets.add(secret);
+      }
+    }
+    req.webhookSecrets = [...activeSecrets];
     next();
   },
   verifyWebhookSignature,

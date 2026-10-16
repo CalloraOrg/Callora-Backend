@@ -1,7 +1,8 @@
+import crypto from 'crypto';
 import { WebhookConfig, WebhookEventType, DeadLetterEntry, type RetryPolicy } from './webhook.types.js';
 import { WebhookNonceStore } from './webhook.nonceStore.js';
 
-const store = new Map<string, WebhookConfig>();
+const store = new Map<string, WebhookConfig[]>();
 const deadLetterStore = new Map<string, DeadLetterEntry>();
 
 /**
@@ -34,36 +35,79 @@ const MAX_FAILED_LOG = 200; // keep 2× the read limit for ring-buffer headroom
 
 function normalizeConfig(config: WebhookConfig): WebhookConfig {
     const secret_current = config.secret_current ?? config.secret;
+    const id = config.id ?? crypto.randomUUID();
 
     return {
         ...config,
+        id,
         secret: secret_current,
         secret_current,
     };
 }
 
 export const WebhookStore = {
-    register(config: WebhookConfig): void {
-        store.set(config.developerId, normalizeConfig(config));
+    register(config: WebhookConfig): WebhookConfig {
+        const normalized = normalizeConfig(config);
+        const existing = store.get(config.developerId) ?? [];
+        const matchIndex = existing.findIndex(
+            (item) => (config.id && item.id === config.id) || item.url === config.url,
+        );
+
+        if (matchIndex >= 0) {
+            const preservedId = config.id ?? existing[matchIndex]!.id;
+            const updated = { ...normalized, id: preservedId };
+            const nextList = [...existing];
+            nextList[matchIndex] = updated;
+            store.set(config.developerId, nextList);
+            return updated;
+        }
+
+        store.set(config.developerId, [...existing, normalized]);
+        return normalized;
     },
 
-    get(developerId: string): WebhookConfig | undefined {
-        return store.get(developerId);
+    get(developerId: string, subscriptionId?: string): WebhookConfig | undefined {
+        const list = store.get(developerId);
+        if (!list || list.length === 0) return undefined;
+        if (subscriptionId !== undefined) {
+            return list.find((cfg) => cfg.id === subscriptionId);
+        }
+        return list[0];
+    },
+
+    getByUrl(developerId: string, url: string): WebhookConfig | undefined {
+        const list = store.get(developerId);
+        if (!list) return undefined;
+        return list.find((cfg) => cfg.url === url);
+    },
+
+    listByDeveloper(developerId: string): WebhookConfig[] {
+        return [...(store.get(developerId) ?? [])];
     },
 
     updateRetryPolicy(
         developerId: string,
         retryPolicy: RetryPolicy | undefined,
+        subscriptionId?: string,
     ): WebhookConfig | undefined {
-        const currentConfig = store.get(developerId);
-        if (!currentConfig) return undefined;
+        const list = store.get(developerId);
+        if (!list || list.length === 0) return undefined;
 
+        const targetIndex =
+            subscriptionId !== undefined
+                ? list.findIndex((cfg) => cfg.id === subscriptionId)
+                : 0;
+        if (targetIndex < 0 || !list[targetIndex]) return undefined;
+
+        const currentConfig = list[targetIndex]!;
         const nextConfig = normalizeConfig({
             ...currentConfig,
             retryPolicy,
         });
 
-        store.set(developerId, nextConfig);
+        const nextList = [...list];
+        nextList[targetIndex] = nextConfig;
+        store.set(developerId, nextList);
         return nextConfig;
     },
 
@@ -71,10 +115,18 @@ export const WebhookStore = {
         developerId: string,
         newSecret: string,
         previousExpiresAt: Date,
+        subscriptionId?: string,
     ): WebhookConfig | undefined {
-        const currentConfig = store.get(developerId);
-        if (!currentConfig) return undefined;
+        const list = store.get(developerId);
+        if (!list || list.length === 0) return undefined;
 
+        const targetIndex =
+            subscriptionId !== undefined
+                ? list.findIndex((cfg) => cfg.id === subscriptionId)
+                : 0;
+        if (targetIndex < 0 || !list[targetIndex]) return undefined;
+
+        const currentConfig = list[targetIndex]!;
         const currentSecret = currentConfig.secret_current ?? currentConfig.secret;
         const nextConfig = normalizeConfig({
             ...currentConfig,
@@ -84,7 +136,9 @@ export const WebhookStore = {
             previous_expires_at: currentSecret ? previousExpiresAt : undefined,
         });
 
-        store.set(developerId, nextConfig);
+        const nextList = [...list];
+        nextList[targetIndex] = nextConfig;
+        store.set(developerId, nextList);
         return nextConfig;
     },
 
@@ -129,17 +183,48 @@ export const WebhookStore = {
         return [...secrets];
     },
 
-    delete(developerId: string): void {
-        store.delete(developerId);
-        WebhookNonceStore.purgeScope(developerId);
+    delete(developerId: string, subscriptionId?: string): boolean {
+        if (subscriptionId === undefined) {
+            const existed = store.delete(developerId);
+            WebhookNonceStore.purgeScope(developerId);
+            return existed;
+        }
+
+        const list = store.get(developerId);
+        if (!list || list.length === 0) return false;
+
+        const nextList = list.filter((cfg) => cfg.id !== subscriptionId);
+        if (nextList.length === list.length) {
+            return false;
+        }
+
+        if (nextList.length === 0) {
+            store.delete(developerId);
+            WebhookNonceStore.purgeScope(developerId);
+        } else {
+            store.set(developerId, nextList);
+        }
+        return true;
     },
 
     getByEvent(event: WebhookEventType): WebhookConfig[] {
-        return [...store.values()].filter((cfg) => cfg.events.includes(event));
+        const matching: WebhookConfig[] = [];
+        for (const list of store.values()) {
+            for (const cfg of list) {
+                if (cfg.events.includes(event)) {
+                    matching.push(cfg);
+                }
+            }
+        }
+        return matching;
     },
 
     list(): WebhookConfig[] {
-        return [...store.values()];
+        const all: WebhookConfig[] = [];
+        for (const list of store.values()) {
+            all.push(...list);
+        }
+        return all;
     },
 
     /** Clear all webhook configurations - for testing only */

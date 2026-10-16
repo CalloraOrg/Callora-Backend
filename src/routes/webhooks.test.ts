@@ -420,4 +420,84 @@ describe('Webhook management routes — Authentication & Authorization (Issue #1
       assert.equal(res.body.developerId, 'dev-bob');
     });
   });
+
+  describe('Multiple webhook endpoints per developer (Issue #1241)', () => {
+    it('registers two different URLs with independent secrets/retry policies, supports legacy GET, and deletes one without affecting the other', async () => {
+      const reg1 = await request(app)
+        .post('/api/webhooks')
+        .set(authHeader('dev-multi-route'))
+        .send({
+          developerId: 'dev-multi-route',
+          url: 'https://example.com/finance-hook',
+          events: ['settlement_completed', 'new_api_call'],
+          secret: 'finance-secret-key-at-least-32-chars-long',
+          retryPolicy: { maxRetries: 5, baseDelayMs: 2000 },
+        });
+      assert.equal(reg1.status, 201);
+      const id1 = reg1.body.id;
+      assert.ok(id1);
+
+      const reg2 = await request(app)
+        .post('/api/webhooks')
+        .set(authHeader('dev-multi-route'))
+        .send({
+          developerId: 'dev-multi-route',
+          url: 'https://example.com/monitoring-hook',
+          events: ['new_api_call', 'low_balance_alert'],
+          secret: 'monitoring-secret-key-at-least-32-chars',
+          retryPolicy: { maxRetries: 2, baseDelayMs: 500 },
+        });
+      assert.equal(reg2.status, 201);
+      const id2 = reg2.body.id;
+      assert.ok(id2);
+      assert.notEqual(id1, id2);
+
+      // Both registrations receive matching events via getByEvent
+      const matching = WebhookStore.getByEvent('new_api_call').filter(
+        (c) => c.developerId === 'dev-multi-route',
+      );
+      assert.equal(matching.length, 2);
+
+      // Legacy GET /api/webhooks/:developerId returns the first subscription
+      const legacyGet = await request(app)
+        .get('/api/webhooks/dev-multi-route')
+        .set(authHeader('dev-multi-route'));
+      assert.equal(legacyGet.status, 200);
+      assert.equal(legacyGet.body.id, id1);
+      assert.equal(legacyGet.body.url, 'https://example.com/finance-hook');
+
+      // Subscription-specific GET and PATCH /api/webhooks/:developerId/subscriptions/:id
+      const sub2Get = await request(app)
+        .get(`/api/webhooks/dev-multi-route/subscriptions/${id2}`)
+        .set(authHeader('dev-multi-route'));
+      assert.equal(sub2Get.status, 200);
+      assert.equal(sub2Get.body.url, 'https://example.com/monitoring-hook');
+      assert.deepEqual(sub2Get.body.retryPolicy, { maxRetries: 2, baseDelayMs: 500 });
+
+      const sub2Patch = await request(app)
+        .patch(`/api/webhooks/dev-multi-route/subscriptions/${id2}/retry-policy`)
+        .set(authHeader('dev-multi-route'))
+        .send({ retryPolicy: { maxRetries: 4, baseDelayMs: 1500 } });
+      assert.equal(sub2Patch.status, 200);
+      assert.deepEqual(sub2Patch.body.retryPolicy, { maxRetries: 4, baseDelayMs: 1500 });
+      // First subscription retryPolicy is untouched
+      assert.deepEqual(WebhookStore.get('dev-multi-route', id1)?.retryPolicy, {
+        maxRetries: 5,
+        baseDelayMs: 2000,
+      });
+
+      // Deleting one subscription leaves the other intact
+      const del1 = await request(app)
+        .delete(`/api/webhooks/dev-multi-route/subscriptions/${id1}`)
+        .set(authHeader('dev-multi-route'));
+      assert.equal(del1.status, 200);
+
+      const listRes = await request(app)
+        .get('/api/webhooks/dev-multi-route/subscriptions')
+        .set(authHeader('dev-multi-route'));
+      assert.equal(listRes.status, 200);
+      assert.equal(listRes.body.subscriptions.length, 1);
+      assert.equal(listRes.body.subscriptions[0].id, id2);
+    });
+  });
 });

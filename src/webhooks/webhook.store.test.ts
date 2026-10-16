@@ -78,4 +78,56 @@ describe('WebhookStore rotation + deletion', () => {
       ['s2', 's1'],
     );
   });
+
+  it('supports multiple webhook subscriptions per developer with independent secrets, retry policies, and deletion (#1241)', () => {
+    const first = WebhookStore.register(baseConfig({
+      developerId: 'dev-multi',
+      url: 'https://finance.example.com/webhook',
+      events: ['settlement_completed', 'new_api_call'],
+      secret_current: 'finance-secret',
+      retryPolicy: { maxRetries: 5, baseDelayMs: 2000 },
+    }));
+
+    const second = WebhookStore.register(baseConfig({
+      developerId: 'dev-multi',
+      url: 'https://monitoring.example.com/webhook',
+      events: ['new_api_call', 'low_balance_alert'],
+      secret_current: 'monitoring-secret',
+      retryPolicy: { maxRetries: 2, baseDelayMs: 500 },
+    }));
+
+    assert.ok(first.id);
+    assert.ok(second.id);
+    assert.notEqual(first.id, second.id);
+
+    // Both subscriptions receive matching event 'new_api_call'
+    const matchingNewCall = WebhookStore.getByEvent('new_api_call');
+    assert.equal(matchingNewCall.length, 2);
+    assert.deepEqual(
+      matchingNewCall.map((c) => c.url),
+      ['https://finance.example.com/webhook', 'https://monitoring.example.com/webhook'],
+    );
+
+    // Legacy get(developerId) returns the first subscription
+    const legacyFirst = WebhookStore.get('dev-multi');
+    assert.equal(legacyFirst?.id, first.id);
+    assert.equal(legacyFirst?.url, 'https://finance.example.com/webhook');
+
+    // Each subscription maintains its own secret and retry policy
+    const sub1 = WebhookStore.get('dev-multi', first.id);
+    const sub2 = WebhookStore.get('dev-multi', second.id);
+    assert.equal(sub1?.secret_current, 'finance-secret');
+    assert.deepEqual(sub1?.retryPolicy, { maxRetries: 5, baseDelayMs: 2000 });
+    assert.equal(sub2?.secret_current, 'monitoring-secret');
+    assert.deepEqual(sub2?.retryPolicy, { maxRetries: 2, baseDelayMs: 500 });
+
+    // Deleting one subscription leaves the other intact
+    const deleted = WebhookStore.delete('dev-multi', first.id);
+    assert.equal(deleted, true);
+    assert.equal(WebhookStore.get('dev-multi', first.id), undefined);
+    const remaining = WebhookStore.listByDeveloper('dev-multi');
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0]?.id, second.id);
+    assert.equal(WebhookStore.get('dev-multi')?.id, second.id);
+  });
 });

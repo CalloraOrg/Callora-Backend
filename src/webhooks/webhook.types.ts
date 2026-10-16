@@ -16,6 +16,7 @@ export type WebhookEventType =
 // docs/webhook-retry-override.md).
 
 export interface WebhookConfig {
+    id?: string;
     developerId: string;
     url: string;
     events: string[];
