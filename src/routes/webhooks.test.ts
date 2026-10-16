@@ -184,18 +184,14 @@ describe('Webhook routes — audit persistence', () => {
       assert.equal(details.after, undefined);
     });
 
-    it('persists an audit row with null before when webhook does not exist', async () => {
+    it('returns 404 WEBHOOK_NOT_FOUND and skips audit write when webhook does not exist', async () => {
       const response = await request(app)
         .delete('/api/webhooks/dev-delete-nonexistent')
         .set(authHeader('dev-delete-nonexistent'));
 
-      assert.equal(response.status, 200);
-      assert.equal(mockWriteQuery.mock.calls.length, 1);
-
-      const call = mockWriteQuery.mock.calls[0]!;
-      const params = call[1] as unknown[];
-      assert.equal(params[1], 'WEBHOOK_DELETED');
-      assert.equal(params[2], 'dev-delete-nonexistent');
+      assert.equal(response.status, 404);
+      assert.equal(response.body.error?.code ?? response.body.code, 'WEBHOOK_NOT_FOUND');
+      assert.equal(mockWriteQuery.mock.calls.length, 0);
     });
   });
 
