@@ -134,6 +134,8 @@ class LruVerifyCache {
 
 const verifyCache = new LruVerifyCache(VERIFY_CACHE_MAX_ENTRIES, VERIFY_CACHE_TTL_MS);
 
+import { getTokenRevocationService } from "../services/tokenRevocation.js";
+
 function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
   return {
     id: record.id,
@@ -151,12 +153,15 @@ function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
   };
 }
 
-export const apiKeyRepository = {
-   async create(params: {
-     apiId: string;
-     userId: string;
-     scopes: string[];
-     rateLimitPerMinute: number | null;
+export function createApiKeyRepository(backingRecords: ApiKeyRecord[] = apiKeys) {
+  const localVerifyCache = new LruVerifyCache(VERIFY_CACHE_MAX_ENTRIES, VERIFY_CACHE_TTL_MS);
+
+  return {
+    async create(params: {
+      apiId: string;
+      userId: string;
+      scopes: string[];
+      rateLimitPerMinute: number | null;
     }): Promise<ApiKeyCreateResult> {
       const key = generatePlainKey();
       const prefix = key.slice(0, 16);
@@ -165,189 +170,200 @@ export const apiKeyRepository = {
       const sha256Hash = sha256Hex(key);
       const keyHash = await toHash(key);
 
-    apiKeys.push({
-      id,
-      apiId: params.apiId,
-      userId: params.userId,
-      prefix,
-      keyHash,
-      sha256Hash,
-      scopes: params.scopes,
-      rateLimitPerMinute: params.rateLimitPerMinute,
-      createdAt,
-      revoked: false,
-      lastUsedAt: null,
-      revokedAt: null
-    });
+      backingRecords.push({
+        id,
+        apiId: params.apiId,
+        userId: params.userId,
+        prefix,
+        keyHash,
+        sha256Hash,
+        scopes: params.scopes,
+        rateLimitPerMinute: params.rateLimitPerMinute,
+        createdAt,
+        revoked: false,
+        lastUsedAt: null,
+        revokedAt: null,
+      });
 
-     return { id, key, prefix, createdAt };
-   },
-  list(params: { userId: string; apiId?: string }): ApiKeyRecord[] {
-    const { userId, apiId } = params;
-    return apiKeys
-      .filter((record) =>
-        record.userId === userId &&
-        (apiId === undefined || record.apiId === apiId)
-      )
-      .map((record) => ({ ...record }));
-  },
-  listWithCursor(params: {
-    userId: string;
-    limit: number;
-    cursor?: string;
-  }): { keys: ApiKeyRecord[]; nextCursor: string | null; hasMore: boolean } {
-    const { userId, limit, cursor } = params;
+      return { id, key, prefix, createdAt };
+    },
+    list(params: { userId: string; apiId?: string }): ApiKeyRecord[] {
+      const { userId, apiId } = params;
+      return backingRecords
+        .filter(
+          (record) =>
+            record.userId === userId &&
+            (apiId === undefined || record.apiId === apiId),
+        )
+        .map((record) => ({ ...record }));
+    },
+    listWithCursor(params: {
+      userId: string;
+      limit: number;
+      cursor?: string;
+    }): { keys: ApiKeyRecord[]; nextCursor: string | null; hasMore: boolean } {
+      const { userId, limit, cursor } = params;
 
-    let filteredKeys = apiKeys.filter((record) => record.userId === userId);
+      let filteredKeys = backingRecords.filter((record) => record.userId === userId);
 
-    // Sort descending by createdAt, then descending by id
-    filteredKeys.sort((a, b) => {
-      const timeA = a.createdAt.getTime();
-      const timeB = b.createdAt.getTime();
-      if (timeB !== timeA) {
-        return timeB - timeA;
+      // Sort descending by createdAt, then descending by id
+      filteredKeys.sort((a, b) => {
+        const timeA = a.createdAt.getTime();
+        const timeB = b.createdAt.getTime();
+        if (timeB !== timeA) {
+          return timeB - timeA;
+        }
+        return b.id.localeCompare(a.id);
+      });
+
+      if (cursor) {
+        const decoded = decodeCursor(cursor);
+        if (decoded) {
+          const targetTime = decoded.timestamp.getTime();
+          filteredKeys = filteredKeys.filter((k) => {
+            const kTime = k.createdAt.getTime();
+            if (kTime < targetTime) {
+              return true;
+            }
+            if (kTime === targetTime) {
+              return k.id < decoded.id;
+            }
+            return false;
+          });
+        }
       }
-      return b.id.localeCompare(a.id);
-    });
 
-    if (cursor) {
-      const decoded = decodeCursor(cursor);
-      if (decoded) {
-        const targetTime = decoded.timestamp.getTime();
-        filteredKeys = filteredKeys.filter((k) => {
-          const kTime = k.createdAt.getTime();
-          if (kTime < targetTime) {
-            return true;
-          }
-          if (kTime === targetTime) {
-            return k.id < decoded.id;
-          }
-          return false;
-        });
+      const hasMore = filteredKeys.length > limit;
+      const results = hasMore ? filteredKeys.slice(0, limit) : filteredKeys;
+
+      let nextCursor: string | null = null;
+      if (hasMore && results.length > 0) {
+        const last = results[results.length - 1];
+        nextCursor = encodeCursor(last.createdAt, last.id);
       }
-    }
 
-    const hasMore = filteredKeys.length > limit;
-    const results = hasMore ? filteredKeys.slice(0, limit) : filteredKeys;
+      return {
+        keys: results.map((record) => ({ ...record })),
+        nextCursor,
+        hasMore,
+      };
+    },
+    revoke(id: string, userId: string): 'success' | 'not_found' | 'forbidden' {
+      const key = backingRecords.find((k) => k.id === id);
+      if (!key) return 'not_found';
+      if (key.userId !== userId) return 'forbidden';
 
-    let nextCursor: string | null = null;
-    if (hasMore && results.length > 0) {
-      const last = results[results.length - 1];
-      nextCursor = encodeCursor(last.createdAt, last.id);
-    }
-
-    return {
-      keys: results.map((record) => ({ ...record })),
-      nextCursor,
-      hasMore,
-    };
-  },
-  revoke(id: string, userId: string): 'success' | 'not_found' | 'forbidden' {
-    const key = apiKeys.find(k => k.id === id);
-    if (!key) return 'not_found';
-    if (key.userId !== userId) return 'forbidden';
-
-    key.revoked = true;
-    key.revokedAt = new Date();
-    // Evict any cached verification for this key so a revoked key cannot
-    // continue to authenticate from the cache.
-    verifyCache.deleteByRecordId(id);
-    return 'success';
-  },
-  getSha256Hash(id: string): string | null {
-    const key = apiKeys.find(k => k.id === id);
-    return key?.sha256Hash ?? null;
-  },
-  async verify(key: string): Promise<ApiKeyRecord | null> {
-    if (typeof key !== 'string') return null;
-
-    const keySha256 = sha256Hex(key);
-
-    // Fast path: a recently verified key is served from the LRU cache
-    // without touching bcrypt. Revoked keys are evicted on revoke.
-    const cached = verifyCache.get(keySha256);
-    if (cached) {
-      if (cached.revoked) {
-        verifyCache.delete(keySha256);
-        return null;
+      key.revoked = true;
+      key.revokedAt = new Date();
+      // Evict any cached verification for this key so a revoked key cannot
+      // continue to authenticate from the cache.
+      localVerifyCache.deleteByRecordId(id);
+      verifyCache.deleteByRecordId(id);
+      if (key.sha256Hash) {
+        getTokenRevocationService().revoke(key.sha256Hash);
       }
-      return redactRecord(cached);
-    }
+      return 'success';
+    },
+    isRevokedByHash(sha256Hash: string): boolean {
+      const record = backingRecords.find((k) =>
+        constantTimeCompare(k.sha256Hash, sha256Hash),
+      );
+      return Boolean(record?.revoked);
+    },
+    getSha256Hash(id: string): string | null {
+      const key = backingRecords.find((k) => k.id === id);
+      return key?.sha256Hash ?? null;
+    },
+    async verify(key: string): Promise<ApiKeyRecord | null> {
+      if (typeof key !== 'string') return null;
 
-    // Find potential matches by prefix first for efficiency
-    const prefix = key.slice(0, 16);
-    const candidates = apiKeys.filter((k) =>
-      constantTimeCompare(k.prefix, prefix),
-    );
+      const keySha256 = sha256Hex(key);
 
-    // No records share this prefix — key does not exist at all.
-    if (candidates.length === 0) return null;
-
-    // High-entropy keys are exact-matched by their sha256 digest using a
-    // constant-time comparison. This avoids the costly bcrypt path for the
-    // common case while still falling back to bcrypt for legacy records.
-    for (const candidate of candidates) {
-      if (constantTimeCompare(candidate.sha256Hash, keySha256)) {
-        if (candidate.revoked) {
-          // A revoked key is not valid — treat it exactly like an unknown key
-          // so callers cannot distinguish "revoked" from "never existed".
+      // Fast path: a recently verified key is served from the LRU cache
+      // without touching bcrypt. Revoked keys are evicted on revoke.
+      const cached = localVerifyCache.get(keySha256);
+      if (cached) {
+        if (cached.revoked) {
+          localVerifyCache.delete(keySha256);
           return null;
         }
-        verifyCache.set(keySha256, candidate);
-        return redactRecord(candidate);
+        return redactRecord(cached);
       }
-    }
 
-    for (const candidate of candidates) {
-      if (await verifyHash(key, candidate.keyHash)) {
-        if (candidate.revoked) {
-          // A revoked key is not valid — treat it exactly like an unknown key
-          // so callers cannot distinguish "revoked" from "never existed".
-          return null;
+      // Find potential matches by prefix first for efficiency
+      const prefix = key.slice(0, 16);
+      const candidates = backingRecords.filter((k) =>
+        constantTimeCompare(k.prefix, prefix),
+      );
+
+      // No records share this prefix — key does not exist at all.
+      if (candidates.length === 0) return null;
+
+      // High-entropy keys are exact-matched by their sha256 digest using a
+      // constant-time comparison. This avoids the costly bcrypt path for the
+      // common case while still falling back to bcrypt for legacy records.
+      for (const candidate of candidates) {
+        if (constantTimeCompare(candidate.sha256Hash, keySha256)) {
+          if (candidate.revoked) {
+            return null;
+          }
+          localVerifyCache.set(keySha256, candidate);
+          return redactRecord(candidate);
         }
-        // Backfill the sha256 digest for legacy records so future calls can
-        // use the constant-time exact-match fast path.
-        if (!candidate.sha256Hash) {
-          candidate.sha256Hash = keySha256;
-        }
-        verifyCache.set(keySha256, candidate);
-        return redactRecord(candidate);
       }
-    }
 
-    // Prefix was found in the store but no candidate's hash matched the supplied
-    // key. Return null (same as "key not found") so we never leak whether a
-    // prefix exists via a distinct error path (timing/oracle safety).
-    return null;
-  },
-  async rotate(id: string, userId: string): Promise<{ success: true; newKey: string; prefix: string } | { success: false; error: 'not_found' | 'forbidden' | 'revoked' }> {
-    const index = apiKeys.findIndex(k => k.id === id);
-    if (index === -1) return { success: false, error: 'not_found' };
-    if (apiKeys[index].userId !== userId) return { success: false, error: 'forbidden' };
-    if (apiKeys[index].revoked) return { success: false, error: 'revoked' };
+      for (const candidate of candidates) {
+        if (await verifyHash(key, candidate.keyHash)) {
+          if (candidate.revoked) {
+            return null;
+          }
+          if (!candidate.sha256Hash) {
+            candidate.sha256Hash = keySha256;
+          }
+          localVerifyCache.set(keySha256, candidate);
+          return redactRecord(candidate);
+        }
+      }
 
-    // Generate new key
-    const newKey = generatePlainKey();
-    const newPrefix = newKey.slice(0, 16);
-    const newSha256Hash = sha256Hex(newKey);
-    const newKeyHash = await toHash(newKey);
+      return null;
+    },
+    async rotate(
+      id: string,
+      userId: string,
+    ): Promise<
+      | { success: true; newKey: string; prefix: string }
+      | { success: false; error: 'not_found' | 'forbidden' | 'revoked' }
+    > {
+      const index = backingRecords.findIndex((k) => k.id === id);
+      if (index === -1) return { success: false, error: 'not_found' };
+      if (backingRecords[index].userId !== userId)
+        return { success: false, error: 'forbidden' };
+      if (backingRecords[index].revoked)
+        return { success: false, error: 'revoked' };
 
-    // Update existing record
-    apiKeys[index].keyHash = newKeyHash;
-    apiKeys[index].prefix = newPrefix;
-    apiKeys[index].sha256Hash = newSha256Hash;
+      const newKey = generatePlainKey();
+      const newPrefix = newKey.slice(0, 16);
+      const newSha256Hash = sha256Hex(newKey);
+      const newKeyHash = await toHash(newKey);
 
-    // Invalidate any cached entry for the rotated key.
-    verifyCache.deleteByRecordId(id);
+      backingRecords[index].keyHash = newKeyHash;
+      backingRecords[index].prefix = newPrefix;
+      backingRecords[index].sha256Hash = newSha256Hash;
 
-    return { success: true, newKey, prefix: newPrefix };
-  },
-  listForTesting(): ApiKeyRecord[] {
-    return apiKeys.map(k => ({ ...k }));
-  },
-  // Clear method for testing
-  clear(): void {
-    apiKeys.length = 0;
-    verifyCache.clear();
-  },
-};
+      localVerifyCache.deleteByRecordId(id);
+      verifyCache.deleteByRecordId(id);
+
+      return { success: true, newKey, prefix: newPrefix };
+    },
+    listForTesting(): ApiKeyRecord[] {
+      return backingRecords.map((k) => ({ ...k }));
+    },
+    clear(): void {
+      backingRecords.length = 0;
+      localVerifyCache.clear();
+      verifyCache.clear();
+    },
+  };
+}
+
+export const apiKeyRepository = createApiKeyRepository(apiKeys);

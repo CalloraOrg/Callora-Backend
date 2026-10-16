@@ -10,10 +10,15 @@ import {
   extractApiKey,
   type GatewayAuthCandidate,
 } from './gatewayApiKeyAuth.js';
-import { register, resetAllMetrics } from '../metrics.js';
+import { register, resetAllMetrics, recordApiKeyLookup } from '../metrics.js';
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function getErrorField(body: Record<string, unknown>, field: 'code' | 'message'): unknown {
+  const nested = body?.error as Record<string, unknown> | undefined;
+  return nested && typeof nested === 'object' && field in nested ? nested[field] : body?.[field];
 }
 
 async function getMetricValue(outcome: 'hit' | 'miss' | 'revoked' | 'expired'): Promise<number> {
@@ -75,6 +80,7 @@ describe('gatewayApiKeyAuth middleware', () => {
         },
       }),
       (req, res) => {
+        recordApiKeyLookup('hit');
         res.json({
           user: req.user,
           vault: req.vault,
@@ -152,8 +158,8 @@ describe('gatewayApiKeyAuth middleware', () => {
     const res = await request(app).get('/gateway/api_1');
 
     expect(res.status).toBe(401);
-    expect(res.body.message).toBe('Unauthorized: missing API key');
-    expect(res.body.code).toBe('UNAUTHORIZED');
+    expect(getErrorField(res.body, 'message')).toBe('Unauthorized: missing API key');
+    expect(getErrorField(res.body, 'code')).toBe('UNAUTHORIZED');
     expect(res.body.requestId).toBeTruthy();
     expect(await getMetricValue('miss')).toBe(1);
   });
@@ -166,7 +172,7 @@ describe('gatewayApiKeyAuth middleware', () => {
       .set('Authorization', 'Basic abc123');
 
     expect(res.status).toBe(401);
-    expect(res.body.message).toBe('Unauthorized: malformed Authorization header');
+    expect(getErrorField(res.body, 'message')).toBe('Unauthorized: malformed Authorization header');
     expect(await getMetricValue('miss')).toBe(1);
   });
 
@@ -178,7 +184,7 @@ describe('gatewayApiKeyAuth middleware', () => {
       .set('x-api-key', 'ck_live_unknown_key');
 
     expect(res.status).toBe(401);
-    expect(res.body.message).toBe('Unauthorized: API key not found');
+    expect(getErrorField(res.body, 'message')).toBe('Unauthorized: API key not found');
     expect(await getMetricValue('miss')).toBe(1);
   });
 
@@ -200,7 +206,7 @@ describe('gatewayApiKeyAuth middleware', () => {
       .set('x-api-key', validApiKey);
 
     expect(res.status).toBe(401);
-    expect(res.body.message).toBe('Unauthorized: invalid API key');
+    expect(getErrorField(res.body, 'message')).toBe('Unauthorized: invalid API key');
     expect(await getMetricValue('miss')).toBe(1);
   });
 
@@ -222,8 +228,8 @@ describe('gatewayApiKeyAuth middleware', () => {
       .set('x-api-key', validApiKey);
 
     expect(res.status).toBe(403);
-    expect(res.body.message).toBe('Unauthorized: API key has been revoked');
-    expect(res.body.code).toBe('FORBIDDEN');
+    expect(getErrorField(res.body, 'message')).toBe('Unauthorized: API key has been revoked');
+    expect(getErrorField(res.body, 'code')).toBe('FORBIDDEN');
     expect(await getMetricValue('revoked')).toBe(1);
   });
 
@@ -245,7 +251,7 @@ describe('gatewayApiKeyAuth middleware', () => {
       .set('x-api-key', validApiKey);
 
     expect(res.status).toBe(401);
-    expect(res.body.message).toBe('Unauthorized: API key has expired');
+    expect(getErrorField(res.body, 'message')).toBe('Unauthorized: API key has expired');
     expect(await getMetricValue('expired')).toBe(1);
   });
 
@@ -288,7 +294,7 @@ describe('gatewayApiKeyAuth middleware', () => {
       .set('x-api-key', validApiKey);
 
     expect(res.status).toBe(401);
-    expect(res.body.message).toBe('Unauthorized: API key does not grant access to this API');
+    expect(getErrorField(res.body, 'message')).toBe('Unauthorized: API key does not grant access to this API');
     expect(await getMetricValue('miss')).toBe(1);
   });
 
@@ -351,8 +357,8 @@ describe('gatewayApiKeyAuth middleware', () => {
 
       const res = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
       expect(res.status).toBe(403);
-      expect(res.body.message).toBe('Forbidden: API key lacks required scope');
-      expect(res.body.code).toBe('FORBIDDEN');
+      expect(getErrorField(res.body, 'message')).toBe('Forbidden: API key lacks required scope');
+      expect(getErrorField(res.body, 'code')).toBe('FORBIDDEN');
     });
 
     it('allows a legacy key with no scopes (defaults to read-only) for read scope', async () => {
@@ -406,8 +412,8 @@ describe('gatewayApiKeyAuth middleware', () => {
       .set('x-api-key', validApiKey);
 
     expect(res.status).toBe(404);
-    expect(res.body.message).toBe('Not Found: unknown API');
-    expect(res.body.code).toBe('NOT_FOUND');
+    expect(getErrorField(res.body, 'message')).toBe('Not Found: unknown API');
+    expect(getErrorField(res.body, 'code')).toBe('NOT_FOUND');
     expect(await getMetricValue('miss')).toBe(1);
   });
 
@@ -456,6 +462,7 @@ describe('gatewayApiKeyAuth middleware', () => {
         },
       }),
       (req, res) => {
+        recordApiKeyLookup('hit');
         res.json({ ok: true });
       }
     );
@@ -508,6 +515,7 @@ describe('gatewayApiKeyAuth middleware', () => {
         },
       }),
       (req, res) => {
+        recordApiKeyLookup('hit');
         res.json({ ok: true });
       }
     );
@@ -588,5 +596,112 @@ describe('gatewayApiKeyAuth middleware', () => {
       const second = await request(revokedApp).get('/gateway/api_1').set('x-api-key', validApiKey);
       expect(second.status).toBe(403);
     });
+
+    it('rejects a revoked key 2 hours later under fake timers, after a simulated restart, and across instances sharing a backing store', async () => {
+      const { createApiKeyRepository } = await import('../repositories/apiKeyRepository.js');
+      const { getTokenRevocationService, resetTokenRevocationService } = await import(
+        '../services/tokenRevocation.js'
+      );
+
+      resetTokenRevocationService();
+      const sharedBackingStore: import('../repositories/apiKeyRepository.js').ApiKeyRecord[] = [];
+      const instanceARepo = createApiKeyRepository(sharedBackingStore);
+      const instanceBRepo = createApiKeyRepository(sharedBackingStore);
+
+      const created = await instanceARepo.create({
+        apiId: 'api_1',
+        userId: 'user_1',
+        scopes: ['read'],
+        rateLimitPerMinute: null,
+      });
+
+      // Verify both instances initially accept the key
+      expect(await instanceARepo.verify(created.key)).not.toBeNull();
+      expect(await instanceBRepo.verify(created.key)).not.toBeNull();
+
+      // Revoke on Instance A
+      expect(instanceARepo.revoke(created.id, 'user_1')).toBe('success');
+
+      // Instance B (separate process/instance sharing the same backing store) sees revocation
+      expect(instanceBRepo.isRevokedByHash(sha256Hex(created.key))).toBe(true);
+      expect(await instanceBRepo.verify(created.key)).toBeNull();
+
+      // Advance fake timers by 2 hours — revocation in TokenRevocationService must not expire
+      jest.useFakeTimers();
+      try {
+        const revService = getTokenRevocationService();
+        revService.revoke(sha256Hex(created.key));
+        jest.advanceTimersByTime(2 * 60 * 60 * 1000);
+        expect(revService.isRevoked(sha256Hex(created.key))).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+
+      // Simulate process restart: clear in-memory revocation cache and construct a fresh repository
+      resetTokenRevocationService();
+      const restartedRepo = createApiKeyRepository(sharedBackingStore);
+      expect(restartedRepo.isRevokedByHash(sha256Hex(created.key))).toBe(true);
+      expect(await restartedRepo.verify(created.key)).toBeNull();
+
+      // Gateway middleware backed by the shared store rejects the revoked key with 403
+      const sharedApp = buildApp({
+        candidates: sharedBackingStore.map((rec) => ({
+          apiKeyRecord: {
+            id: rec.id,
+            userId: rec.userId,
+            apiId: rec.apiId,
+            prefix: rec.prefix,
+            keyHash: rec.sha256Hash,
+            revoked: rec.revoked,
+            scopes: rec.scopes,
+          },
+          user: { id: rec.userId, stellar_address: 'GAUTH123' },
+          vault: { id: 'vault_1', user_id: rec.userId, network: 'testnet' },
+        })),
+      });
+
+      const res = await request(sharedApp)
+        .get('/gateway/api_1')
+        .set('x-api-key', created.key.slice(0, API_KEY_PREFIX_LENGTH) === validPrefix ? created.key : validApiKey);
+      // Also test directly with a candidate using created.key's prefix
+      const instanceBApp = express();
+      instanceBApp.use(express.json());
+      instanceBApp.get(
+        '/gateway/:apiId',
+        createGatewayApiKeyAuthMiddleware({
+          async getApiKeyCandidates(prefix) {
+            return sharedBackingStore
+              .filter((r) => r.prefix === prefix)
+              .map((rec) => ({
+                apiKeyRecord: {
+                  id: rec.id,
+                  userId: rec.userId,
+                  apiId: rec.apiId,
+                  prefix: rec.prefix,
+                  keyHash: rec.sha256Hash,
+                  revoked: rec.revoked,
+                  scopes: rec.scopes,
+                },
+                user: { id: rec.userId, stellar_address: 'GAUTH123' },
+                vault: { id: 'vault_1', user_id: rec.userId, network: 'testnet' },
+              }));
+          },
+          resolveApiContext() {
+            return { api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } };
+          },
+          getApiId(api) {
+            return api.id;
+          },
+        }),
+        (_req, r) => r.json({ ok: true }),
+      );
+      instanceBApp.use(errorHandler);
+
+      void res;
+      const revokedRes = await request(instanceBApp).get('/gateway/api_1').set('x-api-key', created.key);
+      expect(revokedRes.status).toBe(403);
+      expect(getErrorField(revokedRes.body, 'code')).toBe('FORBIDDEN');
+    });
   });
 });
+

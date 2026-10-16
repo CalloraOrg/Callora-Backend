@@ -17,7 +17,7 @@ describe('TokenRevocationService', () => {
     service.clear();
   });
 
-  it('uses default TTL when constructed without config', () => {
+  it('persists revocations indefinitely when constructed without config and expiresAt is omitted', () => {
     const defaultService = new TokenRevocationService();
     defaultService.revoke('default_ttl_test_hash');
     assert.equal(defaultService.isRevoked('default_ttl_test_hash'), true);
@@ -25,7 +25,7 @@ describe('TokenRevocationService', () => {
     defaultService.clear();
   });
 
-  it('uses custom TTL when provided via constructor', () => {
+  it('honours explicit positive expiresAt when provided', () => {
     const shortService = new TokenRevocationService(500);
     shortService.revoke('custom_ttl_test_hash', Date.now() + 100);
     assert.equal(shortService.isRevoked('custom_ttl_test_hash'), true);
@@ -33,7 +33,7 @@ describe('TokenRevocationService', () => {
     shortService.clear();
   });
 
-  it('falls back to default TTL when expiresAt is not provided', () => {
+  it('persists indefinitely when expiresAt is not provided', () => {
     const longLivedService = new TokenRevocationService(1000);
     longLivedService.revoke('no_expires_at_hash');
     assert.equal(longLivedService.isRevoked('no_expires_at_hash'), true);
@@ -41,12 +41,10 @@ describe('TokenRevocationService', () => {
     longLivedService.clear();
   });
 
-  it('falls back to default TTL when expiresAt is zero or negative', () => {
+  it('persists indefinitely when expiresAt is zero or negative unless already past', () => {
     const testService = new TokenRevocationService(1000);
     testService.revoke('zero_expires_at_hash', 0);
-    testService.revoke('negative_expires_at_hash', -100);
     assert.equal(testService.isRevoked('zero_expires_at_hash'), true);
-    assert.equal(testService.isRevoked('negative_expires_at_hash'), true);
     testService.stopSweeper();
     testService.clear();
   });
@@ -62,7 +60,29 @@ describe('TokenRevocationService', () => {
       assert.equal(service.isRevoked(tokenHash), true);
     });
 
-    it('returns false after TTL expires', () => {
+    it('keeps a revoked token revoked 2 hours later under fake timers when expiresAt is omitted', () => {
+      jest.useFakeTimers();
+      try {
+        const persistentService = new TokenRevocationService();
+        const tokenHash = 'f'.repeat(64);
+
+        persistentService.revoke(tokenHash);
+        assert.equal(persistentService.isRevoked(tokenHash), true);
+
+        // Advance 2 hours (well past the legacy 1-hour TTL and multiple sweeper intervals)
+        jest.advanceTimersByTime(2 * 60 * 60 * 1000);
+
+        assert.equal(persistentService.isRevoked(tokenHash), true);
+        assert.equal(persistentService.getRevokedCount(), 1);
+
+        persistentService.stopSweeper();
+        persistentService.clear();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('returns false after explicit positive expiresAt elapses', () => {
       const tokenHash = 'b'.repeat(64);
 
       service.revoke(tokenHash, Date.now() + 10);
