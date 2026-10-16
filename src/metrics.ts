@@ -975,3 +975,33 @@ export function setSloAlertActiveBurns(count: number): void {
 export function recordSloRecorderSample(route: string): void {
   sloRecorderSamplesTotal.labels(route).inc();
 }
+
+// ── Usage SSE active connection metrics (#1235) ─────────────────────────────
+
+export const usageSseActiveConnections = new client.Gauge({
+  name: 'usage_sse_active_connections',
+  help: 'Number of currently active usage SSE stream connections',
+});
+
+register.registerMetric(usageSseActiveConnections);
+
+let activeUsageSseConnectionsCount = 0;
+
+export function incrementUsageSseActiveConnections(): void {
+  activeUsageSseConnectionsCount += 1;
+  usageSseActiveConnections.inc();
+}
+
+export function decrementUsageSseActiveConnections(): void {
+  activeUsageSseConnectionsCount = Math.max(0, activeUsageSseConnectionsCount - 1);
+  usageSseActiveConnections.set(activeUsageSseConnectionsCount);
+}
+
+export function getActiveUsageSseConnectionsCount(): number {
+  return activeUsageSseConnectionsCount;
+}
+
+export function resetUsageSseMetrics(): void {
+  activeUsageSseConnectionsCount = 0;
+  usageSseActiveConnections.set(0);
+}

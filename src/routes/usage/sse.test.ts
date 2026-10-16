@@ -7,8 +7,26 @@ import {
   type UsageSseEventPayload,
 } from './sse.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
+import { UnauthorizedError } from '../../errors/index.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 import { logger } from '../../logger.js';
+import {
+  getActiveUsageSseConnectionsCount,
+  resetUsageSseMetrics,
+} from '../../metrics.js';
+
+jest.mock('../../middleware/requireAuth.js', () => ({
+  requireAuth: (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.header('x-user-id')?.trim();
+    if (!userId) {
+      next(new UnauthorizedError());
+      return;
+    }
+    res.locals.authenticatedUser = { id: userId };
+    req.developerId = userId;
+    next();
+  },
+}));
 
 const USER_A = 'user-1';
 const USER_B = 'user-2';
@@ -19,7 +37,6 @@ const buildEvent = (
 ): UsageSseEventPayload => ({
   id: 'evt-1',
   requestId: 'req-1',
-  apiKey: 'key-1',
   apiKeyId: 'key-id-1',
   apiId: 'api-1',
   endpointId: 'endpoint-1',
@@ -125,6 +142,7 @@ const openSseStream = (app: Express, userId: string): SseStream => {
 
   // Registering listeners keeps the abort error from surfacing as an
   // unhandled 'error' event once the test tears the stream down.
+  stream.on('response', (res) => res.on('error', () => undefined));
   stream.on('error', () => undefined);
   stream.end(() => undefined);
 
@@ -332,10 +350,16 @@ describe('GET /api/usage/sse', () => {
               resolve(seen);
             }
           });
-          res.on('error', reject);
+          res.on('error', (err) => {
+            if (!seen.includes('"apiId":"api-1"')) {
+              reject(err);
+            }
+          });
           callback(null, seen);
         });
 
+      streamRequest.on('response', (res) => res.on('error', () => undefined));
+      streamRequest.on('error', () => undefined);
       streamRequest.end((error) => {
         if (error && !seen.includes('event: usage')) {
           reject(error);
@@ -466,5 +490,102 @@ describe('GET /api/usage/sse', () => {
     await delay(50);
     expect(broadcaster.unsubscribeCalls).toBe(1);
     expect(broadcaster.trackedUserCount()).toBe(0);
+  });
+
+  it('replays missed events in order when Last-Event-ID is provided and sends retry directive (#1236)', async () => {
+    const broadcaster = new UsageSseBroadcaster({ maxBufferSize: 3 });
+    broadcaster.emitForUser(USER_A, buildEvent(USER_A, { id: 'evt-1', apiId: 'api-1' }));
+    broadcaster.emitForUser(USER_A, buildEvent(USER_A, { id: 'evt-2', apiId: 'api-2' }));
+    broadcaster.emitForUser(USER_A, buildEvent(USER_A, { id: 'evt-3', apiId: 'api-3' }));
+    broadcaster.emitForUser(USER_A, buildEvent(USER_A, { id: 'evt-4', apiId: 'api-4' }));
+
+    // Bounded ring buffer of size 3 retains [evt-2, evt-3, evt-4]
+    expect(broadcaster.bufferedEventCount(USER_A)).toBe(3);
+    expect(broadcaster.getEventsAfter(USER_A, 'evt-2').map((e) => e.id)).toEqual([
+      'evt-3',
+      'evt-4',
+    ]);
+    // Unknown ID returns empty array without throwing
+    expect(broadcaster.getEventsAfter(USER_A, 'unknown-id')).toEqual([]);
+
+    const app = express();
+    app.use(requestIdMiddleware);
+    app.use('/api/usage/sse', createUsageSseRouter({ broadcaster, retryMs: 2500 }));
+    app.use(errorHandler);
+
+    const received = await new Promise<string>((resolve, reject) => {
+      let seen = '';
+      const streamRequest = request(app)
+        .get('/api/usage/sse')
+        .set('x-user-id', USER_A)
+        .set('Last-Event-ID', 'evt-2')
+        .buffer(false)
+        .parse((res, callback) => {
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => {
+            seen += chunk;
+            if (seen.includes('id: evt-4')) {
+              streamRequest.abort();
+              resolve(seen);
+            }
+          });
+          res.on('error', (err) => {
+            if (!seen.includes('id: evt-4')) {
+              reject(err);
+            }
+          });
+          callback(null, seen);
+        });
+      streamRequest.on('response', (res) => res.on('error', () => undefined));
+      streamRequest.on('error', () => undefined);
+      streamRequest.end(() => undefined);
+    });
+
+    expect(received).toContain('retry: 2500');
+    expect(received).toContain('event: connected');
+    expect(received.indexOf('id: evt-3')).toBeGreaterThan(-1);
+    expect(received.indexOf('id: evt-4')).toBeGreaterThan(received.indexOf('id: evt-3'));
+    expect(received).not.toContain('id: evt-2');
+  });
+
+  it('sends periodic heartbeat comments, caps concurrent connections per user with 429, and updates active connection gauge (#1235)', async () => {
+    resetUsageSseMetrics();
+    const broadcaster = new UsageSseBroadcaster();
+    const app = express();
+    app.use(requestIdMiddleware);
+    app.use(
+      '/api/usage/sse',
+      createUsageSseRouter({
+        broadcaster,
+        heartbeatIntervalMs: 30,
+        maxConnectionsPerUser: 2,
+      }),
+    );
+    app.use(errorHandler);
+
+    const s1 = openSseStream(app, USER_A);
+    const s2 = openSseStream(app, USER_A);
+    await Promise.all([s1.connected, s2.connected]);
+
+    expect(getActiveUsageSseConnectionsCount()).toBe(2);
+
+    // Wait for at least one `: ping` heartbeat comment on the idle stream
+    await waitFor(() => s1.output().includes(': ping'), 'SSE heartbeat comment');
+
+    // Opening a 3rd stream for USER_A exceeds maxConnectionsPerUser=2 -> 429
+    const overCapRes = await request(app)
+      .get('/api/usage/sse')
+      .set('x-user-id', USER_A);
+    expect(overCapRes.status).toBe(429);
+    expect(overCapRes.body.error.code).toBe('TOO_MANY_REQUESTS');
+
+    // Disconnecting both streams decrements the gauge back to 0 and clears listeners
+    s1.abort();
+    s2.abort();
+    await waitFor(
+      () => broadcaster.listenerCount(USER_A) === 0 && getActiveUsageSseConnectionsCount() === 0,
+      'active SSE connection gauge to return to 0',
+    );
+    expect(getActiveUsageSseConnectionsCount()).toBe(0);
   });
 });
