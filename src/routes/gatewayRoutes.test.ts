@@ -50,8 +50,8 @@ describe("gateway route - rate limiting", () => {
     expect(res.status).toBe(429);
     // Retry-After header is in seconds, rounded up
     expect(res.headers["retry-after"]).toBe(String(Math.ceil(windowMs / 1000)));
-    expect(res.body).toHaveProperty("code", "TOO_MANY_REQUESTS");
-    expect(res.body).toHaveProperty("message", "Too Many Requests");
+    expect(res.body.error ?? res.body).toHaveProperty("code", "TOO_MANY_REQUESTS");
+    expect(res.body.error ?? res.body).toHaveProperty("message", "Too Many Requests");
     expect(res.body).toHaveProperty("requestId");
   });
 });
@@ -195,8 +195,8 @@ describe("gateway route - body size limits", () => {
 
     expect(res.status).toBe(413);
     expect(res.headers["content-type"]).toMatch(/application\/json/);
-    expect(res.body).toHaveProperty("code", "REQUEST_BODY_TOO_LARGE");
-    expect(res.body).toHaveProperty("message", "Request body too large");
+    expect(res.body.error ?? res.body).toHaveProperty("code", "REQUEST_BODY_TOO_LARGE");
+    expect(res.body.error ?? res.body).toHaveProperty("message", "Request body too large");
   });
 });
 
@@ -303,9 +303,10 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
 
     // Must be 401, never 500.
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
+    const errPayload = res.body.error ?? res.body;
+    expect(errPayload).toHaveProperty("code", "UNAUTHORIZED");
     // Generic message — must not reveal whether the prefix was found.
-    expect(res.body.message).toMatch(/invalid API key/i);
+    expect(errPayload.message).toMatch(/invalid API key/i);
   });
 
   test("returns 401 when prefix does not exist at all (no-prefix path)", async () => {
@@ -321,8 +322,9 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", "totally-unknown-key-xyz");
 
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
-    expect(res.body.message).toMatch(/invalid API key/i);
+    const errPayload = res.body.error ?? res.body;
+    expect(errPayload).toHaveProperty("code", "UNAUTHORIZED");
+    expect(errPayload.message).toMatch(/invalid API key/i);
   });
 
   test("happy path — exact key match passes auth and reaches billing", async () => {
@@ -355,7 +357,7 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", validKey);
 
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
+    expect(res.body.error ?? res.body).toHaveProperty("code", "UNAUTHORIZED");
   });
 
   test("returns 403 when key is revoked (prefix + hash match a revoked key)", async () => {
@@ -375,7 +377,7 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", validKey);
 
     expect(res.status).toBe(403);
-    expect(res.body).toHaveProperty("code", "FORBIDDEN");
+    expect(res.body.error ?? res.body).toHaveProperty("code", "FORBIDDEN");
   });
 
   test("returns 403 when key is in revocation list", async () => {
@@ -404,7 +406,7 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
         .set("x-api-key", validKey);
 
       expect(res.status).toBe(403);
-      expect(res.body).toHaveProperty("code", "FORBIDDEN");
+      expect(res.body.error ?? res.body).toHaveProperty("code", "FORBIDDEN");
     } finally {
       resetTokenRevocationService();
     }
@@ -430,20 +432,16 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
     expect(mismatchRes.status).toBe(401);
     expect(unknownRes.status).toBe(401);
 
+    const mismatchErr = mismatchRes.body.error ?? mismatchRes.body;
+    const unknownErr = unknownRes.body.error ?? unknownRes.body;
     // Response codes must be identical — client must not be able to distinguish.
-    expect(mismatchRes.body.code).toBe(unknownRes.body.code);
-    expect(mismatchRes.body.message).toBe(unknownRes.body.message);
+    expect(mismatchErr.code).toBe(unknownErr.code);
+    expect(mismatchErr.message).toBe(unknownErr.message);
   });
 });
 
 // ---------------------------------------------------------------------------
 // gatewayRoutes.ts — per-user token-bucket inline invocation (issue #870)
-//
-// These tests exercise the inline gatewayRateLimit(req, res, () => {...})
-// call path inside the router.all('/:apiId', ...) handler in gatewayRoutes.ts.
-// They use createGatewayRouter directly with a gatewayRateLimitMiddleware stub
-// injected via GatewayDeps so the new code paths show up in coverage for that
-// file, not just gatewayRateLimit.ts.
 // ---------------------------------------------------------------------------
 describe("gateway route - per-user token-bucket rate limit (issue #870)", () => {
   const API_ID = "my-api";
@@ -474,7 +472,6 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
   }
 
   test("passes through to downstream handler when rate limiter calls next()", async () => {
-    // Middleware that always calls next() — exercises the gatewayRateLimitPassed=true path
     const passThroughMiddleware: import("express").RequestHandler = (_req, _res, next) => {
       next();
     };
@@ -484,13 +481,10 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
       .get(`/gateway/${API_ID}`)
       .set("x-api-key", VALID_KEY);
 
-    // Billing stub returns 402 — proves the inline check passed and execution continued
     expect(res.status).toBe(402);
   });
 
   test("returns 429 and stops processing when rate limiter writes its own response (gatewayRateLimitPassed=false path)", async () => {
-    // Middleware that writes a 429 itself and does NOT call next() —
-    // exercises the gatewayRateLimitPassed=false early-return path in gatewayRoutes.ts
     const blockingMiddleware: import("express").RequestHandler = (_req, res, _next) => {
       res.status(429).json({
         code: "TOO_MANY_REQUESTS",
@@ -507,14 +501,10 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
 
     expect(res.status).toBe(429);
     expect(res.body.code).toBe("TOO_MANY_REQUESTS");
-    // Billing must NOT have been called — the handler returned before reaching it
-    // (confirmed by absence of a 402 status)
     expect(res.status).not.toBe(402);
   });
 
   test("rate limiter receives req.apiKeyRecord.userId = keyRecord.developerId", async () => {
-    // Verify that the inline req.apiKeyRecord assignment writes the correct userId
-    // so that the token-bucket key matches the developer, not the raw API key string.
     let capturedUserId: string | undefined;
 
     const inspectingMiddleware: import("express").RequestHandler = (req, _res, next) => {
@@ -528,13 +518,10 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
       .get(`/gateway/${API_ID}`)
       .set("x-api-key", VALID_KEY);
 
-    expect(capturedUserId).toBe("dev1"); // keyRecord.developerId from apiKeys map
+    expect(capturedUserId).toBe("dev1");
   });
 
   test("returns 429 with Retry-After header via real InMemoryGatewayRateLimiter through createGatewayRouter", async () => {
-    // Wire a real (not stubbed) token-bucket limiter with limit=1 into the gateway router
-    // to exercise the full path: auth → req.apiKeyRecord assignment → limiter.check() →
-    // 429 written by middleware → gatewayRateLimitPassed=false → early return.
     const { createGatewayRateLimitMiddleware, InMemoryGatewayRateLimiter } = await import(
       "../middleware/gatewayRateLimit.js"
     );
@@ -544,13 +531,11 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
 
     const app = buildGatewayApp(rl);
 
-    // First request — token bucket not yet exhausted, billing stub returns 402
     const first = await request(app)
       .get(`/gateway/${API_ID}`)
       .set("x-api-key", VALID_KEY);
-    expect(first.status).toBe(402); // auth + rate limit passed, billing fails fast
+    expect(first.status).toBe(402);
 
-    // Second request — bucket empty, rate limiter writes 429 directly
     const second = await request(app)
       .get(`/gateway/${API_ID}`)
       .set("x-api-key", VALID_KEY);
@@ -561,3 +546,99 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
     expect(second.body.retryAfterMs).toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #1224 — Require balance covering endpoint price before proxying
+// ---------------------------------------------------------------------------
+describe("proxy route - endpoint price balance check (issue #1224)", () => {
+  test("rejects with 402 INSUFFICIENT_BALANCE without contacting upstream when balance is positive but less than endpoint price", async () => {
+    const { createProxyRouter } = await import("./proxyRoutes.js");
+    const { MockSorobanBilling } = await import("../services/billingService.js");
+    const { InMemoryRateLimiter } = await import("../services/rateLimiter.js");
+    const { InMemoryUsageStore } = await import("../services/usageStore.js");
+    const { InMemoryApiRegistry } = await import("../data/apiRegistry.js");
+
+    const apiKey = "proxy-price-key-123456";
+    const devId = "dev_price_1";
+    const apiId = "api_price_1";
+    const apiKeys = new Map<string, ApiKey>([
+      [apiKey, { key: apiKey, developerId: devId, apiId }],
+    ]);
+
+    const registry = new InMemoryApiRegistry([
+      {
+        id: apiId,
+        slug: "priced-api",
+        base_url: "http://localhost:9999",
+        developerId: devId,
+        endpoints: [
+          { endpointId: "ep_expensive", path: "expensive", priceUsdc: 5 },
+          { endpointId: "ep_free", path: "free", priceUsdc: 0 },
+        ],
+      },
+    ]);
+
+    // Balance is 1 (< 5 required for /expensive)
+    const billing = new MockSorobanBilling({ [devId]: 1 });
+    const rateLimiter = new InMemoryRateLimiter(100, 60_000);
+    const usageStore = new InMemoryUsageStore();
+
+    const originalFetch = global.fetch;
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      text: async () => JSON.stringify({ ok: true }),
+    } as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const app = express();
+      app.use(express.json());
+      app.use(requestIdMiddleware);
+      app.use(
+        "/v1/call",
+        createProxyRouter({
+          billing,
+          rateLimiter,
+          usageStore,
+          registry,
+          apiKeys,
+          proxyConfig: { timeoutMs: 2000, allowedHosts: ["localhost"] },
+        }),
+      );
+      app.use(errorHandler);
+
+      // 1. Balance 1 calling 5-USDC endpoint -> 402 INSUFFICIENT_BALANCE, no upstream call
+      const insufficientRes = await request(app)
+        .get("/v1/call/priced-api/expensive")
+        .set("x-api-key", apiKey);
+
+      expect(insufficientRes.status).toBe(402);
+      const errObj = insufficientRes.body.error ?? insufficientRes.body;
+      expect(errObj.code).toBe("INSUFFICIENT_BALANCE");
+      expect(errObj.message).toMatch(/insufficient balance/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // 2. Balance 5 calling 5-USDC endpoint -> 200 OK, upstream called
+      billing.setBalance(devId, 5);
+      const sufficientRes = await request(app)
+        .get("/v1/call/priced-api/expensive")
+        .set("x-api-key", apiKey);
+
+      expect(sufficientRes.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // 3. Balance 0 calling 0-USDC (free) endpoint -> 200 OK, upstream called
+      billing.setBalance(devId, 0);
+      const freeRes = await request(app)
+        .get("/v1/call/priced-api/free")
+        .set("x-api-key", apiKey);
+
+      expect(freeRes.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});
+

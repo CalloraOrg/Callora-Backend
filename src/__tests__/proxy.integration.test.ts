@@ -1604,3 +1604,91 @@ describe('Proxy idempotent-method retry contract (#1292)', () => {
     await new Promise<void>((resolve) => tmpServer.close(() => resolve()));
   });
 });
+
+describe('Proxy endpoint price balance check (#1224)', () => {
+  it('returns 402 INSUFFICIENT_BALANCE without calling upstream when balance is 1 and endpoint price is 5, succeeds at balance 5, and allows free endpoints at balance 0', async () => {
+    const pricedRegistry = new InMemoryApiRegistry([
+      {
+        id: 'api_priced',
+        slug: 'priced-api',
+        base_url: upstreamUrl,
+        developerId: TEST_DEVELOPER_ID,
+        endpoints: [
+          { endpointId: 'ep_paid', path: 'paid', priceUsdc: 5 },
+          { endpointId: 'ep_free', path: 'free', priceUsdc: 0 },
+        ],
+      },
+    ]);
+    const pricedKeys = new Map<string, ApiKey>([
+      ['priced-key-123456', { key: 'priced-key-123456', developerId: TEST_DEVELOPER_ID, apiId: 'api_priced' }],
+    ]);
+
+    const tmpApp = express();
+    tmpApp.use(express.json());
+    tmpApp.use(requestIdMiddleware);
+    tmpApp.use(
+      '/v1/call',
+      createProxyRouter({
+        billing,
+        rateLimiter,
+        usageStore,
+        registry: pricedRegistry,
+        apiKeys: pricedKeys,
+        proxyConfig: {
+          timeoutMs: 2000,
+          allowedHosts: ['localhost'],
+        },
+      }),
+    );
+    tmpApp.use(errorHandler);
+
+    const tmpServer = await new Promise<Server>((resolve) => {
+      const s = tmpApp.listen(0, () => resolve(s));
+    });
+    const tmpAddr = tmpServer.address();
+    const tmpUrl =
+      tmpAddr && typeof tmpAddr === 'object' ? `http://localhost:${tmpAddr.port}` : '';
+
+    try {
+      let upstreamHits = 0;
+      setUpstreamHandler((_req, res) => {
+        upstreamHits++;
+        res.status(200).json({ ok: true });
+      });
+
+      // 1. Balance 1 < price 5 -> 402 INSUFFICIENT_BALANCE, upstream not called
+      billing.setBalance(TEST_DEVELOPER_ID, 1);
+      const resInsufficient = await fetch(`${tmpUrl}/v1/call/priced-api/paid`, {
+        method: 'GET',
+        headers: { 'x-api-key': 'priced-key-123456' },
+      });
+      expect(resInsufficient.status).toBe(402);
+      const bodyInsufficient = await resInsufficient.json();
+      const errInsufficient = bodyInsufficient.error ?? bodyInsufficient;
+      expect(errInsufficient.code).toBe('INSUFFICIENT_BALANCE');
+      expect(errInsufficient.message).toMatch(/insufficient balance/i);
+      expect(upstreamHits).toBe(0);
+
+      // 2. Balance 5 == price 5 -> 200 OK, upstream called
+      billing.setBalance(TEST_DEVELOPER_ID, 5);
+      const resSufficient = await fetch(`${tmpUrl}/v1/call/priced-api/paid`, {
+        method: 'GET',
+        headers: { 'x-api-key': 'priced-key-123456' },
+      });
+      expect(resSufficient.status).toBe(200);
+      expect(upstreamHits).toBe(1);
+
+      // 3. Balance 0 calling free endpoint (price 0) -> 200 OK, upstream called
+      billing.setBalance(TEST_DEVELOPER_ID, 0);
+      const resFree = await fetch(`${tmpUrl}/v1/call/priced-api/free`, {
+        method: 'GET',
+        headers: { 'x-api-key': 'priced-key-123456' },
+      });
+      expect(resFree.status).toBe(200);
+      expect(upstreamHits).toBe(2);
+    } finally {
+      await new Promise<void>((resolve) => tmpServer.close(() => resolve()));
+    }
+  });
+});
+

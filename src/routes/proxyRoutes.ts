@@ -180,16 +180,28 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         return;
       }
 
-      // 4. Pre-proxy balance check (ensure they have funds, deduct later)
-      const currentBalance = await billing.checkBalance(keyRecord.userId);
-      if (currentBalance <= 0) {
-        next(new PaymentRequiredError('Payment Required: insufficient balance'));
-        return;
-      }
-
-      // 5. Build upstream URL & find price
+      // 4. Resolve endpoint pricing for the target path and verify balance
       // req.params[0] captures the wildcard portion after the slug
       const wildcardPath = req.params[0] ?? '';
+      const resolvedEndpoint = Array.isArray(apiEntry.endpoints) && apiEntry.endpoints.length > 0
+        ? resolveEndpointPrice(apiEntry.endpoints, wildcardPath)
+        : endpoint;
+      const endpointPriceUsdc = Number(resolvedEndpoint?.priceUsdc ?? endpoint.priceUsdc ?? 0);
+
+      if (endpointPriceUsdc > 0) {
+        const currentBalance = await billing.checkBalance(keyRecord.userId);
+        if (currentBalance < endpointPriceUsdc) {
+          next(
+            new PaymentRequiredError(
+              'Payment Required: insufficient balance',
+              'INSUFFICIENT_BALANCE',
+            ),
+          );
+          return;
+        }
+      }
+
+      // 5. Build upstream URL
       const upstreamTarget = buildUpstreamTargetUrl(apiEntry.base_url, wildcardPath);
       let safeUpstreamTarget: string;
 
@@ -264,6 +276,80 @@ export function createProxyRouter(deps: ProxyDeps): Router {
         });
         res.set('x-request-id', requestId);
 
+        // 8. Keep metering and billing consistent — but ONLY after the response
+        //    has been fully delivered to the caller.
+        //    Using a one-shot 'finish' listener (registered before we start
+        //    streaming) ensures we capture the event even if the stream
+        //    completes synchronously.
+        if (config.recordableStatuses(upstreamStatus)) {
+          let responseFinished = false;
+
+          res.once('finish', () => {
+            responseFinished = true;
+
+            setImmediate(() => {
+              void (async () => {
+                try {
+                  const recorded = await usageStore.record({
+                    id: randomUUID(),
+                    requestId,
+                    apiKey: apiKeyHeader,
+                    apiKeyId: keyRecord.id,
+                    apiId: String(apiEntry.id),
+                    endpointId: resolvedEndpoint.endpointId,
+                    userId: keyRecord.userId,
+                    amountUsdc: endpointPriceUsdc,
+                    statusCode: upstreamStatus,
+                    timestamp: new Date().toISOString(),
+                  });
+
+                  if (recorded) {
+                    defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
+                      id: randomUUID(),
+                      requestId,
+                      apiKeyId: keyRecord.id,
+                      apiKeyPrefix: maskApiKey(apiKeyHeader),
+                      apiId: String(apiEntry.id),
+                      endpointId: resolvedEndpoint.endpointId,
+                      userId: keyRecord.userId,
+                      amountUsdc: endpointPriceUsdc,
+                      statusCode: upstreamStatus,
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
+
+                  recordEndpointThroughputSaturation({
+                    apiId: String(apiEntry.id),
+                    endpointId: resolvedEndpoint.endpointId,
+                    endpointPath: resolvedEndpoint.path,
+                    advertisedLimitPerMinute: Number(keyRecord?.rateLimitPerMinute ?? 0),
+                    observedAt: Date.now(),
+                  });
+
+                  if (recorded && endpointPriceUsdc > 0) {
+                    billing.deductCredit(keyRecord.userId, endpointPriceUsdc).catch((err) => {
+                      console.error('Background billing deduction failed:', err);
+                    });
+                  }
+                } catch (err) {
+                  recordUsageRecordFailure();
+                  logger.error('Background usage recording failed', {
+                    requestId,
+                    apiId: String(apiEntry.id),
+                    error: err,
+                  });
+                }
+              })();
+            });
+          });
+
+          res.once('close', () => {
+            if (!responseFinished) {
+              recordProxyPrematureAbort();
+            }
+          });
+        }
+
         // Stream body back
         res.status(upstreamStatus);
         if (upstreamRes.body) {
@@ -313,7 +399,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
               err,
               requestId,
               apiId: String(apiEntry.id),
-              endpointId: endpoint.endpointId,
+              endpointId: resolvedEndpoint.endpointId,
               upstreamStatus,
             },
             'Proxy error after headers sent; destroying response socket',
@@ -358,99 +444,6 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           setGatewayUpstreamBreakerState(breakerKey, failedStateValue);
           throw new BadGatewayError('Bad Gateway: upstream unreachable');
         }
-      }
-
-      // 8. Keep metering and billing consistent — but ONLY after the response
-      //    has been fully delivered to the caller.
-      //
-      //    We distinguish two response lifecycle events:
-      //      • 'finish' — Node/Express has flushed all data and ended the
-      //                   response normally.  This is the success path; we
-      //                   record usage here.
-      //      • 'close'  — The underlying socket was torn down.  When this
-      //                   fires WITHOUT a prior 'finish' it means the client
-      //                   disconnected mid-stream (premature abort).  In that
-      //                   case we must NOT record usage because the caller
-      //                   never received the response.
-      //
-      //    Using a one-shot 'finish' listener (registered before we start
-      //    streaming) ensures we capture the event even if the stream
-      //    completes synchronously.  The 'close' listener is a guard that
-      //    cancels the deferred work when the socket drops first.
-      if (config.recordableStatuses(upstreamStatus)) {
-        // Track whether the response finished cleanly before the socket closed.
-        let responseFinished = false;
-
-        res.once('finish', () => {
-          responseFinished = true;
-
-          // Run usage recording in a non-blocking microtask so it does not
-          // delay the event loop that is already handling the next request.
-          setImmediate(() => {
-            void (async () => {
-              try {
-                const recorded = await usageStore.record({
-                  id: randomUUID(), // ID of the usage event itself
-                  requestId,        // Idempotency key — prevents double-counts
-                  apiKeyId: keyRecord.id,
-                  apiId: String(apiEntry.id),
-                  endpointId: endpoint.endpointId,
-                  userId: keyRecord.userId,
-                  amountUsdc: endpoint.priceUsdc,
-                  statusCode: upstreamStatus,
-                  timestamp: new Date().toISOString(),
-                });
-
-                if (recorded) {
-                  defaultUsageSseBroadcaster.emitForUser(keyRecord.userId, {
-                    id: randomUUID(),
-                    requestId,
-                    apiKeyId: keyRecord.id,
-                    apiKeyPrefix: maskApiKey(apiKeyHeader),
-                    apiId: String(apiEntry.id),
-                    endpointId: endpoint.endpointId,
-                    userId: keyRecord.userId,
-                    amountUsdc: endpoint.priceUsdc,
-                    statusCode: upstreamStatus,
-                    timestamp: new Date().toISOString(),
-                  });
-                }
-
-                recordEndpointThroughputSaturation({
-                  apiId: String(apiEntry.id),
-                  endpointId: endpoint.endpointId,
-                  endpointPath: endpoint.path,
-                  advertisedLimitPerMinute: Number(keyRecord?.rateLimitPerMinute ?? 0),
-                  observedAt: Date.now(),
-                });
-
-                // Only deduct billing if this requestId hasn't been processed
-                // before (idempotency guard inside usageStore.record).
-                if (recorded && endpoint.priceUsdc > 0) {
-                  billing.deductCredit(keyRecord.userId, endpoint.priceUsdc).catch((err) => {
-                    console.error('Background billing deduction failed:', err);
-                  });
-                }
-              } catch (err) {
-                recordUsageRecordFailure();
-                logger.error('Background usage recording failed', {
-                  requestId,
-                  apiId: String(apiEntry.id),
-                  error: err,
-                });
-              }
-            })();
-          });
-        });
-
-        res.once('close', () => {
-          // 'close' fires after 'finish' on a normal response, or on its own
-          // when the socket is destroyed prematurely.  Only treat it as an
-          // abort when 'finish' has NOT already fired.
-          if (!responseFinished) {
-            recordProxyPrematureAbort();
-          }
-        });
       }
     } catch (error) {
       next(error);
