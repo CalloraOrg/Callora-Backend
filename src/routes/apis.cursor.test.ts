@@ -332,4 +332,26 @@ describe('GET /api/apis — cursor pagination', () => {
     expect(page1.body.data.map((r: { id: number }) => r.id)).toEqual([4, 3]);
     expect(page2.body.data.map((r: { id: number }) => r.id)).toEqual([2, 1]);
   });
+
+  it('issues URL-safe base64url nextCursor values and accepts legacy standard-base64 cursors', async () => {
+    const app = buildFixtureApp();
+
+    const firstPage = await request(app).get('/api/apis?limit=2');
+    expect(firstPage.status).toBe(200);
+    const nextCursor: string = firstPage.body.meta.nextCursor;
+    expect(nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    // Passing nextCursor unescaped in a query string round-trips cleanly
+    const secondPage = await request(app).get(`/api/apis?limit=2&cursor=${nextCursor}`);
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.data.map((r: { id: number }) => r.id)).toEqual([3, 2]);
+
+    // Legacy standard-base64 cursor (with = padding) still decodes
+    const legacyCursor = Buffer.from(`${t4.toISOString()}|4`, 'utf8').toString('base64');
+    const legacyRes = await request(app).get(
+      `/api/apis?limit=2&cursor=${encodeURIComponent(legacyCursor)}`,
+    );
+    expect(legacyRes.status).toBe(200);
+    expect(legacyRes.body.data.map((r: { id: number }) => r.id)).toEqual([3, 2]);
+  });
 });

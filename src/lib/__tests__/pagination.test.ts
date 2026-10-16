@@ -220,3 +220,63 @@ describe('paginatedResponse', () => {
     assert.equal(result.meta.offset, 100);
   });
 });
+
+import { encodeCursor, decodeCursor as decodeJsonCursor, parseCursor } from '../cursorPagination.js';
+import { generateCursor, decodeCursor as decodePipeCursor } from '../pagination.js';
+
+describe('cursorPagination (base64url & backward-compatible base64)', () => {
+  it('encodes cursors using only URL-safe base64url characters even when standard base64 would contain + and /', () => {
+    const ts = new Date('2026-03-01T09:30:00.000Z');
+    const ids = ['id?>>??~', '>>>???~~~', 'api_+/=test_62_63_??'];
+
+    for (const id of ids) {
+      const jsonCursor = encodeCursor(ts, id);
+      assert.match(jsonCursor, /^[A-Za-z0-9_-]+$/);
+      assert.equal(jsonCursor.includes('+'), false);
+      assert.equal(jsonCursor.includes('/'), false);
+      assert.equal(jsonCursor.includes('='), false);
+
+      const decoded = decodeJsonCursor(jsonCursor);
+      assert.ok(decoded);
+      assert.equal(decoded.timestamp.toISOString(), ts.toISOString());
+      assert.equal(decoded.id, id);
+
+      const pipeCursor = generateCursor(ts.toISOString(), id);
+      assert.match(pipeCursor, /^[A-Za-z0-9_-]+$/);
+      const decodedPipe = decodePipeCursor(pipeCursor);
+      assert.equal(decodedPipe.created_at, ts.toISOString());
+      assert.equal(decodedPipe.id, id);
+    }
+  });
+
+  it('decodes legacy standard-base64 cursors containing +, /, and =', () => {
+    const ts = new Date('2026-03-01T09:30:00.000Z');
+    const id = 'id?>>??~';
+    const legacyJsonCursor = Buffer.from(
+      JSON.stringify({ timestamp: ts.toISOString(), id }),
+      'utf8',
+    ).toString('base64');
+    assert.ok(
+      legacyJsonCursor.includes('+') ||
+        legacyJsonCursor.includes('/') ||
+        legacyJsonCursor.includes('='),
+    );
+
+    const decoded = decodeJsonCursor(legacyJsonCursor);
+    assert.ok(decoded);
+    assert.equal(decoded.timestamp.toISOString(), ts.toISOString());
+    assert.equal(decoded.id, id);
+
+    const legacyPipeCursor = Buffer.from(`${ts.toISOString()}|${id}`, 'utf8').toString('base64');
+    const decodedPipe = decodePipeCursor(legacyPipeCursor);
+    assert.equal(decodedPipe.created_at, ts.toISOString());
+    assert.equal(decodedPipe.id, id);
+  });
+
+  it('returns null for malformed cursors', () => {
+    assert.equal(decodeJsonCursor(''), null);
+    assert.equal(decodeJsonCursor('!!!not-base64!!!'), null);
+    assert.equal(decodeJsonCursor('abcde'), null);
+    assert.equal(parseCursor('   '), null);
+  });
+});

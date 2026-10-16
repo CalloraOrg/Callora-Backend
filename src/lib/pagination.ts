@@ -119,15 +119,21 @@ export function parseCursorPagination(query: {
   return { limit, cursor };
 }
 
+const BASE64_CURSOR_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
+
 /**
  * Validate and decode cursor
- * Cursor format: base64(created_at|id)
+ * Cursor format: base64url(created_at|id) or legacy base64(created_at|id)
  * Returns { created_at, id } or throws ValidationError
  */
 export function decodeCursor(cursor: string): { created_at: string; id: string } {
   try {
-    // Decode base64
-    const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
+    if (!cursor || cursor.length % 4 === 1 || !BASE64_CURSOR_RE.test(cursor)) {
+      throw new Error('Invalid cursor encoding');
+    }
+    const normalized = cursor.replace(/-/g, '+').replace(/_/g, '/');
+    const padLen = (4 - (normalized.length % 4)) % 4;
+    const decoded = Buffer.from(normalized + '='.repeat(padLen), 'base64').toString('utf-8');
     
     // Split by pipe
     const parts = decoded.split('|');
@@ -161,10 +167,10 @@ export function decodeCursor(cursor: string): { created_at: string; id: string }
 
 /**
  * Generate cursor for next page
- * Format: base64(created_at|id)
+ * Format: base64url(created_at|id)
  */
 export function generateCursor(created_at: string, id: string): string {
-  return Buffer.from(`${created_at}|${id}`).toString('base64');
+  return Buffer.from(`${created_at}|${id}`, 'utf8').toString('base64url');
 }
 
 /**
