@@ -7,7 +7,9 @@ import app, { createGracefulShutdownHandler, createInFlightDrainTracker } from '
 jest.mock('./db/index.js', () => ({
   db: {},
   initializeDb: jest.fn(),
-  schema: {},
+  schema: {
+    apis: { deleted_at: 'deleted_at' },
+  },
 }));
 describe('Health API', () => {
   it('should return ok status', async () => {
@@ -346,5 +348,42 @@ describe('refresh-token drain tracker', () => {
   it('exposes the subsystem name that was passed to the factory', () => {
     const tracker = createInFlightDrainTracker('refresh-token');
     expect(tracker.subsystem.name).toBe('refresh-token');
+  });
+});
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+describe('entrypoint hygiene — src/index.ts (#1200)', () => {
+  const indexSource = fs.readFileSync(path.join(process.cwd(), 'src', 'index.ts'), 'utf8');
+
+  it('has no duplicate top-level module import paths', () => {
+    const importRegex = /^import\s+[\s\S]*?from\s+["']([^"']+)["'];/gm;
+    const seenModules = new Set<string>();
+    const duplicates: string[] = [];
+    let match: RegExpExecArray | null;
+
+    while ((match = importRegex.exec(indexSource)) !== null) {
+      const mod = match[1];
+      if (seenModules.has(mod)) {
+        duplicates.push(mod);
+      }
+      seenModules.add(mod);
+    }
+
+    expect(duplicates).toEqual([]);
+  });
+
+  it('imports createApiKeyRouter, createWebhooksRouter, and defaultApiRepository', () => {
+    expect(indexSource).toMatch(/import\s+\{\s*createApiKeyRouter\s*\}\s+from\s+["']\.\/routes\/apiKeyRoutes\.js["']/);
+    expect(indexSource).toMatch(/import\s+\{\s*createWebhooksRouter\s*\}\s+from\s+["']\.\/routes\/webhooks\.js["']/);
+    expect(indexSource).toMatch(/import\s+\{\s*defaultApiRepository\s*\}\s+from\s+["']\.\/repositories\/apiRepository\.js["']/);
+  });
+
+  it('mounts /api/admin and /api/admin/usage/anomalies only once', () => {
+    const adminMounts = indexSource.match(/app\.use\(\s*["']\/api\/admin["']/g) ?? [];
+    const anomaliesMounts = indexSource.match(/app\.use\(\s*["']\/api\/admin\/usage\/anomalies["']/g) ?? [];
+    expect(adminMounts).toHaveLength(1);
+    expect(anomaliesMounts).toHaveLength(1);
   });
 });

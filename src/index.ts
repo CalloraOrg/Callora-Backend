@@ -22,17 +22,21 @@ import {
   createInFlightDrainTracker,
   type DrainableSubsystem,
 } from "./lifecycle/shutdown.js";
-import { quotasDrainTracker } from "./routes/quotas/counts.js";
 import type { Socket } from "net";
-
 import { createDeveloperRouter } from "./routes/developerRoutes.js";
 import { createGatewayRouter } from "./routes/gatewayRoutes.js";
 import { createProxyRouter } from "./routes/proxyRoutes.js";
+import { createApiKeyRouter } from "./routes/apiKeyRoutes.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
+import { createRefreshTokenRouter } from "./routes/refresh-token.js";
 import adminRouter from "./routes/admin.js";
 import logsRouter from "./routes/logs.js";
 import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
 import refundsRouter from "./routes/refunds.js";
+import { AuthController } from "./controllers/authController.js";
+import { RefreshTokenService } from "./services/refreshTokenService.js";
+import { DatabaseRefreshTokenRepository } from "./repositories/refreshTokenRepository.js";
+import { defaultApiRepository } from "./repositories/apiRepository.js";
 import { defaultDeveloperRepository } from "./repositories/developerRepository.js";
 import { createBillingService } from "./services/billingService.js";
 import {
@@ -47,7 +51,7 @@ import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
 import { createPostgresUsageStore } from "./services/usageStore.js";
 import { createPostgresSettlementStore } from "./services/settlementStore.js";
 import { createApiRegistry } from "./data/apiRegistry.js";
-import { ApiKey } from "./types/gateway.js";
+import type { ApiKey } from "./types/gateway.js";
 import { listingsCache } from "./lib/listingsCache.js";
 import { createSlowQueryAlerterJob } from "./workers/slowQueryAlerter.js";
 import { createAnomalyDetectorJob } from "./workers/anomalyDetector.js";
@@ -58,29 +62,6 @@ import {
 import { createSloAlertJob } from "./workers/sloAlertJob.js";
 import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
 import { createSettlementReconWorker } from "./workers/settlementRecon.js";
-import { createDeveloperRouter } from './routes/developerRoutes.js';
-import { createGatewayRouter } from './routes/gatewayRoutes.js';
-import { createProxyRouter } from './routes/proxyRoutes.js';
-import { createRefreshTokenRouter } from './routes/refresh-token.js';
-import { AuthController } from './controllers/authController.js';
-import { RefreshTokenService } from './services/refreshTokenService.js';
-import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
-import { defaultDeveloperRepository } from './repositories/developerRepository.js';
-import { createBillingService } from './services/billingService.js';
-import { createRateLimiter } from './services/rateLimiter.js';
-import { PgUsageEventsRepository } from './repositories/usageEventsRepository.pg.js';
-import { createRevenueLedgerIndexerJob } from './services/revenueLedgerIndexer.js';
-import { RevenueSettlementService } from './services/revenueSettlementService.js';
-import { createSettlementStatusSyncJob } from './services/settlementStatusSyncJob.js';
-import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-import { createIdempotencySweeperJob } from './services/idempotencySweeper.js';
-import { createPostgresUsageStore } from './services/usageStore.js';
-import { createPostgresSettlementStore } from './services/settlementStore.js';
-import { createApiRegistry } from './data/apiRegistry.js';
-import { ApiKey } from './types/gateway.js';
-import { listingsCache } from './lib/listingsCache.js';
-import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
-import { createAnomalyDetectorJob } from './workers/anomalyDetector.js';
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -273,9 +254,6 @@ if (isDirectExecution) {
   app.use("/api/admin", adminRouter);
   app.use("/api/refunds", refundsRouter);
   app.use("/api/logs", logsRouter);
-  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
-
-  app.use('/api/admin', adminRouter);
 
   // Legacy gateway route (existing)
   const gatewayRouter = createGatewayRouter({
@@ -285,7 +263,7 @@ if (isDirectExecution) {
     upstreamUrl: config.proxy.upstreamUrl,
     apiKeys,
   });
-  app.use("/api/gateway", createGatewayIpAllowlist(), gatewayRouter);
+  app.use("/api/gateway", createGatewayIpAllowlist(), legacyV1DeprecationMiddleware, gatewayRouter);
 
   // New proxy route: /v1/call/:apiSlugOrId/*
   //
@@ -309,11 +287,14 @@ if (isDirectExecution) {
     // during the graceful shutdown window.
     drainState: { isDraining: proxyDrainTracker.isDraining },
   });
+  app.use("/v1/call", proxyDrainTracker.middleware, proxyRouter);
+
   const keysDrainTracker = createInFlightDrainTracker("api-keys");
   const apiKeyRouter = createApiKeyRouter({
     apiRepository: defaultApiRepository,
     developerRepository: defaultDeveloperRepository,
   });
+  app.use("/api", keysDrainTracker.middleware, apiKeyRouter);
 
   // --- Refresh-token drain tracker ---
   // Tracks in-flight POST /api/refresh-token requests so that a SIGTERM during
@@ -335,6 +316,7 @@ if (isDirectExecution) {
 
   const shutdownSubsystems: DrainableSubsystem[] = [
     proxyDrainTracker.subsystem,
+    keysDrainTracker.subsystem,
     // Drain in-flight refresh-token requests before the process exits.
     refreshTokenDrainTracker.subsystem,
     {
