@@ -101,6 +101,10 @@ export interface Forecast {
 // In-memory store for forecast data (simulated persistence)
 const forecastStore = new Map<string, Forecast>();
 
+export function resetForecastStoreForTests(): void {
+  forecastStore.clear();
+}
+
 // -----------------------------------------------------------------------
 // Helper functions
 // -----------------------------------------------------------------------

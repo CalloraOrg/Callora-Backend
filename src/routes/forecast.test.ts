@@ -13,7 +13,12 @@ import { forecastLogger } from '../middleware/forecastAccessLog.js';
 import jwt from 'jsonwebtoken';
 
 // Mock auditService to capture audit calls
-jest.mock('../services/auditService.js');
+jest.mock('../services/auditService.js', () => ({
+  defaultAuditService: {
+    record: jest.fn(),
+  },
+  appendAuditRow: jest.fn(),
+}));
 const mockAuditService = defaultAuditService as jest.Mocked<typeof defaultAuditService>;
 
 // Mock JWT to simulate authenticated users
@@ -823,3 +828,42 @@ describe('Forecast access log integration', () => {
     expect(payload.status).toBe(500);
   });
 });
+
+// =============================================================================
+// API Index Router Mount Integration (Issue #1215)
+// =============================================================================
+
+describe('createApiRouter forecast mounting (#1215)', () => {
+  it('mounts both /api/forecast and /api/billing/forecast on createApiRouter', async () => {
+    const { createApiRouter } = await import('./index.js');
+    const apiApp = express();
+    apiApp.use(express.json());
+    apiApp.use(requestIdMiddleware);
+    apiApp.use(auditEnrichMiddleware);
+    apiApp.use('/api', createApiRouter());
+    apiApp.use(errorHandler);
+
+    const listRes = await request(apiApp).get('/api/forecast?limit=5');
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.success).toBe(true);
+    expect(listRes.body.data.items).toHaveLength(5);
+    expect(listRes.body.data.total).toBe(24);
+
+    const createRes = await request(apiApp)
+      .post('/api/forecast')
+      .set('Authorization', 'Bearer mock-token-dev-index-1')
+      .send({ name: 'Mounted Forecast', description: 'Created via createApiRouter' });
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.data.name).toBe('Mounted Forecast');
+
+    const billingRes = await request(apiApp)
+      .get('/api/billing/forecast?lookbackDays=15&period=week')
+      .set('Authorization', 'Bearer mock-token-dev-index-1');
+    expect(billingRes.status).toBe(200);
+    expect(billingRes.body.userId).toBe('dev-index-1');
+    expect(billingRes.body.lookbackDays).toBe(15);
+    expect(billingRes.body.forecastPeriod).toBe('week');
+    expect(billingRes.body.forecastDays).toBe(7);
+  });
+});
+

@@ -6,11 +6,11 @@
 
 ## Overview
 
-The `/api/billing/forecast` endpoint allows authenticated developers to forecast their upcoming billing amount based on their actual current run rate over a configurable historical lookback window.
+The `/api/billing/forecast` endpoint (mounted via `createBillingForecastRouter` in `src/routes/index.ts` alongside `/api/forecast` from `createForecastRouter`) allows authenticated developers to forecast their upcoming billing amount based on their actual current run rate over a configurable historical lookback window.
 
 ## Authentication
 
-Requires Bearer JWT token or `x-user-id` header (via `requireAuth` middleware). Unauthenticated requests return `401 Unauthorized`.
+Requires Bearer JWT token (via `requireAuth` middleware). Unauthenticated requests return `401 Unauthorized`.
 
 ## Query Parameters
 

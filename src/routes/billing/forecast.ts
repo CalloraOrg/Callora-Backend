@@ -82,7 +82,7 @@ export interface BillingForecastRouterDeps {
 }
 
 /**
- * Creates the router for /api/billing/forecast.
+ * Creates the router for /api/billing/forecast (mounted by createApiRouter in src/routes/index.ts).
  */
 export function createBillingForecastRouter(deps: BillingForecastRouterDeps = {}): Router {
   const router = Router();

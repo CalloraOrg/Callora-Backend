@@ -32,6 +32,7 @@ import type { SubscriptionRepository } from "../repositories/subscriptionReposit
 import type { DeveloperRepository } from "../repositories/developerRepository.js";
 import type { ApiRepository } from "../repositories/apiRepository.js";
 import { createForecastRouter } from "./forecast.js";
+import { createBillingForecastRouter } from "./billing/forecast.js";
 import { createPlansRouter } from "./plans.js";
 import { createCreditsRouter } from "./credits.js";
 import type { CreditsRepository } from "../repositories/creditsRepository.js";
@@ -76,6 +77,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   const router = Router();
 
   router.use("/health", healthRouter);
+  router.use("/forecast", createForecastRouter());
   router.use("/plans", createPlansRouter());
   // Hot-path credits lookup (idx_credits_lookup_hot) — see migrations/credits_index.sql
   router.use(
@@ -258,6 +260,11 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
   }
 
   if (billingMiddlewares.length > 0) {
+    router.use(
+      "/billing/forecast",
+      ...billingMiddlewares,
+      createBillingForecastRouter(),
+    );
     router.use("/billing", ...billingMiddlewares, billingRouter);
     router.use(
       "/billing/portal",
@@ -265,6 +272,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
       createBillingPortalRouter(),
     );
   } else {
+    router.use("/billing/forecast", createBillingForecastRouter());
     router.use("/billing", billingRouter);
     router.use("/billing/portal", createBillingPortalRouter());
   }
