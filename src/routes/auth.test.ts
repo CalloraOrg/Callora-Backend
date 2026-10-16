@@ -292,19 +292,19 @@ describe('POST /api/auth/refresh — input validation', () => {
   it('returns 400 when refreshToken is missing', async () => {
     const res = await request(app).post('/api/auth/refresh').send({});
     expect(res.status).toBe(400);
-    // Standard error envelope
-    expect(res.body).toHaveProperty('code');
-    expect(res.body).toHaveProperty('message');
+    const errObj = res.body.error ?? res.body;
+    expect(errObj).toHaveProperty('code');
+    expect(errObj).toHaveProperty('message');
     expect(res.body).toHaveProperty('requestId');
-    // Zod validation details array
-    expect(Array.isArray(res.body.details)).toBe(true);
-    expect(res.body.details.length).toBeGreaterThan(0);
+    expect(Array.isArray(errObj.details)).toBe(true);
+    expect(errObj.details.length).toBeGreaterThan(0);
   });
 
   it('returns 400 when refreshToken is an empty string', async () => {
     const res = await request(app).post('/api/auth/refresh').send({ refreshToken: '' });
     expect(res.status).toBe(400);
-    expect(Array.isArray(res.body.details)).toBe(true);
+    const errObj = res.body.error ?? res.body;
+    expect(Array.isArray(errObj.details)).toBe(true);
   });
 
   it('does not invoke the controller when validation fails', async () => {
@@ -333,9 +333,10 @@ describe('POST /api/auth/revoke — input validation', () => {
   it('returns 400 when refreshToken is missing', async () => {
     const res = await request(app).post('/api/auth/revoke').send({});
     expect(res.status).toBe(400);
-    expect(res.body).toHaveProperty('code');
+    const errObj = res.body.error ?? res.body;
+    expect(errObj).toHaveProperty('code');
     expect(res.body).toHaveProperty('requestId');
-    expect(Array.isArray(res.body.details)).toBe(true);
+    expect(Array.isArray(errObj.details)).toBe(true);
   });
 
   it('does not invoke the controller when validation fails', async () => {
@@ -357,6 +358,7 @@ describe('POST /api/auth/revoke-all — authentication guard', () => {
   let app: express.Express;
 
   beforeEach(() => {
+    process.env.JWT_SECRET = 'test-auth-route-jwt-secret';
     ctrl = makeController();
     app  = buildApp(ctrl);
   });
@@ -364,7 +366,8 @@ describe('POST /api/auth/revoke-all — authentication guard', () => {
   it('returns 401 when no credentials are supplied', async () => {
     const res = await request(app).post('/api/auth/revoke-all').send({});
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty('code');
+    const errObj = res.body.error ?? res.body;
+    expect(errObj).toHaveProperty('code');
     expect(res.body).toHaveProperty('requestId');
   });
 
@@ -373,10 +376,11 @@ describe('POST /api/auth/revoke-all — authentication guard', () => {
     expect(ctrl.revokeAllTokens).not.toHaveBeenCalled();
   });
 
-  it('invokes authController.revokeAllTokens when x-user-id is provided', async () => {
+  it('invokes authController.revokeAllTokens when valid Bearer token is provided', async () => {
+    const token = jwt.sign({ userId: 'user-123' }, process.env.JWT_SECRET!, { algorithm: 'HS256' });
     const res = await request(app)
       .post('/api/auth/revoke-all')
-      .set('x-user-id', 'user-123')
+      .set('Authorization', `Bearer ${token}`)
       .send({});
     expect(ctrl.revokeAllTokens).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(200);
@@ -388,6 +392,7 @@ describe('GET /api/auth/tokens — authentication guard', () => {
   let app: express.Express;
 
   beforeEach(() => {
+    process.env.JWT_SECRET = 'test-auth-route-jwt-secret';
     ctrl = makeController();
     app  = buildApp(ctrl);
   });
@@ -395,7 +400,8 @@ describe('GET /api/auth/tokens — authentication guard', () => {
   it('returns 401 when no credentials are supplied', async () => {
     const res = await request(app).get('/api/auth/tokens');
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty('code');
+    const errObj = res.body.error ?? res.body;
+    expect(errObj).toHaveProperty('code');
     expect(res.body).toHaveProperty('requestId');
   });
 
@@ -404,10 +410,11 @@ describe('GET /api/auth/tokens — authentication guard', () => {
     expect(ctrl.getTokenInfo).not.toHaveBeenCalled();
   });
 
-  it('invokes authController.getTokenInfo when x-user-id is provided', async () => {
+  it('invokes authController.getTokenInfo when valid Bearer token is provided', async () => {
+    const token = jwt.sign({ userId: 'user-123' }, process.env.JWT_SECRET!, { algorithm: 'HS256' });
     const res = await request(app)
       .get('/api/auth/tokens')
-      .set('x-user-id', 'user-123');
+      .set('Authorization', `Bearer ${token}`);
     expect(ctrl.getTokenInfo).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(200);
   });
@@ -447,5 +454,239 @@ describe('X-Request-Id propagation', () => {
     const res = await request(app).post('/api/auth/revoke-all').send({});
     expect(res.headers['x-request-id']).toBeDefined();
     expect(res.body.requestId).toBe(res.headers['x-request-id']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /auth/wallet — Stellar signature verification (#1206)
+// ---------------------------------------------------------------------------
+
+import jwt from 'jsonwebtoken';
+import { Keypair } from '@stellar/stellar-sdk';
+import { createAuthRoutes } from './authRoutes.js';
+import { createWalletLoginChallenge } from '../controllers/authController.js';
+import { RefreshTokenService } from '../services/refreshTokenService.js';
+import type { RefreshToken } from '../types/auth.js';
+import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
+
+function createInMemoryRefreshTokenRepository(): RefreshTokenRepository & { stored: RefreshToken[] } {
+  const stored: RefreshToken[] = [];
+  return {
+    stored,
+    async createRefreshToken(token) {
+      const record: RefreshToken = {
+        ...token,
+        id: token.id ?? 'test-id',
+      };
+      stored.push(record);
+      return record;
+    },
+    async findRefreshTokenById(tokenId, userId) {
+      return stored.find((t) => t.id === tokenId && t.userId === userId) ?? null;
+    },
+    async findRefreshTokenByHash(tokenHash, userId) {
+      return stored.find((t) => t.tokenHash === tokenHash && t.userId === userId) ?? null;
+    },
+    async updateLastUsed() {},
+    async revokeRefreshToken(tokenId, userId) {
+      const target = stored.find((t) => t.id === tokenId && t.userId === userId);
+      if (target) target.isRevoked = true;
+    },
+    async revokeFamily(familyId, userId) {
+      for (const t of stored) {
+        if (t.familyId === familyId && t.userId === userId) t.isRevoked = true;
+      }
+    },
+    async revokeAllUserTokens(userId) {
+      for (const t of stored) {
+        if (t.userId === userId) t.isRevoked = true;
+      }
+    },
+    async cleanupExpiredTokens() {
+      return 0;
+    },
+    async countActiveTokens(userId) {
+      return stored.filter((t) => t.userId === userId && !t.isRevoked).length;
+    },
+    async listRefreshTokens(userId, limit) {
+      const list = stored.filter((t) => t.userId === userId).slice(0, limit);
+      return { tokens: list, hasMore: false };
+    },
+  };
+}
+
+describe('POST /auth/wallet — Stellar wallet signature verification (#1206)', () => {
+  const jwtSecret = 'test-wallet-jwt-secret-key-for-1206';
+  let refreshTokenService: RefreshTokenService;
+  let repository: ReturnType<typeof createInMemoryRefreshTokenRepository>;
+  let authController: AuthController;
+  let walletApp: express.Express;
+
+  beforeEach(() => {
+    refreshTokenService = new RefreshTokenService({
+      jwtSecret,
+      accessTokenExpiry: '15m',
+      refreshTokenExpiry: '7d',
+    });
+    repository = createInMemoryRefreshTokenRepository();
+    authController = new AuthController({
+      refreshTokenService,
+      refreshTokenRepository: repository,
+    });
+
+    walletApp = express();
+    walletApp.use(requestIdMiddleware);
+    walletApp.use(express.json());
+    walletApp.use('/auth', createAuthRoutes(authController));
+    walletApp.use(errorHandler);
+  });
+
+  it('returns 200 with a valid access token and persisted refresh token for a valid Stellar signature', async () => {
+    const keypair = Keypair.random();
+    const walletAddress = keypair.publicKey();
+    const message = createWalletLoginChallenge(walletAddress);
+    const signature = keypair.sign(Buffer.from(message, 'utf8')).toString('hex');
+
+    const res = await request(walletApp)
+      .post('/auth/wallet')
+      .send({ walletAddress, signature, message });
+
+    expect(res.status).toBe(200);
+    const data = res.body.data ?? res.body;
+    expect(typeof data.accessToken).toBe('string');
+    expect(typeof data.refreshToken).toBe('string');
+    expect(data.tokenType).toBe('Bearer');
+
+    const decoded = jwt.verify(data.accessToken, jwtSecret) as Record<string, unknown>;
+    expect(decoded.userId).toBe(walletAddress);
+    expect(decoded.walletAddress).toBe(walletAddress);
+    expect(decoded.type).toBe('access');
+
+    expect(repository.stored).toHaveLength(1);
+    expect(repository.stored[0].userId).toBe(walletAddress);
+  });
+
+  it('accepts base64-encoded Stellar signatures as well as hex', async () => {
+    const keypair = Keypair.random();
+    const walletAddress = keypair.publicKey();
+    const message = createWalletLoginChallenge(walletAddress);
+    const signature = keypair.sign(Buffer.from(message, 'utf8')).toString('base64');
+
+    const res = await request(walletApp)
+      .post('/auth/wallet')
+      .send({ walletAddress, signature, message });
+
+    expect(res.status).toBe(200);
+    expect(repository.stored).toHaveLength(1);
+  });
+
+  it('returns 401 when signature was produced by a different keypair', async () => {
+    const victimKeypair = Keypair.random();
+    const attackerKeypair = Keypair.random();
+    const walletAddress = victimKeypair.publicKey();
+    const message = createWalletLoginChallenge(walletAddress);
+    const signature = attackerKeypair.sign(Buffer.from(message, 'utf8')).toString('hex');
+
+    const res = await request(walletApp)
+      .post('/auth/wallet')
+      .send({ walletAddress, signature, message });
+
+    expect(res.status).toBe(401);
+    expect((res.body.error ?? res.body).code).toBe('INVALID_TOKEN');
+    expect(repository.stored).toHaveLength(0);
+  });
+
+  it('returns 401 when the signed message is tampered with', async () => {
+    const keypair = Keypair.random();
+    const walletAddress = keypair.publicKey();
+    const message = createWalletLoginChallenge(walletAddress);
+    const signature = keypair.sign(Buffer.from(message, 'utf8')).toString('hex');
+
+    const res = await request(walletApp)
+      .post('/auth/wallet')
+      .send({
+        walletAddress,
+        signature,
+        message: `${message}\nTampered: true`,
+      });
+
+    expect(res.status).toBe(401);
+    expect((res.body.error ?? res.body).code).toBe('INVALID_TOKEN');
+    expect(repository.stored).toHaveLength(0);
+  });
+
+  it('returns 401 for malformed Stellar wallet addresses', async () => {
+    const keypair = Keypair.random();
+    const message = 'Callora Wallet Login';
+    const signature = keypair.sign(Buffer.from(message, 'utf8')).toString('hex');
+
+    const res = await request(walletApp)
+      .post('/auth/wallet')
+      .send({
+        walletAddress: 'not-a-valid-stellar-public-key',
+        signature,
+        message,
+      });
+
+    expect(res.status).toBe(401);
+    expect((res.body.error ?? res.body).code).toBe('INVALID_TOKEN');
+  });
+
+  it('returns 401 when the login challenge timestamp is expired', async () => {
+    const keypair = Keypair.random();
+    const walletAddress = keypair.publicKey();
+    const expiredTimestamp = new Date(Date.now() - 10 * 60 * 1000); // 10 minutes ago
+    const message = createWalletLoginChallenge(walletAddress, { timestamp: expiredTimestamp });
+    const signature = keypair.sign(Buffer.from(message, 'utf8')).toString('hex');
+
+    const res = await request(walletApp)
+      .post('/auth/wallet')
+      .send({ walletAddress, signature, message });
+
+    expect(res.status).toBe(401);
+    expect((res.body.error ?? res.body).code).toBe('TOKEN_EXPIRED');
+    expect(repository.stored).toHaveLength(0);
+  });
+
+  it('rejects replayed login challenges with 401', async () => {
+    const keypair = Keypair.random();
+    const walletAddress = keypair.publicKey();
+    const message = createWalletLoginChallenge(walletAddress);
+    const signature = keypair.sign(Buffer.from(message, 'utf8')).toString('hex');
+
+    const first = await request(walletApp)
+      .post('/auth/wallet')
+      .send({ walletAddress, signature, message });
+    expect(first.status).toBe(200);
+
+    const replay = await request(walletApp)
+      .post('/auth/wallet')
+      .send({ walletAddress, signature, message });
+    expect(replay.status).toBe(401);
+    expect((replay.body.error ?? replay.body).code).toBe('INVALID_TOKEN');
+    expect(repository.stored).toHaveLength(1);
+  });
+
+  it('enforces IP rate limiting on POST /auth/wallet', async () => {
+    const keypair = Keypair.random();
+    const walletAddress = keypair.publicKey();
+
+    for (let i = 0; i < 5; i++) {
+      const msg = createWalletLoginChallenge(walletAddress, { nonce: `nonce-${i}` });
+      const sig = keypair.sign(Buffer.from(msg, 'utf8')).toString('hex');
+      const okRes = await request(walletApp)
+        .post('/auth/wallet')
+        .send({ walletAddress, signature: sig, message: msg });
+      expect(okRes.status).toBe(200);
+    }
+
+    const sixthMsg = createWalletLoginChallenge(walletAddress, { nonce: 'nonce-6' });
+    const sixthSig = keypair.sign(Buffer.from(sixthMsg, 'utf8')).toString('hex');
+    const throttled = await request(walletApp)
+      .post('/auth/wallet')
+      .send({ walletAddress, signature: sixthSig, message: sixthMsg });
+
+    expect(throttled.status).toBe(429);
+    expect((throttled.body.error ?? throttled.body).code).toBe('TOO_MANY_REQUESTS');
   });
 });
