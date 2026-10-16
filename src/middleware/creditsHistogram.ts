@@ -8,9 +8,16 @@ export function creditsHistogramMiddleware(
   next: NextFunction,
 ): void {
   const start = performance.now();
-  res.on('finish', () => {
-    const durationMs = performance.now() - start;
+  let recorded = false;
+
+  res.once('finish', () => {
+    if (recorded || req.aborted) {
+      return;
+    }
+    recorded = true;
+    const durationMs = Math.max(0, performance.now() - start);
     recordCreditsDuration(res.statusCode, durationMs);
   });
+
   next();
 }

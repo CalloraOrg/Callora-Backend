@@ -7,15 +7,32 @@ import {
   recordMaintenanceDuration,
 } from '../metrics/registry.js';
 
+function resolveBoundedAdminRouteTemplate(req: Request): string {
+  const baseUrl = req.baseUrl || '/api/admin';
+  const routePath = typeof req.route?.path === 'string' ? req.route.path : null;
+  if (routePath !== null) {
+    if (routePath === '/' || routePath === '') {
+      return baseUrl;
+    }
+    return `${baseUrl}${routePath.startsWith('/') ? routePath : `/${routePath}`}`;
+  }
+  return `${baseUrl}/:unmatched`;
+}
+
 export function billingDeductHistogramMiddleware(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
   const start = performance.now();
+  let recorded = false;
 
-  res.on('finish', () => {
-    const durationMs = performance.now() - start;
+  res.once('finish', () => {
+    if (recorded || req.aborted) {
+      return;
+    }
+    recorded = true;
+    const durationMs = Math.max(0, performance.now() - start);
     recordBillingDeductDuration(res.statusCode, durationMs);
   });
 
@@ -23,14 +40,19 @@ export function billingDeductHistogramMiddleware(
 }
 
 export function refreshTokenHistogramMiddleware(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
   const start = performance.now();
+  let recorded = false;
 
-  res.on('finish', () => {
-    const durationMs = performance.now() - start;
+  res.once('finish', () => {
+    if (recorded || req.aborted) {
+      return;
+    }
+    recorded = true;
+    const durationMs = Math.max(0, performance.now() - start);
     recordRefreshTokenDuration(res.statusCode, durationMs);
   });
 
@@ -38,14 +60,19 @@ export function refreshTokenHistogramMiddleware(
 }
 
 export function maintenanceHistogramMiddleware(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
   const start = performance.now();
+  let recorded = false;
 
-  res.on('finish', () => {
-    const durationMs = performance.now() - start;
+  res.once('finish', () => {
+    if (recorded || req.aborted) {
+      return;
+    }
+    recorded = true;
+    const durationMs = Math.max(0, performance.now() - start);
     recordMaintenanceDuration(res.statusCode, durationMs);
   });
 
@@ -58,10 +85,15 @@ export function adminHistogramMiddleware(
   next: NextFunction,
 ): void {
   const start = performance.now();
-  const route = req.baseUrl + (req.route?.path ?? req.path);
+  let recorded = false;
 
-  res.on('finish', () => {
-    const durationMs = performance.now() - start;
+  res.once('finish', () => {
+    if (recorded || req.aborted) {
+      return;
+    }
+    recorded = true;
+    const durationMs = Math.max(0, performance.now() - start);
+    const route = resolveBoundedAdminRouteTemplate(req);
     recordAdminDuration(route, res.statusCode, durationMs);
   });
 

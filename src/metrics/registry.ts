@@ -26,21 +26,21 @@ const creditsDuration = new client.Histogram({
 export function recordBillingDeductDuration(statusCode: number, durationMs: number): void {
   billingDeductDuration.observe(
     { route: '/api/billing/deduct', status_code: String(statusCode) },
-    durationMs / 1000,
+    Math.max(0, durationMs) / 1000,
   );
 }
 
 export function recordRefreshTokenDuration(statusCode: number, durationMs: number): void {
   refreshTokenDuration.observe(
     { route: '/api/refresh-token', status_code: String(statusCode) },
-    durationMs / 1000,
+    Math.max(0, durationMs) / 1000,
   );
 }
 
 export function recordCreditsDuration(statusCode: number, durationMs: number): void {
   creditsDuration.observe(
     { route: '/api/billing/credits', status_code: String(statusCode) },
-    durationMs / 1000,
+    Math.max(0, durationMs) / 1000,
   );
 }
 
@@ -50,6 +50,10 @@ export function resetBillingDeductMetrics(): void {
 
 export function resetRefreshTokenMetrics(): void {
   refreshTokenDuration.reset();
+}
+
+export function resetCreditsMetrics(): void {
+  creditsDuration.reset();
 }
 
 // ── Subscriptions latency histogram (FWC26 issue #742) ─────────────────────
