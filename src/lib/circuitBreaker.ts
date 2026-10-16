@@ -44,6 +44,8 @@ export interface CircuitBreakerMetrics {
 export interface CircuitBreakerStore {
   get(breakerKey: string): Promise<CircuitBreakerMetrics | null>;
   set(breakerKey: string, metrics: CircuitBreakerMetrics): Promise<void>;
+  has?(breakerKey: string): boolean;
+  keys?(): Promise<string[]> | string[];
 }
 
 export class InMemoryCircuitBreakerStore implements CircuitBreakerStore {
@@ -57,10 +59,19 @@ export class InMemoryCircuitBreakerStore implements CircuitBreakerStore {
     this.store.set(breakerKey, metrics);
   }
 
+  has(breakerKey: string): boolean {
+    return this.store.has(breakerKey);
+  }
+
+  keys(): string[] {
+    return Array.from(this.store.keys());
+  }
+
   reset(): void {
     this.store.clear();
   }
 }
+
 
 const DEFAULT_CONFIG: Required<CircuitBreakerConfig> = {
   failureThreshold: 5,
@@ -504,6 +515,15 @@ export function createCircuitBreaker(config: CircuitBreakerConfig = {}, store?: 
  */
 export class BreakerRegistry {
   private breakers = new Map<string, CircuitBreaker>();
+  private readonly store?: CircuitBreakerStore;
+
+  constructor(store?: CircuitBreakerStore) {
+    this.store = store;
+  }
+
+  getStore(): CircuitBreakerStore | undefined {
+    return this.store;
+  }
 
   /**
    * Returns the existing breaker for the given slug, or creates one.
@@ -511,18 +531,26 @@ export class BreakerRegistry {
   getOrCreate(slug: string, config?: CircuitBreakerConfig): CircuitBreaker {
     let breaker = this.breakers.get(slug);
     if (!breaker) {
-      breaker = new CircuitBreaker(config);
+      breaker = new CircuitBreaker(config, this.store);
       this.breakers.set(slug, breaker);
     }
     return breaker;
   }
 
   /**
-   * Retrieve the existing breaker for the given slug without creating one.
+   * Retrieve the existing breaker for the given slug without creating one,
+   * unless the backing CircuitBreakerStore already tracks state for this key.
    * Returns undefined if no breaker has been registered for this slug.
    */
   get(slug: string): CircuitBreaker | undefined {
-    return this.breakers.get(slug);
+    const existing = this.breakers.get(slug);
+    if (existing) {
+      return existing;
+    }
+    if (this.store?.has?.(slug)) {
+      return this.getOrCreate(slug);
+    }
+    return undefined;
   }
 
   /**
@@ -530,8 +558,14 @@ export class BreakerRegistry {
    * Returns CLOSED if no breaker exists yet (no failures recorded).
    */
   async getState(slug: string): Promise<CircuitBreakerState> {
-    const breaker = this.breakers.get(slug);
+    const breaker = this.get(slug);
     if (!breaker) {
+      if (this.store) {
+        const stored = await this.store.get(slug);
+        if (stored) {
+          return this.getOrCreate(slug).getState(slug);
+        }
+      }
       return CircuitBreakerState.CLOSED;
     }
     return breaker.getState(slug);
@@ -541,6 +575,13 @@ export class BreakerRegistry {
    * List all registered breakers with their current state and metrics.
    */
   async list(): Promise<Array<{ slug: string; state: CircuitBreakerState; metrics: CircuitBreakerMetrics }>> {
+    if (this.store?.keys) {
+      const storeKeys = await this.store.keys();
+      for (const key of storeKeys) {
+        this.getOrCreate(key);
+      }
+    }
+
     const entries: Array<{ slug: string; state: CircuitBreakerState; metrics: CircuitBreakerMetrics }> = [];
     for (const [slug, breaker] of this.breakers) {
       const metrics = await breaker.getMetrics(slug);
@@ -550,7 +591,19 @@ export class BreakerRegistry {
   }
 }
 
+let _defaultStore: InMemoryCircuitBreakerStore | undefined;
 let _defaultRegistry: BreakerRegistry | undefined;
+
+/**
+ * Returns a lazily-created singleton InMemoryCircuitBreakerStore shared between
+ * the proxy router and admin circuit-breaker controls when no custom store is injected.
+ */
+export function getDefaultCircuitBreakerStore(): InMemoryCircuitBreakerStore {
+  if (!_defaultStore) {
+    _defaultStore = new InMemoryCircuitBreakerStore();
+  }
+  return _defaultStore;
+}
 
 /**
  * Returns a lazily-created singleton BreakerRegistry.
@@ -558,10 +611,11 @@ let _defaultRegistry: BreakerRegistry | undefined;
  */
 export function getDefaultBreakerRegistry(): BreakerRegistry {
   if (!_defaultRegistry) {
-    _defaultRegistry = new BreakerRegistry();
+    _defaultRegistry = new BreakerRegistry(getDefaultCircuitBreakerStore());
   }
   return _defaultRegistry;
 }
+
 
 /**
  * Wraps an operation with a per-endpoint circuit breaker drawn from a registry.

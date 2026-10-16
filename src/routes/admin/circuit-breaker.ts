@@ -17,6 +17,7 @@ import {
   BreakerRegistry,
   CircuitBreakerState,
   getDefaultBreakerRegistry,
+  type CircuitBreakerStore,
 } from '../../lib/circuitBreaker.js';
 import {
   NotFoundError,
@@ -41,6 +42,7 @@ const tripBodySchema = z.object({
 
 export interface AdminCircuitBreakerRouterDeps {
   registry?: BreakerRegistry;
+  circuitBreakerStore?: CircuitBreakerStore;
 }
 
 function mapState(state: CircuitBreakerState): string {
@@ -56,7 +58,11 @@ export function createAdminCircuitBreakerRouter(
   deps: AdminCircuitBreakerRouterDeps = {},
 ): Router {
   const router = Router();
-  const registry = deps.registry ?? getDefaultBreakerRegistry();
+  const registry = deps.registry
+    ?? (deps.circuitBreakerStore
+      ? new BreakerRegistry(deps.circuitBreakerStore)
+      : getDefaultBreakerRegistry());
+
 
   // ── GET /api/admin/circuit-breakers ────────────────────────────────────
   /**

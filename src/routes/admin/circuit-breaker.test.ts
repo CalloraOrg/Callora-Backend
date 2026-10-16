@@ -407,4 +407,65 @@ describe('Admin Circuit Breaker Endpoint', () => {
       expect(res.status).toBe(503);
     });
   });
+
+  // ── Mounted under /api/admin + shared store with proxy (#1217) ─────────
+
+  describe('Mounted under /api/admin sharing store with proxy (#1217)', () => {
+    it('mounts under /api/admin/circuit-breaker and /api/admin/circuit-breakers, shares store with proxy, and audit-logs reset', async () => {
+      process.env.ADMIN_API_KEY = ADMIN_KEY;
+      const { createAdminRouter } = await import('../admin.js');
+      const { CircuitBreaker, InMemoryCircuitBreakerStore } = await import('../../lib/circuitBreaker.js');
+      const { logger } = await import('../../logger.js');
+      const auditSpy = jest.spyOn(logger, 'audit');
+
+      const sharedStore = new InMemoryCircuitBreakerStore();
+      const proxyBreaker = new CircuitBreaker({ failureThreshold: 2 }, sharedStore);
+
+      // Simulate proxy tripping breaker for api-42
+      await proxyBreaker.execute('api-42', async () => { throw new Error('upstream down'); }).catch(() => {});
+      await proxyBreaker.execute('api-42', async () => { throw new Error('upstream down'); }).catch(() => {});
+      expect(await proxyBreaker.getState('api-42')).toBe(CircuitBreakerState.OPEN);
+
+      const app = express();
+      app.use(express.json());
+      app.use('/api/admin', createAdminRouter({ circuitBreakerStore: sharedStore }));
+      app.use(errorHandler);
+
+      // Unauthenticated call returns 401
+      const unauthRes = await request(app).get('/api/admin/circuit-breaker');
+      expect(unauthRes.status).toBe(401);
+
+      // GET /api/admin/circuit-breaker lists the proxy's tripped breaker
+      const listRes = await request(app)
+        .get('/api/admin/circuit-breaker')
+        .set('x-admin-api-key', ADMIN_KEY);
+      expect(listRes.status).toBe(200);
+      expect(listRes.body.data).toEqual([
+        expect.objectContaining({ slug: 'api-42', state: 'open' }),
+      ]);
+
+      // POST /api/admin/circuit-breakers/api-42/reset moves proxy breaker to CLOSED and audit-logs with adminActor
+      const resetRes = await request(app)
+        .post('/api/admin/circuit-breakers/api-42/reset')
+        .set('x-admin-api-key', ADMIN_KEY);
+      expect(resetRes.status).toBe(200);
+      expect(resetRes.body.data).toEqual({
+        slug: 'api-42',
+        priorState: 'open',
+        currentState: 'closed',
+      });
+
+      expect(await proxyBreaker.getState('api-42')).toBe(CircuitBreakerState.CLOSED);
+      expect(auditSpy).toHaveBeenCalledWith(
+        'RESET_CIRCUIT_BREAKER',
+        expect.any(String),
+        expect.objectContaining({
+          breakerKey: 'api-42',
+          priorState: 'open',
+          currentState: 'closed',
+        }),
+      );
+    });
+  });
 });
+

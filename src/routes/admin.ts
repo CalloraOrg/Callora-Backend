@@ -33,9 +33,27 @@ import { createAdminKeyConcurrencyRouter } from './admin/keys/concurrency.js';
 import { createAdminAuditRouter } from './admin/audit.js';
 import { createMaintenanceBannerRouter } from './admin/maintenance/banner.js';
 import { createAdminDevMetricsRouter } from './admin/metrics.js';
+import {
+  createAdminCircuitBreakerRouter,
+  type AdminCircuitBreakerRouterDeps,
+} from './admin/circuit-breaker.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const usageStore: UsageAdminStore = createUsageStore();
+
+export interface AdminRouterDeps extends AdminCircuitBreakerRouterDeps {}
+
+export function createAdminRouter(deps: AdminRouterDeps = {}): Router {
+  const adminRouter = Router();
+  adminRouter.use(createAdminIpAllowlist());
+  adminRouter.use(adminAuth);
+  adminRouter.use(adminLogMiddleware);
+  adminRouter.use(etagMiddleware);
+  const circuitBreakerRouter = createAdminCircuitBreakerRouter(deps);
+  adminRouter.use('/circuit-breakers', circuitBreakerRouter);
+  adminRouter.use('/circuit-breaker', circuitBreakerRouter);
+  return adminRouter;
+}
 
 const router = Router();
 
@@ -44,6 +62,10 @@ router.use(createAdminIpAllowlist());
 router.use(adminAuth);
 router.use(adminLogMiddleware);
 router.use(etagMiddleware);
+const defaultAdminCircuitBreakerRouter = createAdminCircuitBreakerRouter();
+router.use('/circuit-breakers', defaultAdminCircuitBreakerRouter);
+router.use('/circuit-breaker', defaultAdminCircuitBreakerRouter);
+
 router.get('/users', async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query as Record<string, string>);
