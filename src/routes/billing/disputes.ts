@@ -37,11 +37,11 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
     '/',
     requireAuth,
     bodyValidator(openDisputeSchema),
-    (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actor = res.locals.authenticatedUser!.id;
         const input = openDisputeSchema.parse(req.body);
-        const dispute = svc.openDispute(input, actor);
+        const dispute = await svc.openDispute(input, actor);
 
         logger.audit('DISPUTE_OPENED', actor, {
           disputeId: dispute.id,
@@ -59,10 +59,10 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
   router.get(
     '/',
     requireAuth,
-    (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actor = res.locals.authenticatedUser!.id;
-        const disputes = svc.listForDeveloper(actor);
+        const disputes = await svc.listForDeveloper(actor);
         res.json({ disputes, total: disputes.length });
       } catch (err) {
         next(err);
@@ -72,9 +72,9 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
 
   // ── GET /admin/all  — admin lists all disputes ───────────────────────────
   // Registered before /:id so 'admin' is not treated as a dispute id
-  router.get('/admin/all', adminAuth, (_req, res, next) => {
+  router.get('/admin/all', adminAuth, async (_req, res, next) => {
     try {
-      const disputes = svc.listAll();
+      const disputes = await svc.listAll();
       res.json({ disputes, total: disputes.length });
     } catch (err) {
       next(err);
@@ -85,11 +85,11 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
   router.get(
     '/:id',
     requireAuth,
-    (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actor = res.locals.authenticatedUser!.id;
-        const dispute = svc.getDisputeForDeveloper(req.params.id, actor);
-        const events = svc.getEvents(dispute.id);
+        const dispute = await svc.getDisputeForDeveloper(req.params.id, actor);
+        const events = await svc.getEvents(dispute.id);
         res.json({ dispute, events });
       } catch (err) {
         next(err);
@@ -102,7 +102,7 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
     '/:id/resolve',
     adminAuth,
     bodyValidator(resolveDisputeSchema),
-    (req, res, next) => {
+    async (req, res, next) => {
       try {
         const adminActor = (res.locals as { adminActor?: string }).adminActor;
         if (!adminActor) {
@@ -111,7 +111,7 @@ export function createDisputesRouter(deps: DisputesRouterDeps = {}): Router {
         }
 
         const input = resolveDisputeSchema.parse(req.body);
-        const dispute = svc.resolveDispute(req.params.id, input, adminActor);
+        const dispute = await svc.resolveDispute(req.params.id, input, adminActor);
 
         logger.audit('DISPUTE_RESOLVED', adminActor, {
           disputeId: dispute.id,

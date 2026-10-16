@@ -111,11 +111,20 @@ import {
 } from "./middleware/envelope.js";
 import { openApiErrorHandler } from "./middleware/openApiErrorHandler.js";
 //import * as OpenApiValidator from 'express-openapi-validator';
+import { createDisputesRouter } from "./routes/billing/disputes.js";
+import {
+  DisputeService,
+  InMemoryDisputeRepository,
+  PgDisputeRepository,
+  type DisputeRepository,
+} from "./services/disputeService.js";
 
 interface AppDependencies extends SorobanBillingDependencies {
   usageEventsRepository?: UsageEventsRepository;
   healthCheckConfig?: HealthCheckConfig;
   vaultRepository?: VaultRepository;
+  disputeRepository?: DisputeRepository;
+  disputeService?: DisputeService;
   apiRepository?: ApiRepository;
   developerRepository?: DeveloperRepository;
   findDeveloperByUserId?: (userId: string) => Promise<Developer | undefined>;
@@ -453,6 +462,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
 
   // Webhook management routes
   app.use('/api/webhooks', createWebhooksRouter());
+
+  // Billing disputes — backed by PgDisputeRepository against pool in production/dev
+  const disputeRepository: DisputeRepository =
+    dependencies?.disputeRepository ??
+    (process.env.NODE_ENV === "test"
+      ? new InMemoryDisputeRepository()
+      : new PgDisputeRepository(pool));
+  const disputeService =
+    dependencies?.disputeService ?? new DisputeService(disputeRepository);
+  app.use("/api/billing/disputes", createDisputesRouter({ disputeService }));
 
   // Mount all routes including billing and limits
   app.use(
