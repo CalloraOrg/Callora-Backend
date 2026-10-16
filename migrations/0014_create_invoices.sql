@@ -24,3 +24,6 @@ ON invoices(period_id);
 
 CREATE INDEX idx_invoice_developer
 ON invoices(developer_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_period_developer
+ON invoices(period_id, developer_id);

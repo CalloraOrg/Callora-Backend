@@ -19,34 +19,20 @@ export class InvoiceService {
     const year = Number(periodMatch[1]);
     const month = Number(periodMatch[2]);
     const periodStart = `${periodId}-01`;
-    const nextPeriodStart = `${month === 12 ? year + 1 : year}-${String(month === 12 ? 1 : month + 1).padStart(2, "0")}-01`;
     const periodEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+    const periodStartUtc = new Date(Date.UTC(year, month - 1, 1)).toISOString();
+    const nextPeriodStartUtc = new Date(
+      Date.UTC(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 1),
+    ).toISOString();
     const client = await this.pool.connect();
     const createdEvents: Array<{ invoiceId: string; developerId: string; total: number }> = [];
 
     try {
       await client.query("BEGIN");
 
-      // Idempotency check
-      const existing = await client.query(
-        `SELECT id
-           FROM invoices
-          WHERE period_id = $1
-          LIMIT 1`,
-        [periodId]
-      );
-
-      if (existing.rows.length > 0) {
-        await client.query("ROLLBACK");
-
-        return {
-          success: true,
-          periodId,
-          invoicesCreated: 0,
-        };
-      }
-
-      // Aggregate usage strictly within the requested calendar month.
+      // Aggregate usage strictly within the requested calendar month using a
+      // half-open UTC timestamp range [periodStartUtc, nextPeriodStartUtc) so
+      // Postgres can use an index on usage_events(created_at).
       const usage = await client.query(
         `
         SELECT
@@ -59,7 +45,15 @@ export class InvoiceService {
           AND created_at < $2
         GROUP BY user_id, api_id
         `,
-        [periodStart, nextPeriodStart]
+        [periodStartUtc, nextPeriodStartUtc]
+      );
+
+      const existingInvoices = await client.query(
+        `SELECT developer_id FROM invoices WHERE period_id = $1`,
+        [periodId]
+      );
+      const alreadyInvoiced = new Set<string>(
+        existingInvoices.rows.map((row: { developer_id: string }) => row.developer_id)
       );
 
       let invoicesCreated = 0;
@@ -75,6 +69,10 @@ export class InvoiceService {
       }
 
       for (const [developerId, items] of grouped.entries()) {
+        if (alreadyInvoiced.has(developerId)) {
+          continue;
+        }
+
         const total = items.reduce(
           (sum, item) => sum + Number(item.amount),
           0
@@ -98,10 +96,17 @@ export class InvoiceService {
             $4,
             $5
           )
+          ON CONFLICT (developer_id, period_id) DO NOTHING
           RETURNING id
           `,
           [developerId, periodId, periodStart, periodEnd, total]
         );
+
+        if (invoice.rows.length === 0) {
+          // Invoice already exists for this (developer_id, period_id) from a
+          // prior partial run; skip line items and continue to remaining devs.
+          continue;
+        }
 
         const invoiceId = invoice.rows[0].id;
 
