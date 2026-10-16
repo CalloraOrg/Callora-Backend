@@ -104,9 +104,52 @@ function isLoopbackHost(host: string): boolean {
   return (LOOPBACK_HOSTS as readonly string[]).includes(host);
 }
 
+const INTERNAL_QUERY_PARAM_NAMES = new Set([
+  'api_key',
+  'apikey',
+  'x-api-key',
+  'x_api_key',
+]);
+
+/**
+ * Sanitizes a raw query string (without leading '?') by stripping gateway-internal
+ * authentication query parameters while preserving original percent-encoding and
+ * parameter ordering for all remaining parameters.
+ */
+export function sanitizeUpstreamQueryString(rawQuery?: string): string {
+  if (!rawQuery) {
+    return '';
+  }
+
+  const withoutPrefix = rawQuery.startsWith('?') ? rawQuery.slice(1) : rawQuery;
+  if (!withoutPrefix) {
+    return '';
+  }
+
+  const keptSegments = withoutPrefix
+    .split('&')
+    .filter((segment) => {
+      if (!segment) {
+        return false;
+      }
+      const eqIndex = segment.indexOf('=');
+      const rawKey = eqIndex >= 0 ? segment.slice(0, eqIndex) : segment;
+      let decodedKey = rawKey;
+      try {
+        decodedKey = decodeURIComponent(rawKey);
+      } catch {
+        // Preserve raw key if malformed percent-encoding is encountered
+      }
+      return !INTERNAL_QUERY_PARAM_NAMES.has(decodedKey.trim().toLowerCase());
+    });
+
+  return keptSegments.join('&');
+}
+
 function parseAndValidateBaseUrl(
   rawUrl: string,
   options?: UpstreamTargetValidationOptions,
+  allowQueryString = false,
 ): { canonicalUrl: string; host: string; allowlist: readonly string[] } {
   const trimmedUrl = rawUrl.trim();
   let parsed: URL;
@@ -129,7 +172,7 @@ function parseAndValidateBaseUrl(
     throw new Error('base_url must not include embedded credentials.');
   }
 
-  if (parsed.search || parsed.hash) {
+  if (parsed.hash || (!allowQueryString && parsed.search)) {
     throw new Error('base_url must not include query strings or fragments.');
   }
 
@@ -165,14 +208,14 @@ export function validateUpstreamBaseUrl(
   rawUrl: string,
   options?: UpstreamTargetValidationOptions,
 ): string {
-  return parseAndValidateBaseUrl(rawUrl, options).canonicalUrl;
+  return parseAndValidateBaseUrl(rawUrl, options, false).canonicalUrl;
 }
 
 export async function validateResolvedUpstreamTarget(
   rawUrl: string,
   options?: UpstreamTargetValidationOptions,
 ): Promise<string> {
-  const { canonicalUrl, host, allowlist } = parseAndValidateBaseUrl(rawUrl, options);
+  const { canonicalUrl, host, allowlist } = parseAndValidateBaseUrl(rawUrl, options, true);
 
   if (isIP(host) !== 0) {
     return canonicalUrl;
@@ -201,18 +244,28 @@ export async function validateResolvedUpstreamTarget(
   return canonicalUrl;
 }
 
-export function buildUpstreamTargetUrl(baseUrl: string, path: string): string {
+export function buildUpstreamTargetUrl(
+  baseUrl: string,
+  path: string,
+  rawQuery?: string,
+): string {
   const parsed = new URL(baseUrl);
-  const normalizedPath = path.replace(/^\/+/, '');
-
-  if (!normalizedPath) {
-    return parsed.toString();
+  if (parsed.search || parsed.hash) {
+    throw new Error('base_url must not include query strings or fragments.');
   }
 
-  const basePath = parsed.pathname.endsWith('/')
-    ? parsed.pathname
-    : `${parsed.pathname}/`;
-  parsed.pathname = `${basePath}${normalizedPath}`;
+  const normalizedPath = path.replace(/^\/+/, '');
 
-  return parsed.toString();
+  if (normalizedPath) {
+    const basePath = parsed.pathname.endsWith('/')
+      ? parsed.pathname
+      : `${parsed.pathname}/`;
+    parsed.pathname = `${basePath}${normalizedPath}`;
+  }
+
+  const baseTarget = parsed.toString();
+  const sanitizedQuery = sanitizeUpstreamQueryString(rawQuery);
+
+  return sanitizedQuery ? `${baseTarget}?${sanitizedQuery}` : baseTarget;
 }
+

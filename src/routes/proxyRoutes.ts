@@ -190,10 +190,13 @@ export function createProxyRouter(deps: ProxyDeps): Router {
       // 5. Build upstream URL & find price
       // req.params[0] captures the wildcard portion after the slug
       const wildcardPath = req.params[0] ?? '';
-      const upstreamTarget = buildUpstreamTargetUrl(apiEntry.base_url, wildcardPath);
+      const rawOriginalUrl = req.originalUrl ?? req.url ?? '';
+      const queryIndex = rawOriginalUrl.indexOf('?');
+      const rawQuery = queryIndex >= 0 ? rawOriginalUrl.slice(queryIndex + 1) : '';
       let safeUpstreamTarget: string;
 
       try {
+        const upstreamTarget = buildUpstreamTargetUrl(apiEntry.base_url, wildcardPath, rawQuery);
         safeUpstreamTarget = await validateResolvedUpstreamTarget(upstreamTarget, {
           allowedHosts: config.allowedHosts,
         });

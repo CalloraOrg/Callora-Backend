@@ -328,6 +328,44 @@ describe('Proxy /v1/call', () => {
     expect(receivedPath).toBe('/foo/bar/baz');
   });
 
+  it('forwards original query strings to upstream preserving order and percent-encoding (#1220)', async () => {
+    let receivedUrl = '';
+
+    setUpstreamHandler((req, res) => {
+      receivedUrl = req.originalUrl;
+      res.status(200).json({ url: req.originalUrl, query: req.query });
+    });
+
+    const res1 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/forecast?a=1&b=2`, {
+      method: 'GET',
+      headers: { 'x-api-key': TEST_API_KEY },
+    });
+    expect(res1.status).toBe(200);
+    expect(receivedUrl).toBe('/forecast?a=1&b=2');
+
+    // Percent-encoded values must not be double-encoded
+    const res2 = await fetch(
+      `${proxyUrl}/v1/call/${TEST_API_SLUG}/forecast?city=S%C3%A3o%20Paulo&tag=a%2Fb%2B1`,
+      {
+        method: 'GET',
+        headers: { 'x-api-key': TEST_API_KEY },
+      },
+    );
+    expect(res2.status).toBe(200);
+    expect(receivedUrl).toBe('/forecast?city=S%C3%A3o%20Paulo&tag=a%2Fb%2B1');
+
+    // Internal api_key / x-api-key query params are not leaked upstream
+    const res3 = await fetch(
+      `${proxyUrl}/v1/call/${TEST_API_SLUG}/forecast?city=Paris&api_key=leak&x-api-key=leak2&units=metric`,
+      {
+        method: 'GET',
+        headers: { 'x-api-key': TEST_API_KEY },
+      },
+    );
+    expect(res3.status).toBe(200);
+    expect(receivedUrl).toBe('/forecast?city=Paris&units=metric');
+  });
+
   it('returns 504 on upstream timeout', async () => {
     setUpstreamHandler((_req, _res) => {
       // Don't respond — let it hang until timeout
