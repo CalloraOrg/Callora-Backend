@@ -1,12 +1,16 @@
-export type WebhookEventType =
-    | 'new_api_call'
-    | 'settlement_completed'
-    | 'low_balance_alert'
-    | 'quota.threshold.reached'
-    | 'invoice_created'
-    | 'usage.anomaly.detected'
-    | 'fee_abstraction.executed'
-    | 'usage_event.created';
+export const WEBHOOK_EVENT_TYPES = [
+    'new_api_call',
+    'settlement_completed',
+    'low_balance_alert',
+    'quota.threshold.reached',
+    'invoice_created',
+    'usage.anomaly.detected',
+    'fee_abstraction.executed',
+    'usage_event.created',
+] as const;
+
+export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
+
 
 // `RetryPolicy` and `DEFAULT_RETRY_POLICY` are declared once, at the bottom of
 // this file under "Retry policy types". A duplicate copy used to sit here with

@@ -85,4 +85,19 @@ describe('webhook validators', () => {
     expect(webhookDeliveryPayloadSchema.parse(payload)).toEqual(payload);
     expect(webhookDeliveryPayloadSchema.safeParse({ ...payload, timestamp: 'today' }).success).toBe(false);
   });
+
+  it('accepts every declared WebhookEventType at registration (#1210)', async () => {
+    const { WEBHOOK_EVENT_TYPES } = await import('../webhooks/webhook.types.js');
+    expect(WEBHOOK_EVENT_TYPES).toHaveLength(8);
+
+    for (const eventType of WEBHOOK_EVENT_TYPES) {
+      const parsed = registerWebhookSchema.parse({
+        developerId: 'dev-123',
+        url: 'https://example.com/webhook',
+        events: [eventType],
+      });
+      expect(parsed.events).toEqual([eventType]);
+    }
+  });
 });
+

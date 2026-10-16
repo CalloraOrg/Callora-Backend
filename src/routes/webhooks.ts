@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { validateWebhookUrl, WebhookValidationError } from '../webhooks/webhook.validator.js';
 import { WebhookStore } from '../webhooks/webhook.store.js';
-import { WebhookEventType, type RetryPolicy } from '../webhooks/webhook.types.js';
+import { WEBHOOK_EVENT_TYPES, WebhookEventType, type RetryPolicy } from '../webhooks/webhook.types.js';
 import {
   captureRawBody,
   verifyWebhookSignature,
@@ -27,11 +27,8 @@ router.use(securityHeadersMiddleware);
 
 const webhookMgmtRateLimit = createRestRateLimitMiddleware(config.webhookRateLimit);
 
-const VALID_EVENTS: WebhookEventType[] = [
-  'new_api_call',
-  'settlement_completed',
-  'low_balance_alert',
-];
+const VALID_EVENTS: readonly WebhookEventType[] = WEBHOOK_EVENT_TYPES;
+
 
 function generateWebhookSecret(): string {
   return crypto.randomBytes(32).toString('hex');
@@ -342,7 +339,14 @@ router.delete('/:developerId', webhookMgmtRateLimit, async (req: Request, res: R
     }
 
     const existing = WebhookStore.get(developerId);
-    const before = existing ? sanitizeConfig(existing as unknown as Record<string, unknown>) : null;
+    if (!existing) {
+      throw new NotFoundError(
+        'No webhook registered for this developer.',
+        'WEBHOOK_NOT_FOUND'
+      );
+    }
+
+    const before = sanitizeConfig(existing as unknown as Record<string, unknown>);
 
     WebhookStore.delete(developerId);
 
@@ -438,6 +442,10 @@ router.post(
     return res.status(200).json({ message: 'Webhook delivery accepted.', body: req.body });
   }
 );
+
+import { errorHandler } from '../middleware/errorHandler.js';
+
+router.use(errorHandler);
 
 export function createWebhooksRouter(): Router {
   return router;

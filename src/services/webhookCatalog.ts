@@ -1,4 +1,4 @@
-import type { WebhookEventType } from '../webhooks/webhook.types.js';
+import { WEBHOOK_EVENT_TYPES, type WebhookEventType } from '../webhooks/webhook.types.js';
 
 export interface WebhookEventEntry {
   event: WebhookEventType;
@@ -6,6 +6,8 @@ export interface WebhookEventEntry {
   trigger: string;
   since: string;
 }
+
+export const VALID_WEBHOOK_EVENTS: readonly WebhookEventType[] = WEBHOOK_EVENT_TYPES;
 
 const catalog: WebhookEventEntry[] = [
   {
@@ -27,21 +29,27 @@ const catalog: WebhookEventEntry[] = [
     since: '0.0.1',
   },
   {
-    event: 'invoice_created',
-    description: 'A new invoice is generated for a developer.',
-    trigger: 'After invoice generation completes.',
-    since: '0.0.1',
-  },
-  {
     event: 'quota.threshold.reached',
     description: 'A developer crosses 80%, 95%, or 100% of their monthly call quota.',
     trigger: 'After a request that pushes usage past a threshold percentage.',
     since: '0.0.1',
   },
   {
+    event: 'invoice_created',
+    description: 'A new invoice is generated for a developer.',
+    trigger: 'After invoice generation completes.',
+    since: '0.0.1',
+  },
+  {
     event: 'usage.anomaly.detected',
     description: 'Abnormal traffic pattern detected for a developer.',
     trigger: 'Background anomaly detection worker identifies a spike exceeding the configured baseline multiplier.',
+    since: '0.0.1',
+  },
+  {
+    event: 'fee_abstraction.executed',
+    description: 'A fee abstraction sponsorship transaction is executed.',
+    trigger: 'After a fee-abstracted transaction is broadcast and recorded.',
     since: '0.0.1',
   },
   {

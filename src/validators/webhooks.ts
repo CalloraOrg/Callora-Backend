@@ -1,19 +1,10 @@
 import { z } from 'zod';
+import { WEBHOOK_EVENT_TYPES } from '../webhooks/webhook.types.js';
 
-export const webhookManagementEvents = [
-  'new_api_call',
-  'settlement_completed',
-  'low_balance_alert',
-  'usage_event.created',
-] as const;
+export const webhookManagementEvents = WEBHOOK_EVENT_TYPES;
 
-export const webhookDeliveryEvents = [
-  ...webhookManagementEvents,
-  'quota.threshold.reached',
-  'invoice_created',
-  'usage.anomaly.detected',
-  'fee_abstraction.executed',
-] as const;
+export const webhookDeliveryEvents = WEBHOOK_EVENT_TYPES;
+
 
 const developerIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
 

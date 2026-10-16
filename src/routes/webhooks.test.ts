@@ -184,18 +184,14 @@ describe('Webhook routes — audit persistence', () => {
       assert.equal(details.after, undefined);
     });
 
-    it('persists an audit row with null before when webhook does not exist', async () => {
+    it('returns 404 WEBHOOK_NOT_FOUND and skips audit write when webhook does not exist', async () => {
       const response = await request(app)
         .delete('/api/webhooks/dev-delete-nonexistent')
         .set(authHeader('dev-delete-nonexistent'));
 
-      assert.equal(response.status, 200);
-      assert.equal(mockWriteQuery.mock.calls.length, 1);
-
-      const call = mockWriteQuery.mock.calls[0]!;
-      const params = call[1] as unknown[];
-      assert.equal(params[1], 'WEBHOOK_DELETED');
-      assert.equal(params[2], 'dev-delete-nonexistent');
+      assert.equal(response.status, 404);
+      assert.equal(response.body.error?.code ?? response.body.code, 'WEBHOOK_NOT_FOUND');
+      assert.equal(mockWriteQuery.mock.calls.length, 0);
     });
   });
 
@@ -418,6 +414,101 @@ describe('Webhook management routes — Authentication & Authorization (Issue #1
 
       assert.equal(res.status, 200);
       assert.equal(res.body.developerId, 'dev-bob');
+    });
+  });
+
+  describe('Webhook event registration completeness (Issue #1210)', () => {
+    it('accepts every declared WebhookEventType at POST /api/webhooks including quota.threshold.reached', async () => {
+      const { WEBHOOK_EVENT_TYPES } = await import('../webhooks/webhook.types.js');
+      assert.equal(WEBHOOK_EVENT_TYPES.length, 8);
+
+      for (const eventType of WEBHOOK_EVENT_TYPES) {
+        WebhookStore.clear();
+        const res = await request(app)
+          .post('/api/webhooks')
+          .set(authHeader('dev-events'))
+          .send({
+            developerId: 'dev-events',
+            url: 'https://example.com/webhook',
+            events: [eventType],
+          });
+
+        assert.equal(res.status, 201);
+        assert.deepEqual(res.body.events, [eventType]);
+      }
+    });
+
+    it('lists all eight valid event types when an invalid event is submitted', async () => {
+      const { WEBHOOK_EVENT_TYPES } = await import('../webhooks/webhook.types.js');
+
+      const res = await request(app)
+        .post('/api/webhooks')
+        .set(authHeader('dev-events'))
+        .send({
+          developerId: 'dev-events',
+          url: 'https://example.com/webhook',
+          events: ['unknown.event.type'],
+        });
+
+      assert.equal(res.status, 400);
+      const message = res.body.error?.message ?? res.body.message ?? '';
+      for (const validEvent of WEBHOOK_EVENT_TYPES) {
+        assert.ok(message.includes(validEvent), `Expected error message to list ${validEvent}`);
+      }
+    });
+
+    it('runQuotaCheck dispatches to a webhook registered for quota.threshold.reached via POST /api/webhooks', async () => {
+      const { runQuotaCheck, InMemoryQuotaNotificationStore } = await import('../services/quotaNotifier.js');
+      const savedFetch = global.fetch;
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      try {
+        const regRes = await request(app)
+          .post('/api/webhooks')
+          .set(authHeader('dev-quota-1'))
+          .send({
+            developerId: 'dev-quota-1',
+            url: 'https://example.com/quota-hook',
+            events: ['quota.threshold.reached'],
+          });
+        assert.equal(regRes.status, 201);
+
+        const now = new Date('2026-06-15T12:00:00Z');
+        const events = Array.from({ length: 85 }, (_, i) => ({
+          id: `evt-${i}`,
+          developerId: 'dev-quota-1',
+          apiId: 'api-1',
+          endpoint: '/v1/test',
+          userId: 'dev-quota-1',
+          occurredAt: now,
+          revenue: 0n,
+        }));
+
+        const fired = await runQuotaCheck({
+          usageRepo: {
+            findByDeveloper: async () => events,
+            findByUser: jest.fn(),
+            developerOwnsApi: jest.fn(),
+            aggregateByDeveloper: jest.fn(),
+            aggregateByUser: jest.fn(),
+          } as any,
+          notificationStore: new InMemoryQuotaNotificationStore(),
+          getDeveloperQuotas: async () => [{ developerId: 'dev-quota-1', monthlyLimit: 100 }],
+          now: () => now,
+          logger: { error: jest.fn(), info: jest.fn() },
+        });
+
+        assert.equal(fired, 1);
+        assert.equal(fetchMock.mock.calls.length, 1);
+        assert.equal(fetchMock.mock.calls[0][0], 'https://example.com/quota-hook');
+      } finally {
+        global.fetch = savedFetch;
+      }
     });
   });
 });
