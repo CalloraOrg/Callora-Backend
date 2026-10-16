@@ -21,11 +21,19 @@ jest.mock('../services/transactionBuilder.js', () => {
 });
 
 // Mock config to fix stellar.network so the controller's network-mismatch guard passes
-jest.mock('../config/index.js', () => ({
-  config: {
-    stellar: { network: 'testnet' },
-  },
-}));
+jest.mock('../config/index.js', () => {
+  const actual = jest.requireActual('../config/index.js');
+  return {
+    ...actual,
+    config: {
+      ...actual.config,
+      stellar: {
+        ...actual.config?.stellar,
+        network: 'testnet',
+      },
+    },
+  };
+});
 
 describe('DepositController', () => {
   let depositController: DepositController;

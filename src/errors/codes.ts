@@ -277,7 +277,16 @@ export const ErrorCode = {
   AUTH_NOT_IMPLEMENTED: "AUTH_NOT_IMPLEMENTED",
 
   /** A required system component is not configured */
-  COMPONENT_NOT_CONFIGURED: "COMPONENT_NOT_CONFIGURED"
+  COMPONENT_NOT_CONFIGURED: "COMPONENT_NOT_CONFIGURED",
+
+  /** A vault already exists for this user on the requested network */
+  DUPLICATE_VAULT: "DUPLICATE_VAULT",
+
+  /** Failed to create vault */
+  VAULT_CREATION_FAILED: "VAULT_CREATION_FAILED",
+
+  /** API key has already been revoked */
+  API_KEY_REVOKED: "API_KEY_REVOKED"
 
 } as const;
 

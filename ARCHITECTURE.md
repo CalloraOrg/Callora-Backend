@@ -135,6 +135,7 @@ available through one entrypoint and absent from the other. Rows marked
 | GET | /api/openapi.json | src/routes/index.ts | route-specific | none |
 | GET | /api/developers/apis | src/app.ts | route-specific | none |
 | GET | /api/developers/analytics | src/app.ts | route-specific | none |
+| POST | /api/vault | src/app.ts | route-specific | none |
 | POST | /api/vault/deposit/prepare | src/app.ts | route-specific | none |
 | GET | /api/vault/balance | src/app.ts | route-specific | none |
 | POST | /api/developers/apis | src/app.ts | route-specific | none |

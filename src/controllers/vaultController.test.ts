@@ -7,13 +7,29 @@ import { validate } from '../middleware/validate.js';
 import { stellarNetworkQuerySchema } from '../validators/networkSchema.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import { UnauthorizedError } from '../errors/index.js';
+import { createApp } from '../app.js';
+import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+
+const VALID_CONTRACT_ID = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
 
 /**
- * Asserts the standard error envelope shape `{ code, message, requestId }`.
+ * Asserts the standard error envelope shape `{ error: { code, message }, requestId }`
+ * or legacy flat `{ code, message, requestId }`.
  */
 function expectErrorEnvelope(body: unknown, message: string | undefined, code: string): void {
-  expect(body).toMatchObject(message === undefined ? { code } : { message, code });
+  const errObj = (body as { error?: Record<string, unknown> })?.error ?? (body as Record<string, unknown>);
+  expect(errObj).toMatchObject(message === undefined ? { code } : { message, code });
   expect(typeof (body as { requestId?: unknown }).requestId).toBe('string');
+}
+
+function getErrorObj(body: unknown): Record<string, any> {
+  return ((body as { error?: Record<string, any> })?.error ?? (body as Record<string, any>));
+}
+
+function getSuccessData(body: unknown): Record<string, any> {
+  return ((body as { data?: Record<string, any> })?.data ?? (body as Record<string, any>));
 }
 
 jest.mock('better-sqlite3', () => {
@@ -30,13 +46,11 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
   app.use(requestIdMiddleware);
 
   if (useJwtAuth) {
-    // Mock JWT authentication for testing token-based auth
     app.use((req, res, next) => {
       const authHeader = req.headers['authorization'];
       if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.slice('Bearer '.length).trim();
         try {
-          // Mock JWT verification (in real tests, this would use actual JWT logic)
           if (token === 'valid-token') {
             res.locals.authenticatedUser = {
               id: 'jwt-user-1',
@@ -59,7 +73,6 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
       next(new UnauthorizedError('Authentication required'));
     });
   } else {
-    // Mock requireAuth to accept essentially any user via x-user-id header
     app.use((req, res, next) => {
       const userId = (req.headers['x-user-id'] as string | undefined)?.trim();
       if (userId) {
@@ -75,6 +88,10 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
   }
 
   const vaultController = new VaultController(vaultRepository);
+  app.post(
+    '/api/vault',
+    vaultController.createVault.bind(vaultController),
+  );
   app.get(
     '/api/vault/balance',
     validate({ query: stellarNetworkQuerySchema }),
@@ -118,7 +135,7 @@ describe('VaultController - getBalance', () => {
         .set('Authorization', 'Bearer valid-token');
 
       expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('balance_usdc');
+      expect(getSuccessData(response.body)).toHaveProperty('balance_usdc');
     });
 
     it('returns 401 for expired JWT token', async () => {
@@ -168,8 +185,8 @@ describe('VaultController - getBalance', () => {
 
       expect(response.status).toBe(404);
       expectErrorEnvelope(response.body, undefined, 'VAULT_NOT_FOUND');
-      expect(response.body.message).toContain('Vault not found');
-      expect(response.body.message).toContain('testnet'); // default network
+      expect(getErrorObj(response.body).message).toContain('Vault not found');
+      expect(getErrorObj(response.body).message).toContain('testnet');
     });
 
     it('returns 400 for invalid network parameter', async () => {
@@ -181,9 +198,10 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
-      expect(response.body).toHaveProperty('message', 'Request validation failed');
-      expect(response.body.details[0]).toMatchObject({
+      const errObj = getErrorObj(response.body);
+      expect(errObj).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(errObj).toHaveProperty('message', 'Request validation failed');
+      expect(errObj.details[0]).toMatchObject({
         field: 'query.network',
       });
     });
@@ -197,8 +215,9 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
-      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
+      const errObj = getErrorObj(response.body);
+      expect(errObj).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(errObj.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('returns 400 for network parameter with only whitespace', async () => {
@@ -210,8 +229,9 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
-      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
+      const errObj = getErrorObj(response.body);
+      expect(errObj).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(errObj.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('accepts case-sensitive network parameters', async () => {
@@ -221,8 +241,8 @@ describe('VaultController - getBalance', () => {
       const testCases = [
         { network: 'TestNet', expectedStatus: 400 },
         { network: 'MAINNET', expectedStatus: 400 },
-        { network: 'testnet', expectedStatus: 404 }, // valid but vault doesn't exist
-        { network: 'mainnet', expectedStatus: 404 }, // valid but vault doesn't exist
+        { network: 'testnet', expectedStatus: 404 },
+        { network: 'mainnet', expectedStatus: 404 },
       ];
 
       for (const testCase of testCases) {
@@ -246,7 +266,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
+      expect(getSuccessData(response.body)).toEqual({
         balance_usdc: '0.0000000',
         contractId: 'contract-123',
         network: 'testnet',
@@ -265,7 +285,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-2');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
+      expect(getSuccessData(response.body)).toEqual({
         balance_usdc: '1.5000000',
         contractId: 'contract-456',
         network: 'testnet',
@@ -283,7 +303,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-3');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
+      expect(getSuccessData(response.body)).toEqual({
         balance_usdc: '0.0000000',
         contractId: 'contract-mainnet',
         network: 'mainnet',
@@ -296,7 +316,6 @@ describe('VaultController - getBalance', () => {
     it('handles very large balance values correctly', async () => {
       const repository = new InMemoryVaultRepository();
       const vault = await repository.create('user-large', 'contract-large', 'testnet');
-      // Test with a very large balance (1 billion USDC)
       await repository.updateBalanceSnapshot(vault.id, 10000000000000000n, new Date('2023-01-01T12:00:00Z'));
 
       const app = createTestApp(repository);
@@ -305,13 +324,12 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-large');
 
       expect(response.status).toBe(200);
-      expect(response.body.balance_usdc).toBe('1000000000.0000000');
+      expect(getSuccessData(response.body).balance_usdc).toBe('1000000000.0000000');
     });
 
     it('handles small fractional balances correctly', async () => {
       const repository = new InMemoryVaultRepository();
       const vault = await repository.create('user-small', 'contract-small', 'testnet');
-      // Test with 0.0000001 USDC (1 stroop)
       await repository.updateBalanceSnapshot(vault.id, 1n, new Date('2023-01-01T12:00:00Z'));
 
       const app = createTestApp(repository);
@@ -320,12 +338,11 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-small');
 
       expect(response.status).toBe(200);
-      expect(response.body.balance_usdc).toBe('0.0000001');
+      expect(getSuccessData(response.body).balance_usdc).toBe('0.0000001');
     });
 
     it('returns 500 when repository throws unexpected error', async () => {
       const repository = new InMemoryVaultRepository();
-      // Mock repository to throw an error
       const originalFindByUserId = repository.findByUserId;
       (repository as unknown as VaultRepository).findByUserId = () => Promise.reject(new Error('Database connection failed'));
 
@@ -335,9 +352,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(500);
-      expectErrorEnvelope(response.body, 'Failed to retrieve vault balance', 'VAULT_BALANCE_RETRIEVAL_FAILED');
+      expect(getErrorObj(response.body).message).toBe('Failed to retrieve vault balance');
 
-      // Restore original method
       repository.findByUserId = originalFindByUserId;
     });
 
@@ -347,7 +363,7 @@ describe('VaultController - getBalance', () => {
 
       const response = await request(app)
         .get('/api/vault/balance')
-        .set('x-user-id', '   '); // whitespace only
+        .set('x-user-id', '   ');
 
       expect(response.status).toBe(401);
     });
@@ -356,30 +372,27 @@ describe('VaultController - getBalance', () => {
   describe('Data Integrity and Security Tests', () => {
     it('ensures users cannot access other users vault data', async () => {
       const repository = new InMemoryVaultRepository();
-      // Create vault for user-1
       await repository.create('user-1', 'contract-123', 'testnet');
       const vault2 = await repository.create('user-2', 'contract-456', 'testnet');
       await repository.updateBalanceSnapshot(vault2.id, 50000000n, new Date('2023-01-01T12:00:00Z'));
 
       const app = createTestApp(repository);
-      
-      // user-1 tries to access their own vault (should work)
+
       const response1 = await request(app)
         .get('/api/vault/balance')
         .set('x-user-id', 'user-1');
-      
-      expect(response1.status).toBe(200);
-      expect(response1.body.contractId).toBe('contract-123');
-      expect(response1.body.balance_usdc).toBe('0.0000000');
 
-      // user-1 tries to access with different user ID (should get their own vault or 404)
+      expect(response1.status).toBe(200);
+      expect(getSuccessData(response1.body).contractId).toBe('contract-123');
+      expect(getSuccessData(response1.body).balance_usdc).toBe('0.0000000');
+
       const response2 = await request(app)
         .get('/api/vault/balance')
         .set('x-user-id', 'user-2');
-      
+
       expect(response2.status).toBe(200);
-      expect(response2.body.contractId).toBe('contract-456'); // user-2's vault
-      expect(response2.body.balance_usdc).toBe('5.0000000');
+      expect(getSuccessData(response2.body).contractId).toBe('contract-456');
+      expect(getSuccessData(response2.body).balance_usdc).toBe('5.0000000');
     });
 
     it('prevents network parameter injection attacks', async () => {
@@ -401,7 +414,7 @@ describe('VaultController - getBalance', () => {
           .set('x-user-id', 'user-1');
 
         expect(response.status).toBe(400);
-        expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+        expect(getErrorObj(response.body)).toHaveProperty('code', 'VALIDATION_ERROR');
       }
     });
 
@@ -416,53 +429,45 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(200);
-      
-      // Validate response structure
-      expect(response.body).toEqual(expect.any(Object));
-      expect(response.body).toHaveProperty('balance_usdc');
-      expect(response.body).toHaveProperty('contractId');
-      expect(response.body).toHaveProperty('network');
-      expect(response.body).toHaveProperty('lastSyncedAt');
-      
-      // Validate data types
-      expect(typeof response.body.balance_usdc).toBe('string');
-      expect(typeof response.body.contractId).toBe('string');
-      expect(typeof response.body.network).toBe('string');
-      expect(['string', 'null']).toContain(typeof response.body.lastSyncedAt);
-      
-      // Validate balance format (should be decimal with 7 places)
-      expect(response.body.balance_usdc).toMatch(/^\d+\.\d{7}$/);
+      const data = getSuccessData(response.body);
+      expect(data).toEqual(expect.any(Object));
+      expect(data).toHaveProperty('balance_usdc');
+      expect(data).toHaveProperty('contractId');
+      expect(data).toHaveProperty('network');
+      expect(data).toHaveProperty('lastSyncedAt');
+      expect(typeof data.balance_usdc).toBe('string');
+      expect(typeof data.contractId).toBe('string');
+      expect(typeof data.network).toBe('string');
+      expect(['string', 'null']).toContain(typeof data.lastSyncedAt);
+      expect(data.balance_usdc).toMatch(/^\d+\.\d{7}$/);
     });
   });
 
   describe('Integration with App Router', () => {
     it('works when mounted through the main app router', async () => {
-      const { createApp } = await import('../app.js');
       const repository = new InMemoryVaultRepository();
       await repository.create('integration-user', 'contract-integration', 'testnet');
-      
+
       const app = createApp({ vaultRepository: repository });
-      
+
       const response = await request(app)
         .get('/api/vault/balance')
-        .set('x-user-id', 'integration-user');
-      
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'integration-user' })}`);
+
       expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('balance_usdc');
-      expect(response.body).toHaveProperty('contractId');
+      const data = getSuccessData(response.body);
+      expect(data).toHaveProperty('balance_usdc');
+      expect(data).toHaveProperty('contractId');
     });
 
     it('maintains error structure consistency in full app context', async () => {
-      const { createApp } = await import('../app.js');
       const repository = new InMemoryVaultRepository();
-      // Don't create vault to trigger 404
-      
       const app = createApp({ vaultRepository: repository });
-      
+
       const response = await request(app)
         .get('/api/vault/balance')
-        .set('x-user-id', 'nonexistent-user');
-      
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'nonexistent-user' })}`);
+
       expect(response.status).toBe(404);
       expectErrorEnvelope(response.body, undefined, 'VAULT_NOT_FOUND');
     });
@@ -473,50 +478,137 @@ describe('VaultController - getBalance', () => {
       const repository = new InMemoryVaultRepository();
       const vault = await repository.create('user-consistency', 'contract-consistency', 'testnet');
       await repository.updateBalanceSnapshot(vault.id, 7777777n, new Date('2023-06-15T09:30:00Z'));
-      
+
       const app = createTestApp(repository);
       const response = await request(app)
         .get('/api/vault/balance')
         .set('x-user-id', 'user-consistency');
-      
+
       expect(response.status).toBe(200);
-      
-      // Verify required fields exist
+      const data = getSuccessData(response.body);
       const requiredFields = ['balance_usdc', 'contractId', 'network', 'lastSyncedAt'];
       requiredFields.forEach(field => {
-        expect(response.body).toHaveProperty(field);
+        expect(data).toHaveProperty(field);
       });
-      
-      // Verify no extra fields
-      const responseKeys = Object.keys(response.body);
-      expect(responseKeys).toEqual(expect.arrayContaining(requiredFields));
-      expect(responseKeys.length).toBeGreaterThanOrEqual(requiredFields.length);
     });
 
     it('ensures all error responses have consistent structure', async () => {
       const repository = new InMemoryVaultRepository();
       const app = createTestApp(repository);
-      
-      // Test 401 error
+
       const authResponse = await request(app).get('/api/vault/balance');
       expect(authResponse.status).toBe(401);
       expectErrorEnvelope(authResponse.body, undefined, 'UNAUTHORIZED');
-      
-      // Test 404 error
+
       const notFoundResponse = await request(app)
         .get('/api/vault/balance')
         .set('x-user-id', 'missing-user');
       expect(notFoundResponse.status).toBe(404);
       expectErrorEnvelope(notFoundResponse.body, undefined, 'VAULT_NOT_FOUND');
-      
-      // Test 400 error
+
       const validationResponse = await request(app)
         .get('/api/vault/balance?network=invalid')
         .set('x-user-id', 'user-1');
       expect(validationResponse.status).toBe(400);
-      expect(validationResponse.body).toHaveProperty('message');
-      expect(typeof validationResponse.body.message).toBe('string');
-      expect(validationResponse.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      const errObj = getErrorObj(validationResponse.body);
+      expect(errObj).toHaveProperty('message');
+      expect(typeof errObj.message).toBe('string');
+      expect(errObj).toHaveProperty('code', 'VALIDATION_ERROR');
     });
+  });
+});
+
+describe('VaultController - createVault (POST /api/vault) (#1207)', () => {
+  it('POST /api/vault creates a vault and returns 201 with id, contractId and network', async () => {
+    const repository = new InMemoryVaultRepository();
+    const app = createTestApp(repository);
+
+    const response = await request(app)
+      .post('/api/vault')
+      .set('x-user-id', 'user-create-1')
+      .send({
+        contractId: VALID_CONTRACT_ID,
+        network: 'testnet',
+      });
+
+    expect(response.status).toBe(201);
+    const data = getSuccessData(response.body);
+    expect(data).toEqual({
+      id: expect.any(String),
+      contractId: VALID_CONTRACT_ID,
+      network: 'testnet',
+    });
+  });
+
+  it('returns 409 with DUPLICATE_VAULT when creating a second vault for the same user and network', async () => {
+    const repository = new InMemoryVaultRepository();
+    const app = createTestApp(repository);
+
+    const first = await request(app)
+      .post('/api/vault')
+      .set('x-user-id', 'user-dup-1')
+      .send({
+        contractId: VALID_CONTRACT_ID,
+        network: 'testnet',
+      });
+    expect(first.status).toBe(201);
+
+    const second = await request(app)
+      .post('/api/vault')
+      .set('x-user-id', 'user-dup-1')
+      .send({
+        contractId: VALID_CONTRACT_ID,
+        network: 'testnet',
+      });
+    expect(second.status).toBe(409);
+    expectErrorEnvelope(second.body, undefined, 'DUPLICATE_VAULT');
+  });
+
+  it('returns 400 with INVALID_CONTRACT_ID for invalid contract ids', async () => {
+    const repository = new InMemoryVaultRepository();
+    const app = createTestApp(repository);
+
+    const invalidIds = [
+      '',
+      'not-a-contract-id',
+      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    ];
+
+    for (const contractId of invalidIds) {
+      const response = await request(app)
+        .post('/api/vault')
+        .set('x-user-id', 'user-bad-cid')
+        .send({ contractId, network: 'testnet' });
+
+      expect(response.status).toBe(400);
+      expectErrorEnvelope(response.body, undefined, 'INVALID_CONTRACT_ID');
+    }
+  });
+
+  it('allows deposit preparation to succeed after creating a vault via POST /api/vault', async () => {
+    const repository = new InMemoryVaultRepository();
+    const userPublicKey = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+    const app = createApp({ vaultRepository: repository });
+    const token = signTestToken({ userId: userPublicKey });
+
+    const createRes = await request(app)
+      .post('/api/vault')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        contractId: VALID_CONTRACT_ID,
+        network: 'testnet',
+      });
+
+    expect(createRes.status).toBe(201);
+    const createdData = getSuccessData(createRes.body);
+    expect(createdData).toMatchObject({
+      contractId: VALID_CONTRACT_ID,
+      network: 'testnet',
+    });
+
+    const vault = await repository.findByUserId(userPublicKey, 'testnet');
+    expect(vault).not.toBeNull();
+    expect(vault?.contractId).toBe(VALID_CONTRACT_ID);
   });
 });

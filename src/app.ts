@@ -633,6 +633,15 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }),
   );
 
+  // Vault registration endpoint
+  app.post(
+    "/api/vault",
+    requireAuth,
+    (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+      vaultController.createVault(req, res, next);
+    },
+  );
+
   // Deposit transaction preparation endpoint
   app.post(
     "/api/vault/deposit/prepare",

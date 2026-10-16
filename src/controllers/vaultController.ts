@@ -1,17 +1,80 @@
 import type { NextFunction, Request, Response } from 'express';
+import { Address } from '@stellar/stellar-sdk';
 import {
+  BadRequestError,
+  ConflictError,
   InternalServerError,
   NotFoundError,
   UnauthorizedError,
   isAppError,
 } from '../errors/index.js';
 import type { AuthenticatedLocals } from '../middleware/requireAuth.js';
-import type { VaultRepository } from '../repositories/vaultRepository.js';
+import { DuplicateVaultError, type VaultRepository } from '../repositories/vaultRepository.js';
+import { InvalidContractIdError } from '../services/transactionBuilder.js';
 import { parseNetworkWithDefault } from '../validators/networkSchema.js';
-import { successEnvelope, getRequestId } from '../lib/envelope.js';
 
 export class VaultController {
   constructor(private readonly vaultRepository: VaultRepository) { }
+
+  /**
+   * Registers a new vault for the authenticated user on the requested Stellar network.
+   * POST /api/vault
+   */
+  async createVault(
+    req: Request,
+    res: Response<unknown, AuthenticatedLocals>,
+    next: NextFunction,
+  ): Promise<void> {
+    const user = res.locals.authenticatedUser;
+    if (!user) {
+      next(new UnauthorizedError('Authentication required'));
+      return;
+    }
+
+    const body = (req.body ?? {}) as { contractId?: unknown; network?: unknown };
+    const rawContractId = typeof body.contractId === 'string' ? body.contractId.trim() : '';
+
+    try {
+      this.validateContractId(rawContractId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : `Invalid contract ID format: ${String(body.contractId ?? '')}`;
+      next(new BadRequestError(msg, 'INVALID_CONTRACT_ID'));
+      return;
+    }
+
+    const rawNetwork = body.network === undefined ? 'testnet' : body.network;
+    if (rawNetwork !== 'testnet' && rawNetwork !== 'mainnet') {
+      next(
+        new BadRequestError(
+          'network must be either "testnet" or "mainnet"',
+          'INVALID_NETWORK',
+        ),
+      );
+      return;
+    }
+
+    try {
+      const vault = await this.vaultRepository.create(user.id, rawContractId, rawNetwork);
+      res.status(201).json({
+        id: vault.id,
+        contractId: vault.contractId,
+        network: vault.network,
+      });
+    } catch (error) {
+      if (error instanceof DuplicateVaultError) {
+        next(new ConflictError(error.message, 'DUPLICATE_VAULT'));
+        return;
+      }
+      next(
+        isAppError(error)
+          ? error
+          : new InternalServerError(
+              'Failed to create vault',
+              'VAULT_CREATION_FAILED',
+            ),
+      );
+    }
+  }
 
   /**
    * Returns the authenticated user's vault balance for the requested Stellar network.
@@ -23,7 +86,6 @@ export class VaultController {
     res: Response<unknown, AuthenticatedLocals>,
     next: NextFunction,
   ): Promise<void> {
-    const requestId = getRequestId(req);
     const user = res.locals.authenticatedUser;
     if (!user) {
       next(new UnauthorizedError('Authentication required'));
@@ -54,7 +116,7 @@ export class VaultController {
         lastSyncedAt: vault.lastSyncedAt ? vault.lastSyncedAt.toISOString() : null,
       };
 
-      res.status(200).json(successEnvelope(data, requestId));
+      res.status(200).json(data);
     } catch (error) {
       next(
         isAppError(error)
@@ -64,6 +126,17 @@ export class VaultController {
               'VAULT_BALANCE_RETRIEVAL_FAILED',
             ),
       );
+    }
+  }
+
+  private validateContractId(contractId: string): void {
+    if (!contractId || !contractId.startsWith('C')) {
+      throw new InvalidContractIdError(contractId);
+    }
+    try {
+      new Address(contractId);
+    } catch {
+      throw new InvalidContractIdError(contractId);
     }
   }
 
