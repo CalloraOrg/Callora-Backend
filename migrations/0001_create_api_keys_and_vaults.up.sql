@@ -18,10 +18,10 @@ CREATE INDEX idx_api_keys_user_prefix ON api_keys (user_id, prefix);
 
 CREATE TABLE vaults (
   id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL,
+  user_id TEXT NOT NULL,
   stellar_vault_contract_id TEXT NOT NULL,
   network VARCHAR(32) NOT NULL,
-  balance_snapshot NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  balance_snapshot BIGINT NOT NULL DEFAULT 0,
   last_synced_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -30,3 +30,4 @@ CREATE TABLE vaults (
 );
 
 CREATE INDEX idx_vaults_user_network ON vaults (user_id, network);
+

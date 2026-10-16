@@ -61,6 +61,7 @@ import { createQuotasRouter } from "./routes/quotas.js";
 import { parsePagination, paginatedResponse } from "./lib/pagination.js";
 import {
   InMemoryVaultRepository,
+  PgVaultRepository,
   type VaultRepository,
 } from "./repositories/vaultRepository.js";
 import { DepositController } from "./controllers/depositController.js";
@@ -180,7 +181,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
   const vaultRepository =
-    dependencies?.vaultRepository ?? new InMemoryVaultRepository();
+    dependencies?.vaultRepository ??
+    (process.env.DATABASE_URL
+      ? new PgVaultRepository(pool)
+      : new InMemoryVaultRepository());
   const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
   const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
   const reportExporterService = new ReportExporterService(

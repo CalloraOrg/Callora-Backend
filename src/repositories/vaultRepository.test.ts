@@ -159,3 +159,111 @@ test('updateBalanceSnapshot rejects negative balances', async () => {
     /non-negative integer/
   );
 });
+
+describe('PgVaultRepository (pg-mem)', () => {
+  async function createPgRepo(): Promise<import('./vaultRepository.js').PgVaultRepository> {
+    const { newDb } = await import('pg-mem');
+    const { PgVaultRepository } = await import('./vaultRepository.js');
+    const db = newDb();
+    db.public.none(`
+      CREATE TABLE vaults (
+        id BIGSERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        stellar_vault_contract_id TEXT NOT NULL,
+        network VARCHAR(32) NOT NULL,
+        balance_snapshot BIGINT NOT NULL DEFAULT 0,
+        last_synced_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT vaults_user_network_unique UNIQUE (user_id, network),
+        CONSTRAINT vaults_balance_snapshot_non_negative CHECK (balance_snapshot >= 0)
+      );
+    `);
+    const { Pool } = db.adapters.createPg();
+    const pool = new Pool();
+    return new PgVaultRepository(pool);
+  }
+
+  test('create stores a vault with default snapshot values', async () => {
+    const repository = await createPgRepo();
+    const vault = await repository.create('user-1', 'contract-1', 'testnet');
+
+    assert.equal(vault.userId, 'user-1');
+    assert.equal(vault.contractId, 'contract-1');
+    assert.equal(vault.network, 'testnet');
+    assert.equal(vault.balanceSnapshot, 0n);
+    assert.equal(vault.lastSyncedAt, null);
+    assert.ok(vault.createdAt instanceof Date);
+    assert.ok(vault.updatedAt instanceof Date);
+  });
+
+  test('create enforces one vault per user and network via unique constraint', async () => {
+    const repository = await createPgRepo();
+    await repository.create('user-1', 'contract-1', 'testnet');
+
+    await assert.rejects(
+      repository.create('user-1', 'contract-2', 'testnet'),
+      DuplicateVaultError,
+    );
+  });
+
+  test('create allows multiple vaults for same user on different networks', async () => {
+    const repository = await createPgRepo();
+    const testnetVault = await repository.create('user-1', 'contract-1', 'testnet');
+    const mainnetVault = await repository.create('user-1', 'contract-2', 'mainnet');
+
+    assert.notEqual(testnetVault.id, mainnetVault.id);
+    const foundMainnet = await repository.findByUserId('user-1', 'mainnet');
+    assert.ok(foundMainnet);
+    assert.equal(foundMainnet.contractId, 'contract-2');
+  });
+
+  test('findByUserId returns null when user has no vault for a network', async () => {
+    const repository = await createPgRepo();
+    await repository.create('user-1', 'contract-1', 'testnet');
+
+    const result = await repository.findByUserId('user-1', 'mainnet');
+    assert.equal(result, null);
+  });
+
+  test('updateBalanceSnapshot updates balance and lastSyncedAt and persists across reads', async () => {
+    const repository = await createPgRepo();
+    const vault = await repository.create('user-1', 'contract-1', 'testnet');
+    const syncedAt = new Date('2026-02-25T10:00:00.000Z');
+
+    const updated = await repository.updateBalanceSnapshot(vault.id, 15000000n, syncedAt);
+    assert.equal(updated.balanceSnapshot, 15000000n);
+    assert.equal(updated.lastSyncedAt?.toISOString(), '2026-02-25T10:00:00.000Z');
+
+    const stored = await repository.findByUserId('user-1', 'testnet');
+    assert.ok(stored);
+    assert.equal(stored.balanceSnapshot, 15000000n);
+    assert.equal(stored.lastSyncedAt?.toISOString(), '2026-02-25T10:00:00.000Z');
+  });
+
+  test('updateBalanceSnapshot throws VaultNotFoundError for unknown or non-numeric vault id', async () => {
+    const repository = await createPgRepo();
+    const syncedAt = new Date('2026-02-25T10:00:00.000Z');
+
+    await assert.rejects(
+      repository.updateBalanceSnapshot('999999', 100n, syncedAt),
+      VaultNotFoundError,
+    );
+    await assert.rejects(
+      repository.updateBalanceSnapshot('does-not-exist', 100n, syncedAt),
+      VaultNotFoundError,
+    );
+  });
+
+  test('updateBalanceSnapshot rejects negative balances', async () => {
+    const repository = await createPgRepo();
+    const vault = await repository.create('user-1', 'contract-1', 'testnet');
+    const syncedAt = new Date('2026-02-25T10:00:00.000Z');
+
+    await assert.rejects(
+      repository.updateBalanceSnapshot(vault.id, -1n, syncedAt),
+      /non-negative integer/,
+    );
+  });
+});
+
