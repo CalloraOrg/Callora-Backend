@@ -47,6 +47,7 @@
 - Error code changes should be made in `docs/error-codes.yaml` and then synced with `src/errors/codes.ts` via `npm run error-codes:generate`.
 - `src/routes/*` use factory functions like `createDeveloperRouter(...)` to receive explicit dependencies instead of global imports.
 - Always preserve the health and metrics endpoints in `src/index.ts` before other route registrations.
+- Maintain `CHANGELOG.md` alongside every feature merge or behavioral fix: add an entry under `## [Unreleased]` using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (`### Breaking Changes`, `### Added`, `### Changed`, `### Fixed`, `### Security`) and explicitly flag breaking API contract changes caught by Optic.
 
 ## Integration points and external dependencies
 
