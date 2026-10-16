@@ -284,7 +284,7 @@ export function createGatewayApiKeyAuthMiddleware<
 
     if (matchedCandidate.apiKeyRecord.expiresAt) {
       const expiresAt = new Date(matchedCandidate.apiKeyRecord.expiresAt);
-      if (expiresAt.getTime() < Date.now()) {
+      if (expiresAt.getTime() <= Date.now()) {
         // The key exists but its expiration timestamp has passed
         evictCachedVerification(extracted.apiKey);
         recordApiKeyLookup('expired');
@@ -353,6 +353,7 @@ export function createMapBackedGatewayApiKeyAuthMiddleware<
             revoked: record.revoked ?? false,
             scopes: record.scopes,
             tier: record.tier,
+            expiresAt: (record as { expiresAt?: Date | string | null }).expiresAt ?? null,
           },
           user: { id: record.developerId },
           vault: null,
@@ -424,6 +425,7 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
           createdAt: row.created_at ?? undefined,
           lastUsedAt: row.last_used_at ?? undefined,
           tier: row.plan_tier ?? undefined,
+          expiresAt: (row as { expires_at?: string | Date | null }).expires_at ?? undefined,
         },
         user: row.user ?? {},
         vault: row.vault,

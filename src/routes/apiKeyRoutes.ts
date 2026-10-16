@@ -26,9 +26,44 @@ const keyIdParamsSchema = z.object({
   id: z.string().min(1),
 });
 
+export const DEFAULT_MAX_API_KEY_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
+
 const createApiKeyBodySchema = z.object({
   scopes: z.array(z.string().min(1)).max(20).optional().default(['*']),
   rateLimitPerMinute: z.number().int().positive().nullable().optional().default(null),
+  expiresAt: z
+    .string()
+    .nullable()
+    .optional()
+    .default(null)
+    .superRefine((val, ctx) => {
+      if (val === null || val === undefined) return;
+      const parsed = new Date(val);
+      const now = Date.now();
+      if (Number.isNaN(parsed.getTime())) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'expiresAt must be a valid ISO-8601 timestamp',
+        });
+        return;
+      }
+      if (parsed.getTime() <= now) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'expiresAt must be in the future',
+        });
+        return;
+      }
+      const maxExpiryMs = Number(
+        process.env.API_KEY_MAX_EXPIRY_MS ?? DEFAULT_MAX_API_KEY_EXPIRY_MS,
+      );
+      if (Number.isFinite(maxExpiryMs) && maxExpiryMs > 0 && parsed.getTime() - now > maxExpiryMs) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'expiresAt exceeds the maximum allowed API key lifetime',
+        });
+      }
+    }),
 });
 
 function maskKey(prefix: string): string {
@@ -81,7 +116,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
         }
 
         const { apiId } = apiIdParamsSchema.parse(req.params);
-        const { scopes, rateLimitPerMinute } = createApiKeyBodySchema.parse(req.body);
+        const { scopes, rateLimitPerMinute, expiresAt } = createApiKeyBodySchema.parse(req.body);
 
         await assertDeveloperOwnsApi(user.id, apiId, deps);
 
@@ -90,6 +125,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
           userId: user.id,
           scopes,
           rateLimitPerMinute,
+          expiresAt: expiresAt ? new Date(expiresAt) : null,
         });
 
         res.status(201).json({
@@ -98,6 +134,8 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
           key: created.key,
           prefix: created.prefix,
           createdAt: created.createdAt.toISOString(),
+          expiresAt: created.expiresAt ? created.expiresAt.toISOString() : null,
+          lastUsedAt: null,
           revoked: false,
           scopes,
           rateLimitPerMinute,
@@ -131,6 +169,8 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
           scopes: record.scopes,
           rateLimitPerMinute: record.rateLimitPerMinute,
           createdAt: record.createdAt.toISOString(),
+          expiresAt: record.expiresAt ? record.expiresAt.toISOString() : null,
+          lastUsedAt: record.lastUsedAt ? record.lastUsedAt.toISOString() : null,
           revoked: record.revoked,
         }));
 
