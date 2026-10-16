@@ -11,10 +11,9 @@ Field	Type	Required	Description
 developerId	string	✅	Your developer ID
 url	string	✅	HTTPS endpoint to receive events
 events	string[]	✅	One or more event types (see below)
-secret	string	❌	Used to sign payloads (recommended)
+secret	string	❌	Used to sign payloads (min 32 characters; auto-generated as 64 hex chars and returned once in the 201 response when omitted)
 retryPolicy	object	optional	Optional per-subscription retry override
-Request bodies are Zod-validated before registration logic runs. Unknown fields
-are rejected.
+Request bodies are validated before registration logic runs. If `secret` is omitted, Callora automatically generates a 32-byte (64-character hex) signing secret, stores it on the subscription, and returns it once in the `201 Created` response body (`secret`). Store it immediately — `GET /api/webhooks/:developerId` never returns signing secrets. If a caller supplies `secret`, it must be at least 32 characters long or registration fails with `400 Bad Request` (`INVALID_WEBHOOK_SECRET`).
 
 Validation errors
 Invalid registration and retry-policy requests return HTTP 400 using the

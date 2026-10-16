@@ -420,4 +420,109 @@ describe('Webhook management routes — Authentication & Authorization (Issue #1
       assert.equal(res.body.developerId, 'dev-bob');
     });
   });
+
+  describe('Automatic signing secret generation on registration (Issue #1211)', () => {
+    it('returns a 64-hex-char secret when registered without a secret and stores it on the subscription', async () => {
+      const res = await request(app)
+        .post('/api/webhooks')
+        .set(authHeader('dev-auto-secret'))
+        .send({
+          developerId: 'dev-auto-secret',
+          url: 'https://example.com/webhook',
+          events: ['new_api_call'],
+        });
+
+      assert.equal(res.status, 201);
+      assert.equal(typeof res.body.secret, 'string');
+      assert.match(res.body.secret, /^[a-f0-9]{64}$/);
+
+      const stored = WebhookStore.get('dev-auto-secret');
+      assert.ok(stored);
+      assert.equal(stored.secret_current, res.body.secret);
+      assert.equal(stored.secret, res.body.secret);
+    });
+
+    it('attaches X-Callora-Signature on subsequent deliveries for a subscription registered without a secret', async () => {
+      const res = await request(app)
+        .post('/api/webhooks')
+        .set(authHeader('dev-auto-dispatch'))
+        .send({
+          developerId: 'dev-auto-dispatch',
+          url: 'https://example.com/webhook',
+          events: ['settlement_completed'],
+        });
+
+      assert.equal(res.status, 201);
+      const generatedSecret = res.body.secret as string;
+      const stored = WebhookStore.get('dev-auto-dispatch')!;
+
+      const { dispatchWebhook } = await import('../webhooks/webhook.dispatcher.js');
+      const { signWithSecret } = await import('../services/webhookSigner.js');
+      const originalFetch = global.fetch;
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+      } as unknown as Response);
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      try {
+        const payload = {
+          event: 'settlement_completed' as const,
+          timestamp: new Date().toISOString(),
+          developerId: 'dev-auto-dispatch',
+          data: { settlementId: 's-1', amount: '10.00' },
+        };
+        await dispatchWebhook(stored, payload);
+
+        assert.equal(fetchMock.mock.calls.length, 1);
+        const [, init] = fetchMock.mock.calls[0]!;
+        const headers = (init as RequestInit).headers as Record<string, string>;
+        const body = (init as RequestInit).body as string;
+        assert.equal(
+          headers['X-Callora-Signature'],
+          `sha256=${signWithSecret(generatedSecret, body)}`,
+        );
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('rejects a caller-supplied secret shorter than 32 characters with 400', async () => {
+      const res = await request(app)
+        .post('/api/webhooks')
+        .set(authHeader('dev-short-secret'))
+        .send({
+          developerId: 'dev-short-secret',
+          url: 'https://example.com/webhook',
+          events: ['new_api_call'],
+          secret: 'too-short-secret-123',
+        });
+
+      assert.equal(res.status, 400);
+      assert.equal(WebhookStore.get('dev-short-secret'), undefined);
+    });
+
+    it('never returns the secret on GET /api/webhooks/:developerId', async () => {
+      const regRes = await request(app)
+        .post('/api/webhooks')
+        .set(authHeader('dev-no-leak'))
+        .send({
+          developerId: 'dev-no-leak',
+          url: 'https://example.com/webhook',
+          events: ['new_api_call'],
+        });
+      assert.equal(regRes.status, 201);
+      assert.match(regRes.body.secret, /^[a-f0-9]{64}$/);
+
+      const getRes = await request(app)
+        .get('/api/webhooks/dev-no-leak')
+        .set(authHeader('dev-no-leak'));
+
+      assert.equal(getRes.status, 200);
+      assert.equal(getRes.body.secret, undefined);
+      assert.equal(getRes.body.secret_current, undefined);
+      assert.equal(getRes.body.secret_previous, undefined);
+    });
+  });
 });

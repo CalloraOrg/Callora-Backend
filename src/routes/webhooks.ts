@@ -191,6 +191,15 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       );
     }
 
+    if (secret !== undefined && secret !== null) {
+      if (typeof secret !== 'string' || secret.length < 32) {
+        throw new BadRequestError(
+          'Webhook secret must be at least 32 characters long.',
+          'INVALID_WEBHOOK_SECRET'
+        );
+      }
+    }
+
     const invalidEvents = events.filter(
       (e: string) => !VALID_EVENTS.includes(e as WebhookEventType)
     );
@@ -219,13 +228,19 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       throw new AppError('URL validation failed.', 500, 'WEBHOOK_URL_VALIDATION_FAILED');
     }
 
+    const effectiveSecret =
+      typeof secret === 'string' && secret.length >= 32
+        ? secret
+        : generateWebhookSecret();
+
     const before = WebhookStore.get(developerId) ? sanitizeConfig(WebhookStore.get(developerId) as unknown as Record<string, unknown>) : null;
 
     WebhookStore.register({
       developerId,
       url,
       events: events as WebhookEventType[],
-      secret_current: secret ?? undefined,
+      secret: effectiveSecret,
+      secret_current: effectiveSecret,
       retryPolicy: retryPolicy as RetryPolicy | undefined,
       createdAt: new Date(),
     });
@@ -239,6 +254,7 @@ router.post('/', webhookMgmtRateLimit, express.json(), async (req: Request, res:
       developerId,
       url,
       events,
+      secret: effectiveSecret,
     });
   } catch (error) {
     next(error);
