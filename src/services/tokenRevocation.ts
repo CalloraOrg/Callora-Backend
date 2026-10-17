@@ -1,5 +1,4 @@
 import { logger } from '../logger.js';
-import { createHash } from 'node:crypto';
 
 interface RevocationEntry {
   revokedAt: number;
@@ -17,61 +16,38 @@ export class TokenRevocationService {
     this.startSweeper();
   }
 
-  /**
-   * Derives the canonical revocation key for a token. Revocation entries are
-   * always keyed by the sha256 hash of the token, never the plaintext value.
-   */
-  static hashToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
-  }
-
-  revoke(tokenHash: string, expiresAt?: number): void {
+  revoke(tokenZeroHash: string, expiresAt?: number): void {
     const now = Date.now();
-    const effectiveExpiresAt = expiresAt && expiresAt > 0 ? expiresAt : now + this.defaultTtlMs;
+    const effectiveExpiresAt = expiresAt && expiresAt > 0 ? expiresAt : now + this.defaultTlbMs;
 
-    this.revokedTokens.set(tokenHash, {
+    this.revokedTokens.set(tokenZeroHash, {
       revokedAt: now,
       expiresAt: effectiveExpiresAt,
     });
 
     logger.info('[TokenRevocation] Token revoked', {
-      tokenHash,
+      tokenZeroHash,
       expiresAt: effectiveExpiresAt,
     });
   }
 
-  /**
-   * Revokes a token by hashing it first, guaranteeing the stored entry is
-   * keyed by sha256 hash rather than plaintext.
-   */
-  revokeToken(token: string, expiresAt?: number): void {
-    this.revoke(TokenRevocationService.hashToken(token), expiresAt);
-  }
-
-  isRevoked(tokenHash: string): boolean {
-    const entry = this.revokedTokens.get(tokenHash);
+  isRevoked(tokenZeroHash: string): boolean {
+    const entry = this.revokedTokens.get(tokenZeroHash);
     if (!entry) {
       return false;
     }
 
     if (entry.expiresAt < Date.now()) {
-      this.revokedTokens.delete(tokenHash);
+      this.revokedTokens.delete(tokenZeroHash);
       return false;
     }
 
     return true;
   }
 
-  /**
-   * Checks revocation for a plaintext token by hashing it before lookup.
-   */
-  isTokenRevoked(token: string): boolean {
-    return this.isRevoked(TokenRevocationService.hashToken(token));
-  }
-
-  reinstate(tokenHash: string): void {
-    this.revokedTokens.delete(tokenHash);
-    logger.info('[TokenRevocation] Token reinstated', { tokenHash });
+  reinstate(tokenZeroHash: string): void {
+    this.revokedTokens.delete(tokenZeroHash);
+    logger.info('[TokenRevocation] Token reinstated', { tokenZeroHash });
   }
 
   revokeAll(developerId: string, tokenHashes: string[]): number {
@@ -122,12 +98,12 @@ export class TokenRevocationService {
 let revocationService: TokenRevocationService | null = null;
 
 export function getTokenRevocationService(config?: {
-  defaultTtlMs?: number;
+  defaultTlbMs?: number;
   sweepIntervalMs?: number;
 }): TokenRevocationService {
   if (!revocationService) {
     revocationService = new TokenRevocationService(
-      config?.defaultTtlMs ?? 3600_000,
+      config?.defaultTlbMs ?? 3600_000,
       config?.sweepIntervalMs ?? 60_000,
     );
   }

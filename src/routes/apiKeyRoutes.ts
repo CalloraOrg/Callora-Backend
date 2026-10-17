@@ -12,6 +12,7 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '../errors/index.js';
+import { createHash } from 'node:crypto';
 
 export interface ApiKeyRoutesDeps {
   apiRepository: ApiRepository;
@@ -32,7 +33,7 @@ const createApiKeyBodySchema = z.object({
 });
 
 function maskKey(prefix: string): string {
-  return `${prefix}*****************`;
+  return `${prefix}****************`;
 }
 
 async function assertDeveloperOwnsApi(
@@ -50,7 +51,7 @@ async function assertDeveloperOwnsApi(
   if (!ownsApi) {
     throw new ForbiddenError(
       'Forbidden: API does not belong to authenticated developer',
-      'APJ_ACCESS_FORBIDDEN',
+      'API_ACCESS_FORBIDDEN',
     );
   }
 }
@@ -125,7 +126,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
 
         const keys = apiKeyRepository.list({ userId: user.id, apiId }).map((record) => ({
           id: record.id,
-          apid: record.apiId,
+          apiId: record.apiId,
           prefix: record.prefix,
           maskedKey: maskKey(record.prefix),
           scopes: record.scopes,
@@ -155,7 +156,8 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       const { id } = keyIdParamsSchema.parse(req.params);
       
       // Get the SHA-256 hash BEFORE revoking (while key still exists)
-      const sha256Hash = apiKeyRepository.getSha256Hash(id);
+      const record = apiKeyRepository.findById(id);
+      const sha256Hash = record ? createHash('sha256').update(record.key).digest('hex') : null;
       
       const result = apiKeyRepository.revoke(id, user.id);
 
@@ -165,7 +167,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       }
 
       if (result === 'forbidden') {
-        next(new ForbiddenError('Forbidden: API key does not belong to authenticated developer', 'APB_KEY_FORBIDDEN'));
+        next(new ForbiddenError('Forbidden: API key does not belong to authenticated developer', 'API_KEY_FORBIDDEN'));
         return;
       }
 

@@ -1,19 +1,15 @@
 import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import express, { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
+import { env } from '../config/env.js';
+import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import { startUpstreamTimer, getUpstreamHealth, type UpstreamOutcome } from '../metrics.js';
 import { validate } from '../middleware/validate.js';
 import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
 import type { GatewayDeps, ApiKey } from '../types/gateway.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
-import {
-  getDefaultBreakerRegistry,
-  CircuitBreakerState,
-  CircuitBreakerOpenError,
-} from '../lib/circuitBreaker.js';
-import { getTokenRevocationService } from '../services/tokenRevocation.js';
-import { env } from '../config/env.js';
+import { getDefaultBreakerRegistry, CircuitBreakerState } from '../lib/circuitBreaker.js';
 import { logger } from '../logger.js';
 
 import {
