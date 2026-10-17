@@ -1,4 +1,5 @@
 import express from 'express';
+import healthRouter from './routes/health.js';
 import cors from 'cors';
 import helmet from 'helmet';
 import adminRouter from './routes/admin.js';
@@ -387,6 +388,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     createDependenciesRouter(dependencies?.healthCheckConfig),
   );
 
+  // Single source of truth for GET /api/health — the health router owns the
+  // response shape and headers so every entrypoint returns the same envelope.
+  app.use("/api/health", healthRouter);
+
   // Rate-limit routes with X-Correlation-Id propagation — every sub-route
   // inherits correlation-id middleware for structured logging and outbound
   // call correlation.
@@ -398,7 +403,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       maxRequests: restRateLimitOptions.maxRequests,
     }),
   );
-
 
   // Public maintenance status — readable by external monitoring without admin auth.
   // Mounted in front of the admin routers so it cannot be shadowed by their catch-alls.

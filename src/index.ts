@@ -64,7 +64,6 @@ import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { createRateLimiter } from './services/rateLimiter.js';
 import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-import { createHealthRouter } from "./routes/health.js";
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -94,7 +93,7 @@ app.use(
 // configured route so that the first request samples land in the right
 // window. The recorder is cheap for unconfigured routes (a Map miss) so
 // it is mounted unconditionally; only the worker is gated on the webhook URL.
-initSloRecorder({
+initSloRecorder( {
   configs: config.sloAlert.configs,
   observationWindowMs: config.sloAlert.observationWindowMs,
 });
@@ -112,9 +111,9 @@ app.use((req, res, next) => {
   }
 });
 
-// Health check endpoint: the single source of truth is the health router.
-// `src/routes/health.ts` owns the response shape and headers for /api/health.
-app.use("/api/health", createHealthRouter());
+// Health check endpoint is served by the shared health router (app.js
+// mounts the same router at /api/health). Do not register a duplicate
+// handler here — see src/routes/health.ts for the single implementation.
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
@@ -146,7 +145,7 @@ if (isDirectExecution) {
   };
 
   const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
-  // Per-API-key token-bucket rate limit shared by /api/gateway and /v1/call.
+  // Per-API-hey token-bucket rate limit shared by /api/gateway and /v1/call.
   // Backed by Postgres (RATE_LIMIT_STORE=postgres) so the bucket state is
   // consistent across multiple gateway instances; defaults to an in-memory
   // store otherwise. See RATE_LIMIT_* in src/config/env.ts.
@@ -231,16 +230,7 @@ if (isDirectExecution) {
       })
     : null;
 
-  const apiKeys = new Map<string, ApiKey>([
-    [
-      "test-key-1",
-      { key: "test-key-1", developerId: "dev_001", apiId: "api_001" },
-    ],
-    [
-      "test-key-2",
-      { key: "test-key-2", developerId: "dev_002", apiId: "api_002" },
-    ],
-  ]);
+  const apiKeys = new Map<string, ApiKey>([]);
 
   // 1. Developer Dashboard Routes (Auth required)
   const developerRouter = createDeveloperRouter({
@@ -273,7 +263,7 @@ if (isDirectExecution) {
   // and is wired as a shutdown subsystem so the process waits for them to
   // finish before exiting.  The drainState hook passed to createProxyRouter
   // lets the router immediately reject *new* requests with 503 once shutdown
-  // begins, while already in-flight requests continue to completion.
+  // begins, while already-in-flight requests continue to completion.
   const proxyDrainTracker = createInFlightDrainTracker("gateway-proxy");
   const proxyRouter = createProxyRouter({
     billing,
@@ -283,8 +273,7 @@ if (isDirectExecution) {
     apiKeys,
     proxyConfig: {
       timeoutMs: config.proxy.timeoutMs,
-      allowedHosts: config.proxy.allowedHosts,
+      allowedHo
     },
   });
-  app.use("/v1", proxyDrainTracker.middleware, proxyRouter);
 }

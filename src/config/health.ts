@@ -27,8 +27,10 @@ function getDbPool(): Pool {
 }
 
 export function buildHealthCheckConfig(): HealthCheckConfig | undefined {
-  // Only enable detailed health checks if database is explicitly configured
-  if (env.DB_HOST === 'localhost' && env.DB_NAME === 'callora') {
+  // Only enable detailed health checks when explicitly opted in, so that
+  // every entrypoint (createApp and the index app) resolves the same
+  // /api/health handler configuration.
+  if (!env.HEALTH_CHECKS_ENABLED) {
     return undefined;
   }
 
