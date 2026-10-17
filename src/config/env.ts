@@ -87,6 +87,39 @@ export const envSchema = z
     FORWARDED_USER_ID_SECRET: z.string().optional(),
     INTERNAL_GATEWAY_SECRET: z.string().optional(),
 
+    /**
+     * TRUST_PROXY_HOPS — number of trusted reverse-proxy hops in front of the
+     * application. When greater than 0, client IPs are derived by walking the
+     * X-Forwarded-For header from the right (the side appended by the nearest
+     * trusted proxy) and selecting the entry that many positions from the
+     * right, falling back to the socket address when the header is missing or
+     * too short. This mirrors Express `trust proxy` semantics and prevents
+     * spoofing via client-controlled leftmost entries.
+     *
+     * Default 0 means no proxy is trusted and the socket address is always
+     * used, regardless of any X-Forwarded-For header.
+     */
+    TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(0),
+    /**
+     * TRUST_PROXY_HEADERS — legacy boolean flag. Retained for backwards
+     * compatibility: when true and TRUST_PROXY_HOPS is unset (0), a single
+     * trusted hop is assumed. Prefer TRUST_PROXY_HOPS for new deployments.
+     */
+    TRUST_PROXY_HEADERS: z
+      .string()
+      .optional()
+      .transform((v) => v === "true")
+      .default(false),
+
+    /**
+     * Effective trusted-proxy hop count derived from TRUST_PROXY_HOPS and the
+     * legacy TRUST_PROXY_HEADERS flag. When the legacy flag is true and no
+     * explicit hop count is configured, a single trusted hop is assumed.
+     * Consumers (e.g. src/lib/clientIp.ts) should read this value rather than
+     * re-deriving the fallback themselves.
+     */
+    EFFECTIVE_TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().optional(),
+
     // Proxy / Gateway
     UPSTREAM_URL: z.string().url().default("http://localhost:4000"),
     UPSTREAM_HOST_ALLOWLIST: z.string().optional(),
@@ -209,6 +242,16 @@ export const envSchema = z
       .default(false),
     SOROBAN_RPC_URL: z.string().url().optional(),
     SOROBAN_RPC_TIMEOUT: z.coerce.number().default(2_000),
+
+    // Billing RPC (the contract must be configured in production)
+    SOROBAN_BILLING_RPC_URL: z.string().url().optional(),
+    SOROBAN_BILLING_CONTRACT_ID: z.string().trim().min(1).optional(),
+    SOROBAN_BILLING_SOURCE_ACCOUNT: z.string().min(1).optional(),
+    SOROBAN_BILLING_NETWORK_PASSPHRASE: z.string().min(1).optional(),
+    SOROBAN_BILLING_BACKEND_SECRET_KEY: z.string().min(1).optional(),
+    SOROBAN_BILLING_RPC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+    SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
+    SOROBAN_BILLING_DEDUCT_FN: z.string().min(1).default("deduct"),
 
     // Horizon (optional)
     HORIZON_ENABLED: z
@@ -533,6 +576,14 @@ export const envSchema = z
       .default(345_600_000), // 96h = 4 days, the slow-burn window
   })
   .superRefine((values, ctx) => {
+    if (values.NODE_ENV === "production" && !values.SOROBAN_BILLING_CONTRACT_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SOROBAN_BILLING_CONTRACT_ID"],
+        message: "SOROBAN_BILLING_CONTRACT_ID is required in production",
+      });
+    }
+
     if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -548,6 +599,45 @@ export const envSchema = z
         message: "HORIZON_URL is required when HORIZON_ENABLED=true",
       });
     }
+
+    // In production the upstream host allowlist must be explicitly configured.
+    // The default empty allowlist rejects all upstream hosts, so operators
+    // must set UPSTREAM_HOST_ALLOWLIST to a non-empty value to proxy traffic.
+    if (
+      values.NODE_ENV === "production" &&
+      (!values.UPSTREAM_HOST_ALLOWLIST ||
+        values.UPSTREAM_HOST_ALLOWLIST.trim() === "")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["UPSTREAM_HOST_ALLOWLIST"],
+        message:
+          "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
+      });
+    }
+
+    // TRUST_PROXY_HEADERS is a legacy alias for a single trusted hop. Reject
+    // configurations that set both to conflicting values so operators cannot
+    // silently believe they trust more (or fewer) hops than they actually do.
+    if (values.TRUST_PROXY_HEADERS && values.TRUST_PROXY_HOPS > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["TRUST_PROXY_HOPS"],
+        message:
+          "TRUST_PROXY_HOPS conflicts with legacy TRUST_PROXY_HEADERS=true; set only one of them",
+      });
+    }
+
+    // Resolve the effective trusted-hop count: explicit TRUST_PROXY_HOPS wins;
+    // otherwise the legacy boolean implies a single trusted hop.
+    const effectiveHops =
+      values.TRUST_PROXY_HOPS > 0
+        ? values.TRUST_PROXY_HOPS
+        : values.TRUST_PROXY_HEADERS
+          ? 1
+          : 0;
+    (values as { EFFECTIVE_TRUST_PROXY_HOPS?: number }).EFFECTIVE_TRUST_PROXY_HOPS =
+      effectiveHops;
   });
 
 const parsed = envSchema.safeParse(process.env);

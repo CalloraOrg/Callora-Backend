@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import type { Request } from 'express';
 import { getClientIp, isValidIp, DEFAULT_PROXY_HEADERS } from '../clientIp.js';
 
+// Note: getClientIp's second argument is a trusted proxy hop count (number),
+// matching Express 'trust proxy' semantics. 0/false means no trust.
+
 function makeReq(overrides: Partial<Request> = {}): Request {
   return {
     headers: {},
@@ -32,24 +35,50 @@ describe('isValidIp', () => {
 });
 
 describe('getClientIp', () => {
-  test('returns socket address when trustProxy is false', () => {
+  test('returns socket address when trustProxy is 0 (no trust)', () => {
     const req = makeReq({ socket: { remoteAddress: '1.2.3.4' } as never });
-    assert.equal(getClientIp(req, false), '1.2.3.4');
+    assert.equal(getClientIp(req, 0), '1.2.3.4');
   });
 
-  test('ignores x-forwarded-for when trustProxy is false', () => {
+  test('ignores x-forwarded-for when trustProxy is 0 (no trust)', () => {
     const req = makeReq({
       headers: { 'x-forwarded-for': '9.9.9.9' },
       socket: { remoteAddress: '1.2.3.4' } as never,
     });
-    assert.equal(getClientIp(req, false), '1.2.3.4');
+    assert.equal(getClientIp(req, 0), '1.2.3.4');
   });
 
-  test('uses x-forwarded-for leftmost IP when trustProxy is true', () => {
+  test('with one trusted hop, selects the rightmost forwarded entry', () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' },
+      socket: { remoteAddress: '10.0.0.1' } as never,
+    });
+    assert.equal(getClientIp(req, 1), '2.2.2.2');
+  });
+
+  test('spoofed leftmost entries are ignored with a single trusted hop', () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '6.6.6.6, 2.2.2.2' },
+      socket: { remoteAddress: '10.0.0.1' } as never,
+    });
+    assert.equal(getClientIp(req, 1), '2.2.2.2');
+  });
+
+  test('selects the entry that many positions from the right for multiple hops', () => {
     const req = makeReq({
       headers: { 'x-forwarded-for': '5.5.5.5, 10.0.0.1, 172.16.0.1' },
+      socket: { remoteAddress: '10.0.0.1' } as never,
     });
-    assert.equal(getClientIp(req, true), '5.5.5.5');
+    assert.equal(getClientIp(req, 2), '10.0.0.1');
+    assert.equal(getClientIp(req, 3), '5.5.5.5');
+  });
+
+  test('falls back to socket when trusted hop exceeds available entries', () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' },
+      socket: { remoteAddress: '1.2.3.4' } as never,
+    });
+    assert.equal(getClientIp(req, 3), '1.2.3.4');
   });
 
   test('falls back to socket when proxy header is invalid', () => {
@@ -57,17 +86,17 @@ describe('getClientIp', () => {
       headers: { 'x-forwarded-for': 'not-an-ip' },
       socket: { remoteAddress: '1.2.3.4' } as never,
     });
-    assert.equal(getClientIp(req, true), '1.2.3.4');
+    assert.equal(getClientIp(req, 1), '1.2.3.4');
   });
 
   test('falls back to req.ip when socket is absent', () => {
     const req = makeReq({ ip: '3.3.3.3', socket: undefined as never });
-    assert.equal(getClientIp(req, false), '3.3.3.3');
+    assert.equal(getClientIp(req, 0), '3.3.3.3');
   });
 
   test('returns empty string when no IP source is available', () => {
     const req = makeReq({ ip: undefined, socket: undefined as never });
-    assert.equal(getClientIp(req, false), '');
+    assert.equal(getClientIp(req, 0), '');
   });
 
   test('checks proxy headers in DEFAULT_PROXY_HEADERS priority order', () => {
@@ -75,16 +104,16 @@ describe('getClientIp', () => {
     const reqBoth = makeReq({
       headers: { 'x-forwarded-for': '5.5.5.5', 'x-real-ip': '6.6.6.6' },
     });
-    assert.equal(getClientIp(reqBoth, true), '5.5.5.5');
+    assert.equal(getClientIp(reqBoth, 1), '5.5.5.5');
 
     // Only x-real-ip present
     const reqReal = makeReq({ headers: { 'x-real-ip': '6.6.6.6' } });
-    assert.equal(getClientIp(reqReal, true), '6.6.6.6');
+    assert.equal(getClientIp(reqReal, 1), '6.6.6.6');
   });
 
   test('accepts custom proxy header list', () => {
     const req = makeReq({ headers: { 'x-custom-ip': '7.7.7.7' } });
-    assert.equal(getClientIp(req, true, ['x-custom-ip']), '7.7.7.7');
+    assert.equal(getClientIp(req, 1, ['x-custom-ip']), '7.7.7.7');
   });
 
   test('DEFAULT_PROXY_HEADERS includes x-forwarded-for', () => {

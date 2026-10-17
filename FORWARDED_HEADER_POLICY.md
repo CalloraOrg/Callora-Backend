@@ -17,31 +17,75 @@ The following headers are **never** forwarded to upstream services for security 
 ### Network Infrastructure
 - `host` - The original request host
 - `x-forwarded-for` - Client IP address chain
-- `x-real-ip` - Original client IP address
+-  x-real-ip` - Original client IP address
 - `connection` - Connection control directives
-- `keep-alive` - Persistent connection directives
+- keep-alive` - Persistent connection directives
 - `transfer-encoding` - Transfer encoding specifications
 - `te` - Transfer encoding (legacy)
 - `trailer` - Trailer header fields
 - `upgrade` - Protocol upgrade directives
 - `proxy-connection` - Proxy connection directives
 
+## Client IP Derivation (Trusted Proxy Hops)
+
+The client IP used for admin IP allowlists and per-IP rate limiting is derived in `src/lib/clientIp.ts`. The leftmost `X-Forwarded-For` entry is client-controlled and must not be trusted.
+
+### Trust Model
+
+The former boolean `trustProxyHeaders` has been replaced by a trusted hop count (`trustedProxyHops`). This aligns with Express's `trust proxy` semantics: the number represents how many reverse proxies sit in front of the application and are trusted to append to the forwarded chain.
+
+- `trustedProxyHops = 0` (default) - No proxy is trusted; the socket address is used and forwarded headers are ignored.
+- `trustedProxyHops = 1` - One trusted proxy; the rightmost `X-Forwarded-For` entry is the client.
+- `trustedProxyHops = N` - The entry `N` positions from the right is selected.
+
+### Selection Algorithm
+
+1. If `trustedProxyHops` <= 0, or there is no `X-Forwarded-For` header, return the socket address.
+2. Parse the `X-Forwarded-For` header into a list of entries (comma-separated, trimmed).
+3. If the number of entries is less than `trustedProxyHops`, the header is malformed or incomplete; fall back to the socket address.
+4. Otherwise, select the entry at index `length - trustedProxyHops` (zero-based), i.e. the entry that many positions from the right.
+5. If the selected entry is empty or invalid, fall back to the socket address.
+
+### Examples
+
+With `trustedProxyHops = 1`:
+
+```
+X-Forwarded-For: 1.1.1.1, 2.2.2.2
+
+```
+Yields `2.2.2.2` (the rightmost entry). The leftmost `1.1.1.1` is client-controlled and ignored.
+
+With `trustedProxyHops = 0`:
+
+```
+X-Forwarded-For: 1.1.1.1, 2.2.2.2
+
+```
+Yields the socket address. The header is ignored entirely.
+
+### Security Considerations
+
+- Spoofed leftmost entries cannot satisfy the admin IP allowlist because only trusted hops are considered.
+- Per-IP rate limiting cannot be evaded by rotating client-supplied header values.
+- When the forwarded header is malformed or shorter than the trusted hop count, the socket address is used, failing closed.
+
 ## Headers Added by Proxy
 
 The proxy adds the following headers to all upstream requests:
 
-- `x-request-id` - Unique UUID v4 identifier for request tracing and correlation
+-  x-request-id` - Unique UUID v4 identifier for request tracing and correlation
 
 ## Safe Headers (Forwarded)
 
-All other headers not in the strip list are forwarded to upstream services, including but not limited to:
+All other headers not in the strip include but not limited to:
 
 - `content-type` - Media type of the request body
 - `content-length` - Length of the request body
 - `accept` - Preferred response media types
-- `user-agent` - Client software identification
-- `accept-encoding` - Preferred content encodings
-- `accept-language` - Preferred response languages
+- user-agent` - Client software identification
+- accept-encoding` - Preferred response encodings
+- accept-language` - Preferred response languages
 - Custom application headers (e.g., `x-custom-*`)
 
 ## Response Header Handling
@@ -49,15 +93,15 @@ All other headers not in the strip list are forwarded to upstream services, incl
 ### Headers Preserved from Upstream
 All upstream response headers are forwarded to the client **except** hop-by-hop headers:
 
-- `connection`
-- `keep-alive`
-- `transfer-encoding`
+- connection`
+- keep-alive`
+- transfer-encoding`
 - `te`
 - `trailer`
 - `upgrade`
 
 ### Headers Overridden by Proxy
-- `x-request-id` - Always set to the proxy's request ID for correlation
+- x-request-id` - Always set to the proxy's request ID for correlation
 
 ## Case Sensitivity
 
@@ -113,5 +157,6 @@ Comprehensive tests verify:
 - Case-insensitive header stripping works
 - Response headers are filtered appropriately
 - Request ID correlation is maintained
+- Client IP derivation uses trusted proxy hops and falls back to the socket address
 
-See `src/__tests__/proxy.integration.test.ts` for detailed test coverage.
+For client IP derivation, see `src/lib/__tests__/clientIp.test.ts` and `tests/integration/ipAllowlist.integration.test.ts`. For proxy header behavior, see `src/__tests__/proxy.integration.test.ts`.
