@@ -29,7 +29,6 @@ import { createDeveloperRouter } from "./routes/developerRoutes.js";
 import { createGatewayRouter } from "./routes/gatewayRoutes.js";
 import { createProxyRouter } from "./routes/proxyRoutes.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
-import { createHealthRouter } from "./routes/health.js";
 import adminRouter from "./routes/admin.js";
 import logsRouter from "./routes/logs.js";
 import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
@@ -65,6 +64,9 @@ import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { createRateLimiter } from './services/rateLimiter.js';
 import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
+
+// Health router is the single source of truth for /api/health.
+import healthRouter from "./routes/health.js";
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -112,8 +114,9 @@ app.use((req, res, next) => {
   }
 });
 
-// Health check endpoint — single implementation lives in routes/health.ts
-app.use("/api/health", createHealthRouter());
+// Health check endpoint -- served exclusively by the health router so
+  // there is exactly one implementation for /api/health.
+app.use("/api/health", healthRouter);
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
@@ -145,7 +148,7 @@ if (isDirectExecution) {
   };
 
   const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
-  // Per-API-hey token-bucket rate limit shared by /api/gateway and /v1/call.
+  // Per-API-key token-bucket rate limit shared by /api/gateway and /v1/call.
   // Backed by Postgres (RATE_LIMIT_STORE=postgres) so the bucket state is
   // consistent across multiple gateway instances; defaults to an in-memory
   // store otherwise. See RATE_LIMIT_* in src/config/env.ts.
@@ -231,6 +234,8 @@ if (isDirectExecution) {
     : null;
 
   const apiKeys = new Map<string, ApiKey>([]);
+  apiKeys.set("test-key-1", { key: "test-key-1", developerId: "dev_001", apiId: "api_001" });
+  apiKeys.set("test-key-2", { key: "test-key-2", developerId: "dev_002", apiId: "api_002" });
 
   // 1. Developer Dashboard Routes (Auth required)
   const developerRouter = createDeveloperRouter({
@@ -272,8 +277,10 @@ if (isDirectExecution) {
     registry,
     apiKeys,
     proxyConfig: {
-      upstreamUrl: config.proxy.upstreamUrl,
+      timeoutMs: config.proxy.timeoutMs,
+      allowedHosts: config.proxy.allowedHosts,
     },
+    drainState: proxyDrainTracker,
   });
   app.use("/v1/call", proxyDrainTracker.middleware, proxyRouter);
 
@@ -283,10 +290,13 @@ if (isDirectExecution) {
   const authController = new AuthController(refreshTokenService);
   app.use("/api/auth", createRefreshTokenRouter(authController));
 
-  // Error handler must be mounted last
+  // Legacy V1 deprecation notice middleware
+  app.use(legacyV1DeprecationMiddleware);
+
+  // Error handler must be last
   app.use(errorHandler);
 
-  // Start the server
+  // Initialize DB and start listening
   const port = config.port;
   const server = app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
@@ -294,29 +304,31 @@ if (isDirectExecution) {
 
   // Graceful shutdown
   const subsystems: DrainableSubsystem[] = [
-    {
-      name: "quotas",
-      drain: () => quotasDrainTracker.waitForIdle(),
-    },
-    {
-      name: "proxy",
-      drain: () => proxyDrainTracker.waitForIdle(),
-    },
+    { name: "proxy", tracker: proxyDrainTracker },
+    { name: "quotas", tracker: quotasDrainTracker },
   ];
-
-  const shutdown = createGracefulShutdownHandler({
-    server,
-    subsystems,
+  const shutdown = createGracefulShutdownHandler(server, subsystems, {
     onShutdown: async () => {
       await stopWebhookDispatching();
       await awaitWebhookDispatcherIdle();
-      await closeDb();
-      await closePgPool();
       await closeDbPool();
+      await closePgPool();
       await disconnectPrisma();
+      await closeDb();
     },
   });
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // Start background jobs
+  void initializeDb().then(() => {
+    revenueLedgerIndexerJob.start();
+    settlementStatusSyncJob.start();
+    settlementReconJob.start();
+    idempotencySweeperJob.start();
+    monthlyInvoiceJob.start();
+    if (slowQueryAlerterJob) slowQueryAlerterJob.start();
+    if (anomalyDetectorJob) anomalyDetectorJob.start();
+    if (sloAlertJob) sloAlertJob.start();
+  });
 }

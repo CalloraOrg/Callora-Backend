@@ -12,6 +12,7 @@ import { createApisRouter } from './routes/apis.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createPluginsRouter } from './routes/marketplace/plugins.js';
 import { createGatewayHealthRouter } from './routes/gatewayRoutes.js';
+import healthRouter from './routes/health.js';
 import {
   HmacObjectStorageClient,
 } from './services/scheduledExports.js';
@@ -21,7 +22,6 @@ import {
 } from './services/reportExporter.js';
 import { createLogsRouter } from './routes/logs.js';
 import { pool } from './db.js';
-import healthRouter from './routes/health.js';
 import {
   InMemoryUsageEventsRepository,
   type GroupBy,
@@ -348,6 +348,40 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   // Register envelope validator after body parser but before routes
   app.use(envelopeValidator);
 
+  /**
+   * GET /api/health
+   *
+   * Provides health status of the application and its dependencies.
+   * If health check config is minimally configured, returns a basic status.
+   *
+   * @schema HealthCheckResult | BasicHealthResult
+   * @example Basic
+   * {
+   *   "success": true,
+   *   "data": {
+   *     "status": "ok",
+   *     "service": "callora-backend"
+   *   },
+   *   "requestId": "...",
+   *   "timestamp": "..."
+   * }
+   * @example Full
+   * {
+   *   "success": true,
+   *   "data": {
+   *     "status": "ok",
+   *     "version": "1.0.0",
+   *     "timestamp": "2026-03-27T10:00:00.000Z",
+   *     "checks": {
+   *       "api": "ok",
+   *       "database": "ok",
+   *       "soroban_rpc": "ok"
+   *     }
+   *   },
+   *   "requestId": "...",
+   *   "timestamp": "..."
+   * }
+   */
   // Per-dependency health probe — detailed status for each configured dependency
   app.use(
     "/api/health/dependencies",
@@ -365,6 +399,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       maxRequests: restRateLimitOptions.maxRequests,
     }),
   );
+
+  // Single source of truth for GET /api/health — the health router owns the
+  // enveloped response shape and headers. Do not register another handler here.
+  app.use("/api/health", healthRouter);
 
   // Public maintenance status — readable by external monitoring without admin auth.
   // Mounted in front of the admin routers so it cannot be shadowed by their catch-alls.
@@ -429,9 +467,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
       subscriptionRepository: defaultSubscriptionRepository,
     }),
   );
-
-  // Single source of truth for /api/health — mounted from src/routes/health.ts
-  app.use("/api/health", healthRouter);
 
   app.get(
     "/api/developers/apis",
