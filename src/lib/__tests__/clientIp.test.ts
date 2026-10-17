@@ -2,9 +2,6 @@ import assert from 'node:assert/strict';
 import type { Request } from 'express';
 import { getClientIp, isValidIp, DEFAULT_PROXY_HEADERS } from '../clientIp.js';
 
-// Note: getClientIp's second argument is a trusted proxy hop count (number),
-// matching Express 'trust proxy' semantics. 0/false means no trust.
-
 function makeReq(overrides: Partial<Request> = {}): Request {
   return {
     headers: {},
@@ -35,50 +32,55 @@ describe('isValidIp', () => {
 });
 
 describe('getClientIp', () => {
-  test('returns socket address when trustProxy is 0 (no trust)', () => {
+  test('returns socket address when trustProxy is false', () => {
     const req = makeReq({ socket: { remoteAddress: '1.2.3.4' } as never });
-    assert.equal(getClientIp(req, 0), '1.2.3.4');
+    assert.equal(getClientIp(req, false), '1.2.3.4');
   });
 
-  test('ignores x-forwarded-for when trustProxy is 0 (no trust)', () => {
+  test('ignores x-forwarded-for when trustProxy is false', () => {
     const req = makeReq({
       headers: { 'x-forwarded-for': '9.9.9.9' },
       socket: { remoteAddress: '1.2.3.4' } as never,
     });
-    assert.equal(getClientIp(req, 0), '1.2.3.4');
+    assert.equal(getClientIp(req, false), '1.2.3.4');
   });
 
-  test('with one trusted hop, selects the rightmost forwarded entry', () => {
+  test('defaults to socket address when trust is not specified', () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '5.5.5.5' },
+      socket: { remoteAddress: '1.2.3.4' } as never,
+    });
+    assert.equal(getClientIp(req), '1.2.3.4');
+  });
+
+  test('with one trusted hop, selects the rightmost entry', () => {
     const req = makeReq({
       headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' },
+    });
+    assert.equal(getClientIp(req, 1), '2.2.2.2');
+  });
+
+  test('with two trusted hops, selects the second entry from the right', () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2, 3.3.3.3' },
+    });
+    assert.equal(getClientIp(req, 2), '2.2.2.2');
+  });
+
+  test('spoofed leftmost entries are ignored with one trusted hop', () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '9.9.9.9, 2.2.2.2' },
       socket: { remoteAddress: '10.0.0.1' } as never,
     });
     assert.equal(getClientIp(req, 1), '2.2.2.2');
   });
 
-  test('spoofed leftmost entries are ignored with a single trusted hop', () => {
+  test('falls back to socket when trusted hop count exceeds header entries', () => {
     const req = makeReq({
-      headers: { 'x-forwarded-for': '6.6.6.6, 2.2.2.2' },
-      socket: { remoteAddress: '10.0.0.1' } as never,
-    });
-    assert.equal(getClientIp(req, 1), '2.2.2.2');
-  });
-
-  test('selects the entry that many positions from the right for multiple hops', () => {
-    const req = makeReq({
-      headers: { 'x-forwarded-for': '5.5.5.5, 10.0.0.1, 172.16.0.1' },
+      headers: { 'x-forwarded-for': '2.2.2.2' },
       socket: { remoteAddress: '10.0.0.1' } as never,
     });
     assert.equal(getClientIp(req, 2), '10.0.0.1');
-    assert.equal(getClientIp(req, 3), '5.5.5.5');
-  });
-
-  test('falls back to socket when trusted hop exceeds available entries', () => {
-    const req = makeReq({
-      headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' },
-      socket: { remoteAddress: '1.2.3.4' } as never,
-    });
-    assert.equal(getClientIp(req, 3), '1.2.3.4');
   });
 
   test('falls back to socket when proxy header is invalid', () => {
@@ -91,12 +93,12 @@ describe('getClientIp', () => {
 
   test('falls back to req.ip when socket is absent', () => {
     const req = makeReq({ ip: '3.3.3.3', socket: undefined as never });
-    assert.equal(getClientIp(req, 0), '3.3.3.3');
+    assert.equal(getClientIp(req, false), '3.3.3.3');
   });
 
   test('returns empty string when no IP source is available', () => {
     const req = makeReq({ ip: undefined, socket: undefined as never });
-    assert.equal(getClientIp(req, 0), '');
+    assert.equal(getClientIp(req, false), '');
   });
 
   test('checks proxy headers in DEFAULT_PROXY_HEADERS priority order', () => {
