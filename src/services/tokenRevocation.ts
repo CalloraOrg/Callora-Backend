@@ -1,5 +1,4 @@
 import { logger } from '../logger.js';
-import { createHash } from 'node:crypto';
 
 interface RevocationEntry {
   revokedAt: number;
@@ -30,10 +29,6 @@ export class TokenRevocationService {
       tokenHash,
       expiresAt: effectiveExpiresAt,
     });
-  }
-
-  static hashToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
   }
 
   isRevoked(tokenHash: string): boolean {
@@ -88,7 +83,7 @@ export class TokenRevocationService {
     const now = Date.now();
     for (const [tokenHash, entry] of this.revokedTokens) {
       if (entry.expiresAt < now) {
-        this.revokedTokens.delete(tokenHash);
+        this.revokedTokens.delete(tokenPath);
       }
     }
   }

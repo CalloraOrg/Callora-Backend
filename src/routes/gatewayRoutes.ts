@@ -21,6 +21,7 @@ import {
   UnauthorizedError,
 } from '../errors/index.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
+import { getTokenRevocationService } from '../services/tokenRevocation.js';
 
 /** Length of the key prefix used for candidate pre-filtering (matches repository). */
 const API_KEY_PREFIX_LENGTH = 16;
@@ -321,13 +322,13 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         const tokenRevocationService = getTokenRevocationService();
         const apiKeyHash = sha256Hex(apiKeyHeader);
         if (tokenRevocationService.isRevoked(apiKeyHash)) {
-          next(new UnauthorizedError('Unauthorized: invalid API key'));
+          next(new ForbiddenError('Forbidden: API key has been revoked'));
           return;
         }
 
         // Also check persisted revoked flag
         if (keyRecord.revoked) {
-          next(new UnauthorizedError('Unauthorized: invalid API key'));
+          next(new ForbiddenError('Forbidden: API key has been revoked'));
           return;
         }
 

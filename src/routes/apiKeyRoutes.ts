@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
-const { apiKeyRepository } = await import('../repositories/apiKeyRepository.js');
+import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
@@ -50,7 +50,7 @@ async function assertDeveloperOwnsApi(
   if (!ownsApi) {
     throw new ForbiddenError(
       'Forbidden: API does not belong to authenticated developer',
-      'API_ACCESS_FORBIDDEN',
+      'APJ_ACCESS_FORBIDDEN',
     );
   }
 }
@@ -170,6 +170,8 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       }
 
       // Add to in-memory revocation list for immediate invalidation
+      // The revocation service is keyed by the SHA-256 hash of the key, not the
+      // plaintext key, so leaked credentials cannot be recovered from the store.
       if (sha256Hash) {
         getTokenRevocationService().revoke(sha256Hash);
       }
