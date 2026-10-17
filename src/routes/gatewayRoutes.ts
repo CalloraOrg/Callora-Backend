@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import express, { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
+import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import { startUpstreamTimer, getUpstreamHealth, type UpstreamOutcome } from '../metrics.js';
 import { validate } from '../middleware/validate.js';
 import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
@@ -21,7 +22,6 @@ import {
   UnauthorizedError,
 } from '../errors/index.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
-import { getTokenRevocationService } from '../services/tokenRevocation.js';
 
 /** Length of the key prefix used for candidate pre-filtering (matches repository). */
 const API_KEY_PREFIX_LENGTH = 16;
@@ -322,13 +322,15 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         const tokenRevocationService = getTokenRevocationService();
         const apiKeyHash = sha256Hex(apiKeyHeader);
         if (tokenRevocationService.isRevoked(apiKeyHash)) {
-          next(new ForbiddenError('Forbidden: API key has been revoked'));
+          // Revoked keys must fail authentication with 401 (not 403) so that
+          // clients treat the credential as invalid and stop retrying.
+          next(new UnauthorizedError('Unauthorized: invalid API key'));
           return;
         }
 
         // Also check persisted revoked flag
         if (keyRecord.revoked) {
-          next(new ForbiddenError('Forbidden: API key has been revoked'));
+          next(new UnauthorizedError('Unauthorized: invalid API key'));
           return;
         }
 

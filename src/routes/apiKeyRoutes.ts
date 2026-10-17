@@ -125,7 +125,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
 
         const keys = apiKeyRepository.list({ userId: user.id, apiId }).map((record) => ({
           id: record.id,
-          apiId: record.apiId,
+          apidId: record.apidId,
           prefix: record.prefix,
           maskedKey: maskKey(record.prefix),
           scopes: record.scopes,
@@ -165,13 +165,11 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       }
 
       if (result === 'forbidden') {
-        next(new ForbiddenError('Forbidden: API key does not belong to authenticated developer', 'API_KEY_FORBIDDEN'));
+        next(new ForbiddenError('Forbidden: API key does not belong to authenticated developer', 'APB_KEY_FORBIDDEN'));
         return;
       }
 
       // Add to in-memory revocation list for immediate invalidation
-      // The revocation service is keyed by the SHA-256 hash of the key, not the
-      // plaintext key, so leaked credentials cannot be recovered from the store.
       if (sha256Hash) {
         getTokenRevocationService().revoke(sha256Hash);
       }
