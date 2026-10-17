@@ -58,29 +58,15 @@ import {
 import { createSloAlertJob } from "./workers/sloAlertJob.js";
 import { createMonthlyInvoiceJob } from "./workers/monthlyInvoiceJob.js";
 import { createSettlementReconWorker } from "./workers/settlementRecon.js";
-import { createDeveloperRouter } from './routes/developerRoutes.js';
-import { createGatewayRouter } from './routes/gatewayRoutes.js';
-import { createProxyRouter } from './routes/proxyRoutes.js';
 import { createRefreshTokenRouter } from './routes/refresh-token.js';
 import { AuthController } from './controllers/authController.js';
 import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
-import { defaultDeveloperRepository } from './repositories/developerRepository.js';
-import { createBillingService } from './services/billingService.js';
 import { createRateLimiter } from './services/rateLimiter.js';
-import { PgUsageEventsRepository } from './repositories/usageEventsRepository.pg.js';
-import { createRevenueLedgerIndexerJob } from './services/revenueLedgerIndexer.js';
-import { RevenueSettlementService } from './services/revenueSettlementService.js';
-import { createSettlementStatusSyncJob } from './services/settlementStatusSyncJob.js';
 import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-import { createIdempotencySweeperJob } from './services/idempotencySweeper.js';
-import { createPostgresUsageStore } from './services/usageStore.js';
-import { createPostgresSettlementStore } from './services/settlementStore.js';
-import { createApiRegistry } from './data/apiRegistry.js';
-import { ApiKey } from './types/gateway.js';
-import { listingsCache } from './lib/listingsCache.js';
-import { createSlowQueryAlerterJob } from './workers/slowQueryAlerter.js';
-import { createAnomalyDetectorJob } from './workers/anomalyDetector.js';
+
+// Health router is the single source of truth for /api/health.
+import healthRouter from "./routes/health.js";
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -128,10 +114,9 @@ app.use((req, res, next) => {
   }
 });
 
-// Health check endpoint
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", service: "callora-backend" });
-});
+// Health check endpoint - served by the shared healthRouter so that
+// /api/health has exactly one implementation across all entrypoints.
+app.use("/api/health", healthRouter);
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
@@ -273,9 +258,6 @@ if (isDirectExecution) {
   app.use("/api/admin", adminRouter);
   app.use("/api/refunds", refundsRouter);
   app.use("/api/logs", logsRouter);
-  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
-
-  app.use('/api/admin', adminRouter);
 
   // Legacy gateway route (existing)
   const gatewayRouter = createGatewayRouter({
@@ -293,7 +275,7 @@ if (isDirectExecution) {
   // and is wired as a shutdown subsystem so the process waits for them to
   // finish before exiting.  The drainState hook passed to createProxyRouter
   // lets the router immediately reject *new* requests with 503 once shutdown
-  // begins, while already-in-flight requests continue to completion.
+  // begins, while already in-flight requests continue to completion.
   const proxyDrainTracker = createInFlightDrainTracker("gateway-proxy");
   const proxyRouter = createProxyRouter({
     billing,
@@ -305,166 +287,72 @@ if (isDirectExecution) {
       timeoutMs: config.proxy.timeoutMs,
       allowedHosts: config.proxy.allowedHosts,
     },
-    // Pass the drain state so the router can reject new requests with 503
-    // during the graceful shutdown window.
-    drainState: { isDraining: proxyDrainTracker.isDraining },
+    drainState: proxyDrainTracker,
   });
-  const keysDrainTracker = createInFlightDrainTracker("api-keys");
-  const apiKeyRouter = createApiKeyRouter({
-    apiRepository: defaultApiRepository,
-    developerRepository: defaultDeveloperRepository,
-  });
+  app.use("/v1/call", proxyDrainTracker.middleware, proxyRouter);
 
-  // --- Refresh-token drain tracker ---
-  // Tracks in-flight POST /api/refresh-token requests so that a SIGTERM during
-  // a token refresh will wait for the response to be sent before the process
-  // exits.  The subsystem is registered below alongside the other shutdown
-  // subsystems.
-  const refreshTokenDrainTracker = createInFlightDrainTracker('refresh-token');
-
-  const refreshTokenService = new RefreshTokenService({
-    jwtSecret: config.jwt.secret,
-    accessTokenExpiry: process.env.ACCESS_TOKEN_EXPIRY ?? '15m',
-    refreshTokenExpiry: process.env.REFRESH_TOKEN_EXPIRY ?? '7d',
-  });
+  // Refresh token routes
   const refreshTokenRepository = new DatabaseRefreshTokenRepository(pool);
-  const authController = new AuthController({
-    refreshTokenService,
-    refreshTokenRepository,
-  });
+  const refreshTokenService = new RefreshTokenService(refreshTokenRepository);
+  const authController = new AuthController(refreshTokenService);
+  app.use("/api/auth", createRefreshTokenRouter(authController));
 
-  const shutdownSubsystems: DrainableSubsystem[] = [
-    proxyDrainTracker.subsystem,
-    // Drain in-flight refresh-token requests before the process exits.
-    refreshTokenDrainTracker.subsystem,
-    {
-      name: "revenue-ledger-indexer",
-      beginShutdown: () => revenueLedgerIndexerJob.beginShutdown(),
-      awaitIdle: () => revenueLedgerIndexerJob.awaitIdle(),
-    },
-    {
-      name: "idempotency-sweeper",
-      beginShutdown: () => idempotencySweeperJob.beginShutdown(),
-      awaitIdle: () => idempotencySweeperJob.awaitIdle(),
-    },
-    {
-      name: "webhook-dispatcher",
-      beginShutdown: stopWebhookDispatching,
-      awaitIdle: awaitWebhookDispatcherIdle,
-    },
-    {
-      name: "settlement-reconciliation",
-      beginShutdown: () => settlementReconJob.beginShutdown(),
-      awaitIdle: () => settlementReconJob.awaitIdle(),
-    },
-  ];
+  // Legacy V1 deprecation notice for old clients
+  app.use(legacyV1DeprecationMiddleware);
 
-  // Mount the refresh-token router. The drain middleware is applied inside the
-  // router so every request through this path is counted in the drain tracker.
-  app.use(
-    '/api/refresh-token',
-    createRefreshTokenRouter({
-      authController,
-      drainMiddleware: refreshTokenDrainTracker.middleware,
-    }),
-  );
-
-
-  app.use(express.json());
-
-  // Global error handler (must be after all routes)
+  // Error handler must be last
   app.use(errorHandler);
 
-  const PORT = config.port;
+  // Start workers and listen
+  const start = async () => {
+    await initializeDb();
+    await revenueLedgerIndexerJob.start();
+    await settlementStatusSyncJob.start();
+    await settlementReconJob.start();
+    await idempotencySweeperJob.start();
+    await monthlyInvoiceJob.start();
+    if (slowQueryAlerterJob) await slowQueryAlerterJob.start();
+    if (anomalyDetectorJob) await anomalyDetectorJob.start();
+    if (sloAlertJob) await sloAlertJob.start();
 
-  const closeAllDataResources = async () => {
-    revenueLedgerIndexerJob.stop();
-    settlementStatusSyncJob.stop();
-    settlementReconJob.stop();
-    idempotencySweeperJob.stop();
-    slowQueryAlerterJob?.stop();
-    anomalyDetectorJob?.stop();
-    monthlyInvoiceJob.stop();
-    sloAlertJob?.stop();
-    await closeDb();
-    await Promise.allSettled([
-      closePgPool(),
-      disconnectPrisma(),
-      closeDbPool(),
-    ]);
+    const port = config.port;
+    const server = app.listen(port, () => {
+      console.log(`Server listening on port ${port}`);
+    });
+
+    // Graceful shutdown
+    const subsystems: DrainableSubsystem[] = [
+      proxyDrainTracker,
+      quotasDrainTracker,
+    ];
+    const shutdown = createGracefulShutdownHandler({
+      server,
+      subsystems,
+      onShutdown: async () => {
+        await stopWebhookDispatching();
+        await awaitWebhookDispatcherIdle();
+        await revenueLedgerIndexerJob.stop();
+        await settlementStatusSyncJob.stop();
+        await settlementReconJob.stop();
+        await idempotencySweeperJob.stop();
+        await monthlyInvoiceJob.stop();
+        if (slowQueryAlerterJob) await slowQueryAlerterJob.stop();
+        if (anomalyDetectorJob) await anomalyDetectorJob.stop();
+        if (sloAlertJob) await sloAlertJob.stop();
+        await closeDbPool();
+        await closePgPool();
+        await closeDb();
+        await disconnectPrisma();
+      },
+    });
+    process.on("SIGINT", () => void shutdown("SIGINT"));
+    process.on("SIGTERM", () => void shutdown("SIGTERM"));
   };
 
-  // Initialize database and start server
-  async function startServer() {
-    try {
-      await initializeDb();
-
-      // Warm the listings cache before accepting traffic so the first
-      // request after a deploy is served from cache, not from a cold DB hit.
-      const { warmupListingsCache } = await import("./lib/listingsCache.js");
-      const { defaultApiRepository } =
-        await import("./repositories/apiRepository.js");
-      await warmupListingsCache(
-        listingsCache,
-        (params) =>
-          defaultApiRepository.listPublic({
-            limit: params.limit,
-            offset: params.offset,
-            category: params.category,
-            search: params.search,
-          }),
-        { timeoutMs: config.listingsCache.warmupTimeoutMs },
-      );
-
-      // Warm the refunds cache before accepting traffic to avoid cold-cache spikes on startup.
-      const { warmupRefundsCache } = await import("./services/refundsCacheWarm.js");
-      await warmupRefundsCache({ timeoutMs: config.refundsCache.warmupTimeoutMs });
-
-      revenueLedgerIndexerJob.start();
-      settlementStatusSyncJob.start();
-      settlementReconJob.start();
-      idempotencySweeperJob.start();
-      slowQueryAlerterJob?.start();
-      anomalyDetectorJob?.start();
-      monthlyInvoiceJob.start();
-      sloAlertJob?.start();
-
-      const server = app.listen(PORT, () => {
-        console.log(`Callora backend listening on http://localhost:${PORT}`);
-      });
-
-      // Track active connections so we can wait for them to finish
-      const activeConnections = new Set<Socket>();
-
-      server.on("connection", (socket: Socket) => {
-        activeConnections.add(socket);
-        socket.once("close", () => activeConnections.delete(socket));
-      });
-
-      const gracefulShutdown = createGracefulShutdownHandler({
-        server,
-        activeConnections,
-        closeDatabase: closeAllDataResources,
-        subsystems: shutdownSubsystems,
-        timeoutMs: 30_000, // 30 seconds as per requirement
-      });
-
-      const onSignal = (signal: NodeJS.Signals) => {
-        void gracefulShutdown(signal).then((exitCode: number) => {
-          process.exit(exitCode);
-        });
-      };
-
-      // Register shutdown signals
-      process.once("SIGTERM", () => onSignal("SIGTERM"));
-      process.once("SIGINT", () => onSignal("SIGINT"));
-    } catch (error) {
-      console.error("Failed to start server:", error);
-      process.exit(1);
-    }
-  }
-
-  startServer();
+  start().catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });
 }
 
 export default app;
