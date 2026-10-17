@@ -29,6 +29,7 @@ import { createDeveloperRouter } from "./routes/developerRoutes.js";
 import { createGatewayRouter } from "./routes/gatewayRoutes.js";
 import { createProxyRouter } from "./routes/proxyRoutes.js";
 import { createWebhooksRouter } from "./routes/webhooks.js";
+import { createHealthRouter } from "./routes/health.js";
 import adminRouter from "./routes/admin.js";
 import logsRouter from "./routes/logs.js";
 import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
@@ -64,9 +65,6 @@ import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { createRateLimiter } from './services/rateLimiter.js';
 import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-
-// Health router is the single source of truth for /api/health.
-import healthRouter from "./routes/health.js";
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -114,9 +112,8 @@ app.use((req, res, next) => {
   }
 });
 
-// Health check endpoint - served by the shared healthRouter so that
-// /api/health has exactly one implementation across all entrypoints.
-app.use("/api/health", healthRouter);
+// Health check endpoint — single implementation lives in routes/health.ts
+app.use("/api/health", createHealthRouter());
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
@@ -148,7 +145,7 @@ if (isDirectExecution) {
   };
 
   const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
-  // Per-API-key token-bucket rate limit shared by /api/gateway and /v1/call.
+  // Per-API-hey token-bucket rate limit shared by /api/gateway and /v1/call.
   // Backed by Postgres (RATE_LIMIT_STORE=postgres) so the bucket state is
   // consistent across multiple gateway instances; defaults to an in-memory
   // store otherwise. See RATE_LIMIT_* in src/config/env.ts.
@@ -233,16 +230,7 @@ if (isDirectExecution) {
       })
     : null;
 
-  const apiKeys = new Map<string, ApiKey>([
-    [
-      "test-key-1",
-      { key: "test-key-1", developerId: "dev_001", apiId: "api_001" },
-    ],
-    [
-      "test-key-2",
-      { key: "test-key-2", developerId: "dev_002", apiId: "api_002" },
-    ],
-  ]);
+  const apiKeys = new Map<string, ApiKey>([]);
 
   // 1. Developer Dashboard Routes (Auth required)
   const developerRouter = createDeveloperRouter({
@@ -284,10 +272,8 @@ if (isDirectExecution) {
     registry,
     apiKeys,
     proxyConfig: {
-      timeoutMs: config.proxy.timeoutMs,
-      allowedHosts: config.proxy.allowedHosts,
+      upstreamUrl: config.proxy.upstreamUrl,
     },
-    drainState: proxyDrainTracker,
   });
   app.use("/v1/call", proxyDrainTracker.middleware, proxyRouter);
 
@@ -297,62 +283,40 @@ if (isDirectExecution) {
   const authController = new AuthController(refreshTokenService);
   app.use("/api/auth", createRefreshTokenRouter(authController));
 
-  // Legacy V1 deprecation notice for old clients
-  app.use(legacyV1DeprecationMiddleware);
-
-  // Error handler must be last
+  // Error handler must be mounted last
   app.use(errorHandler);
 
-  // Start workers and listen
-  const start = async () => {
-    await initializeDb();
-    await revenueLedgerIndexerJob.start();
-    await settlementStatusSyncJob.start();
-    await settlementReconJob.start();
-    await idempotencySweeperJob.start();
-    await monthlyInvoiceJob.start();
-    if (slowQueryAlerterJob) await slowQueryAlerterJob.start();
-    if (anomalyDetectorJob) await anomalyDetectorJob.start();
-    if (sloAlertJob) await sloAlertJob.start();
-
-    const port = config.port;
-    const server = app.listen(port, () => {
-      console.log(`Server listening on port ${port}`);
-    });
-
-    // Graceful shutdown
-    const subsystems: DrainableSubsystem[] = [
-      proxyDrainTracker,
-      quotasDrainTracker,
-    ];
-    const shutdown = createGracefulShutdownHandler({
-      server,
-      subsystems,
-      onShutdown: async () => {
-        await stopWebhookDispatching();
-        await awaitWebhookDispatcherIdle();
-        await revenueLedgerIndexerJob.stop();
-        await settlementStatusSyncJob.stop();
-        await settlementReconJob.stop();
-        await idempotencySweeperJob.stop();
-        await monthlyInvoiceJob.stop();
-        if (slowQueryAlerterJob) await slowQueryAlerterJob.stop();
-        if (anomalyDetectorJob) await anomalyDetectorJob.stop();
-        if (sloAlertJob) await sloAlertJob.stop();
-        await closeDbPool();
-        await closePgPool();
-        await closeDb();
-        await disconnectPrisma();
-      },
-    });
-    process.on("SIGINT", () => void shutdown("SIGINT"));
-    process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  };
-
-  start().catch((err) => {
-    console.error("Failed to start server:", err);
-    process.exit(1);
+  // Start the server
+  const port = config.port;
+  const server = app.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
   });
-}
 
-export default app;
+  // Graceful shutdown
+  const subsystems: DrainableSubsystem[] = [
+    {
+      name: "quotas",
+      drain: () => quotasDrainTracker.waitForIdle(),
+    },
+    {
+      name: "proxy",
+      drain: () => proxyDrainTracker.waitForIdle(),
+    },
+  ];
+
+  const shutdown = createGracefulShutdownHandler({
+    server,
+    subsystems,
+    onShutdown: async () => {
+      await stopWebhookDispatching();
+      await awaitWebhookDispatcherIdle();
+      await closeDb();
+      await closePgPool();
+      await closeDbPool();
+      await disconnectPrisma();
+    },
+  });
+
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+}

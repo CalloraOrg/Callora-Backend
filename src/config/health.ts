@@ -26,7 +26,7 @@ function getDbPool(): Pool {
   return dbPool;
 }
 
-export function buildHealthCheckConfig(): HealthCheckConfig | undefined {
+export function buildHealthCheckConfig(): HealthCheckConfig {
   const healthConfig: HealthCheckConfig = {
     version: env.APP_VERSION,
     database: {
