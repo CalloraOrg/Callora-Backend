@@ -32,7 +32,7 @@ const createApiKeyBodySchema = z.object({
 });
 
 function maskKey(prefix: string): string {
-  return `${prefix}****************`;
+  return `${prefix}*****************`;
 }
 
 async function assertDeveloperOwnsApi(
@@ -50,7 +50,7 @@ async function assertDeveloperOwnsApi(
   if (!ownsApi) {
     throw new ForbiddenError(
       'Forbidden: API does not belong to authenticated developer',
-      'API_ACCESS_FORBIDDEN',
+      'APJ_ACCESS_FORBIDDEN',
     );
   }
 }
@@ -85,7 +85,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
 
         await assertDeveloperOwnsApi(user.id, apiId, deps);
 
-        const created = apiKeyRepository.create({
+        const created = await apiKeyRepository.create({
           apiId,
           userId: user.id,
           scopes,
@@ -125,7 +125,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
 
         const keys = apiKeyRepository.list({ userId: user.id, apiId }).map((record) => ({
           id: record.id,
-          apiId: record.apiId,
+          apid: record.apiId,
           prefix: record.prefix,
           maskedKey: maskKey(record.prefix),
           scopes: record.scopes,
@@ -165,7 +165,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       }
 
       if (result === 'forbidden') {
-        next(new ForbiddenError('Forbidden: API key does not belong to authenticated developer', 'API_KEY_FORBIDDEN'));
+        next(new ForbiddenError('Forbidden: API key does not belong to authenticated developer', 'APB_KEY_FORBIDDEN'));
         return;
       }
 

@@ -18,6 +18,7 @@
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import crypto from 'crypto';
 import request from 'supertest';
 import { Pool, Client } from 'pg';
 import { GenericContainer, Network, Wait } from 'testcontainers';
@@ -30,6 +31,8 @@ import jwt from 'jsonwebtoken';
 import { createApp } from '../../src/app.js';
 import { defaultApiRepository } from '../../src/repositories/apiRepository.js';
 import { defaultDeveloperRepository } from '../../src/repositories/developerRepository.js';
+import { getTokenRevocationService } from '../../src/services/tokenRevocation.js';
+import { createServer, Server, IncomingMessage, ServerResponse } from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,6 +60,12 @@ interface TestUser {
   developerId?: number;
 }
 
+interface UpstreamStub {
+  server: Server;
+  url: string;
+  requests: Array<{ method: string; url: string; headers: IncomingMessage['headers'] }>;
+}
+
 let testContext: TestContext | null = null;
 
 /**
@@ -66,6 +75,13 @@ let testContext: TestContext | null = null;
 function generateTestApiKey(): string {
   const randomPart = Math.random().toString(16).substring(2, 50);
   return `ck_live_${randomPart}`;
+}
+
+/**
+ * Helper: Compute sha256 hash of an API key (matches gateway/revocation service)
+ */
+function sha256Hex(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
 }
 
 /**
@@ -150,6 +166,35 @@ async function createTestApi(
   return result.rows[0].id;
 }
 
+/**
+ * Helper: Start a minimal upstream HTTP stub that records incoming requests
+ */
+async function startUpstreamStub(): Promise<UpstreamStub> {
+  const requests: UpstreamStub['requests'] = [];
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    requests.push({ method: req.method || '', url: req.url || '', headers: req.headers });
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true }));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Failed to determine upstream stub address');
+  }
+
+  return {
+    server,
+    url: `http://127.0.0.1:${address.port}`,
+    requests,
+  };
+}
+
 // ============================================================================
 // Test Suite
 // ============================================================================
@@ -159,6 +204,7 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
   let testUser: TestUser;
   let otherUser: TestUser;
   let testApiId: number;
+  let upstreamStub: UpstreamStub;
 
   /**
    * Setup: Start PostgreSQL container, run migrations, seed test data
@@ -233,6 +279,9 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
     // Create test APIs
     testApiId = await createTestApi(testContext.pool, testUser.developerId!, 'My API');
     await createTestApi(testContext.pool, otherUser.developerId!, "Other's API");
+
+    // Start upstream stub used for gateway revocation tests
+    upstreamStub = await startUpstreamStub();
   }, 60000); // Allow 60s for container startup
 
   /**
@@ -242,6 +291,9 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
     if (testContext) {
       await testContext.pool.end();
       await testContext.container.stop();
+    }
+    if (upstreamStub) {
+      await new Promise<void>((resolve) => upstreamStub.server.close(() => resolve()));
     }
   });
 
@@ -256,6 +308,9 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
          )`,
         [testUser.developerId]
       );
+    }
+    if (upstreamStub) {
+      upstreamStub.requests.length = 0;
     }
   });
 
@@ -795,6 +850,98 @@ describe('API Keys Integration Tests (End-to-End with Real PostgreSQL)', () => {
       expect(requestId1).toBeDefined();
       expect(requestId2).toBeDefined();
       expect(requestId1).not.toBe(requestId2);
+    });
+  });
+
+  // ========================================================================
+  // Test: Gateway Authentication After Revocation (End-to-End)
+  // ========================================================================
+
+  describe('Gateway authentication after key revocation', () => {
+    it('should reject a revoked key with 401 and never contact the upstream', async () => {
+      const token = signTestToken(testUser.userId, testUser.walletAddress);
+
+      // Point the test API at the upstream stub so we can observe traffic
+      await testContext!.pool.query(
+        `UPDATE apis SET base_url = $1 WHERE id = $2`,
+        [upstreamStub.url, testApiId]
+      );
+
+      // Create a key via the real API key router
+      const create = await request(app)
+        .post(`/apis/${testApiId}/keys`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scopes: ['*'] });
+
+      expect(create.status).toBe(201);
+      const keyId = create.body.id;
+      const rawKey = create.body.key;
+      expect(rawKey).toMatch(/^ck_live_/);
+
+      // Sanity check: revocation service must be keyed by sha256 hash, not plaintext
+      const keyHash = sha256Hex(rawKey);
+      const revocationService = getTokenRevocationService();
+      expect(revocationService.isRevoked(keyHash)).toBe(false);
+      expect(revocationService.isRevoked(rawKey)).toBe(false);
+
+      // First gateway call should succeed and hit the upstream
+      const before = await request(app)
+        .get(`/gateway/${testApiId}/echo`)
+        .set('Authorization', `Bearer ${rawKey}`);
+
+      expect(before.status).toBe(200);
+      expect(upstreamStub.requests.length).toBe(1);
+
+      // Revoke the key via the real DELETE endpoint
+      const revoke = await request(app)
+        .delete(`/keys/${keyId}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(revoke.status).toBe(204);
+
+      // Revocation entry must be keyed by sha256 hash, not plaintext
+      expect(revocationService.isRevoked(keyHash)).toBe(true);
+      expect(revocationService.isRevoked(rawKey)).toBe(false);
+
+      // Reset upstream request counter to isolate post-revocation behavior
+      upstreamStub.requests.length = 0;
+
+      // Second gateway call with the revoked key must fail with 401
+      const after = await request(app)
+        .get(`/gateway/${testApiId}/echo`)
+        .set('Authorization', `Bearer ${rawKey}`);
+
+      expect(after.status).toBe(401);
+      expect(after.body).toHaveProperty('error');
+
+      // Upstream must not have been contacted after revocation
+      expect(upstreamStub.requests.length).toBe(0);
+    });
+
+    it('should still allow a non-revoked key to reach the upstream', async () => {
+      const token = signTestToken(testUser.userId, testUser.walletAddress);
+
+      await testContext!.pool.query(
+        `UPDATE apis SET base_url = $1 WHERE id = $2`,
+        [upstreamStub.url, testApiId]
+      );
+
+      const create = await request(app)
+        .post(`/apis/${testApiId}/keys`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ scopes: ['*'] });
+
+      expect(create.status).toBe(201);
+      const rawKey = create.body.key;
+
+      upstreamStub.requests.length = 0;
+
+      const response = await request(app)
+        .get(`/gateway/${testApiId}/echo`)
+        .set('Authorization', `Bearer ${rawKey}`);
+
+      expect(response.status).toBe(200);
+      expect(upstreamStub.requests.length).toBe(1);
     });
   });
 });

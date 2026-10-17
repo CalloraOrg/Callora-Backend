@@ -1,4 +1,5 @@
 import { logger } from '../logger.js';
+import { createHash } from 'node:crypto';
 
 interface RevocationEntry {
   revokedAt: number;
@@ -16,6 +17,14 @@ export class TokenRevocationService {
     this.startSweeper();
   }
 
+  /**
+   * Derives the canonical revocation key for a token. Revocation entries are
+   * always keyed by the sha256 hash of the token, never the plaintext value.
+   */
+  static hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
   revoke(tokenHash: string, expiresAt?: number): void {
     const now = Date.now();
     const effectiveExpiresAt = expiresAt && expiresAt > 0 ? expiresAt : now + this.defaultTtlMs;
@@ -31,6 +40,14 @@ export class TokenRevocationService {
     });
   }
 
+  /**
+   * Revokes a token by hashing it first, guaranteeing the stored entry is
+   * keyed by sha256 hash rather than plaintext.
+   */
+  revokeToken(token: string, expiresAt?: number): void {
+    this.revoke(TokenRevocationService.hashToken(token), expiresAt);
+  }
+
   isRevoked(tokenHash: string): boolean {
     const entry = this.revokedTokens.get(tokenHash);
     if (!entry) {
@@ -43,6 +60,13 @@ export class TokenRevocationService {
     }
 
     return true;
+  }
+
+  /**
+   * Checks revocation for a plaintext token by hashing it before lookup.
+   */
+  isTokenRevoked(token: string): boolean {
+    return this.isRevoked(TokenRevocationService.hashToken(token));
   }
 
   reinstate(tokenHash: string): void {
