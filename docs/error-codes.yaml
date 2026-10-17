@@ -1,7 +1,8 @@
 # Canonical Error Code Catalog
 #
 # This is the single source of truth for all error codes in the Callora backend.
-# The TypeScript enum in src/errors/codes.ts is auto-generated from this file.
+# Both the TypeScript enum in src/errors/codes.ts and the markdown catalogue
+# in docs/error-code-catalog.md are auto-generated from this file.
 #
 # DO NOT edit src/errors/codes.ts manually. Instead, update this file and run:
 #   npm run error-codes:generate
@@ -10,6 +11,8 @@
 #   - code: The error code identifier (SCREAMING_SNAKE_CASE)
 #   - section: Category for documentation grouping
 #   - description: Human-readable explanation of when this error occurs
+#
+# Do not edit docs/error-code-catalog.md by hand either; it is generated too.
 #
 # The 'code' field becomes both the TypeScript enum key and value.
 
@@ -309,27 +312,27 @@ error_codes:
 
   # Route-specific / auth overrides
   - code: INVALID_AUTH_HEADER
-    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    section: Route-specific / auth overrides
     description: Authorization header is invalid
 
   - code: MISSING_TOKEN
-    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    section: Route-specific / auth overrides
     description: Authentication token is missing
 
   - code: INVALID_TOKEN
-    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    section: Route-specific / auth overrides
     description: Authentication token is invalid
 
   - code: MISSING_CLAIMS
-    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    section: Route-specific / auth overrides
     description: Token claims are missing
 
   - code: TOKEN_EXPIRED
-    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    section: Route-specific / auth overrides
     description: Authentication token has expired
 
   - code: TOKEN_NOT_ACTIVE
-    section: Route-specific / auth overrides (documented in docs/error-codes.md)
+    section: Route-specific / auth overrides
     description: Authentication token is not yet active
 
   # Quota self-service
@@ -347,19 +350,19 @@ error_codes:
 
   # HTTP fallback derived codes
   - code: REQUEST_TIMEOUT
-    section: HTTP fallback derived codes referenced by documentation
+    section: HTTP fallback derived codes
     description: Request timeout
 
   - code: REQUEST_BODY_TOO_LARGE
-    section: HTTP fallback derived codes referenced by documentation
+    section: HTTP fallback derived codes
     description: Request body exceeds size limit
 
   - code: UNSUPPORTED_MEDIA_TYPE
-    section: HTTP fallback derived codes referenced by documentation
+    section: HTTP fallback derived codes
     description: Media type is not supported
 
   - code: UNPROCESSABLE_ENTITY
-    section: HTTP fallback derived codes referenced by documentation
+    section: HTTP fallback derived codes
     description: Request is syntactically correct but semantically invalid
 
   - code: USAGE_AGGREGATE_NOT_FOUND

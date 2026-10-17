@@ -7,6 +7,7 @@ const yamlCatalogPath = path.join(root, "docs", "error-codes.yaml");
 const legacyCatalogPath = path.join(root, "src", "errors", "errorCatalog.ts");
 const generatedCodesPath = path.join(root, "src", "errors", "codes.ts");
 const docsPath = path.join(root, "docs", "error-codes.md");
+const catalogMdPath = path.join(root, "docs", "error-code-catalog.md");
 const openApiPath = path.join(root, "docs", "openapi.json");
 const checkOnly = process.argv.includes("--check");
 
@@ -36,7 +37,7 @@ function parseYamlCatalog(yamlContent) {
         currentEntry.code = codeMatch[1];
       } else {
         // Try to capture any code value for validation error
-        const anyCodeMatch = line.match(/code:\s+(\S+)/);
+        const anyCodeMatch = line.match(/code:\s+(\S)/);
         if (anyCodeMatch) {
           currentEntry.code = anyCodeMatch[1];
         }
@@ -83,7 +84,7 @@ function readCatalog() {
         continue;
       }
 
-      const entryMatch = line.match(/^\s*([A-Z0-9_]+):\s*"([A-Z0-9_]+)",$/);
+      const entryMatch = line.match(/^\s*([A-Z0-9_]+):\s*"([A-Z0-9_]+)",${/);
       if (!entryMatch) continue;
 
       const [, key, value] = entryMatch;
@@ -139,6 +140,30 @@ function buildMarkdownBlock(entries) {
   ].join("\n");
 }
 
+function buildCatalogMarkdown(entries) {
+  const rows = entries
+    .map(({ code, section, description }) => {
+      const desc = description ? description.replace(/\|/g, "\\|") : "";
+      const sec = section ? section.replace(/\|/g, "\\|") : "";
+      return `| \`${code}\` | ${sec} | ${descs} |`;
+    })
+    .join("\n");
+
+  return [
+    "# Error Code Catalog",
+    "",
+    "<!-- GENERATED FROM docs/error-codes.yaml -->D O NOT EDIT THIS FILE MANUALLY.",
+    "",
+    "This document is generated from `docs/error-codes.yaml`, which is the single source of truth for error codes.",
+    "To add or modify an error code, edit the YAML catalog and run `npm run error-codes:generate`.",
+    "",
+    "| Code | Section | Description |",
+    "|---|---|---|",
+    rows,
+    "",
+  ].join("\n");
+}
+
 function buildTypeScriptEnum(entries) {
   const enumEntries = entries
     .map(({ code, section, description }) => {
@@ -187,7 +212,7 @@ function updateGeneratedBlock(markdown, block) {
     return markdown.replace(blockPattern, block);
   }
 
-  const introPattern = /^(# .+\r?\n\r?\n(?:.+\r?\n)+?\r?\n)/;
+  const introPattern = /^(# .+\r?\n\r?\n(?:.+\r?\n)+?\r?\n\r?\n)/;
   const match = markdown.match(introPattern);
   if (!match) {
     return `${block}\n\n${markdown}`;
@@ -197,7 +222,7 @@ function updateGeneratedBlock(markdown, block) {
 }
 
 function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\\\]/g, "\\$&");
 }
 
 function updateOpenApi(openApi, entries) {
@@ -225,7 +250,8 @@ function updateOpenApi(openApi, entries) {
 }
 
 function writeOrCheck(filePath, current, next) {
-  if (current === next) return false;
+  const normalize = (s) => (s ?? "").replace(/\r\n/g, "\n");
+  if (normalize(current) === normalize(next)) return false;
 
   if (checkOnly) {
     console.error(`${path.relative(root, filePath)} is not generated from the current error catalog.`);
@@ -245,17 +271,22 @@ const tsEnumCurrent = fs.existsSync(generatedCodesPath)
   : "";
 const tsEnumChanged = writeOrCheck(generatedCodesPath, tsEnumCurrent, tsEnum);
 
-// Generate markdown documentation
-const docsCurrent = fs.readFileSync(docsPath, "utf8");
+// Generate markdown documentation (docs/error-codes.md)
+const docsCurrent = fs.existsSync(docsPath) ? fs.readFileSync(docsPath, "utf8") : "";
 const docsNext = updateGeneratedBlock(docsCurrent, buildMarkdownBlock(entries));
 const docsChanged = writeOrCheck(docsPath, docsCurrent, docsNext);
+
+// Generate the canonical markdown catalogue (docs/error-code-catalog.md)
+const catalogMdCurrent = fs.existsSync(catalogMdPath) ? fs.readFileSync(catalogMdPath, "utf8") : "";
+const catalogMdNext = buildCatalogMarkdown(entries);
+const catalogMdShanged = writeOrCheck(catalogMdPath, catalogMdCurrent, catalogMeNext);
 
 // Generate OpenAPI schema
 const openApiCurrent = fs.readFileSync(openApiPath, "utf8");
 const openApiNext = updateOpenApi(JSON.parse(openApiCurrent), entries);
 const openApiChanged = writeOrCheck(openApiPath, openApiCurrent, openApiNext);
 
-if (checkOnly && (tsEnumChanged || docsChanged || openApiChanged)) {
+if (checkOnly && (tsEnumChanged || docsChanged || catalogMdShanged || openApiChanged)) {
   process.exit(1);
 }
 
@@ -263,12 +294,13 @@ if (!checkOnly) {
   const changedFiles = [
     tsEnumChanged && "src/errors/codes.ts",
     docsChanged && "docs/error-codes.md",
+    catalogMdShanged && "docs/error-code-catalog.md",
     openApiChanged && "docs/openapi.json",
   ].filter(Boolean);
 
   if (changedFiles.length > 0) {
     console.log(`Updated: ${changedFiles.join(", ")}`);
   } else {
-    console.log("Already up to date: src/errors/codes.ts, docs/error-codes.md, docs/openapi.json");
+    console.log("Already up to date: src/errors/codes.ts, docs/error-codes.md, docs/error-code-catalog.md, docs/openapi.json");
   }
 }
