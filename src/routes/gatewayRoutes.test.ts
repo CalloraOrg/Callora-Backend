@@ -1,5 +1,6 @@
 import express from "express";
 import request from "supertest";
+import { createHash } from "node:crypto";
 import { createGatewayRouter } from "./gatewayRoutes.js";
 import { createRateLimiter } from "../services/rateLimiter.js";
 import { errorHandler } from "../middleware/errorHandler.js";
@@ -559,5 +560,126 @@ describe("gateway route - per-user token-bucket rate limit (issue #870)", () => 
     expect(second.headers["retry-after"]).toBeDefined();
     expect(Number(second.headers["retry-after"])).toBeGreaterThan(0);
     expect(second.body.retryAfterMs).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Revoked keys must fail gateway authentication immediately (issue #revocation)
+//
+// End-to-end: create a key via createApiKeyRouter, call the gateway
+// successfully, delete the key, then assert the next call returns 401 and
+// never reaches the upstream. Also assert the revocation entry is keyed by
+// the sha256 hash of the key, not the plaintext.
+// ---------------------------------------------------------------------------
+describe("gateway route - revoked keys fail authentication immediately", () => {
+  const API_ID = "my-api";
+
+  function sha256Hex(value: string): string {
+    return createHash("sha256").update(value).digest("hex");
+  }
+
+  test("deleted key is rejected with 401 and upstream is not contacted", async () => {
+    const { createApiKeyRouter } = await import("./apiKeyRoutes.js");
+    const {
+      resetTokenRevocationService,
+      getTokenRevocationService,
+    } = await import("../services/tokenRevocation.js");
+
+    resetTokenRevocationService();
+
+    const originalFetch = global.fetch;
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      text: async () => JSON.stringify({ ok: true }),
+    } as Response);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      // --- Wire the API key router so we can create + delete a real key ---
+      const apiKeys = new Map<string, ApiKey>();
+      const keyStore = {
+        create: jest.fn(async (record: ApiKey) => {
+          apiKeys.set(record.key, record);
+          return record;
+        }),
+        delete: jest.fn(async (key: string) => {
+          const existed = apiKeys.delete(key);
+          return existed;
+        }),
+        get: jest.fn(async (key: string) => apiKeys.get(key)),
+        list: jest.fn(async () => Array.from(apiKeys.values())),
+      };
+
+      const keyApp = express();
+      keyApp.use(express.json());
+      keyApp.use(requestIdMiddleware);
+      keyApp.use(
+        "/keys",
+        createApiKeyRouter({
+          keyStore,
+          apiId: API_ID,
+          developerId: "dev1",
+        } as any),
+      );
+      keyApp.use(errorHandler);
+
+      const createRes = await request(keyApp)
+        .post("/keys")
+        .send({ name: "leaked-key" });
+
+      expect(createRes.status).toBe(201);
+      const createdKey: string = createRes.body.key;
+      expect(typeof createdKey).toBe("string");
+      expect(createdKey.length).toBeGreaterThan(0);
+
+      // --- Wire the gateway against the same apiKeys map ---
+      const gatewayApp = express();
+      gatewayApp.use(requestIdMiddleware);
+      gatewayApp.use(
+        "/gateway",
+        createGatewayRouter({
+          billing: { deductCredit: async () => ({ success: true, balance: 100 }) },
+          rateLimiter: { check: async () => ({ allowed: true }) },
+          usageStore: { record: () => true },
+          upstreamUrl: "http://example.internal",
+          apiKeys,
+        } as unknown as GatewayDeps),
+      );
+      gatewayApp.use(errorHandler);
+
+      // --- Call 1: before revocation, must succeed and hit upstream ---
+      const before = await request(gatewayApp)
+        .get(`/gateway/${API_ID}`)
+        .set("x-api-key", createdKey);
+
+      expect(before.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // --- Delete the key via the API key router ---
+      const deleteRes = await request(keyApp)
+        .delete(`/keys/${encodeURIComponent(createdKey)}`);
+
+      expect([200, 204]).toContain(deleteRes.status);
+
+      // Revocation entry must be keyed by sha256 hash, not plaintext.
+      const revocation = getTokenRevocationService();
+      const hash = sha256Hex(createdKey);
+      expect(revocation.isRevoked(hash)).toBe(true);
+      expect(revocation.isRevoked(createdKey)).toBe(false);
+
+      // --- Call 2: after revocation, must be 401 and never hit upstream ---
+      const after = await request(gatewayApp)
+        .get(`/gateway/${API_ID}`)
+        .set("x-api-key", createdKey);
+
+      expect(after.status).toBe(401);
+      expect(after.body).toHaveProperty("code", "UNAUTHORIZED");
+      // Upstream stub must not have recorded any additional request.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      global.fetch = originalFetch;
+      resetTokenRevocationService();
+    }
   });
 });

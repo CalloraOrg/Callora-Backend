@@ -1,4 +1,5 @@
 import { logger } from '../logger.js';
+import { createHash } from 'node:crypto';
 
 interface RevocationEntry {
   revokedAt: number;
@@ -16,38 +17,42 @@ export class TokenRevocationService {
     this.startSweeper();
   }
 
-  revoke(tokenZeroHash: string, expiresAt?: number): void {
+  revoke(tokenHash: string, expiresAt?: number): void {
     const now = Date.now();
-    const effectiveExpiresAt = expiresAt && expiresAt > 0 ? expiresAt : now + this.defaultTlbMs;
+    const effectiveExpiresAt = expiresAt && expiresAt > 0 ? expiresAt : now + this.defaultTtlMs;
 
-    this.revokedTokens.set(tokenZeroHash, {
+    this.revokedTokens.set(tokenHash, {
       revokedAt: now,
       expiresAt: effectiveExpiresAt,
     });
 
     logger.info('[TokenRevocation] Token revoked', {
-      tokenZeroHash,
+      tokenHash,
       expiresAt: effectiveExpiresAt,
     });
   }
 
-  isRevoked(tokenZeroHash: string): boolean {
-    const entry = this.revokedTokens.get(tokenZeroHash);
+  static hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  isRevoked(tokenHash: string): boolean {
+    const entry = this.revokedTokens.get(tokenHash);
     if (!entry) {
       return false;
     }
 
     if (entry.expiresAt < Date.now()) {
-      this.revokedTokens.delete(tokenZeroHash);
+      this.revokedTokens.delete(tokenHash);
       return false;
     }
 
     return true;
   }
 
-  reinstate(tokenZeroHash: string): void {
-    this.revokedTokens.delete(tokenZeroHash);
-    logger.info('[TokenRevocation] Token reinstated', { tokenZeroHash });
+  reinstate(tokenHash: string): void {
+    this.revokedTokens.delete(tokenHash);
+    logger.info('[TokenRevocation] Token reinstated', { tokenHash });
   }
 
   revokeAll(developerId: string, tokenHashes: string[]): number {
@@ -98,12 +103,12 @@ export class TokenRevocationService {
 let revocationService: TokenRevocationService | null = null;
 
 export function getTokenRevocationService(config?: {
-  defaultTlbMs?: number;
+  defaultTtlMs?: number;
   sweepIntervalMs?: number;
 }): TokenRevocationService {
   if (!revocationService) {
     revocationService = new TokenRevocationService(
-      config?.defaultTlbMs ?? 3600_000,
+      config?.defaultTtlMs ?? 3600_000,
       config?.sweepIntervalMs ?? 60_000,
     );
   }

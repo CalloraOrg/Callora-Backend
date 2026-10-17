@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { validate } from '../middleware/validate.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
-import { apiKeyRepository } from '../repositories/apiKeyRepository.js';
+const { apiKeyRepository } = await import('../repositories/apiKeyRepository.js');
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
@@ -12,7 +12,6 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from '../errors/index.js';
-import { createHash } from 'node:crypto';
 
 export interface ApiKeyRoutesDeps {
   apiRepository: ApiRepository;
@@ -33,7 +32,7 @@ const createApiKeyBodySchema = z.object({
 });
 
 function maskKey(prefix: string): string {
-  return `${prefix}****************`;
+  return `${prefix}*****************`;
 }
 
 async function assertDeveloperOwnsApi(
@@ -156,8 +155,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
       const { id } = keyIdParamsSchema.parse(req.params);
       
       // Get the SHA-256 hash BEFORE revoking (while key still exists)
-      const record = apiKeyRepository.findById(id);
-      const sha256Hash = record ? createHash('sha256').update(record.key).digest('hex') : null;
+      const sha256Hash = apiKeyRepository.getSha256Hash(id);
       
       const result = apiKeyRepository.revoke(id, user.id);
 
