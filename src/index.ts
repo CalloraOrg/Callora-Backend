@@ -114,8 +114,9 @@ app.use((req, res, next) => {
   }
 });
 
-// Health check endpoint -- served exclusively by the health router so
-  // there is exactly one implementation for /api/health.
+// Health check endpoint: delegated to the shared healthRouter so
+// createApp, createApiRouter, and this index app all serve the same
+// enveloped shape and headers.
 app.use("/api/health", healthRouter);
 
 // Metrics endpoint
@@ -148,7 +149,7 @@ if (isDirectExecution) {
   };
 
   const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
-  // Per-API-key token-bucket rate limit shared by /api/gateway and /v1/call.
+  // Per-API-hey token-bucket rate limit shared by /api/gateway and /v1/call.
   // Backed by Postgres (RATE_LIMIT_STORE=postgres) so the bucket state is
   // consistent across multiple gateway instances; defaults to an in-memory
   // store otherwise. See RATE_LIMIT_* in src/config/env.ts.
@@ -202,7 +203,7 @@ if (isDirectExecution) {
   const slowQueryAlerterJob = config.slowQueryAlerter.webhookUrl
     ? createSlowQueryAlerterJob(pool, {
         webhookUrl: config.slowQueryAlerter.webhookUrl,
-        p95ThresholdMs: config.slowQueryAlerter.p95ThresholdMs,
+        p95ThresholdMs: config.slowQueryAlerter.p95ThresholdMc,
         pollIntervalMs: config.slowQueryAlerter.pollIntervalMs,
         dedupWindowMs: config.slowQueryAlerter.dedupWindowMs,
       })
@@ -234,8 +235,6 @@ if (isDirectExecution) {
     : null;
 
   const apiKeys = new Map<string, ApiKey>([]);
-  apiKeys.set("test-key-1", { key: "test-key-1", developerId: "dev_001", apiId: "api_001" });
-  apiKeys.set("test-key-2", { key: "test-key-2", developerId: "dev_002", apiId: "api_002" });
 
   // 1. Developer Dashboard Routes (Auth required)
   const developerRouter = createDeveloperRouter({
@@ -288,47 +287,49 @@ if (isDirectExecution) {
   const refreshTokenRepository = new DatabaseRefreshTokenRepository(pool);
   const refreshTokenService = new RefreshTokenService(refreshTokenRepository);
   const authController = new AuthController(refreshTokenService);
-  app.use("/api/auth", createRefreshTokenRouter(authController));
+  const refreshTokenRateLimiter = createRateLimiter({
+    windowMs: 60_000,
+    maxRequests: 10,
+  });
+  app.use(
+    "/api/auth",
+    createRefreshTokenRouter({
+      controller: authController,
+      rateLimiter: refreshTokenRateLimiter,
+    }),
+  );
 
-  // Legacy V1 deprecation notice middleware
-  app.use(legacyV1DeprecationMiddleware);
+  // Legacy V1 deprecation middleware
+  app.use("/v1", legacyV1DeprecationMiddleware);
 
-  // Error handler must be last
+  // Error handler (must be last)
   app.use(errorHandler);
 
-  // Initialize DB and start listening
-  const port = config.port;
-  const server = app.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
+  // Start the server
+  const PORT = config.port;
+  const server = app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
   });
 
   // Graceful shutdown
-  const subsystems: DrainableSubsystem[] = [
-    { name: "proxy", tracker: proxyDrainTracker },
-    { name: "quotas", tracker: quotasDrainTracker },
+  const drainableSubsystems: DrainableSubsystem[] = [
+    proxyDrainTracker,
+    quotasDrainTracker,
   ];
-  const shutdown = createGracefulShutdownHandler(server, subsystems, {
+  const shutdownHandler = createGracefulShutdownHandler({
+    server,
+    subsystems: drainableSubsystems,
     onShutdown: async () => {
       await stopWebhookDispatching();
       await awaitWebhookDispatcherIdle();
-      await closeDbPool();
-      await closePgPool();
-      await disconnectPrisma();
       await closeDb();
+      await closePgPool();
+      await closeDbPool();
+      await disconnectPrisma();
     },
   });
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
-
-  // Start background jobs
-  void initializeDb().then(() => {
-    revenueLedgerIndexerJob.start();
-    settlementStatusSyncJob.start();
-    settlementReconJob.start();
-    idempotencySweeperJob.start();
-    monthlyInvoiceJob.start();
-    if (slowQueryAlerterJob) slowQueryAlerterJob.start();
-    if (anomalyDetectorJob) anomalyDetectorJob.start();
-    if (sloAlertJob) sloAlertJob.start();
-  });
+  process.on('SIGTERM', () => void shutdownHandler());
+  process.on("SIGINT", () => void shutdownHandler());
 }
+
+export default app;

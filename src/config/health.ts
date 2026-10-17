@@ -8,6 +8,7 @@ import { Pool } from 'pg';
 import { env } from './env.js';
 import type { HealthCheckConfig } from '../services/healthCheck.js';
 
+let dbPool: Pool | null = null;
 
 function getDbPool(): Pool {
   if (!dbPool) {
@@ -25,12 +26,7 @@ function getDbPool(): Pool {
   return dbPool;
 }
 
-export function buildHealthCheckConfig(): HealthCheckConfig | undefined {
-  // Only enable detailed health checks if database is explicitly configured
-  if (env.DB_HOST === 'localhost' && env.DB_NAME === 'callora') {
-    return undefined;
-  }
-
+export function buildHealthCheckConfig(): HealthCheckConfig {
   const healthConfig: HealthCheckConfig = {
     version: env.APP_VERSION,
     database: {
