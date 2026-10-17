@@ -10,7 +10,7 @@ import type { HealthCheckConfig } from '../services/healthCheck.js';
 
 let dbPool: Pool | null = null;
 
-export function getDbPool(): Pool {
+function getDbPool(): Pool {
   if (!dbPool) {
     dbPool = new Pool({
       host: env.DB_HOST,
@@ -28,7 +28,7 @@ export function getDbPool(): Pool {
 
 export function buildHealthCheckConfig(): HealthCheckConfig | undefined {
   // Only enable detailed health checks if database is explicitly configured
-  if (!env.DB_HOST || !env.DB_NAME) {
+  if (env.DB_HOST === 'localhost' && env.DB_NAME === 'callora') {
     return undefined;
   }
 

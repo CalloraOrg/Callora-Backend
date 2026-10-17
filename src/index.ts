@@ -64,7 +64,7 @@ import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { createRateLimiter } from './services/rateLimiter.js';
 import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-import { createApiRouter } from "./routes/api.js";
+import { createHealthRouter } from "./routes/health.js";
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
@@ -112,10 +112,9 @@ app.use((req, res, next) => {
   }
 });
 
-// Health check endpoint is now served exclusively by the API router
-// (see createApiRouter -> healthRouter mounted at /api). The redundant
-// inline handler that returned an unenveloped body has been removed.
-app.use("/api", createApiRouter());
+// Health check endpoint: the single source of truth is the health router.
+// `src/routes/health.ts` owns the response shape and headers for /api/health.
+app.use("/api/health", createHealthRouter());
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
@@ -286,72 +285,6 @@ if (isDirectExecution) {
       timeoutMs: config.proxy.timeoutMs,
       allowedHosts: config.proxy.allowedHosts,
     },
-    drainState: proxyDrainTracker,
   });
-  app.use("/v1/call", proxyDrainTracker.middleware, proxyRouter);
-
-  // Refresh token routes
-  const refreshTokenRepository = new DatabaseRefreshTokenRepository(pool);
-  const refreshTokenService = new RefreshTokenService(refreshTokenRepository);
-  const authController = new AuthController(refreshTokenService);
-  app.use("/api/auth", createRefreshTokenRouter(authController));
-
-  // Legacy V1 deprecation headers
-  app.use(legacyV1DeprecationMiddleware);
-
-  // Error handler must be last
-  app.use(errorHandler);
-
-  // Graceful shutdown
-  const drainableSubsystems: DrainableSubsystem[] = [
-    proxyDrainTracker,
-    quotasDrainTracker,
-  ];
-  const shutdownHandler = createGracefulShutdownHandler({
-    subsystems: drainableSubsystems,
-    onShutdown: async () => {
-      await stopWebhookDispatching();
-      await awaitWebhookDispatcherIdle();
-      revenueLedgerIndexerJob.stop();
-      settlementStatusSyncJob.stop();
-      settlementReconJob.stop();
-      idempotencySweeperJob.stop();
-      slowQueryAlerterJob?.stop();
-      anomalyDetectorJob?.stop();
-      monthlyInvoiceJob.stop();
-      sloAlertJob?.stop();
-      await closePgPool();
-      await closeDbPool();
-      await closeDb();
-      await disconnectPrisma();
-    },
-  });
-
-  const server = app.listen(config.port, () => {
-    console.log(`Server listening on port ${config.port}`);
-  });
-
-  // Track connections so shutdown can drain them
-  const connections = new Set<Socket>();
-  server.on("connection", (socket: Socket) => {
-    connections.add(socket);
-    socket.on("close", () => connections.delete(socket));
-  });
-
-  const shutdown = async (signal: string) => {
-    console.log(`Received ${signal}, shutting down...`);
-    await shutdownHandler();
-    server.close(() => {
-      for (const socket of connections) socket.destroy();
-      process.exit(0);
-    });
-  };
-
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-
-  // Start background jobs
-  void initializeDb().catch((err) => {
-    console.error("Failed to initialize database", err);
-  });
+  app.use("/v1", proxyDrainTracker.middleware, proxyRouter);
 }

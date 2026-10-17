@@ -1,5 +1,4 @@
 import express from 'express';
-import healthRouter from './routes/health.js';
 import cors from 'cors';
 import helmet from 'helmet';
 import adminRouter from './routes/admin.js';
@@ -400,10 +399,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }),
   );
 
-  // Single source of truth for GET /api/health. The router in
-  // src/routes/health.ts owns the response shape (envelope + headers) so
-  // every entrypoint that mounts createApp sees identical output.
-  app.use("/api/health", healthRouter);
 
   // Public maintenance status — readable by external monitoring without admin auth.
   // Mounted in front of the admin routers so it cannot be shadowed by their catch-alls.
