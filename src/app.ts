@@ -1,4 +1,5 @@
 import express from 'express';
+import healthRouter from './routes/health.js';
 import cors from 'cors';
 import helmet from 'helmet';
 import adminRouter from './routes/admin.js';
@@ -399,6 +400,11 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }),
   );
 
+  // Single source of truth for GET /api/health. The router in
+  // src/routes/health.ts owns the response shape (envelope + headers) so
+  // every entrypoint that mounts createApp sees identical output.
+  app.use("/api/health", healthRouter);
+
   // Public maintenance status — readable by external monitoring without admin auth.
   // Mounted in front of the admin routers so it cannot be shadowed by their catch-alls.
   app.use("/api/maintenance", publicMaintenanceRouter);
@@ -412,6 +418,11 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
   app.use("/api/admin", adminRouter);
   app.use("/api/admin/db/explain", createExplainRouter({ pool }));
+  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
+  app.use('/api/admin/usage/by-endpoint', createAdminUsageByEndpointRouter({ pool }));
+  app.use('/api/admin/usage/spike', createSpikeRouter({ pool }));
+  app.use('/api/admin', adminRouter);
+  app.use('/api/admin/db/explain', createExplainRouter({ pool }));
 
   // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
   app.use("/api/quota/requests", quotaRequestsRouter);
