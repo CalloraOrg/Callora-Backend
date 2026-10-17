@@ -33,7 +33,7 @@ import adminRouter from "./routes/admin.js";
 import logsRouter from "./routes/logs.js";
 import { createUsageAnomaliesRouter } from "./routes/admin/usage/anomalies.js";
 import refundsRouter from "./routes/refunds.js";
-import { defaultDeveloperRepository } from "./repositories/developerRepository.js";
+import defaultDeveloperRepository from "./repositories/developerRepository.js";
 import { createBillingService } from "./services/billingService.js";
 import {
   createConfiguredRateLimiter,
@@ -64,14 +64,12 @@ import { RefreshTokenService } from './services/refreshTokenService.js';
 import { DatabaseRefreshTokenRepository } from './repositories/refreshTokenRepository.js';
 import { createRateLimiter } from './services/rateLimiter.js';
 import { createSettlementReconciliationJob } from './services/settlementReconciliationJob.js';
-
-// Health router is the single source of truth for /api/health.
-import healthRouter from "./routes/health.js";
+import { createHealthRouter } from "./routes/health.js";
 
 // Helper for Jest/CommonJS compat
 const isDirectExecution =
   process.argv[1] &&
-  (process.argv[1].endsWith("index.ts") ||
+  (process.argv[1].endsWith("index.ts")  ||
     process.argv[1].endsWith("index.js"));
 
 // Re-export types and functions from lifecycle/shutdown for backward compatibility
@@ -114,10 +112,11 @@ app.use((req, res, next) => {
   }
 });
 
-// Health check endpoint: delegated to the shared healthRouter so
-// createApp, createApiRouter, and this index app all serve the same
-// enveloped shape and headers.
-app.use("/api/health", healthRouter);
+// Health check endpoint: delegates to the single health router
+// implementation so /api/health has exactly one handler across all
+// entrypoints. The router is mounted at /api here (and at /api in
+// createApp) so the response shape is identical.
+app.use("/api", createHealthRouter());
 
 // Metrics endpoint
 app.get("/api/metrics", metricsEndpoint);
@@ -149,7 +148,7 @@ if (isDirectExecution) {
   };
 
   const billing = createBillingService(MOCK_DEVELOPER_BALANCES);
-  // Per-API-hey token-bucket rate limit shared by /api/gateway and /v1/call.
+  // Per-API-Key token-bucket rate limit shared by /api/gateway and /v1/call.
   // Backed by Postgres (RATE_LIMIT_STORE=postgres) so the bucket state is
   // consistent across multiple gateway instances; defaults to an in-memory
   // store otherwise. See RATE_LIMIT_* in src/config/env.ts.
@@ -203,7 +202,7 @@ if (isDirectExecution) {
   const slowQueryAlerterJob = config.slowQueryAlerter.webhookUrl
     ? createSlowQueryAlerterJob(pool, {
         webhookUrl: config.slowQueryAlerter.webhookUrl,
-        p95ThresholdMs: config.slowQueryAlerter.p95ThresholdMc,
+        p95ThresholdMs: config.slowQueryAlerter.p95ThresholdMs,
         pollIntervalMs: config.slowQueryAlerter.pollIntervalMs,
         dedupWindowMs: config.slowQueryAlerter.dedupWindowMs,
       })
@@ -279,57 +278,5 @@ if (isDirectExecution) {
       timeoutMs: config.proxy.timeoutMs,
       allowedHosts: config.proxy.allowedHosts,
     },
-    drainState: proxyDrainTracker,
   });
-  app.use("/v1/call", proxyDrainTracker.middleware, proxyRouter);
-
-  // Refresh token routes
-  const refreshTokenRepository = new DatabaseRefreshTokenRepository(pool);
-  const refreshTokenService = new RefreshTokenService(refreshTokenRepository);
-  const authController = new AuthController(refreshTokenService);
-  const refreshTokenRateLimiter = createRateLimiter({
-    windowMs: 60_000,
-    maxRequests: 10,
-  });
-  app.use(
-    "/api/auth",
-    createRefreshTokenRouter({
-      controller: authController,
-      rateLimiter: refreshTokenRateLimiter,
-    }),
-  );
-
-  // Legacy V1 deprecation middleware
-  app.use("/v1", legacyV1DeprecationMiddleware);
-
-  // Error handler (must be last)
-  app.use(errorHandler);
-
-  // Start the server
-  const PORT = config.port;
-  const server = app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-  });
-
-  // Graceful shutdown
-  const drainableSubsystems: DrainableSubsystem[] = [
-    proxyDrainTracker,
-    quotasDrainTracker,
-  ];
-  const shutdownHandler = createGracefulShutdownHandler({
-    server,
-    subsystems: drainableSubsystems,
-    onShutdown: async () => {
-      await stopWebhookDispatching();
-      await awaitWebhookDispatcherIdle();
-      await closeDb();
-      await closePgPool();
-      await closeDbPool();
-      await disconnectPrisma();
-    },
-  });
-  process.on('SIGTERM', () => void shutdownHandler());
-  process.on("SIGINT", () => void shutdownHandler());
 }
-
-export default app;

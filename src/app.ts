@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import healthRouter from './routes/health.js';
 import adminRouter from './routes/admin.js';
 import { createExplainRouter } from './routes/admin/explain.js';
 import { createUsageAnomaliesRouter } from './routes/admin/usage/anomalies.js';
@@ -348,15 +347,45 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   // Register envelope validator after body parser but before routes
   app.use(envelopeValidator);
 
+  /**
+   * GET /api/health
+   *
+   * Provides health status of the application and its dependencies.
+   * If health check config is minimally configured, returns a basic status.
+   *
+   * @schema HealthCheckResult | BasicHealthResult
+   * @example Basic
+   * {
+   *   "success": true,
+   *   "data": {
+   *     "status": "ok",
+   *     "service": "callora-backend"
+   *   },
+   *   "requestId": "...",
+   *   "timestamp": "..."
+   * }
+   * @example Full
+   * {
+   *   "success": true,
+   *   "data": {
+   *     "status": "ok",
+   *     "version": "1.0.0",
+   *     "timestamp": "2026-03-27T10:00:00.000Z",
+   *     "checks": {
+   *       "api": "ok",
+   *       "database": "ok",
+   *       "soroban_rpc": "ok"
+   *     }
+   *   },
+   *   "requestId": "...",
+   *   "timestamp": "..."
+   * }
+   */
   // Per-dependency health probe — detailed status for each configured dependency
   app.use(
     "/api/health/dependencies",
     createDependenciesRouter(dependencies?.healthCheckConfig),
   );
-
-  // Single source of truth for GET /api/health. The router is mounted at
-  // /api so that /health resolves to /api/health, matching the public contract.
-  app.use("/api", healthRouter);
 
   // Rate-limit routes with X-Correlation-Id propagation — every sub-route
   // inherits correlation-id middleware for structured logging and outbound
@@ -383,11 +412,6 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   );
   app.use("/api/admin", adminRouter);
   app.use("/api/admin/db/explain", createExplainRouter({ pool }));
-  app.use('/api/admin/usage/anomalies', createUsageAnomaliesRouter({ pool }));
-  app.use('/api/admin/usage/by-endpoint', createAdminUsageByEndpointRouter({ pool }));
-  app.use('/api/admin/usage/spike', createSpikeRouter({ pool }));
-  app.use('/api/admin', adminRouter);
-  app.use('/api/admin/db/explain', createExplainRouter({ pool }));
 
   // Quota self-service — developers submit requests, admins manage via /api/admin/quota/requests
   app.use("/api/quota/requests", quotaRequestsRouter);
