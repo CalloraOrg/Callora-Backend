@@ -402,6 +402,7 @@ export const envSchema = z
     KEY_SEMAPHORE_TTL_MS: z.coerce.number().int().positive().default(300000),
 
     // Idempotency
+    IDEMPOTENCY_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
     IDEMPOTENCY_RETENTION_WINDOW_SECONDS: z.coerce
       .number()
       .int()

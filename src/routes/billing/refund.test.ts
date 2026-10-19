@@ -57,7 +57,7 @@ function makeIdempotencyPool(): Pool {
       return { rows: record ? [record] : [] };
     }
     if (text.includes('INSERT INTO idempotency_store')) {
-      const [scope, key, requestHash, status, expiresAt] = params as [
+      const [scope, key, requestHash] = params as [
         string,
         string,
         string,
@@ -69,16 +69,15 @@ function makeIdempotencyPool(): Pool {
       }
       store.set(composite(scope, key), {
         request_hash: requestHash,
-        status,
+        status: 'started',
         response_status: 0,
         response_body: '',
-        expires_at: expiresAt,
+        expires_at: new Date(Date.now() + 86400000).toISOString(),
       });
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ lease_token: '2026-01-01 00:01:00.000000' }], rowCount: 1 };
     }
     if (text.includes('UPDATE idempotency_store')) {
-      const [status, responseStatus, responseBody, scope, key] = params as [
-        string,
+      const [responseStatus, responseBody, scope, key] = params as [
         number,
         string,
         string,
@@ -88,7 +87,7 @@ function makeIdempotencyPool(): Pool {
       if (existing) {
         store.set(composite(scope, key), {
           ...existing,
-          status,
+          status: 'completed',
           response_status: responseStatus,
           response_body: responseBody,
         });
