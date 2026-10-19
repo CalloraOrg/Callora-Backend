@@ -771,6 +771,7 @@ export function resetAllMetrics(): void {
   resetApiKeyLookupMetrics();
   resetThroughputSaturationMetrics();
   gatewayUsageRecordFailuresTotal.reset();
+  resetBillingPendingMetrics();
 }
 
 // ── Replica routing metrics ───────────────────────────────────────────────────
@@ -974,4 +975,35 @@ export function setSloAlertActiveBurns(count: number): void {
 
 export function recordSloRecorderSample(route: string): void {
   sloRecorderSamplesTotal.labels(route).inc();
+}
+
+// ── Billing pending deductions metrics ────────────────────────────────────────
+
+const billingPendingDeductions = new client.Gauge({
+  name: 'billing_pending_deductions',
+  help: 'Current number of usage_events pending reconciliation',
+});
+
+const billingPendingResolvedTotal = new client.Counter({
+  name: 'billing_pending_resolved_total',
+  help: 'Total number of pending billing deductions resolved by outcome',
+  labelNames: ['outcome'] as const,
+});
+
+register.registerMetric(billingPendingDeductions);
+register.registerMetric(billingPendingResolvedTotal);
+
+export type BillingPendingResolutionOutcome = 'confirmed' | 'voided' | 'error';
+
+export function setBillingPendingDeductions(count: number): void {
+  billingPendingDeductions.set(count);
+}
+
+export function recordBillingPendingResolved(outcome: BillingPendingResolutionOutcome): void {
+  billingPendingResolvedTotal.inc({ outcome });
+}
+
+export function resetBillingPendingMetrics(): void {
+  billingPendingDeductions.reset();
+  billingPendingResolvedTotal.reset();
 }
