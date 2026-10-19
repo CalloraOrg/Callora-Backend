@@ -41,6 +41,7 @@ function createUsageEventsRepository() {
 
     CREATE INDEX idx_usage_events_user_created ON usage_events(user_id, created_at);
     CREATE INDEX idx_usage_events_api_created ON usage_events(api_id, created_at);
+    CREATE INDEX idx_usage_events_developer_created ON usage_events(developer_id, created_at);
   `);
 
   const { Pool } = db.adapters.createPg();
@@ -141,6 +142,41 @@ test('create uses the database default timestamp when createdAt is omitted', asy
     assert.ok(event.createdAt >= before);
     assert.ok(event.createdAt <= after);
     assert.equal(event.stellarTxHash, null);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('countByDeveloper counts rows in a half-open UTC month range by developer_id', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+
+  try {
+    for (const [requestId, developerId, createdAt] of [
+      ['req-count-start', 'dev-1', '2026-02-01T00:00:00.000Z'],
+      ['req-count-end-minus-ms', 'dev-1', '2026-02-28T23:59:59.999Z'],
+      ['req-count-next-month', 'dev-1', '2026-03-01T00:00:00.000Z'],
+      ['req-count-other-developer', 'dev-2', '2026-02-15T00:00:00.000Z'],
+    ]) {
+      await repository.create({
+        userId: 'user-1',
+        apiId: 'api-weather',
+        endpointId: 'endpoint-current',
+        apiKeyId: 'key-1',
+        developerId,
+        amount: 1n,
+        requestId,
+        createdAt: new Date(createdAt),
+      });
+    }
+
+    assert.equal(
+      await repository.countByDeveloper({
+        developerId: 'dev-1',
+        from: new Date('2026-02-01T00:00:00.000Z'),
+        to: new Date('2026-03-01T00:00:00.000Z'),
+      }),
+      2,
+    );
   } finally {
     await pool.end();
   }
@@ -710,4 +746,3 @@ test('sumSpendByConsumer sums confirmed charges within [from, to) and excludes u
     await pool.end();
   }
 });
-

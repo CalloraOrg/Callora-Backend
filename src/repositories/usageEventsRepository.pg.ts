@@ -46,6 +46,7 @@ export interface RevenueLedgerUsageEvent {
 
 export interface UsageEventsPgRepository {
   create(event: CreateUsageEventInput): Promise<BillingUsageEvent>;
+  countByDeveloper(query: { developerId: string; from: Date; to: Date }): Promise<number>;
   findByUserId(userId: string, from?: Date, to?: Date, limit?: number, offset?: number): Promise<BillingUsageEvent[]>;
   findByApiId(apiId: string, from?: Date, to?: Date, limit?: number, offset?: number): Promise<BillingUsageEvent[]>;
   getTotalSpentByUser(userId: string, from?: Date, to?: Date): Promise<bigint>;
@@ -457,6 +458,20 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       occurredAt: event.createdAt,
       revenue: event.amount,
     }));
+  }
+
+  async countByDeveloper(query: { developerId: string; from: Date; to: Date }): Promise<number> {
+    const developerId = assertNonEmpty(query.developerId, 'developerId');
+    assertValidRange(query.from, query.to);
+    const result = await this.readDb.query<{ count: number | string }>(
+      `SELECT COUNT(*) AS count
+       FROM usage_events
+       WHERE developer_id = $1
+         AND created_at >= $2
+         AND created_at < $3`,
+      [developerId, query.from, query.to],
+    );
+    return Number(result.rows[0]?.count ?? 0);
   }
 
   async getTotalSpentByUser(userId: string, from?: Date, to?: Date): Promise<bigint> {
