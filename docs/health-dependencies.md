@@ -95,10 +95,12 @@ If the router is created without a `HealthCheckConfig`, no probes run and an emp
 | Key           | Required | Check                                  |
 |---------------|----------|-----------------------------------------|
 | `database`    | Yes      | Executes `SELECT 1` via the pg pool     |
-| `soroban_rpc` | No       | Calls `getHealth` JSON-RPC method       |
+| `soroban_rpc` | No       | Calls `getHealth`, verifies `getNetwork().passphrase`, and checks the configured vault contract instance when a vault ID is set |
 | `horizon`     | No       | Pings the Horizon root endpoint         |
 
 Optional dependencies are omitted entirely from the `dependencies` object when not configured (see `sorobanRpc` / `horizon` in `HealthCheckConfig`), rather than being reported as down.
+
+Soroban remains `down` when the RPC is unreachable. A successful liveness check is reported as `degraded` with `network_mismatch` when the RPC passphrase differs from the configured Stellar network, or `vault_contract_missing` when the configured vault contract instance is absent.
 
 ## Status Codes
 

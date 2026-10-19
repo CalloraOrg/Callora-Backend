@@ -278,6 +278,7 @@ export const envSchema = z
     STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
+    VAULT_SNAPSHOT_MAX_AGE_MS: z.coerce.number().int().positive().default(60_000),
 
     STELLAR_BASE_FEE: z.coerce.number().int().positive().default(100),
     STELLAR_TRANSACTION_TIMEOUT: z.coerce.number().int().positive().optional(),

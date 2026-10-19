@@ -67,6 +67,10 @@ import {
 } from "./repositories/vaultRepository.js";
 import { DepositController } from "./controllers/depositController.js";
 import { VaultController } from "./controllers/vaultController.js";
+import {
+  createSorobanVaultReader,
+  type VaultStateReader,
+} from "./services/sorobanVaultReader.js";
 import { TransactionBuilderService } from "./services/transactionBuilder.js";
 import {
   requestIdMiddleware,
@@ -118,6 +122,7 @@ interface AppDependencies extends SorobanBillingDependencies {
   usageEventsRepository?: UsageEventsRepository;
   healthCheckConfig?: HealthCheckConfig;
   vaultRepository?: VaultRepository;
+  vaultReader?: VaultStateReader;
   apiRepository?: ApiRepository;
   developerRepository?: DeveloperRepository;
   findDeveloperByUserId?: (userId: string) => Promise<Developer | undefined>;
@@ -202,7 +207,17 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     vaultRepository,
     transactionBuilder,
   );
-  const vaultController = new VaultController(vaultRepository);
+  const vaultReader =
+    dependencies?.vaultReader ??
+    createSorobanVaultReader(
+      config.stellar.networks,
+      config.sorobanRpc?.timeout ?? 2_000,
+    );
+  const vaultController = new VaultController(
+    vaultRepository,
+    vaultReader,
+    config.vaultSnapshotMaxAgeMs,
+  );
   const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
   const developerRepository =
     dependencies?.developerRepository ?? defaultDeveloperRepository;
@@ -659,7 +674,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
    *
    * Query params:
    *   network - optional Stellar network identifier (`testnet` or `mainnet`)
-   *             default: `testnet`
+   *             default: the configured Stellar network
    */
   // Vault balance endpoint
   app.get(
@@ -668,6 +683,25 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     validate({ query: stellarNetworkQuerySchema }),
     (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
       vaultController.getBalance(req, res, next);
+    },
+  );
+
+  const onchainVaultAuth =
+    process.env.DEMO_MODE === "true"
+      ? (req: express.Request, res: express.Response, next: express.NextFunction) => {
+          if (!req.headers.authorization) {
+            next();
+            return;
+          }
+          requireAuth(req, res, next);
+        }
+      : requireAuth;
+  app.get(
+    "/api/vault/onchain",
+    onchainVaultAuth,
+    validate({ query: stellarNetworkQuerySchema }),
+    (req, res: express.Response<unknown, AuthenticatedLocals>, next) => {
+      vaultController.getOnchain(req, res, next);
     },
   );
 

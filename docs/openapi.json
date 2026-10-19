@@ -6,6 +6,245 @@
     "description": "API contract covering Callora backend billing, usage, and developer routes."
   },
   "paths": {
+    "/api/vault/balance": {
+      "get": {
+        "summary": "Get the authenticated user's vault balance",
+        "operationId": "getVaultBalance",
+        "description": "Returns the latest cached balance snapshot. Snapshots older than VAULT_SNAPSHOT_MAX_AGE_MS are refreshed from the read-only vault contract; if Soroban RPC is unavailable, the previous value is returned with stale=true.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "network",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "testnet",
+                "mainnet"
+              ]
+            },
+            "description": "Stellar network. Defaults to the configured active network."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Vault balance snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "balance_usdc",
+                        "contractId",
+                        "network",
+                        "lastSyncedAt",
+                        "stale"
+                      ],
+                      "properties": {
+                        "balance_usdc": {
+                          "type": "string",
+                          "pattern": "^-?\\d+\\.\\d{7}$"
+                        },
+                        "contractId": {
+                          "type": "string"
+                        },
+                        "network": {
+                          "type": "string",
+                          "enum": [
+                            "testnet",
+                            "mainnet"
+                          ]
+                        },
+                        "lastSyncedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "stale": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The caller has no vault on the requested network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/onchain": {
+      "get": {
+        "summary": "Read live on-chain vault state",
+        "operationId": "getOnchainVaultState",
+        "description": "Simulates the vault's read-only view functions and returns their values at the indicated ledger. In DEMO_MODE, requests without authentication read the configured testnet vault.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "network",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "testnet",
+                "mainnet"
+              ]
+            },
+            "description": "Stellar network. Defaults to the configured active network."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live on-chain vault state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "contractId",
+                        "network",
+                        "balanceUsdc",
+                        "maxDeductUsdc",
+                        "paused",
+                        "usdcToken",
+                        "settlement",
+                        "ledger"
+                      ],
+                      "properties": {
+                        "contractId": {
+                          "type": "string"
+                        },
+                        "network": {
+                          "type": "string",
+                          "enum": [
+                            "testnet",
+                            "mainnet"
+                          ]
+                        },
+                        "balanceUsdc": {
+                          "type": "string",
+                          "pattern": "^-?\\d+\\.\\d{7}$"
+                        },
+                        "maxDeductUsdc": {
+                          "type": "string",
+                          "pattern": "^-?\\d+\\.\\d{7}$"
+                        },
+                        "paused": {
+                          "type": "boolean"
+                        },
+                        "usdcToken": {
+                          "type": "string"
+                        },
+                        "settlement": {
+                          "type": "string"
+                        },
+                        "ledger": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required outside the public demo mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The caller has no vault on the requested network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/billing/credits/grant": {
       "post": {
         "summary": "Grant GrantFox FWC26 prepaid credits",
