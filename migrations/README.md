@@ -31,11 +31,20 @@ NNNN_lowercase-description.down.sql
 ```
 
 Versions up to `0021` (including the mixed-width prefixes and historical
-duplicates) are legacy. The enforced new sequence begins at `0022`; because
-`0022` and `0023` already exist, the next new migration is `0024`. Do not
+duplicates) are legacy. The enforced new sequence begins at `0022`; the highest
+version currently used is `0028`, so the next new migration is `0029`. Do not
 reuse a prefix: **one forward migration per numeric version**. In particular,
 the three legacy `0014_*` forward migrations are a collision to preserve, not
 a pattern to copy. Add new versions consecutively, without gaps.
+
+Three independent pull requests each claimed `0026`, which broke both the
+layout gate and `discoverMigrations()`, whose duplicate-prefix guard makes the
+whole directory unappliable on a fresh database. They were renumbered into
+merge order: `0026_forwarded_identity_replays`, `0027_add_developer_payout_address`,
+`0028_usage_events_deduction_status`. On any database that already recorded one
+of these under version `0026`, the renamed file is treated as pending and
+re-applied; `src/migrate.ts` tracks migrations by filename, so verify
+`_migrations` before and after such a run.
 
 ## Rollback policy
 
@@ -137,7 +146,7 @@ not replace a backup or post-backfill verification.
 
 ## Adding a migration checklist
 
-1. Choose the next unused four-digit version (`0024` at the time of writing).
+1. Choose the next unused four-digit version (`0029` at the time of writing).
 2. Create the canonical forward file and its same-stem `.down.sql` rollback.
 3. Keep the forward migration additive where possible; obtain the destructive
    approval marker when applicable.

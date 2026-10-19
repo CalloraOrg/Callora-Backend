@@ -1,4 +1,4 @@
--- Rollback: 0026_usage_events_deduction_status
+-- Rollback: 0028_usage_events_deduction_status
 -- destructive-approved: #1435
 
 DROP INDEX IF EXISTS idx_usage_events_status_created;
