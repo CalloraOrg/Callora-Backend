@@ -59,10 +59,14 @@ export class AuthController {
   /**
     * Refresh access token using a valid refresh token.
    *
-   * On success the consumed refresh token is revoked and a fresh token pair
-   * (access + refresh) is returned. Single-use enforcement means a reused
-   * token is an unambiguous theft signal: all tokens for the user are
-   * immediately revoked and the request is rejected with 401.
+   * The entire rotation is a single compare-and-set on the primary database:
+   * the old token is revoked and the new one inserted in one transaction.
+   * Exactly one concurrent request with the same token succeeds; the rest
+   * receive REVOKED_TOKEN and trigger a full family revocation (theft signal).
+   *
+   * Policy: a legitimate double-submit (network retry with the same token)
+   * also revokes the whole family. Clients must re-authenticate on a genuine
+   * collision. This matches common OAuth 2.0 guidance.
    *
    * POST /auth/refresh
    */
@@ -77,81 +81,62 @@ export class AuthController {
       
       const requestId = getRequestId(req);
 
-      // Verify the refresh token structure and signature
+      // Verify the refresh token structure and signature (JWT layer).
       const tokenPayload = this.refreshTokenService.verifyRefreshToken(refreshToken);
       if (!tokenPayload) {
         next(new UnauthorizedError('Invalid or expired refresh token', 'INVALID_REFRESH_TOKEN'));
         return;
       }
 
-      // Find the stored refresh token record
-      const storedToken = await this.refreshTokenRepository.findRefreshTokenById(
-        tokenPayload.tokenId,
-        tokenPayload.userId
+      // Atomic compare-and-set: consume the old token and insert the new one in
+      // a single primary-side transaction.  No replica reads are used here.
+      const result = await this.refreshTokenService.atomicRotateRefreshToken(
+        refreshToken,
+        tokenPayload,
+        undefined, // walletAddress not available in refresh flow
+        this.refreshTokenRepository,
       );
 
-      if (!storedToken) {
-        logger.warn('[AuthController] Refresh token not found in database', {
-          tokenId: tokenPayload.tokenId,
-          userId: tokenPayload.userId
+      if (result.outcome === 'success') {
+        logger.info('[AuthController] Token pair rotated successfully (atomic CAS)', {
+          userId: tokenPayload.userId,
+          consumedTokenId: tokenPayload.tokenId,
         });
-        next(new UnauthorizedError('Invalid refresh token', 'INVALID_REFRESH_TOKEN'));
+
+        res.json(successEnvelope({
+          accessToken: result.tokens.accessToken,
+          refreshToken: result.tokens.refreshToken,
+          tokenType: 'Bearer'
+        }, requestId));
         return;
       }
 
-      // Reuse detection — token is already revoked, which means it was
-      // previously rotated. Presenting it again is a theft signal.
-      // Revoke all user tokens and reject the request.
-      if (storedToken.isRevoked) {
-        await this.refreshTokenService.handleReuse(storedToken, this.refreshTokenRepository);
+      // Map failure outcomes to error codes.
+      if (result.outcome === 'revoked') {
         logger.warn('[AuthController] Theft signal: revoked token presented again — all user tokens revoked', {
           tokenId: tokenPayload.tokenId,
           userId: tokenPayload.userId,
-          familyId: storedToken.familyId
         });
         next(new UnauthorizedError('Refresh token has been revoked', 'REVOKED_TOKEN'));
         return;
       }
 
-      if (this.refreshTokenService.isTokenExpired(storedToken.expiresAt)) {
+      if (result.outcome === 'expired') {
         logger.warn('[AuthController] Attempted to use expired refresh token', {
           tokenId: tokenPayload.tokenId,
-          userId: tokenPayload.userId
+          userId: tokenPayload.userId,
         });
         next(new UnauthorizedError('Refresh token has expired', 'EXPIRED_TOKEN'));
         return;
       }
 
-      // Verify the token hash matches (prevents token substitution attacks)
-      if (!this.refreshTokenService.verifyTokenHash(refreshToken, storedToken.tokenHash)) {
-        logger.warn('[AuthController] Refresh token hash mismatch', {
-          tokenId: tokenPayload.tokenId,
-          userId: tokenPayload.userId
-        });
-        next(new UnauthorizedError('Invalid refresh token', 'INVALID_REFRESH_TOKEN'));
-        return;
-      }
-
-      // Rotate: revoke consumed token, issue fresh access + refresh token pair
-      // in the same family so the entire lineage is covered by theft detection.
-      const newTokenPair = await this.refreshTokenService.rotateRefreshToken(
-        storedToken,
-        storedToken.userId,
-        undefined, // walletAddress not available in refresh flow
-        this.refreshTokenRepository
-      );
-
-      logger.info('[AuthController] Token pair rotated successfully', {
-        userId: storedToken.userId,
-        consumedTokenId: storedToken.id,
-        familyId: storedToken.familyId
+      // 'not_found' and 'hash_mismatch' both map to INVALID_REFRESH_TOKEN.
+      logger.warn('[AuthController] Refresh token validation failed', {
+        outcome: result.outcome,
+        tokenId: tokenPayload.tokenId,
+        userId: tokenPayload.userId,
       });
-
-      res.json(successEnvelope({
-        accessToken: newTokenPair.accessToken,
-        refreshToken: newTokenPair.refreshToken,
-        tokenType: 'Bearer'
-      }, requestId));
+      next(new UnauthorizedError('Invalid refresh token', 'INVALID_REFRESH_TOKEN'));
 
     } catch (error) {
       logger.error('[AuthController] Error refreshing token', { error });
