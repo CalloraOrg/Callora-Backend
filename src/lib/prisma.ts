@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { ServiceUnavailableError } from '../errors/index.js';
+import { config } from '../config/index.js';
 
 type PrismaClientLike = {
   $disconnect: () => Promise<void>;
@@ -17,7 +18,7 @@ const nodeRequire: NodeRequire =
 type PrismaClientConstructor = new (options?: unknown) => PrismaClientLike;
 
 function getPrismaClient(): PrismaClientLike {
-  if (process.env.DEMO_MODE === 'true') {
+  if (config.demoMode) {
     throw new ServiceUnavailableError('Database service is unavailable in demo mode');
   }
 
