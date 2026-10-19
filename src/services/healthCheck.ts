@@ -6,6 +6,9 @@
  */
 
 import type { Pool } from 'pg';
+import { rpc, xdr } from '@stellar/stellar-sdk';
+import { config as appConfig } from '../config/index.js';
+import { contractInstanceLedgerKey } from './sorobanVaultReader.js';
 
 export type ComponentStatus = 'ok' | 'degraded' | 'down';
 
@@ -27,6 +30,12 @@ export interface ComponentCheck {
   error?: string;
 }
 
+export interface SorobanRpcProbeServer {
+  getHealth(): Promise<unknown>;
+  getNetwork(): Promise<{ passphrase: string }>;
+  getLedgerEntries(...keys: xdr.LedgerKey[]): Promise<{ entries: unknown[] }>;
+}
+
 export interface HealthCheckConfig {
   version?: string;
   database: {
@@ -36,6 +45,9 @@ export interface HealthCheckConfig {
   sorobanRpc?: {
     url: string;
     timeout?: number;
+    networkPassphrase?: string;
+    vaultContractId?: string;
+    createServer?: (url: string, timeoutMs: number) => SorobanRpcProbeServer;
   };
   horizon?: {
     url: string;
@@ -113,55 +125,72 @@ export async function checkDatabase(
  */
 export async function checkSorobanRpc(
   url: string,
-  timeoutMs: number = DEFAULT_EXTERNAL_TIMEOUT
+  timeoutMs: number = DEFAULT_EXTERNAL_TIMEOUT,
+  options: {
+    networkPassphrase?: string;
+    vaultContractId?: string;
+    createServer?: (url: string, timeoutMs: number) => SorobanRpcProbeServer;
+  } = {},
 ): Promise<ComponentCheck> {
   const startTime = Date.now();
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const server = options.createServer?.(url, timeoutMs) ??
+      new rpc.Server(url, { timeout: timeoutMs });
+    await server.getHealth();
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'getHealth',
-        params: [],
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-    const responseTime = Date.now() - startTime;
-
-    if (response.ok) {
-      await response.json(); // Validate JSON response
+    const expectedPassphrase =
+      options.networkPassphrase ?? appConfig.stellar.networkPassphrase;
+    const network = await server.getNetwork();
+    if (network.passphrase !== expectedPassphrase) {
       return {
-        status: responseTime > DEGRADED_THRESHOLD_EXTERNAL ? 'degraded' : 'ok',
-        responseTime,
+        status: 'degraded',
+        responseTime: Date.now() - startTime,
+        error: 'network_mismatch',
       };
     }
 
+    const contractId =
+      options.vaultContractId ?? appConfig.stellar.vaultContractId;
+    if (contractId) {
+      const contractEntry = await server.getLedgerEntries(
+        contractInstanceLedgerKey(contractId),
+      );
+      if (contractEntry.entries.length === 0) {
+        return {
+          status: 'degraded',
+          responseTime: Date.now() - startTime,
+          error: 'vault_contract_missing',
+        };
+      }
+    }
+
     return {
-      status: 'degraded',
-      responseTime,
-      error: `HTTP ${response.status}`,
+      status:
+        Date.now() - startTime > DEGRADED_THRESHOLD_EXTERNAL
+          ? 'degraded'
+          : 'ok',
+      responseTime: Date.now() - startTime,
     };
   } catch (error) {
     const responseTime = Date.now() - startTime;
-    const errorMessage =
-      error instanceof Error
-        ? error.name === 'AbortError'
-          ? 'Timeout'
-          : error.message
-        : 'Unknown error';
-
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    if (/^HTTP \d+$/.test(message)) {
+      return {
+        status: 'degraded',
+        responseTime,
+        error: message,
+      };
+    }
     return {
       status: 'down',
       responseTime,
-      error: errorMessage,
+      error:
+        error instanceof Error
+          ? error.name === 'AbortError'
+            ? 'Timeout'
+            : error.message
+          : message,
     };
   }
 }
@@ -274,7 +303,15 @@ export async function performHealthCheck(
   const [dbCheck, sorobanCheck, horizonCheck] = await Promise.all([
     checkDatabase(config.database.pool, config.database.timeout),
     config.sorobanRpc
-      ? checkSorobanRpc(config.sorobanRpc.url, config.sorobanRpc.timeout)
+      ? checkSorobanRpc(
+          config.sorobanRpc.url,
+          config.sorobanRpc.timeout,
+          {
+            networkPassphrase: config.sorobanRpc.networkPassphrase,
+            vaultContractId: config.sorobanRpc.vaultContractId,
+            createServer: config.sorobanRpc.createServer,
+          },
+        )
       : Promise.resolve(undefined),
     config.horizon
       ? checkHorizon(config.horizon.url, config.horizon.timeout)

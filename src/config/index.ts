@@ -250,6 +250,7 @@ export const config = {
       mainnet: mainnetConfig,
     },
   },
+  vaultSnapshotMaxAgeMs: env.VAULT_SNAPSHOT_MAX_AGE_MS,
 
   bcrypt: {
     // Number of bcrypt hashing rounds (BCRYPT_COST_FACTOR, defaults to 12).

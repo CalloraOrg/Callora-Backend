@@ -123,7 +123,9 @@ export function sanitizeUsageCheck(check: ComponentCheck): UsageDependencyEntry 
   }
 
   if (check.error) {
-    if (check.error === 'Timeout' || check.error === 'Database check timeout') {
+    if (check.error === 'network_mismatch' || check.error === 'vault_contract_missing') {
+      entry.error = check.error;
+    } else if (check.error === 'Timeout' || check.error === 'Database check timeout') {
       entry.error = 'timeout';
     } else if (check.error.startsWith('HTTP ')) {
       // Preserve HTTP status codes — they are not sensitive.
@@ -206,7 +208,15 @@ export function createUsageHealthRouter(deps: UsageHealthRouterDeps = {}): Route
       const [dbCheck, sorobanCheck, horizonCheck] = await Promise.all([
         checkDatabase(config.database.pool, config.database.timeout),
         config.sorobanRpc
-          ? checkSorobanRpc(config.sorobanRpc.url, config.sorobanRpc.timeout)
+          ? checkSorobanRpc(
+              config.sorobanRpc.url,
+              config.sorobanRpc.timeout,
+              {
+                networkPassphrase: config.sorobanRpc.networkPassphrase,
+                vaultContractId: config.sorobanRpc.vaultContractId,
+                createServer: config.sorobanRpc.createServer,
+              },
+            )
           : Promise.resolve(undefined),
         config.horizon
           ? checkHorizon(config.horizon.url, config.horizon.timeout)
