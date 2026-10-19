@@ -561,6 +561,17 @@
             "bearerAuth": []
           }
         ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional key for replaying the complete batch response."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -578,6 +589,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BillingBulkDeductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid batch or duplicate requestId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Aggregate balance is insufficient; no new usage events are charged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflict or deduction requires reconciliation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -6236,9 +6277,11 @@
       "BillingBulkDeductEntry": {
         "type": "object",
         "required": [
-          "events",
-          "stats",
-          "period"
+          "requestId",
+          "apiId",
+          "endpointId",
+          "apiKeyId",
+          "amountUsdc"
         ],
         "properties": {
           "requestId": {
@@ -6262,10 +6305,10 @@
       "BillingBulkDeductRequest": {
         "type": "object",
         "required": [
-          "entries"
+          "items"
         ],
         "properties": {
-          "entries": {
+          "items": {
             "type": "array",
             "minItems": 1,
             "maxItems": 100,
@@ -6282,6 +6325,7 @@
         "type": "object",
         "required": [
           "requestId",
+          "success",
           "usageEventId",
           "alreadyProcessed",
           "deductionApplied",
@@ -6290,6 +6334,9 @@
         "properties": {
           "requestId": {
             "type": "string"
+          },
+          "success": {
+            "type": "boolean"
           },
           "usageEventId": {
             "type": "string"
@@ -7454,6 +7501,8 @@
           "IDEMPOTENCY_CONFLICT",
           "IDEMPOTENCY_IN_PROGRESS",
           "SIMULATION_FAILED",
+          "DUPLICATE_REQUEST_ID",
+          "RECONCILIATION_REQUIRED",
           "INVALID_AUTH_HEADER",
           "MISSING_TOKEN",
           "INVALID_TOKEN",
