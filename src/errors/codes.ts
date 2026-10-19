@@ -222,12 +222,6 @@ export const ErrorCode = {
   /** Soroban simulation failed */
   SIMULATION_FAILED: "SIMULATION_FAILED",
 
-  /** A billing batch contains duplicate request IDs */
-  DUPLICATE_REQUEST_ID: "DUPLICATE_REQUEST_ID",
-
-  /** A billing deduction requires reconciliation after phase one */
-  RECONCILIATION_REQUIRED: "RECONCILIATION_REQUIRED",
-
   /** Authorization header is invalid */
   INVALID_AUTH_HEADER: "INVALID_AUTH_HEADER",
 

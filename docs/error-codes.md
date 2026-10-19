@@ -83,8 +83,6 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `IDEMPOTENCY_CONFLICT` | Idempotency |
 | `IDEMPOTENCY_IN_PROGRESS` | Idempotency |
 | `SIMULATION_FAILED` | Misc / direct middleware responses |
-| `DUPLICATE_REQUEST_ID` | Billing / Soroban |
-| `RECONCILIATION_REQUIRED` | Billing / Soroban |
 | `INVALID_AUTH_HEADER` | Route-specific / auth overrides (documented in docs/error-codes.md) |
 | `MISSING_TOKEN` | Route-specific / auth overrides (documented in docs/error-codes.md) |
 | `INVALID_TOKEN` | Route-specific / auth overrides (documented in docs/error-codes.md) |

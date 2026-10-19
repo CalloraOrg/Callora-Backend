@@ -598,7 +598,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/BillingBulkDeductErrorResponse"
                 }
               }
             }
@@ -618,7 +618,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/BillingBulkDeductErrorResponse"
                 }
               }
             }
@@ -6277,11 +6277,9 @@
       "BillingBulkDeductEntry": {
         "type": "object",
         "required": [
-          "requestId",
-          "apiId",
-          "endpointId",
-          "apiKeyId",
-          "amountUsdc"
+          "events",
+          "stats",
+          "period"
         ],
         "properties": {
           "requestId": {
@@ -6305,10 +6303,10 @@
       "BillingBulkDeductRequest": {
         "type": "object",
         "required": [
-          "items"
+          "entries"
         ],
         "properties": {
-          "items": {
+          "entries": {
             "type": "array",
             "minItems": 1,
             "maxItems": 100,
@@ -6385,6 +6383,47 @@
             "items": {
               "$ref": "#/components/schemas/BillingBulkDeductEntryResult"
             }
+          }
+        }
+      },
+      "BillingBulkDeductErrorResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "error",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -7501,8 +7540,6 @@
           "IDEMPOTENCY_CONFLICT",
           "IDEMPOTENCY_IN_PROGRESS",
           "SIMULATION_FAILED",
-          "DUPLICATE_REQUEST_ID",
-          "RECONCILIATION_REQUIRED",
           "INVALID_AUTH_HEADER",
           "MISSING_TOKEN",
           "INVALID_TOKEN",

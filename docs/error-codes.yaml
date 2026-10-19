@@ -307,13 +307,6 @@ error_codes:
     section: Misc / direct middleware responses
     description: Soroban simulation failed
 
-  - code: DUPLICATE_REQUEST_ID
-    section: Billing / Soroban
-    description: A billing batch contains duplicate request IDs
-
-  - code: RECONCILIATION_REQUIRED
-    section: Billing / Soroban
-    description: A billing deduction requires reconciliation after phase one
 
   # Route-specific / auth overrides
   - code: INVALID_AUTH_HEADER

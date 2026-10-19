@@ -55,7 +55,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
       - name: Check OpenAPI backward compatibility
         run: |
           git fetch origin ${{ github.base_ref }}
-          npx --yes @useoptic/optic diff docs/openapi.json --base origin/${{ github.base_ref }} --check
+          ./node_modules/.bin/optic diff docs/openapi.json --base FETCH_HEAD --check
