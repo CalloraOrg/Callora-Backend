@@ -35,7 +35,9 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `SOROBAN_RPC_TIMEOUT` | Billing / Soroban |
 | `SOROBAN_RPC_ERROR` | Billing / Soroban |
 | `BILLING_DEDUCTION_FAILED` | Billing / Soroban |
+| `RECONCILIATION_REQUIRED` | Billing / Soroban |
 | `BILLING_REQUEST_NOT_FOUND` | Billing request |
+| `FORECAST_DATA_UNAVAILABLE` | Billing forecast |
 | `DEVELOPER_NOT_FOUND` | Developer / API keys |
 | `API_ACCESS_FORBIDDEN` | Developer / API keys |
 | `API_KEY_NOT_FOUND` | Developer / API keys |

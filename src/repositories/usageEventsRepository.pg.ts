@@ -64,6 +64,11 @@ export interface UsageEventsPgRepository {
     nextCursor: string | null;
     prevCursor: string | null;
   }>;
+  sumSpendByConsumer(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ totalUnits: bigint; calls: number }>;
 }
 
 export interface UsageEventsRepositoryQueryable {
@@ -813,4 +818,43 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
 
     return { buckets, totalCalls, totalRevenue };
   }
-} 
+
+  /**
+   * Sums confirmed spend for a consumer within [from, to).
+   *
+   * Query uses idx_usage_events_user_created (user_id, created_at)
+   * and filters for confirmed charges (stellar_tx_hash IS NOT NULL).
+   */
+  async sumSpendByConsumer(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ totalUnits: bigint; calls: number }> {
+    assertValidRange(query.from, query.to);
+
+    const params: unknown[] = [
+      assertNonEmpty(query.userId, 'userId'),
+      query.from,
+      query.to,
+    ];
+
+    const sql = `
+      SELECT
+        COALESCE(SUM(amount_usdc), 0)::text AS total_units,
+        COUNT(*)::int                       AS calls
+      FROM usage_events
+      WHERE user_id = $1
+        AND created_at >= $2
+        AND created_at < $3
+        AND stellar_tx_hash IS NOT NULL
+    `;
+
+    const result = await this.readDb.query<{ total_units: string | number | bigint; calls: number | string }>(sql, params);
+    const row = result.rows[0];
+
+    const totalUnits = toBigInt(row?.total_units ?? '0', 'total_units');
+    const calls = Number(row?.calls ?? 0);
+
+    return { totalUnits, calls };
+  }
+}

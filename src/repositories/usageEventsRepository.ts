@@ -8,6 +8,7 @@ export interface UsageEvent {
   userId: string;
   occurredAt: Date;
   revenue: bigint;
+  stellarTxHash?: string | null;
 }
 
 export interface UsageEventQuery {
@@ -78,6 +79,11 @@ export interface UsageEventsRepository {
     apiId?: string;
     limit: number;
   }): Promise<Array<{ endpoint: string; calls: number; revenue: bigint }>>;
+  sumSpendByConsumer(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ totalUnits: bigint; calls: number }>;
 }
 
 export class InMemoryUsageEventsRepository implements UsageEventsRepository {
@@ -320,6 +326,36 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
       return d.toISOString().slice(0, 7) + '-01';
     }
     return d.toISOString().slice(0, 10);
+  }
+
+  async sumSpendByConsumer(query: {
+    userId: string;
+    from: Date;
+    to: Date;
+  }): Promise<{ totalUnits: bigint; calls: number }> {
+    let totalUnits = 0n;
+    let calls = 0;
+
+    for (const event of this.events) {
+      if (event.userId !== query.userId) {
+        continue;
+      }
+
+      const eventTime = (event as unknown as { createdAt?: Date }).createdAt ?? event.occurredAt;
+      if (eventTime < query.from || eventTime >= query.to) {
+        continue;
+      }
+
+      if (!event.stellarTxHash) {
+        continue;
+      }
+
+      calls += 1;
+      const amount = (event as unknown as { amount?: bigint }).amount ?? event.revenue ?? 0n;
+      totalUnits += amount;
+    }
+
+    return { totalUnits, calls };
   }
 }
 

@@ -106,10 +106,19 @@ error_codes:
     section: Billing / Soroban
     description: Billing deduction operation failed
 
+  - code: RECONCILIATION_REQUIRED
+    section: Billing / Soroban
+    description: Previous billing deduction attempt is pending reconciliation
+
   # Billing request
   - code: BILLING_REQUEST_NOT_FOUND
     section: Billing request
     description: The requested billing record was not found
+
+  # Billing forecast
+  - code: FORECAST_DATA_UNAVAILABLE
+    section: Billing forecast
+    description: Historical usage data could not be retrieved for forecast calculation
 
   # Developer / API keys
   - code: DEVELOPER_NOT_FOUND

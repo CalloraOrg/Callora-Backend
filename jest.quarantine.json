@@ -68,7 +68,6 @@
   "src/routes/billing.test.ts",
   "src/routes/billing/deduct/bulk.test.ts",
   "src/routes/billing/disputes.test.ts",
-  "src/routes/billing/forecast.test.ts",
   "src/routes/billing/portal.test.ts",
   "src/routes/credits.test.ts",
   "src/routes/developerRoutes.test.ts",
