@@ -412,3 +412,44 @@ describe('InMemoryUsageEventsRepository – aggregateByUser', () => {
     assert.equal(result.totalRevenue, largeRevenue * 2n);
   });
 });
+
+// ---------------------------------------------------------------------------
+// sumSpendByConsumer
+// ---------------------------------------------------------------------------
+
+describe('InMemoryUsageEventsRepository – sumSpendByConsumer', () => {
+  it('sums confirmed spend for the given consumer within [from, to)', async () => {
+    const from = new Date('2026-03-01T00:00:00.000Z');
+    const to = new Date('2026-03-31T00:00:00.000Z');
+
+    const repo = new InMemoryUsageEventsRepository([
+      makeEvent({ id: 'e1', userId: 'user-1', revenue: 100n, occurredAt: new Date('2026-03-05T00:00:00.000Z'), stellarTxHash: 'tx-1' }),
+      makeEvent({ id: 'e2', userId: 'user-1', revenue: 250n, occurredAt: new Date('2026-03-20T00:00:00.000Z'), stellarTxHash: 'tx-2' }),
+      // Boundary check: exactly at `from` is INCLUDED
+      makeEvent({ id: 'e-from', userId: 'user-1', revenue: 50n, occurredAt: from, stellarTxHash: 'tx-from' }),
+      // Boundary check: exactly at `to` is EXCLUDED
+      makeEvent({ id: 'e-to', userId: 'user-1', revenue: 999n, occurredAt: to, stellarTxHash: 'tx-to' }),
+      // Other user is EXCLUDED
+      makeEvent({ id: 'e-other', userId: 'user-2', revenue: 500n, occurredAt: new Date('2026-03-10T00:00:00.000Z'), stellarTxHash: 'tx-3' }),
+      // Unconfirmed (pending) charge is EXCLUDED
+      makeEvent({ id: 'e-pending', userId: 'user-1', revenue: 300n, occurredAt: new Date('2026-03-15T00:00:00.000Z'), stellarTxHash: null }),
+    ]);
+
+    const result = await repo.sumSpendByConsumer({ userId: 'user-1', from, to });
+
+    assert.equal(result.calls, 3);
+    assert.equal(result.totalUnits, 400n); // 100n + 250n + 50n
+  });
+
+  it('returns 0 units and 0 calls when no events match', async () => {
+    const repo = new InMemoryUsageEventsRepository([]);
+    const result = await repo.sumSpendByConsumer({
+      userId: 'user-1',
+      from: new Date('2026-01-01T00:00:00.000Z'),
+      to: new Date('2026-01-31T00:00:00.000Z'),
+    });
+
+    assert.equal(result.calls, 0);
+    assert.equal(result.totalUnits, 0n);
+  });
+});

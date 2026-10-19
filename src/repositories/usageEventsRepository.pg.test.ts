@@ -611,3 +611,103 @@ test('indexRevenueLedgerEvent inserts idempotently by usageEventId', async () =>
     await pool.end();
   }
 });
+
+test('sumSpendByConsumer sums confirmed charges within [from, to) and excludes unconfirmed and other users', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+
+  try {
+    const from = new Date('2026-02-01T00:00:00.000Z');
+    const to = new Date('2026-03-01T00:00:00.000Z');
+
+    // Matching confirmed event 1
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 100n,
+      requestId: 'req-c-1',
+      stellarTxHash: 'stellar-tx-1',
+      createdAt: new Date('2026-02-10T12:00:00.000Z'),
+    });
+
+    // Matching confirmed event 2
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-2',
+      endpointId: 'ep-2',
+      apiKeyId: 'key-2',
+      developerId: 'dev-2',
+      amount: 250n,
+      requestId: 'req-c-2',
+      stellarTxHash: 'stellar-tx-2',
+      createdAt: new Date('2026-02-15T12:00:00.000Z'),
+    });
+
+    // Boundary check: created_at == from (INCLUDED)
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 50n,
+      requestId: 'req-c-from',
+      stellarTxHash: 'stellar-tx-from',
+      createdAt: from,
+    });
+
+    // Boundary check: created_at == to (EXCLUDED, since created_at < $3)
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 9999n,
+      requestId: 'req-c-to',
+      stellarTxHash: 'stellar-tx-to',
+      createdAt: to,
+    });
+
+    // Unconfirmed charge: stellarTxHash is null (EXCLUDED)
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 500n,
+      requestId: 'req-c-unconfirmed',
+      stellarTxHash: null,
+      createdAt: new Date('2026-02-12T12:00:00.000Z'),
+    });
+
+    // Other user event: caller was developer, not consumer (EXCLUDED)
+    await repository.create({
+      userId: 'other-user',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'consumer-1',
+      amount: 800n,
+      requestId: 'req-c-other',
+      stellarTxHash: 'stellar-tx-other',
+      createdAt: new Date('2026-02-12T12:00:00.000Z'),
+    });
+
+    const result = await repository.sumSpendByConsumer({ userId: 'consumer-1', from, to });
+
+    assert.equal(result.calls, 3);
+    assert.equal(result.totalUnits, 400n); // 100n + 250n + 50n
+
+    // Non-existent user returns 0 units and 0 calls
+    const emptyResult = await repository.sumSpendByConsumer({ userId: 'nobody', from, to });
+    assert.equal(emptyResult.calls, 0);
+    assert.equal(emptyResult.totalUnits, 0n);
+  } finally {
+    await pool.end();
+  }
+});
+

@@ -78,8 +78,14 @@ export const ErrorCode = {
   /** Billing deduction operation failed */
   BILLING_DEDUCTION_FAILED: "BILLING_DEDUCTION_FAILED",
 
+  /** Previous billing deduction attempt is pending reconciliation */
+  RECONCILIATION_REQUIRED: "RECONCILIATION_REQUIRED",
+
   /** The requested billing record was not found */
   BILLING_REQUEST_NOT_FOUND: "BILLING_REQUEST_NOT_FOUND",
+
+  /** Historical usage data could not be retrieved for forecast calculation */
+  FORECAST_DATA_UNAVAILABLE: "FORECAST_DATA_UNAVAILABLE",
 
   /** Developer profile not found */
   DEVELOPER_NOT_FOUND: "DEVELOPER_NOT_FOUND",

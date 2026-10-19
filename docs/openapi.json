@@ -769,7 +769,7 @@
             }
           },
           "409": {
-            "description": "Idempotency conflict",
+            "description": "Conflict or reconciliation required",
             "content": {
               "application/json": {
                 "schema": {
@@ -782,6 +782,21 @@
                       "code": "IDEMPOTENCY_CONFLICT",
                       "message": "Idempotency key conflict: different request parameters",
                       "requestId": "req-abc123"
+                    }
+                  },
+                  "reconciliationRequired": {
+                    "summary": "Previous deduction attempt pending reconciliation",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "RECONCILIATION_REQUIRED",
+                        "message": "Billing deduction pending reconciliation"
+                      },
+                      "reconciliationRequired": true,
+                      "deductionStatus": "pending",
+                      "usageEventId": "evt-123",
+                      "requestId": "req-abc123",
+                      "timestamp": "2026-07-28T10:00:00.000Z"
                     }
                   }
                 }
@@ -6183,6 +6198,91 @@
           }
         }
       }
+    },
+    "/api/billing/forecast": {
+      "get": {
+        "operationId": "getBillingForecast",
+        "summary": "Forecast next-period billing spend",
+        "description": "Forecasts the authenticated user's next-period bill based on their historical run rate over a specified lookback window.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lookbackDays",
+            "in": "query",
+            "description": "Number of past days used to calculate current daily run rate (Min: 1, Max: 90).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90,
+              "default": 30
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "description": "Target forecast period.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "month",
+                "next_30_days",
+                "week",
+                "day",
+                "quarter"
+              ],
+              "default": "month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Billing forecast successfully calculated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingForecastResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Historical usage data is currently unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7731,7 +7831,9 @@
           "SOROBAN_RPC_TIMEOUT",
           "SOROBAN_RPC_ERROR",
           "BILLING_DEDUCTION_FAILED",
+          "RECONCILIATION_REQUIRED",
           "BILLING_REQUEST_NOT_FOUND",
+          "FORECAST_DATA_UNAVAILABLE",
           "DEVELOPER_NOT_FOUND",
           "API_ACCESS_FORBIDDEN",
           "API_KEY_NOT_FOUND",
@@ -8796,6 +8898,88 @@
           "timestamp": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "BillingForecastResponse": {
+        "type": "object",
+        "description": "Forecast calculation result payload with exact 7-decimal USDC amounts.",
+        "required": [
+          "userId",
+          "lookbackDays",
+          "lookbackStart",
+          "lookbackEnd",
+          "windowSpentUsdc",
+          "dailyRunRateUsdc",
+          "forecastPeriod",
+          "forecastDays",
+          "forecastedAmountUsdc",
+          "totalCalls",
+          "currency",
+          "generatedAt"
+        ],
+        "properties": {
+          "userId": {
+            "type": "string",
+            "description": "Authenticated user/consumer ID."
+          },
+          "lookbackDays": {
+            "type": "integer",
+            "description": "Number of days evaluated for current run rate."
+          },
+          "lookbackStart": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp starting the lookback window."
+          },
+          "lookbackEnd": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp ending the lookback window."
+          },
+          "windowSpentUsdc": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{7}$",
+            "description": "Total USDC spent as a consumer during the lookback window, formatted to 7 decimal places."
+          },
+          "dailyRunRateUsdc": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{7}$",
+            "description": "Calculated daily run rate in USDC, formatted to 7 decimal places."
+          },
+          "forecastPeriod": {
+            "type": "string",
+            "enum": [
+              "month",
+              "next_30_days",
+              "week",
+              "day",
+              "quarter"
+            ],
+            "description": "Selected target forecast period."
+          },
+          "forecastDays": {
+            "type": "integer",
+            "description": "Number of days in target forecast period."
+          },
+          "forecastedAmountUsdc": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{7}$",
+            "description": "Forecasted bill amount in USDC, formatted to 7 decimal places."
+          },
+          "totalCalls": {
+            "type": "integer",
+            "description": "Total confirmed usage calls recorded during the lookback window."
+          },
+          "currency": {
+            "type": "string",
+            "default": "USDC",
+            "description": "Currency unit (USDC)."
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp when forecast was computed."
           }
         }
       }
