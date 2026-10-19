@@ -305,6 +305,13 @@ export const config = {
     intervalMs: env.MONTHLY_INVOICE_JOB_INTERVAL_MS,
   },
 
+  idempotencySweeper: {
+    enabled: env.IDEMPOTENCY_SWEEPER_ENABLED,
+    intervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
+    batchSize: env.IDEMPOTENCY_SWEEPER_BATCH_SIZE,
+    timeBudgetMs: env.IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS,
+  },
+
   sloAlert: {
     enabled:
       Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
