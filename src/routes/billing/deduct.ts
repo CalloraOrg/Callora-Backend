@@ -152,11 +152,21 @@ router.post(
         }
 
         if (result.reconciliationRequired) {
+          const reqId =
+            (typeof (req as { id?: string }).id === "string" && (req as { id?: string }).id) ||
+            (req.headers["x-request-id"] as string) ||
+            requestId;
           res.status(409).json({
-            error: "Billing deduction pending reconciliation",
-            code: "RECONCILIATION_REQUIRED",
+            success: false,
+            error: {
+              code: "RECONCILIATION_REQUIRED",
+              message: "Billing deduction pending reconciliation",
+            },
             reconciliationRequired: true,
+            deductionStatus: result.deductionStatus ?? "pending",
             usageEventId: result.usageEventId,
+            requestId: reqId,
+            timestamp: new Date().toISOString(),
           });
           return;
         }
@@ -239,6 +249,7 @@ router.get(
         usageEventId: result.usageEventId,
         stellarTxHash: result.stellarTxHash,
         alreadyProcessed: result.alreadyProcessed,
+        deductionStatus: result.deductionStatus,
       });
     } catch (error) {
       next(error);
