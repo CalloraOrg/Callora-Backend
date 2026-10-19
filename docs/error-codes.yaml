@@ -410,3 +410,11 @@ error_codes:
   - code: BULK_QUOTA_UPDATE_FAILED
     section: Audit, logs and quotas
     description: A bulk quota update failed and was rolled back
+
+  - code: STALE_FORWARDED_IDENTITY
+    section: Authentication
+    description: Forwarded identity timestamp is missing, malformed, expired, or too far in the future
+
+  - code: REPLAYED_FORWARDED_IDENTITY
+    section: Authentication
+    description: Forwarded identity signature was already used on another request

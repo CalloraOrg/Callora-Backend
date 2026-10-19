@@ -3,6 +3,8 @@ import type { ValidationErrorDetail } from '../middleware/validate.js';
 export const PUBLIC_ERROR_CODES = [
   'BAD_REQUEST',
   'UNAUTHORIZED',
+  'STALE_FORWARDED_IDENTITY',
+  'REPLAYED_FORWARDED_IDENTITY',
   'PAYMENT_REQUIRED',
   'FORBIDDEN',
   'NOT_FOUND',

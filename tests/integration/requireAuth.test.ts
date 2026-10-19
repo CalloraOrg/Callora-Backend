@@ -62,10 +62,12 @@ beforeEach(() => {
   process.env.JWT_SECRET = TEST_JWT_SECRET;
   delete process.env.TRUST_FORWARDED_USER_ID;
   delete process.env.FORWARDED_USER_ID_SECRET;
+  delete process.env.FORWARDED_IDENTITY_ALLOW_LEGACY;
   app = buildTestApp();
 });
 
 afterEach(() => {
+  delete process.env.FORWARDED_IDENTITY_ALLOW_LEGACY;
   if (originalSecret !== undefined) {
     process.env.JWT_SECRET = originalSecret;
   } else {
@@ -166,7 +168,8 @@ describe('requireAuth – trusted forwarded user ID (TRUST_FORWARDED_USER_ID)', 
     expect(getErrorCode(res)).toBe('UNAUTHORIZED');
   });
 
-  it('accepts x-user-id when TRUST_FORWARDED_USER_ID=true and signature is valid (raw hex)', async () => {
+  it('legacy opt-in: accepts x-user-id when TRUST_FORWARDED_USER_ID=true and signature is valid (raw hex)', async () => {
+    process.env.FORWARDED_IDENTITY_ALLOW_LEGACY = 'true';
     process.env.TRUST_FORWARDED_USER_ID = 'true';
     process.env.FORWARDED_USER_ID_SECRET = TEST_GATEWAY_SECRET;
 
@@ -180,7 +183,8 @@ describe('requireAuth – trusted forwarded user ID (TRUST_FORWARDED_USER_ID)', 
     expect(res.body.userId).toBe('trusted-user-123');
   });
 
-  it('accepts x-user-id when signature has sha256= prefix and uses x-internal-signature', async () => {
+  it('legacy opt-in: accepts x-user-id when signature has sha256= prefix and uses x-internal-signature', async () => {
+    process.env.FORWARDED_IDENTITY_ALLOW_LEGACY = 'true';
     process.env.TRUST_FORWARDED_USER_ID = 'true';
     process.env.FORWARDED_USER_ID_SECRET = TEST_GATEWAY_SECRET;
 
@@ -194,7 +198,8 @@ describe('requireAuth – trusted forwarded user ID (TRUST_FORWARDED_USER_ID)', 
     expect(res.body.userId).toBe('internal-worker-456');
   });
 
-  it('accepts x-user-id with valid timestamped signature (x-gateway-timestamp)', async () => {
+  it('legacy opt-in: accepts x-user-id with valid timestamped signature (x-gateway-timestamp)', async () => {
+    process.env.FORWARDED_IDENTITY_ALLOW_LEGACY = 'true';
     process.env.TRUST_FORWARDED_USER_ID = 'true';
     process.env.FORWARDED_USER_ID_SECRET = TEST_GATEWAY_SECRET;
 
@@ -447,4 +452,45 @@ describe('requireAuth – server misconfiguration', () => {
     expect(res.status).toBe(401);
     expect(getErrorCode(res)).toBe('UNAUTHORIZED');
   });
+});
+
+
+describe("v1 forwarded identity HTTP contract", () => {
+  it("shares verification across a mounted limiter and auth, rejects replay", async () => {
+    const { signForwardedIdentity } = await import("../../src/middleware/requireAuth.js");
+    const { createRateLimitMiddleware } = await import("../../src/middleware/rateLimit.js");
+    process.env.TRUST_FORWARDED_USER_ID = "true";
+    process.env.FORWARDED_USER_ID_SECRET = TEST_GATEWAY_SECRET;
+    const { createPerDevConcurrencyMiddleware } = await import("../../src/middleware/perDevConcurrency.js");
+    const router = express.Router();
+    router.use(createPerDevConcurrencyMiddleware({ maxConcurrent: 2 }));
+    router.use(createRateLimitMiddleware({ windowMs: 60_000, maxRequests: 100 }));
+    router.get("/usage", requireAuth, (_req, res) => { res.json({ userId: res.locals.authenticatedUser.id }); });
+    const mounted = express(); mounted.use("/api", router); mounted.use(errorHandler);
+    const signed = signForwardedIdentity({ secret: TEST_GATEWAY_SECRET, method: "GET", path: "/api/usage", userId: "http-user", now: Date.now() });
+    const headers = { "x-user-id": "http-user", "x-gateway-signature": signed.signature, "x-gateway-timestamp": signed.timestamp };
+    const first = await request(mounted).get("/api/usage?ignored=1").set(headers);
+    expect(first.status).toBe(200); expect(first.body.userId).toBe("http-user");
+    const replay = await request(mounted).get("/api/usage").set(headers);
+    expect(replay.status).toBe(401); expect(getErrorCode(replay)).toBe("REPLAYED_FORWARDED_IDENTITY");
+  });
+  it("rejects a captured untimed legacy signature by default", async () => {
+    process.env.TRUST_FORWARDED_USER_ID = "true";
+    process.env.FORWARDED_USER_ID_SECRET = TEST_GATEWAY_SECRET;
+    const signature = createTestGatewaySignature("captured", TEST_GATEWAY_SECRET);
+    for (let i = 0; i < 2; i++) {
+      await request(app).get("/protected").set("x-user-id", "captured").set("x-gateway-signature", signature).expect(401);
+    }
+  });
+});
+
+
+test("HTTP stale signature preserves the distinct public error code", async () => {
+  const { signForwardedIdentity } = await import("../../src/middleware/requireAuth.js");
+  process.env.TRUST_FORWARDED_USER_ID = "true";
+  process.env.FORWARDED_USER_ID_SECRET = TEST_GATEWAY_SECRET;
+  const signed = signForwardedIdentity({ secret: TEST_GATEWAY_SECRET, method: "GET", path: "/protected", userId: "stale-http-user", now: Date.now() - 61_000 });
+  const response = await request(app).get("/protected").set({ "x-user-id": "stale-http-user", "x-gateway-signature": signed.signature, "x-gateway-timestamp": signed.timestamp });
+  expect(response.status).toBe(401);
+  expect(getErrorCode(response)).toBe("STALE_FORWARDED_IDENTITY");
 });
