@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { calloraEvents } from "../events/event.emitter.js";
+import type { UtcMonthPeriod } from "../lib/periods.js";
 
 export interface InvoiceGenerationResult {
   success: boolean;
@@ -10,17 +11,15 @@ export interface InvoiceGenerationResult {
 export class InvoiceService {
   constructor(private readonly pool: Pool) {}
 
-  async generateMonthlyInvoices(periodId: string): Promise<InvoiceGenerationResult> {
+  async generateMonthlyInvoices(period: UtcMonthPeriod): Promise<InvoiceGenerationResult> {
+    const { periodId, start, end } = period;
     const periodMatch = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(periodId);
     if (!periodMatch) {
       throw new Error("periodId must use YYYY-MM format");
     }
 
-    const year = Number(periodMatch[1]);
-    const month = Number(periodMatch[2]);
-    const periodStart = `${periodId}-01`;
-    const nextPeriodStart = `${month === 12 ? year + 1 : year}-${String(month === 12 ? 1 : month + 1).padStart(2, "0")}-01`;
-    const periodEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+    const periodStart = start.toISOString().slice(0, 10);
+    const periodEnd = new Date(end.getTime() - 1).toISOString().slice(0, 10);
     const client = await this.pool.connect();
     const createdEvents: Array<{ invoiceId: string; developerId: string; total: number }> = [];
 
@@ -59,7 +58,7 @@ export class InvoiceService {
           AND created_at < $2
         GROUP BY user_id, api_id
         `,
-        [periodStart, nextPeriodStart]
+        [start.toISOString(), end.toISOString()]
       );
 
       let invoicesCreated = 0;
