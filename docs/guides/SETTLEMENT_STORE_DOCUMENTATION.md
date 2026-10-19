@@ -4,6 +4,53 @@
 
 This document outlines the invariants, persistence semantics, and testing approach for the `InMemorySettlementStore` implementation. The tests ensure data integrity, proper state transitions, and resistance to corruption.
 
+## USDC Contract Units (Issue #1512)
+
+All USDC amounts in the settlement and invoice domain are represented as **bigint contract units**, not floating-point numbers.
+
+**1 USDC = 10,000,000 contract units** (7 decimal places, matching the Soroban i128 wire format).
+
+### Arithmetic invariant — exact conservation
+
+For any set of usage events in a settlement batch:
+
+```
+payout amount (bigint units) == Σ event.amountUsdc (bigint units) == Σ invoice line items (bigint units)
+```
+
+This is guaranteed because all sums use `bigint` addition, which has no rounding error.
+
+### Conversion helpers (`src/lib/usdcUnits.ts`)
+
+| Function | Direction | Used in |
+|---|---|---|
+| `parseUsdcToUnits(str)` | decimal string → bigint | SQL read boundary, priceUsdc ingestion |
+| `formatUnitsToUsdc(units)` | bigint → minimal decimal string | SQL write boundary |
+| `formatUnitsToUsdcFixed(units)` | bigint → 7-decimal string | API / webhook payloads |
+
+### Boundary rules
+
+- **SQL READ**: `amount_usdc` DECIMAL column returned as string by `pg` driver → `parseUsdcToUnits()`.
+- **SQL WRITE**: `formatUnitsToUsdc(amount)` produces a minimal decimal string (e.g. `"6"` not `"6.0000000"`) stored in the `DECIMAL` column.
+- **API / webhook OUT**: `formatUnitsToUsdcFixed(amount)` produces the canonical 7-decimal wire format (e.g. `"6.0000000"`) so external consumers see a consistent string.
+- **priceUsdc ingestion** (`proxyRoutes.ts`, `gatewayRoutes.ts`): `parseUsdcToUnits(priceUsdc.toFixed(7))` converts the float endpoint price to bigint exactly once at ingestion. No float arithmetic happens downstream.
+
+### Lint guard
+
+`eslint.config.js` contains a `no-restricted-syntax` rule that flags `parseFloat`, `Number(`, and `.toFixed(` in the five USDC-sensitive service files:
+
+- `src/services/revenueSettlementService.ts`
+- `src/services/sorobanSettlement.ts`
+- `src/services/InvoiceService.ts`
+- `src/services/settlementStore.ts`
+- `src/services/usageStore.ts`
+
+Any reintroduction of float arithmetic in these files is a build-time error.
+
+### JSON serialisation
+
+`Settlement.amount` (bigint) and `RevenueSummary` fields (bigint) are converted to `number` via `Number(units) / 10_000_000` in the `/api/developers/revenue` route handler before `res.json()`. This preserves the existing OpenAPI contract (`type: number`) while keeping all internal arithmetic exact. Amounts above `Number.MAX_SAFE_INTEGER / 10_000_000 ≈ 9 × 10^8 USDC` would lose precision at this display step, but that is a display-only concern — the stored and computed bigint values are always exact.
+
 ## Core Invariants
 
 ### 1. Data Persistence Invariants
@@ -11,6 +58,7 @@ This document outlines the invariants, persistence semantics, and testing approa
 - **Status Mutability**: Only `status` and `tx_hash` fields can be modified after creation
 - **Ordering Guarantee**: Settlements are always returned in descending `created_at` order (newest first)
 - **Developer Isolation**: Settlements are strictly isolated by `developerId`
+- **Amount type**: `Settlement.amount` is a `bigint` (contract units). Never a `number`.
 
 ### 1a. Ledger Consistency Invariants (PostgresSettlementStore)
 - **Completed Transaction Hash Requirement**: All `completed` settlements MUST have a non-NULL `stellar_tx_hash`
@@ -213,3 +261,13 @@ Key takeaways:
 - ✅ Added CHECK constraint migration (`0008_settlement_status_check.sql`)
 - ✅ Comprehensive test coverage for all status transitions and ledger invariants
 - ✅ Documentation updated to reflect new invariants and verification methods
+
+### Recent Enhancements (Issue #1512)
+- ✅ `Settlement.amount` changed from `number` to `bigint` contract units (1 USDC = 10,000,000)
+- ✅ `UsageEvent.amountUsdc` changed from `number` to `bigint` contract units
+- ✅ `RevenueSummary` fields changed from `number` to `bigint` contract units
+- ✅ `src/lib/usdcUnits.ts` created with `parseUsdcToUnits`, `formatUnitsToUsdc`, `formatUnitsToUsdcFixed`
+- ✅ SQL boundaries use `parseUsdcToUnits` (read) / `formatUnitsToUsdc` (write)
+- ✅ Webhook / API payloads use `formatUnitsToUsdcFixed` (7-decimal canonical string)
+- ✅ `convertUsdcToStroops` removed; Soroban i128 receives bigint units directly
+- ✅ ESLint `no-restricted-syntax` guard prevents reintroduction of float arithmetic in the five service files

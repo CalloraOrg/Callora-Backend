@@ -372,7 +372,7 @@ describe('Complete Integration — Vault + Billing + Gateway + Settlement', () =
       apiId: API_ID,
       endpointId: 'forecast',
       userId: CONSUMER_ID,
-      amountUsdc: 1,
+      amountUsdc: 10000000n,
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });

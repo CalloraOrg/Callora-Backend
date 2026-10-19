@@ -9,6 +9,7 @@ import {
   isTransientNetworkError,
   withRetry,
 } from '../lib/retry.js';
+import { parseUsdcToUnits, formatUnitsToUsdcFixed } from '../lib/usdcUnits.js';
 
 const TX_FAILED_TOO_EARLY = 'tx_failed_too_early';
 
@@ -32,13 +33,6 @@ export interface RevenueSettlementOptions {
 
 /**
  * Horizon transaction response type.
- * 
- * Note: result_codes may be missing when Horizon returns a generic error (e.g., tx_failed without
- * details). In such cases, we treat the transaction as failed with an unknown reason. The result_codes.transaction
- * field indicates why the transaction was rejected by Stellar (e.g., 'tx_bad_seq', 'tx_too_large').
- * 
- * When result_codes is missing or transaction field is undefined, we assign status 'failed_unknown'
- * and log at WARN level. This is expected behavior from Horizon and requires investigation in the DB.
  */
 export interface ReconcileResult {
   checked: number;
@@ -76,7 +70,7 @@ export class RevenueSettlementService {
    * 3. Groups by developer, applying max batch size.
    * 4. For each developer meeting min payout, creates a settlement + calls distribute().
    */
-  async runBatch(): Promise<{ processed: number; settledAmount: number; errors: number }> {
+  async runBatch(): Promise<{ processed: number; settledAmount: bigint; errors: number }> {
     const previousBatch = this.batchTail.catch(() => undefined);
     let releaseBatch!: () => void;
     this.batchTail = new Promise<void>((resolve) => {
@@ -92,20 +86,22 @@ export class RevenueSettlementService {
     }
   }
 
-  private async runBatchOnce(): Promise<{ processed: number; settledAmount: number; errors: number }> {
+  private async runBatchOnce(): Promise<{ processed: number; settledAmount: bigint; errors: number }> {
     const unsettled = await this.usageStore.getUnsettledEvents();
     if (unsettled.length === 0) {
-      return { processed: 0, settledAmount: 0, errors: 0 };
+      return { processed: 0, settledAmount: 0n, errors: 0 };
     }
 
-    const minPayout = this.options.minPayoutUsdc ?? 5.0;
+    // Convert minPayoutUsdc option (a float like 5.0) to bigint contract units.
+    const rawMinPayout = this.options.minPayoutUsdc ?? 5.0;
+    const minPayout = parseUsdcToUnits(rawMinPayout.toFixed(7));
     const maxEvents = this.options.maxEventsPerBatch ?? 1000;
 
     // Group events by developerId
     const devEvents = new Map<string, UsageEvent[]>();
 
     for (const event of unsettled) {
-      if (event.amountUsdc <= 0) continue;
+      if (event.amountUsdc <= 0n) continue;
 
       const apiEntry = this.apiRegistry.resolve(event.apiId);
       if (!apiEntry) {
@@ -124,11 +120,11 @@ export class RevenueSettlementService {
     }
 
     let processed = 0;
-    let settledAmount = 0;
+    let settledAmount = 0n;
     let errors = 0;
 
     for (const [developerId, events] of devEvents.entries()) {
-      const totalAmount = events.reduce((sum, e) => sum + e.amountUsdc, 0);
+      const totalAmount = events.reduce((sum, e) => sum + e.amountUsdc, 0n);
 
       if (totalAmount < minPayout) {
         // Skip for now, let it accumulate for the next batch
@@ -158,9 +154,7 @@ export class RevenueSettlementService {
         continue;
       }
 
-      // 2. Call contract
-      // Note: in a real system we would use the developer's registered Soroban address here.
-      // For this mock, we just use the developerId as the address string.
+      // 2. Call contract — pass bigint contract units directly.
       let result;
 
       try {
@@ -172,9 +166,7 @@ export class RevenueSettlementService {
         };
       }
 
-      // 3. Record the submitted tx hash and mark events settled. The settlement
-      //    stays 'pending' until reconcilePendingSettlements() confirms the
-      //    transaction on Horizon and promotes it to 'completed'.
+      // 3. Record the submitted tx hash and mark events settled.
       if (result.success && result.txHash) {
         try {
           await this.settlementStore.updateStatus(settlementId, 'pending', result.txHash);
@@ -210,10 +202,6 @@ export class RevenueSettlementService {
 
   /**
    * Reconcile all pending settlements by checking their transaction status on Horizon.
-   * - Marks confirmed transactions as 'completed'.
-   * - Marks 404/unsuccessful transactions as 'failed'.
-   * - Leaves pending entries unchanged when Horizon returns a transient error (retries with backoff).
-   * Returns a summary of the reconciliation pass.
    */
   async reconcilePendingSettlements(): Promise<ReconcileResult> {
     const previousReconcile = this.reconcileTail.catch(() => undefined);
@@ -234,7 +222,6 @@ export class RevenueSettlementService {
   private async reconcilePendingSettlementsOnce(): Promise<ReconcileResult> {
     const horizonUrl = this.options.horizonUrl;
     if (!horizonUrl) {
-      // Horizon is not configured; skip reconciliation
       return { checked: 0, completed: 0, failed: 0, retried: 0, errors: 0 };
     }
 
@@ -250,15 +237,12 @@ export class RevenueSettlementService {
       try {
         checked++;
 
-        // Defensively fetch and parse Horizon response
         const horizonResponse = await this.fetchHorizonTransactionStatus(settlement.tx_hash!);
 
-        // Defensive parsing: result_codes may be missing
         const resultCodes = horizonResponse?.result_codes;
         const transactionCode = resultCodes?.transaction;
 
         if (horizonResponse?.successful === true) {
-          // Transaction confirmed successful
           try {
             await this.settlementStore.updateStatus(settlement.id, 'completed');
             completed++;
@@ -273,7 +257,6 @@ export class RevenueSettlementService {
           if (transactionCode === TX_FAILED_TOO_EARLY) {
             const maxRetries = this.options.maxTooEarlyRetries ?? 5;
             if ((settlement.retry_count ?? 0) >= maxRetries) {
-              // Max retries exhausted — permanently fail
               try {
                 await this.settlementStore.updateStatus(settlement.id, 'failed');
                 failed++;
@@ -299,7 +282,6 @@ export class RevenueSettlementService {
               }
             }
           } else {
-            // Other explicit failure
             try {
               await this.settlementStore.updateStatus(settlement.id, 'failed');
               failed++;
@@ -319,7 +301,6 @@ export class RevenueSettlementService {
             }
           }
         } else if (horizonResponse === null) {
-          // Transaction not found in Horizon — treat as failed
           try {
             await this.settlementStore.updateStatus(settlement.id, 'failed');
             failed++;
@@ -336,7 +317,6 @@ export class RevenueSettlementService {
             'Horizon did not find transaction',
           );
         } else {
-          // Unexpected response shape; leave as pending and log warning
           errors++;
           console.warn(
             { settlementId: settlement.id },
@@ -344,7 +324,6 @@ export class RevenueSettlementService {
           );
         }
       } catch (error) {
-        // Catch any exception during per-settlement processing to continue batch
         errors++;
         console.warn(
           { settlementId: settlement.id, error },
@@ -356,11 +335,6 @@ export class RevenueSettlementService {
     return { checked, completed, failed, retried, errors };
   }
 
-  /**
-   * Fetches transaction status from Horizon, retrying transient errors with backoff.
-   * Returns null if transaction is not found (404).
-   * Throws only on permanent errors (not retriable).
-   */
   private async fetchHorizonTransactionStatus(txHash: string): Promise<HorizonTransactionResponse | null> {
     const horizonUrl = this.options.horizonUrl;
     if (!horizonUrl) {
@@ -383,16 +357,13 @@ export class RevenueSettlementService {
           const response = await fetchImpl(url, { signal: controller.signal });
 
           if (response.status === 404) {
-            // Not found is not retriable; transaction doesn't exist
             return null;
           }
 
           if (!response.ok) {
-            // For non-404 errors, check if retriable (5xx or specific 4xx)
             if (RETRIABLE_HTTP_STATUSES.has(response.status)) {
               throw new TransientError(`Horizon returned ${response.status}`);
             }
-            // Non-retriable error
             throw new Error(`Horizon returned ${response.status}`);
           }
 
@@ -413,12 +384,13 @@ export class RevenueSettlementService {
   private async emitSettlementCompleted(
     settlementId: string,
     developerId: string,
-    amount: number,
+    amount: bigint,
     txHash: string,
   ): Promise<void> {
     calloraEvents.emit('settlement_completed', developerId, {
       settlementId,
-      amount: amount.toFixed(7),
+      // Webhook payload keeps the canonical 7-decimal decimal-string format.
+      amount: formatUnitsToUsdcFixed(amount),
       asset: 'USDC',
       txHash,
       settledAt: new Date().toISOString(),
@@ -462,4 +434,3 @@ export class RevenueSettlementService {
     return 'Unknown settlement failure';
   }
 }
-

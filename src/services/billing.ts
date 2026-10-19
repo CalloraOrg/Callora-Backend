@@ -34,8 +34,13 @@ import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
+import {
+  USDC_UNITS_PER_USDC,
+  parseUsdcToUnits as _parseUsdcToUnits,
+  formatUnitsToUsdc as _formatUnitsToUsdc,
+} from "../lib/usdcUnits.js";
 
-const USDC_7_DECIMAL_FACTOR = 10_000_000n;
+const USDC_7_DECIMAL_FACTOR = USDC_UNITS_PER_USDC;
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
 
 /**
@@ -127,22 +132,12 @@ export interface BillingServiceOptions {
 // ---------------------------------------------------------------------------
 
 export function parseUsdcToContractUnits(amountUsdc: string): bigint {
-  const trimmed = amountUsdc.trim();
-  if (!/^\d+(\.\d{1,7})?$/.test(trimmed)) {
-    throw new Error(
-      "amountUsdc must be a positive decimal with at most 7 fractional digits",
-    );
-  }
-
-  const [wholePart, fractionalPart = ""] = trimmed.split(".");
-  const whole = BigInt(wholePart);
-  const fraction = BigInt((fractionalPart + "0000000").slice(0, 7));
-  const result = whole * USDC_7_DECIMAL_FACTOR + fraction;
-
+  // Delegates to the shared usdcUnits helper then enforces the deduction-
+  // specific invariant: amounts must be strictly positive.
+  const result = _parseUsdcToUnits(amountUsdc);
   if (result <= 0n) {
     throw new Error("amountUsdc must be greater than zero");
   }
-
   return result;
 }
 
@@ -218,17 +213,7 @@ export function isTransientSorobanError(error: unknown): boolean {
 }
 
 export function formatContractUnitsToUsdc(amount: bigint): string {
-  const whole = amount / USDC_7_DECIMAL_FACTOR;
-  const fraction = amount % USDC_7_DECIMAL_FACTOR;
-
-  if (fraction === 0n) {
-    return whole.toString();
-  }
-
-  return `${whole.toString()}.${fraction
-    .toString()
-    .padStart(7, "0")
-    .replace(/0+$/, "")}`;
+  return _formatUnitsToUsdc(amount);
 }
 
 function buildBulkDeductIdempotencyKey(requestIds: string[]): string {
