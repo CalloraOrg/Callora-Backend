@@ -295,7 +295,13 @@ export const ErrorCode = {
   LOG_ENTRY_NOT_FOUND: "LOG_ENTRY_NOT_FOUND",
 
   /** A bulk quota update failed and was rolled back */
-  BULK_QUOTA_UPDATE_FAILED: "BULK_QUOTA_UPDATE_FAILED"
+  BULK_QUOTA_UPDATE_FAILED: "BULK_QUOTA_UPDATE_FAILED",
+
+  /** Forwarded identity timestamp is missing, malformed, expired, or too far in the future */
+  STALE_FORWARDED_IDENTITY: "STALE_FORWARDED_IDENTITY",
+
+  /** Forwarded identity signature was already used on another request */
+  REPLAYED_FORWARDED_IDENTITY: "REPLAYED_FORWARDED_IDENTITY"
 
 } as const;
 

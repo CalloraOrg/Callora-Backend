@@ -108,6 +108,8 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `AUDIT_DETAILS_INCOMPLETE` | Audit, logs and quotas |
 | `LOG_ENTRY_NOT_FOUND` | Audit, logs and quotas |
 | `BULK_QUOTA_UPDATE_FAILED` | Audit, logs and quotas |
+| `STALE_FORWARDED_IDENTITY` | Authentication |
+| `REPLAYED_FORWARDED_IDENTITY` | Authentication |
 <!-- END GENERATED ERROR CODES -->
 
 ## Scope and important caveats

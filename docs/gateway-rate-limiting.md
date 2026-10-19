@@ -306,3 +306,9 @@ GATEWAY_RATE_LIMIT_MAX_REQUESTS=50
 - [Error Codes](./error-codes.md) — Standard error envelope format
 - [Gateway API Key Auth](./gateway-api-key-auth.md) — Authentication middleware (runs before rate limiting)
 - [Tiered Rate Limits](./tiered-rate-limits.md) — Per-key service policies and caller differences
+
+
+Forwarded identity-aware limiters await the same request-memoized v1 verification
+and replay claim as `requireAuth`. They do not re-consume a signature within a
+request. See [forwarded identity signing and deployment](./gateway-api-key-auth.md#forwarded-user-identities-v1).
+The JWT-only REST identity policy remains unchanged.

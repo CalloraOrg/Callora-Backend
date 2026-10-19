@@ -7478,7 +7478,9 @@
           "AUDIT_ACTION_NOT_REPLAYABLE",
           "AUDIT_DETAILS_INCOMPLETE",
           "LOG_ENTRY_NOT_FOUND",
-          "BULK_QUOTA_UPDATE_FAILED"
+          "BULK_QUOTA_UPDATE_FAILED",
+          "STALE_FORWARDED_IDENTITY",
+          "REPLAYED_FORWARDED_IDENTITY"
         ],
         "description": "Canonical Callora backend error code."
       },
