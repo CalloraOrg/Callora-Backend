@@ -307,6 +307,7 @@ error_codes:
     section: Misc / direct middleware responses
     description: Soroban simulation failed
 
+
   # Route-specific / auth overrides
   - code: INVALID_AUTH_HEADER
     section: Route-specific / auth overrides (documented in docs/error-codes.md)

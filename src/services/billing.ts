@@ -106,6 +106,11 @@ export interface SorobanClient {
     amount: string,
     idempotencyKey?: string,
   ): Promise<SorobanDeductResult>;
+  deductBalanceBatch?(
+    userId: string,
+    items: Array<{ amount: string; requestId: string }>,
+    idempotencyKey?: string,
+  ): Promise<SorobanDeductResult>;
 }
 
 export interface BillingServiceOptions {
@@ -853,11 +858,19 @@ export class BillingService {
 
     let deductResult: SorobanDeductResult;
     try {
-      deductResult = await this.executeDeductWithRetry(
+      const bulkKey = idempotencyKey ??
+        buildBulkDeductIdempotencyKey(Array.from(insertedRequestIds));
+      const insertedRequests = requests.filter((request) =>
+        insertedRequestIds.has(request.requestId),
+      );
+      deductResult = await this.executeBulkDeductWithRetry(
         requests[0].userId,
+        insertedRequests.map((request) => ({
+          requestId: request.requestId,
+          amount: (amountByRequestId.get(request.requestId) ?? 0n).toString(),
+        })),
         totalInsertedAmount.toString(),
-        idempotencyKey ??
-          buildBulkDeductIdempotencyKey(Array.from(insertedRequestIds)),
+        bulkKey,
       );
     } catch (error) {
       return {
@@ -986,6 +999,32 @@ export class BillingService {
     throw lastError instanceof Error
       ? lastError
       : new Error(normalizeErrorMessage(lastError));
+  }
+
+  private async executeBulkDeductWithRetry(
+    userId: string,
+    items: Array<{ amount: string; requestId: string }>,
+    aggregateAmount: string,
+    idempotencyKey: string,
+  ): Promise<SorobanDeductResult> {
+    if (!this.sorobanClient.deductBalanceBatch) {
+      return this.executeDeductWithRetry(userId, aggregateAmount, idempotencyKey);
+    }
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt += 1) {
+      try {
+        return await this.sorobanClient.deductBalanceBatch(userId, items, idempotencyKey);
+      } catch (error) {
+        lastError = error;
+        if (!isTransientSorobanError(error) || attempt === this.retryDelaysMs.length) break;
+        const scheduledDelay = this.retryDelaysMs[attempt];
+        await sleep(computeJitteredDelay(scheduledDelay, {
+          strategy: "full", random: this.random, maxDelayMs: scheduledDelay,
+        }));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(normalizeErrorMessage(lastError));
   }
 }
 
