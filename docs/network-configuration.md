@@ -43,6 +43,9 @@ STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID=CB...MAINNET_SETTLEMENT
 
 - Deposit transaction building uses the active network Horizon URL.
 - Deposit preparation rejects requests for a different network than the active configuration.
+- Vault queries without an explicit `network` use `STELLAR_NETWORK` (then `SOROBAN_NETWORK`) rather than implicitly selecting testnet.
+- `GET /api/vault/balance` refreshes snapshots from the configured vault's read-only Soroban views when older than `VAULT_SNAPSHOT_MAX_AGE_MS` (default `60000`). A failed RPC read returns the prior snapshot with `stale: true`.
+- `GET /api/vault/onchain` returns the live vault view state and ledger; it performs simulations only and never signs or submits transactions.
 - Soroban settlement client resolves RPC URL and settlement contract ID from the active network.
 - If a settlement contract ID is missing for the active network, the Soroban client fails fast.
 - Stellar Horizon and Soroban RPC endpoints are validated at runtime before config export.
@@ -77,3 +80,17 @@ For contract IDs, these aliases are also accepted:
 - `SOROBAN_MAINNET_VAULT_CONTRACT_ID`
 - `SOROBAN_TESTNET_SETTLEMENT_CONTRACT_ID`
 - `SOROBAN_MAINNET_SETTLEMENT_CONTRACT_ID`
+
+## Testnet vault deployment
+
+The testnet deployment documented by Callora-Contracts uses:
+
+| Contract | ID |
+|---|---|
+| Vault | `CBJZLUKQBWDMZPKNJAVONZ7GCCWADSETRXWOPN5Z3XWAUNI4F2R7XDYQ` |
+| Settlement | `CB4BUGCX5LFS5KYWAO2J4ZQTALOQSGXFFAOVKKGAS32OFZLU7O7YYGHS` |
+| USDC SAC | `CAC7CFZ42L3LTTZCI4C3XI6UF7AHS2PYTNJ5QEG2PSLRGDGMWRQOZOT5` |
+
+The testnet RPC is `https://soroban-testnet.stellar.org` and its passphrase is `Test SDF Network ; September 2015`. Set `STELLAR_TESTNET_VAULT_CONTRACT_ID` to enable contract-aware health checks and to select the deployed vault for public demo reads when `DEMO_MODE=true`.
+
+The opt-in live reader test is skipped by default. Run it with `SOROBAN_LIVE_TESTNET=1 npx jest --runInBand --runTestsByPath src/services/sorobanVaultReader.live.test.ts` to read the deployed vault without signing or submitting a transaction.

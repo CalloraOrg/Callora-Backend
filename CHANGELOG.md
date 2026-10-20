@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- Require fresh, method/path-bound v1 forwarded identity signatures, reject replay with bounded memory or shared PostgreSQL storage, and restrict legacy migration mode to non-production.
+
 - Propagated `X-Correlation-Id` across the quota self-service routes and outbound webhook dispatches so quota requests and related notifications can be traced end-to-end.
 - Removed a broken, unmounted CORS middleware call and a duplicate import from `src/routes/billing.ts` that were left over from a conflicted merge and failed to compile.
 - Removed a duplicated, syntactically invalid test block in `src/middleware/etag.test.ts` that was blocking `tsc --noEmit` for the entire project.

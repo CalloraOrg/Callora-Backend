@@ -16,6 +16,7 @@ import {
   checkHorizon,
   determineOverallStatus,
   type ComponentCheck,
+  type SorobanRpcProbeServer,
 } from '../../../services/healthCheck.js';
 import { BadRequestError, NotFoundError, InternalServerError } from '../../../errors/index.js';
 import { logger } from '../../../logger.js';
@@ -26,7 +27,20 @@ const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 
 export interface AdminHealthProbesDeps {
   pool?: Pool;
-  config?: typeof defaultConfig;
+  config?: {
+    version?: string;
+    database?: { timeout?: number };
+    sorobanRpc?: { url: string; timeout?: number };
+    horizon?: { url: string; timeout?: number };
+    stellar?: {
+      networkPassphrase: string;
+      vaultContractId?: string;
+    };
+  };
+  sorobanRpcServerFactory?: (
+    url: string,
+    timeoutMs: number,
+  ) => SorobanRpcProbeServer;
 }
 
 const componentParamSchema = z.object({
@@ -42,6 +56,9 @@ export function createAdminHealthProbesRouter(deps: AdminHealthProbesDeps = {}):
   const router = Router();
   const pool = deps.pool ?? defaultPool;
   const config = deps.config ?? defaultConfig;
+  const stellarConfig = config.stellar ?? defaultConfig.stellar;
+  const configuredVaultContractId =
+    config.stellar ? stellarConfig.vaultContractId : '';
 
   // Helper to run health check for a single component
   const runComponentCheck = async (component: string): Promise<ComponentCheck> => {
@@ -55,7 +72,11 @@ export function createAdminHealthProbesRouter(deps: AdminHealthProbesDeps = {}):
         if (!config.sorobanRpc) {
           throw new NotFoundError('Soroban RPC component is not configured', 'COMPONENT_NOT_CONFIGURED');
         }
-        return await checkSorobanRpc(config.sorobanRpc.url, config.sorobanRpc.timeout);
+        return await checkSorobanRpc(config.sorobanRpc.url, config.sorobanRpc.timeout, {
+          networkPassphrase: stellarConfig.networkPassphrase,
+          vaultContractId: configuredVaultContractId,
+          createServer: deps.sorobanRpcServerFactory,
+        });
       case 'horizon':
         if (!config.horizon) {
           throw new NotFoundError('Horizon component is not configured', 'COMPONENT_NOT_CONFIGURED');
@@ -76,7 +97,11 @@ export function createAdminHealthProbesRouter(deps: AdminHealthProbesDeps = {}):
 
       const dbPromise = checkDatabase(pool, config.database?.timeout);
       const sorobanPromise = config.sorobanRpc
-        ? checkSorobanRpc(config.sorobanRpc.url, config.sorobanRpc.timeout)
+        ? checkSorobanRpc(config.sorobanRpc.url, config.sorobanRpc.timeout, {
+            networkPassphrase: stellarConfig.networkPassphrase,
+            vaultContractId: configuredVaultContractId,
+            createServer: deps.sorobanRpcServerFactory,
+          })
         : Promise.resolve(undefined);
       const horizonPromise = config.horizon
         ? checkHorizon(config.horizon.url, config.horizon.timeout)

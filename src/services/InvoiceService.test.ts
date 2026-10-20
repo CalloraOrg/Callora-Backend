@@ -3,6 +3,10 @@ import { join } from "node:path";
 import { newDb } from "pg-mem";
 import type { Pool } from "pg";
 import { InvoiceService } from "./InvoiceService.js";
+import { previousUtcMonthPeriod } from "../lib/periods.js";
+import { createMonthlyInvoiceJob } from "../workers/monthlyInvoiceJob.js";
+
+const january = previousUtcMonthPeriod(new Date('2024-02-01T01:00:00Z'));
 
 const invoiceMigration = readFileSync(
   join(process.cwd(), "migrations/0014_create_invoices.sql"),
@@ -57,7 +61,7 @@ describe("InvoiceService.generateMonthlyInvoices", () => {
     await addEvent(pool, { userId: "dev-1", apiId: "api-b", amount: "2.0000000", requestId: "r3", createdAt: "2024-01-31T23:59:59Z" });
     await addEvent(pool, { userId: "dev-2", apiId: "api-a", amount: "3.5000000", requestId: "r4", createdAt: "2024-01-20T00:00:00Z" });
 
-    const result = await new InvoiceService(pool).generateMonthlyInvoices("2024-01");
+    const result = await new InvoiceService(pool).generateMonthlyInvoices(january);
 
     expect(result).toEqual({ success: true, periodId: "2024-01", invoicesCreated: 2 });
     const invoices = await pool.query("SELECT developer_id, period_id, period_start, period_end, total_amount FROM invoices ORDER BY developer_id");
@@ -83,8 +87,8 @@ describe("InvoiceService.generateMonthlyInvoices", () => {
     await addEvent(pool, { userId: "dev-1", apiId: "api-b", amount: "9.0000000", requestId: "out-after", createdAt: "2024-02-01T00:00:00Z" });
 
     const service = new InvoiceService(pool);
-    await expect(service.generateMonthlyInvoices("2024-01")).resolves.toMatchObject({ invoicesCreated: 1 });
-    await expect(service.generateMonthlyInvoices("2024-01")).resolves.toEqual({ success: true, periodId: "2024-01", invoicesCreated: 0 });
+    await expect(service.generateMonthlyInvoices(january)).resolves.toMatchObject({ invoicesCreated: 1 });
+    await expect(service.generateMonthlyInvoices(january)).resolves.toEqual({ success: true, periodId: "2024-01", invoicesCreated: 0 });
 
     const invoiceCount = await pool.query("SELECT COUNT(*) AS count FROM invoices");
     const lineItemCount = await pool.query("SELECT COUNT(*) AS count FROM invoice_line_items");
@@ -116,11 +120,60 @@ describe("InvoiceService.generateMonthlyInvoices", () => {
       },
     } as unknown as Pool;
 
-    await expect(new InvoiceService(failingPool).generateMonthlyInvoices("2024-01")).rejects.toThrow("simulated line-item failure");
+    await expect(new InvoiceService(failingPool).generateMonthlyInvoices(january)).rejects.toThrow("simulated line-item failure");
     expect(queries).toContain("BEGIN");
     expect(queries).toContain("ROLLBACK");
     expect(queries).not.toContain("COMMIT");
     // pg-mem 3.x does not undo DML after ROLLBACK, so the assertion verifies
     // that the service issued the rollback and never committed the transaction.
+  });
+
+  it('rejects malformed period IDs before connecting', async () => {
+    const connect = jest.fn();
+    const service = new InvoiceService({ connect } as unknown as Pool);
+    await expect(service.generateMonthlyInvoices({ ...january, periodId: '2024-13' }))
+      .rejects.toThrow('periodId must use YYYY-MM format');
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('catches up through the worker, includes the last millisecond, and does nothing on the second tick', async () => {
+    const pool = await createPool();
+    const now = new Date('2026-03-04T12:00:00Z');
+    const period = previousUtcMonthPeriod(now);
+    const service = new InvoiceService(pool);
+    for (const [requestId, createdAt, amount] of [
+      ['before', '2026-01-31T23:59:59.999Z', '90'],
+      ['start', '2026-02-01T00:00:00.000Z', '1'],
+      ['last', '2026-02-28T23:59:59.999Z', '2'],
+      ['after', '2026-03-01T00:00:00.000Z', '90'],
+    ]) {
+      await addEvent(pool, { userId: 'dev-1', apiId: 'api-a', amount, requestId, createdAt });
+    }
+    const log = { info: jest.fn(), error: jest.fn() };
+    const job = createMonthlyInvoiceJob(pool, { intervalMs: 60_000, clock: () => now, logger: log });
+    try {
+      job.start();
+      await job.awaitIdle();
+      job.stop();
+      job.start();
+      await job.awaitIdle();
+      expect(log.error).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenLastCalledWith('[monthlyInvoice] Invoice generation complete', {
+        periodId: '2026-02', success: true, invoicesCreated: 0,
+      });
+      const invoices = await pool.query('SELECT * FROM invoices');
+      const lines = await pool.query('SELECT * FROM invoice_line_items');
+      expect(invoices.rows).toHaveLength(1);
+      expect(invoices.rows[0]).toMatchObject({ period_id: '2026-02', total_amount: 3 });
+      expect(invoices.rows[0].period_start).toEqual(period.start);
+      expect(invoices.rows[0].period_end).toEqual(new Date('2026-02-28T00:00:00Z'));
+      expect(lines.rows).toHaveLength(1);
+      expect(lines.rows[0]).toMatchObject({ usage_count: 2, amount_usdc: 3 });
+      await expect(service.generateMonthlyInvoices(period)).resolves.toMatchObject({ invoicesCreated: 0 });
+    } finally {
+      job.beginShutdown();
+      await job.awaitIdle();
+      await pool.end();
+    }
   });
 });

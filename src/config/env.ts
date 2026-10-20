@@ -84,6 +84,10 @@ export const envSchema = z
       .optional()
       .transform((v) => v === "true")
       .default(false),
+    FORWARDED_IDENTITY_TOLERANCE_SECONDS: z.coerce.number().int().min(1).max(3600).default(60),
+    FORWARDED_IDENTITY_ALLOW_LEGACY: z.string().optional().transform(v => v === "true").default(false),
+    FORWARDED_IDENTITY_REPLAY_STORE: z.enum(["memory", "postgres"]).default("memory"),
+    FORWARDED_IDENTITY_REPLAY_MAX_ENTRIES: z.coerce.number().int().positive().max(1_000_000).default(10_000),
     FORWARDED_USER_ID_SECRET: z.string().optional(),
     INTERNAL_GATEWAY_SECRET: z.string().optional(),
 
@@ -278,6 +282,7 @@ export const envSchema = z
     STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
+    VAULT_SNAPSHOT_MAX_AGE_MS: z.coerce.number().int().positive().default(60_000),
 
     STELLAR_BASE_FEE: z.coerce.number().int().positive().default(100),
     STELLAR_TRANSACTION_TIMEOUT: z.coerce.number().int().positive().optional(),
@@ -544,6 +549,9 @@ export const envSchema = z
       .default(345_600_000), // 96h = 4 days, the slow-burn window
   })
   .superRefine((values, ctx) => {
+    if (values.NODE_ENV === "production" && values.FORWARDED_IDENTITY_ALLOW_LEGACY) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["FORWARDED_IDENTITY_ALLOW_LEGACY"], message: "Legacy forwarded identities are forbidden in production" });
+    }
     if (values.NODE_ENV === "production" && !values.SOROBAN_BILLING_CONTRACT_ID) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

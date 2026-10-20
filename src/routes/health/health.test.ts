@@ -33,6 +33,7 @@ import request from "supertest";
 import type { Pool, QueryResult } from "pg";
 import { createHealthDependencyRouter } from "./health.js";
 import type { HealthCheckConfig } from "../../services/healthCheck.js";
+import { mockSorobanRpc } from "../../services/healthCheck.testUtils.js";
 import { activeMaintenanceWindow } from "../admin/maintenance.js";
 
 // ---------------------------------------------------------------------------
@@ -96,7 +97,7 @@ describe("Health Dependency Probe Route", () => {
       const app = buildApp(
         {
           database: { pool, timeout: 1000 },
-          sorobanRpc: { url: "https://soroban-test.stellar.org", timeout: 1000 },
+          sorobanRpc: mockSorobanRpc(),
           horizon: { url: "https://horizon-testnet.stellar.org", timeout: 1000 },
         },
         "1.2.3",
@@ -141,7 +142,7 @@ describe("Health Dependency Probe Route", () => {
 
       const app = buildApp({
         database: { pool, timeout: 1000 },
-        sorobanRpc: { url: "https://soroban-test.stellar.org", timeout: 1000 },
+        sorobanRpc: mockSorobanRpc({ healthError: new Error("Network error") }),
       });
 
       const res = await request(app).get("/api/health/health");
@@ -241,7 +242,9 @@ describe("Health Dependency Probe Route", () => {
           pool: createMockPool({ rows: [{ result: 1 }] } as QueryResult),
           timeout: 1000,
         },
-        sorobanRpc: { url: "https://soroban-test.stellar.org", timeout: 1000 },
+        sorobanRpc: mockSorobanRpc({
+          healthError: Object.assign(new Error("Timeout"), { name: "AbortError" }),
+        }),
       });
 
       const res = await request(app).get("/api/health/health");
@@ -264,7 +267,7 @@ describe("Health Dependency Probe Route", () => {
           pool: createMockPool({ rows: [{ result: 1 }] } as QueryResult),
           timeout: 1000,
         },
-        sorobanRpc: { url: "https://soroban-test.stellar.org", timeout: 1000 },
+        sorobanRpc: mockSorobanRpc({ healthError: new Error("HTTP 503") }),
       });
 
       const res = await request(app).get("/api/health/health");
@@ -327,7 +330,7 @@ describe("Health Dependency Probe Route", () => {
 
       const app = buildApp({
         database: { pool, timeout: 1000 },
-        sorobanRpc: { url: "https://soroban-test.stellar.org", timeout: 5000 },
+        sorobanRpc: mockSorobanRpc(),
         horizon: { url: "https://horizon-testnet.stellar.org", timeout: 1000 },
       });
 
@@ -373,7 +376,7 @@ describe("Health Dependency Probe Route", () => {
 
       const app = buildApp({
         database: { pool, timeout: 1000 },
-        sorobanRpc: { url: "https://soroban-test.stellar.org", timeout: 1000 },
+        sorobanRpc: mockSorobanRpc(),
       });
 
       const res = await request(app).get("/api/health/health");

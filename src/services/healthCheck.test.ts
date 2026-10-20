@@ -15,6 +15,7 @@ import {
   performHealthCheck,
   type HealthCheckConfig,
 } from './healthCheck.js';
+import { mockSorobanRpc } from './healthCheck.testUtils.js';
 
 // Mock Pool for database tests
 function createMockPool(
@@ -79,58 +80,118 @@ describe('checkDatabase', () => {
 });
 
 describe('checkSorobanRpc', () => {
-  test('returns ok when Soroban RPC responds quickly', async () => {
-    const mockFetch = jest.fn(async () => ({
-      ok: true,
-      json: async () => ({ jsonrpc: '2.0', id: 1, result: { status: 'healthy' } }),
-    }));
-    global.fetch = mockFetch as unknown as typeof fetch;
+  const networkPassphrase = 'Test SDF Network ; September 2015';
+  const createServer = (overrides: {
+    getHealth?: () => Promise<unknown>;
+    getNetwork?: () => Promise<{ passphrase: string }>;
+    getLedgerEntries?: () => Promise<{ entries: unknown[] }>;
+  } = {}) => ({
+    getHealth: overrides.getHealth ?? jest.fn(async () => ({ status: 'healthy' })),
+    getNetwork:
+      overrides.getNetwork ??
+      jest.fn(async () => ({ passphrase: networkPassphrase })),
+    getLedgerEntries:
+      overrides.getLedgerEntries ??
+      jest.fn(async () => ({ entries: [{ val: {} }] })),
+  });
+  const probeOptions = (
+    server: ReturnType<typeof createServer>,
+    vaultContractId = '',
+  ) => ({
+    networkPassphrase,
+    vaultContractId,
+    createServer: () => server,
+  });
 
-    const result = await checkSorobanRpc('https://soroban-test.stellar.org', 2000);
+  test('returns ok when Soroban RPC responds quickly', async () => {
+    const server = createServer();
+    const result = await checkSorobanRpc(
+      'https://soroban-test.stellar.org',
+      2000,
+      probeOptions(server),
+    );
 
     assert.equal(result.status, 'ok');
     assert.ok(result.responseTime !== undefined);
     assert.ok(result.responseTime < 2000);
+    expect(server.getHealth).toHaveBeenCalledTimes(1);
+    expect(server.getNetwork).toHaveBeenCalledTimes(1);
   });
 
-  test('returns degraded when Soroban RPC responds with non-ok status', async () => {
-    const mockFetch = jest.fn(async () => ({
-      ok: false,
-      status: 503,
-    }));
-    global.fetch = mockFetch as unknown as typeof fetch;
-
-    const result = await checkSorobanRpc('https://soroban-test.stellar.org', 2000);
-
+  test('returns degraded when the server network passphrase mismatches', async () => {
+    const server = createServer({
+      getNetwork: async () => ({ passphrase: 'Public Global Stellar Network ; September 2015' }),
+    });
+    const result = await checkSorobanRpc(
+      'https://soroban-test.stellar.org',
+      2000,
+      probeOptions(server),
+    );
     assert.equal(result.status, 'degraded');
-    assert.equal(result.error, 'HTTP 503');
+    assert.equal(result.error, 'network_mismatch');
+  });
+
+  test('returns degraded when the configured vault contract is missing', async () => {
+    const getLedgerEntries = jest.fn(async () => ({ entries: [] }));
+    const server = createServer({ getLedgerEntries });
+    const result = await checkSorobanRpc(
+      'https://soroban-test.stellar.org',
+      2000,
+      probeOptions(
+        server,
+        'CBJZLUKQBWDMZPKNJAVONZ7GCCWADSETRXWOPN5Z3XWAUNI4F2R7XDYQ',
+      ),
+    );
+    assert.equal(result.status, 'degraded');
+    assert.equal(result.error, 'vault_contract_missing');
+    expect(getLedgerEntries).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns ok when the configured contract instance exists on the expected network', async () => {
+    const server = createServer({
+      getLedgerEntries: async () => ({ entries: [{ val: {} }] }),
+    });
+    const result = await checkSorobanRpc(
+      'https://soroban-test.stellar.org',
+      2000,
+      probeOptions(
+        server,
+        'CBJZLUKQBWDMZPKNJAVONZ7GCCWADSETRXWOPN5Z3XWAUNI4F2R7XDYQ',
+      ),
+    );
+
+    assert.equal(result.status, 'ok');
   });
 
   test('returns down when Soroban RPC is unreachable', async () => {
-    const mockFetch = jest.fn(async () => {
-      throw new Error('Network error');
+    const server = createServer({
+      getHealth: async () => {
+        throw new Error('Network error');
+      },
     });
-    global.fetch = mockFetch as unknown as typeof fetch;
-
-    const result = await checkSorobanRpc('https://soroban-test.stellar.org', 2000);
+    const result = await checkSorobanRpc(
+      'https://soroban-test.stellar.org',
+      2000,
+      probeOptions(server),
+    );
 
     assert.equal(result.status, 'down');
     assert.equal(result.error, 'Network error');
   });
 
   test('returns down when Soroban RPC times out', async () => {
-    const mockFetch = jest.fn(async (url: string, options?: { signal?: AbortSignal }) => {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      if (options?.signal?.aborted) {
-        const err = new Error('Timeout');
-        err.name = 'AbortError';
-        throw err;
-      }
-      return { ok: true, json: async () => ({}) };
+    const server = createServer({
+      getHealth: async () => {
+        const error = new Error('Timeout');
+        error.name = 'AbortError';
+        throw error;
+      },
     });
-    global.fetch = mockFetch as unknown as typeof fetch;
-
-    const result = await checkSorobanRpc('https://soroban-test.stellar.org', 100);
+    const result = await checkSorobanRpc(
+      'https://soroban-test.stellar.org',
+      100,
+      probeOptions(server),
+    );
 
     assert.equal(result.status, 'down');
     assert.equal(result.error, 'Timeout');
@@ -251,7 +312,7 @@ describe('performHealthCheck', () => {
     const config: HealthCheckConfig = {
       version: '1.0.0',
       database: { pool },
-      sorobanRpc: { url: 'https://soroban-test.stellar.org' },
+      sorobanRpc: mockSorobanRpc(),
       horizon: { url: 'https://horizon-testnet.stellar.org' },
     };
 
@@ -290,7 +351,7 @@ describe('performHealthCheck', () => {
     const config: HealthCheckConfig = {
       version: '1.0.0',
       database: { pool },
-      sorobanRpc: { url: 'https://soroban-test.stellar.org' },
+      sorobanRpc: mockSorobanRpc({ healthError: new Error('Network error') }),
     };
 
     const result = await performHealthCheck(config);
@@ -335,7 +396,7 @@ describe('performHealthCheck', () => {
 
     const config: HealthCheckConfig = {
       database: { pool, timeout: 1000 },
-      sorobanRpc: { url: 'https://soroban-test.stellar.org', timeout: 1000 },
+      sorobanRpc: mockSorobanRpc({ delayMs: 350 }),
       horizon: { url: 'https://horizon-testnet.stellar.org', timeout: 1000 },
     };
 
@@ -357,7 +418,7 @@ describe('performHealthCheck', () => {
 
     const config: HealthCheckConfig = {
       database: { pool, timeout: 100 },
-      sorobanRpc: { url: 'https://soroban-test.stellar.org', timeout: 1000 },
+      sorobanRpc: mockSorobanRpc(),
     };
 
     const start = Date.now();

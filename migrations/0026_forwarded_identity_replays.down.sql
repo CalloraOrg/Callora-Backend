@@ -1,0 +1,1 @@
+DROP TABLE forwarded_identity_replays;
