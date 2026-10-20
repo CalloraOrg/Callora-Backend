@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/issue-1490-make-revenue-settlement-batches-crash-safe-and",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/issue-1490-make-revenue-settlement-batches-crash-safe-and": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/issue-1490-make-revenue-settlement-batches-crash-safe-and",
+    "origin"
+  ]
+}
