@@ -54,8 +54,11 @@ prevents an event copied between tenants from being interpreted as a replay.
 
 For a database implementation, use a parameterized insert and a unique index;
 never build SQL from the provider id. Store monetary values in the smallest
-integer unit and do not use floating point arithmetic. Compare currency after
-normalization but preserve the canonical uppercase code in the audit context.
+integer unit (7-decimal contract units / stroops: 1 USDC = 10,000,000) and do not use floating point
+arithmetic. All database rows across `usage_events.amount_usdc` and `revenue_ledger.amount_usdc`
+hold exact bigint contract units, and the reconciliation job computes deltas strictly using exact
+bigint integer arithmetic. Compare currency after normalization but preserve the canonical uppercase
+code in the audit context.
 
 The operation is intentionally monotonic: `applied` is written once, replay
 does not rewrite its timestamp, and conflict never changes the ledger. This
