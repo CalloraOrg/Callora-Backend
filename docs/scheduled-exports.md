@@ -2,6 +2,16 @@
 
 This feature adds developer-managed recurring exports of `usage_events` to a user-provided S3-compatible endpoint, plus a server-managed daily export pipeline that materialises signed download artifacts accessible via `GET /api/developers/exports`.
 
+Exports are disabled by default. Set `EXPORTS_ENABLED=true` together with
+`EXPORTS_S3_BUCKET`, `EXPORTS_S3_ENDPOINT`, `EXPORTS_S3_REGION`, and a
+`EXPORTS_SIGNING_SECRET` of at least 32 characters to mount the export routers.
+The endpoint must be public; production requires HTTPS. Optional
+`EXPORTS_S3_ENDPOINT_ALLOWLIST` limits schedule endpoint hostnames to a
+comma-separated list (wildcards such as `*.example.com` are supported).
+Schedule secrets are AES-256-GCM encrypted in the in-memory store using a key
+derived from `EXPORTS_SIGNING_SECRET`; API responses continue to return
+`[REDACTED]`.
+
 ---
 
 ## API
@@ -135,7 +145,7 @@ const service = new ReportExporterService(
 );
 ```
 
-`HmacObjectStorageClient` (from `scheduledExports.ts`) records all uploads in its `.uploads` array and generates deterministic signed URLs — no real S3 connection required.
+`HmacObjectStorageClient` (from `scheduledExports.ts`) records all uploads in its `.uploads` array and generates signed URLs — no real S3 connection required.
 
 ---
 

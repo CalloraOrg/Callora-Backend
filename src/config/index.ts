@@ -145,6 +145,18 @@ export const config = {
     apiKey: env.METRICS_API_KEY,
   },
 
+  exports: {
+    enabled: env.EXPORTS_ENABLED,
+    bucket: env.EXPORTS_S3_BUCKET,
+    endpoint: env.EXPORTS_S3_ENDPOINT,
+    region: env.EXPORTS_S3_REGION,
+    signingSecret: env.EXPORTS_SIGNING_SECRET,
+    endpointAllowlist: (env.EXPORTS_S3_ENDPOINT_ALLOWLIST ?? "")
+      .split(",")
+      .map((host) => host.trim())
+      .filter(Boolean),
+  },
+
   proxy: {
     upstreamUrl: validatedUpstreamUrl,
     timeoutMs: env.PROXY_TIMEOUT_MS,

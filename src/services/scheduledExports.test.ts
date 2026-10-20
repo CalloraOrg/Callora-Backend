@@ -67,7 +67,7 @@ test('service persists schedule, runs due job, uploads csv+json, and returns sig
     await repository.create({ userId: 'u1', apiId: 'api-1', endpointId: 'ep-1', apiKeyId: 'key-1', developerId: 'dev-1', amount: 15n, requestId: 'req-1', createdAt: new Date('2026-06-01T00:00:00.000Z') });
     await repository.create({ userId: 'u2', apiId: 'api-2', endpointId: 'ep-2', apiKeyId: 'key-2', developerId: 'dev-2', amount: 30n, requestId: 'req-2', createdAt: new Date('2026-06-01T00:05:00.000Z') });
 
-    const store = new InMemoryScheduleStore();
+    const store = new InMemoryScheduleStore('test-encryption-key');
     const objectStorage = new HmacObjectStorageClient();
     const service = new ScheduledExportsService({ findByApiId: async () => listAllEvents(pool) }, store, objectStorage);
 
@@ -104,7 +104,7 @@ test('worker starts, processes due schedules, and idles cleanly', async () => {
   const { repository, pool } = createUsageRepository();
   try {
     await repository.create({ userId: 'u1', apiId: 'api-1', endpointId: 'ep-1', apiKeyId: 'key-1', developerId: 'dev-1', amount: 15n, requestId: 'req-1', createdAt: new Date('2026-06-01T00:00:00.000Z') });
-    const store = new InMemoryScheduleStore();
+    const store = new InMemoryScheduleStore('test-encryption-key');
     const objectStorage = new HmacObjectStorageClient();
     const service = new ScheduledExportsService({ findByApiId: async () => listAllEvents(pool) }, store, objectStorage);
     const schedule = await service.createSchedule({ developerId: 'dev-1', name: 'Minute export', cron: '* * * * *', s3Bucket: 'exports', s3Region: 'us-east-1', s3Endpoint: 'https://s3.example.com', s3AccessKeyId: 'akid', s3SecretAccessKey: 'secret', enabled: true });
@@ -127,7 +127,7 @@ test('worker handles cancellation cooperatively and preserves idempotency on res
   try {
     await repository.create({ userId: 'u1', apiId: 'api-1', endpointId: 'ep-1', apiKeyId: 'key-1', developerId: 'dev-1', amount: 15n, requestId: 'req-1', createdAt: new Date('2026-06-01T00:00:00.000Z') });
     
-    const store = new InMemoryScheduleStore();
+    const store = new InMemoryScheduleStore('test-encryption-key');
     const objectStorage = new HmacObjectStorageClient();
     
     let uploadsStarted = 0;
@@ -166,4 +166,30 @@ test('worker handles cancellation cooperatively and preserves idempotency on res
   } finally {
     await pool.end();
   }
+});
+
+test('schedule secrets are encrypted in the store and redacted in listings', async () => {
+  const store = new InMemoryScheduleStore('test-encryption-key');
+  const service = new ScheduledExportsService(
+    { findByApiId: async () => [] },
+    store,
+    new HmacObjectStorageClient(),
+  );
+  const created = await service.createSchedule({
+    developerId: 'dev-1',
+    name: 'Encrypted export',
+    cron: '* * * * *',
+    s3Bucket: 'exports',
+    s3Region: 'us-east-1',
+    s3Endpoint: 'https://s3.example.com',
+    s3AccessKeyId: 'access-key',
+    s3SecretAccessKey: 'plaintext-secret',
+  });
+  const stored = (store as unknown as {
+    schedules: Map<string, { s3SecretAccessKey: string }>;
+  }).schedules.get(created.id);
+
+  assert.ok(stored);
+  assert.notEqual(stored.s3SecretAccessKey, 'plaintext-secret');
+  assert.equal((await service.listSchedulesForDeveloper('dev-1'))[0]?.s3SecretAccessKey, '[REDACTED]');
 });

@@ -79,6 +79,14 @@ export const envSchema = z
     JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
     ADMIN_API_KEY: z.string().min(1, "ADMIN_API_KEY is required"),
     METRICS_API_KEY: z.string().min(1, "METRICS_API_KEY is required"),
+
+    // Export object storage. Disabled unless explicitly enabled.
+    EXPORTS_ENABLED: z.string().optional().transform((value) => value === "true").default(false),
+    EXPORTS_S3_BUCKET: z.string().trim().min(1).optional(),
+    EXPORTS_S3_ENDPOINT: z.string().url().optional(),
+    EXPORTS_S3_REGION: z.string().trim().min(1).optional(),
+    EXPORTS_SIGNING_SECRET: z.string().min(32).optional(),
+    EXPORTS_S3_ENDPOINT_ALLOWLIST: z.string().optional(),
     TRUST_FORWARDED_USER_ID: z
       .string()
       .optional()
@@ -548,6 +556,23 @@ export const envSchema = z
       .default(345_600_000), // 96h = 4 days, the slow-burn window
   })
   .superRefine((values, ctx) => {
+    if (values.EXPORTS_ENABLED) {
+      for (const [key, value] of [
+        ["EXPORTS_S3_BUCKET", values.EXPORTS_S3_BUCKET],
+        ["EXPORTS_S3_ENDPOINT", values.EXPORTS_S3_ENDPOINT],
+        ["EXPORTS_S3_REGION", values.EXPORTS_S3_REGION],
+        ["EXPORTS_SIGNING_SECRET", values.EXPORTS_SIGNING_SECRET],
+      ] as const) {
+        if (!value) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when EXPORTS_ENABLED=true`,
+          });
+        }
+      }
+    }
+
     if (values.NODE_ENV === "production" && values.FORWARDED_IDENTITY_ALLOW_LEGACY) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["FORWARDED_IDENTITY_ALLOW_LEGACY"], message: "Legacy forwarded identities are forbidden in production" });
     }

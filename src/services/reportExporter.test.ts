@@ -4,6 +4,7 @@ import {
   createReportExporterWorker,
   type DeveloperExportRecord,
 } from './reportExporter.js';
+import crypto from 'node:crypto';
 import { HmacObjectStorageClient } from './scheduledExports.js';
 import type { BillingUsageEvent } from '../repositories/usageEventsRepository.pg.js';
 
@@ -175,6 +176,27 @@ test('getSignedUrl returns a URL string containing the record s3Key', () => {
   expect(url.length).toBeGreaterThan(0);
   // The HmacObjectStorageClient encodes the key in the URL path
   expect(url).toContain(encodeURIComponent('daily-exports/dev-1/2026-06-01.csv'));
+});
+
+test('getSignedUrl uses the configured signing secret', () => {
+  const { service } = makeService([]);
+  const record: DeveloperExportRecord = {
+    id: 'rec-secret',
+    developerId: 'dev-1',
+    format: 'csv',
+    s3Key: 'daily-exports/dev-1/secret.csv',
+    exportedAt: new Date(),
+    expiresAt: new Date(Date.now() + 86_400_000),
+  };
+
+  const signedUrl = new URL(service.getSignedUrl(record, 900));
+  const expires = signedUrl.searchParams.get('expires');
+  const payload = `test-bucket/${record.s3Key}:${expires}`;
+  const expected = crypto.createHmac('sha256', 'test-secret').update(payload).digest('hex');
+  const wrongSecret = crypto.createHmac('sha256', 'another-secret').update(payload).digest('hex');
+
+  expect(signedUrl.searchParams.get('signature')).toBe(expected);
+  expect(signedUrl.searchParams.get('signature')).not.toBe(wrongSecret);
 });
 
 // ─── worker lifecycle ─────────────────────────────────────────────────────
