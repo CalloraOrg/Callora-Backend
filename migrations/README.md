@@ -32,10 +32,17 @@ NNNN_lowercase-description.down.sql
 
 Versions up to `0021` (including the mixed-width prefixes and historical
 duplicates) are legacy. The enforced new sequence begins at `0022`; because
-`0022` and `0023` already exist, the next new migration is `0024`. Do not
+`0022` through `0027` already exist, the next new migration is `0028`. Do not
 reuse a prefix: **one forward migration per numeric version**. In particular,
 the three legacy `0014_*` forward migrations are a collision to preserve, not
 a pattern to copy. Add new versions consecutively, without gaps.
+
+The published `0026_*` files currently collide. This is a blocking policy
+violation, not a new legacy exception. Do not rename or replay them without
+checking deployed PostgreSQL history: the usage-status backfill can overwrite
+later reconciliation decisions. See the [deployment-history request](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
+The unpublished response-header addition uses `0027`; its version must be
+reconciled with the final approved collision repair before deployment.
 
 ## Rollback policy
 
@@ -137,7 +144,7 @@ not replace a backup or post-backfill verification.
 
 ## Adding a migration checklist
 
-1. Choose the next unused four-digit version (`0024` at the time of writing).
+1. Choose the next unused four-digit version after resolving any outstanding collision; never copy a stale example number.
 2. Create the canonical forward file and its same-stem `.down.sql` rollback.
 3. Keep the forward migration additive where possible; obtain the destructive
    approval marker when applicable.

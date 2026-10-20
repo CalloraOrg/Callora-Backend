@@ -34,28 +34,6 @@ exports[`/api/admin — response schema stability GET /api/admin/usage/:develope
 }
 `;
 
-exports[`/api/admin — response schema stability GET /api/admin/users matches the known success response shape 1`] = `
-{
-  "data": [
-    {
-      "email": "admin@callora.test",
-      "id": "user-admin",
-      "role": "admin",
-    },
-    {
-      "email": "dev@callora.test",
-      "id": "user-dev",
-      "role": "developer",
-    },
-  ],
-  "meta": {
-    "limit": 20,
-    "offset": 0,
-    "total": 2,
-  },
-}
-`;
-
 exports[`/api/admin — response schema stability GET /api/admin/users matches the standardized error envelope when unauthenticated 1`] = `
 {
   "error": {

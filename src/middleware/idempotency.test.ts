@@ -1,9 +1,16 @@
-import type { Request, Response, NextFunction } from 'express';
+import express, { type Request, type Response, type NextFunction, type RequestHandler } from 'express';
+import request from 'supertest';
+import { newDb } from 'pg-mem';
+import type { Pool } from 'pg';
+import { logger } from '../logger.js';
 import {
   idempotencyMiddleware,
   calculateRequestHash,
   IDEMPOTENCY_KEY_REUSE_MISMATCH,
   INVALID_IDEMPOTENCY_KEY,
+  createIdempotencyMiddleware,
+  isCacheableIdempotencyResponse,
+  type IdempotencyConfig,
 } from './idempotency.js';
 
 /** Mirrors DEFAULT_KEY_MAX_LENGTH in idempotency.ts (not exported). */
@@ -42,12 +49,13 @@ function makeReq(overrides: Partial<{
   };
 }
 
-function makeRes(userId = 'user-1'): Partial<Response> & { locals: { authenticatedUser: { id: string } }; statusCode: number; setHeader: jest.Mock; json: jest.Mock; send: jest.Mock } {
+function makeRes(userId = 'user-1'): Partial<Response> & { locals: { authenticatedUser: { id: string } }; statusCode: number; setHeader: jest.Mock; getHeader: jest.Mock; json: jest.Mock; send: jest.Mock } {
   return {
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
     send: jest.fn().mockReturnThis(),
     setHeader: jest.fn(),
+    getHeader: jest.fn(),
     locals: { authenticatedUser: { id: userId } },
     statusCode: 200,
   };
@@ -417,86 +425,6 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('saves successful response via res.json interception', async () => {
-    const mockDb = makeDb([]);
-    const req = makeReq() as Request;
-    const res = makeRes();
-    const next = jest.fn();
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
-
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-
-    res.statusCode = 200;
-    res.json({ success: true, data: 42 });
-
-    await new Promise(resolve => process.nextTick(resolve));
-
-    expect(mockDb.query).toHaveBeenLastCalledWith(
-      expect.stringContaining('UPDATE idempotency_store'),
-      ['completed', 200, JSON.stringify({ success: true, data: 42 }), 'user-1', 'test-key-123']
-    );
-  });
-
-  it('deletes key on server error (>= 500) so client can retry', async () => {
-    const mockDb = makeDb([]);
-    const req = makeReq() as Request;
-    const res = makeRes();
-    const next = jest.fn();
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
-
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-
-    res.statusCode = 500;
-    res.json({ error: 'Internal Server Error' });
-
-    await new Promise(resolve => process.nextTick(resolve));
-
-    expect(mockDb.query).toHaveBeenLastCalledWith(
-      expect.stringContaining('DELETE FROM idempotency_store WHERE scope'),
-      ['user-1', 'test-key-123']
-    );
-  });
-
-  it('saves successful response via res.send interception', async () => {
-    const mockDb = makeDb([]);
-    const req = makeReq() as Request;
-    const res = makeRes();
-    const next = jest.fn();
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
-
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-
-    res.statusCode = 200;
-    res.send(JSON.stringify({ success: true }));
-
-    await new Promise(resolve => process.nextTick(resolve));
-
-    expect(mockDb.query).toHaveBeenLastCalledWith(
-      expect.stringContaining('UPDATE idempotency_store'),
-      ['completed', 200, JSON.stringify({ success: true }), 'user-1', 'test-key-123']
-    );
-  });
-
-  it('handles saveResponse database error gracefully', async () => {
-    const mockDb = { query: jest.fn() };
-    mockDb.query.mockResolvedValueOnce({ rows: [] }); // SELECT empty
-    mockDb.query.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // INSERT started
-    mockDb.query.mockRejectedValueOnce(new Error('DB error')); // UPDATE fails
-
-    const req = makeReq() as Request;
-    const res = makeRes();
-    const next = jest.fn();
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
-
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-
-    expect(next).toHaveBeenCalled();
-    res.statusCode = 200;
-    res.json({ success: true });
-
-    await new Promise(resolve => process.nextTick(resolve));
-    // Should not throw - error is caught and logged
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -851,5 +779,228 @@ describe('idempotencyMiddleware — key length validation', () => {
     );
     expect(next).not.toHaveBeenCalled();
     expect(mockDb.query).not.toHaveBeenCalled();
+  });
+});
+
+function createHttpIdempotencyApp(handler: RequestHandler, options?: IdempotencyConfig) {
+  const database = newDb();
+  database.public.none(`
+    CREATE TABLE idempotency_store (
+      scope TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      response_status INTEGER,
+      response_body TEXT,
+      response_headers JSONB,
+      expires_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (scope, idempotency_key)
+    );
+  `);
+  const { Pool: MemoryPool } = database.adapters.createPg();
+  const pool = new MemoryPool() as unknown as Pool;
+  const app = express();
+  app.locals.dbPool = pool;
+  app.use(express.json());
+  app.post('/operation', createIdempotencyMiddleware(options), handler);
+  return { app, pool };
+}
+
+describe('idempotency response cache policy over HTTP', () => {
+  it('replays original response headers without persisting cookies', async () => {
+    let operations = 0;
+    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      res.status(201)
+        .set('Location', '/resources/created-1')
+        .set('ETag', '"resource-v1"')
+        .set('Retry-After', '7')
+        .set('X-Request-ID', 'request-original')
+        .set('Set-Cookie', 'session=synthetic-private-cookie')
+        .json({ id: 'created-1' });
+    });
+    try {
+      const original = await request(app).post('/operation').set('Idempotency-Key', 'headers').send({});
+      const replay = await request(app).post('/operation').set('Idempotency-Key', 'headers').send({});
+      expect(original.status).toBe(201);
+      expect(replay.status).toBe(201);
+      expect(replay.body).toEqual(original.body);
+      expect(replay.headers.location).toBe('/resources/created-1');
+      expect(replay.headers.etag).toBe('"resource-v1"');
+      expect(replay.headers['retry-after']).toBe('7');
+      expect(replay.headers['x-request-id']).toBe('request-original');
+      expect(replay.headers['content-type']).toBe(original.headers['content-type']);
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(replay.headers['set-cookie']).toBeUndefined();
+      expect(operations).toBe(1);
+      const stored = await pool.query('SELECT response_headers FROM idempotency_store');
+      expect(stored.rows[0].response_headers).toEqual({
+        'content-type': original.headers['content-type'],
+        location: '/resources/created-1',
+        etag: '"resource-v1"',
+        'retry-after': '7',
+        'x-request-id': 'request-original',
+      });
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('does not cache a UTF-8 response above the body cap and logs only bounded metadata', async () => {
+    const warning = jest.spyOn(logger, 'warn');
+    let operations = 0;
+    const response = 'é'.repeat(128 * 1024);
+    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      res.json(response);
+    });
+    try {
+      const original = await request(app).post('/operation').set('Idempotency-Key', 'large-body').send({});
+      const retry = await request(app).post('/operation').set('Idempotency-Key', 'large-body').send({});
+      expect(original.status).toBe(200);
+      expect(retry.status).toBe(200);
+      expect(retry.body).toBe(response);
+      expect(retry.headers['idempotent-replayed']).toBeUndefined();
+      expect(operations).toBe(2);
+      expect(warning).toHaveBeenCalled();
+      for (const [, metadata] of warning.mock.calls) {
+        expect(metadata).toEqual({
+          route: '/operation',
+          bodyBytes: 262146,
+          maxBodyBytes: 262144,
+        });
+      }
+    } finally {
+      warning.mockRestore();
+      await pool.end();
+    }
+  });
+
+  it('allows a retry after a rate-limit response clears', async () => {
+    let limited = true;
+    let operations = 0;
+    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      if (limited) res.status(429).set('Retry-After', '3').json({ code: 'RATE_LIMITED' });
+      else res.json({ accepted: true });
+    });
+    try {
+      const limitedResponse = await request(app).post('/operation').set('Idempotency-Key', 'rate-limit').send({});
+      expect(limitedResponse.status).toBe(429);
+      expect(limitedResponse.headers['retry-after']).toBe('3');
+      limited = false;
+      const retry = await request(app).post('/operation').set('Idempotency-Key', 'rate-limit').send({});
+      expect(retry.status).toBe(200);
+      expect(retry.body).toEqual({ accepted: true });
+      expect(retry.headers['idempotent-replayed']).toBeUndefined();
+      expect(operations).toBe(2);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('replays deterministic validation failures without running the operation twice', async () => {
+    let operations = 0;
+    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      res.status(422).json({ code: 'INVALID_AMOUNT' });
+    });
+    try {
+      const original = await request(app).post('/operation').set('Idempotency-Key', 'validation').send({});
+      const replay = await request(app).post('/operation').set('Idempotency-Key', 'validation').send({});
+      expect(original.status).toBe(422);
+      expect(replay.status).toBe(422);
+      expect(replay.body).toEqual({ code: 'INVALID_AMOUNT' });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(operations).toBe(1);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('replays a pre-migration response whose stored headers are null', async () => {
+    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+      res.sendStatus(500);
+    });
+    try {
+      await pool.query(
+        `INSERT INTO idempotency_store
+         (scope, idempotency_key, request_hash, status, response_status, response_body, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        ['anonymous', 'legacy', calculateRequestHash(undefined, {}, 'POST', '/operation'),
+          'completed', 200, JSON.stringify({ legacy: 'original' }), new Date(Date.now() + 60_000).toISOString()]
+      );
+      const replay = await request(app).post('/operation').set('Idempotency-Key', 'legacy').send({});
+      expect(replay.status).toBe(200);
+      expect(replay.body).toEqual({ legacy: 'original' });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it.each([[200, false], [418, true], [429, false]] as const)(
+    'applies a custom status policy to %i without overriding transient exclusions',
+    async (status, cached) => {
+      let operations = 0;
+      const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+        operations += 1;
+        res.status(status).json({ operation: operations });
+      }, { cacheableStatus: candidate => candidate === 418 || candidate === 429 });
+      try {
+        await request(app).post('/operation').set('Idempotency-Key', 'custom').send({});
+        const retry = await request(app).post('/operation').set('Idempotency-Key', 'custom').send({});
+        expect(retry.status).toBe(status);
+        expect(retry.body).toEqual({ operation: cached ? 1 : 2 });
+        expect(retry.headers['idempotent-replayed']).toBe(cached ? 'true' : undefined);
+        expect(operations).toBe(cached ? 1 : 2);
+      } finally {
+        await pool.end();
+      }
+    }
+  );
+
+  it('caches a JSON response exactly at the 256 KiB byte boundary', async () => {
+    let operations = 0;
+    const response = 'x'.repeat(262142);
+    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      res.json(response);
+    });
+    try {
+      await request(app).post('/operation').set('Idempotency-Key', 'at-cap').send({});
+      const replay = await request(app).post('/operation').set('Idempotency-Key', 'at-cap').send({});
+      expect(replay.status).toBe(200);
+      expect(replay.body).toBe(response);
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(operations).toBe(1);
+    } finally {
+      await pool.end();
+    }
+  });
+});
+
+describe('exported idempotency cache policy', () => {
+  it('matches the documented default status table', () => {
+    const cases: [number, boolean][] = [
+      [200, true], [201, true], [204, true], [299, true],
+      [300, false], [302, false], [399, false],
+      [400, true], [401, true], [402, false], [403, true], [404, true], [405, false],
+      [408, false], [409, true], [410, true], [422, true], [425, false], [429, false],
+      [500, false], [503, false], [504, false],
+    ];
+    for (const [status, expected] of cases) {
+      expect(isCacheableIdempotencyResponse(status, {})).toBe(expected);
+    }
+  });
+
+  it('never caches transient body codes in either response envelope', () => {
+    for (const code of ['RECONCILIATION_REQUIRED', 'IDEMPOTENCY_IN_PROGRESS']) {
+      for (const body of [{ code }, { error: { code } }]) {
+        expect(isCacheableIdempotencyResponse(200, body)).toBe(false);
+        expect(isCacheableIdempotencyResponse(409, body, () => true)).toBe(false);
+      }
+    }
   });
 });

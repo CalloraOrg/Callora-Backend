@@ -1071,12 +1071,18 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
       // This test requires the ability to delay upstream response completion.
       // We'll set an upstream handler that hangs, then send a concurrent retry.
 
-      const upstreamReady = Promise.withResolvers<void>();
-      const upstreamShouldReply = Promise.withResolvers<void>();
+      let signalUpstreamReady!: () => void;
+      const upstreamReady = new Promise<void>((resolve) => {
+        signalUpstreamReady = resolve;
+      });
+      let releaseUpstream!: () => void;
+      const upstreamShouldReply = new Promise<void>((resolve) => {
+        releaseUpstream = resolve;
+      });
 
       setUpstreamHandler(async (req, res) => {
-        upstreamReady.resolve();
-        await upstreamShouldReply.promise;
+        signalUpstreamReady();
+        await upstreamShouldReply;
         res.status(200).json({ id: 'slow-resource', created: true });
       });
 
@@ -1094,7 +1100,7 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
       });
 
       // Wait for upstream to start processing
-      await upstreamReady.promise;
+      await upstreamReady;
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Now send a concurrent retry with the same key while first is still in progress
@@ -1109,7 +1115,7 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
       });
 
       // Let first request complete
-      upstreamShouldReply.resolve();
+      releaseUpstream();
       const res1 = await promise1;
       const res2 = await promise2;
 

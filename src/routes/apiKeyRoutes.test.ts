@@ -162,12 +162,12 @@ describe('API key lifecycle routes', () => {
 
   it('lists keys with masked values and revoked status', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['read', 'write'],
       rateLimitPerMinute: null,
-    });
+    })
 
     const [record] = apiKeyRepository.list({ userId: 'dev-1', apiId: '101' });
     expect(record.id).toBe(created.id);
@@ -192,12 +192,12 @@ describe('API key lifecycle routes', () => {
 
   it('revokes an API key and revoked keys are no longer verifiable', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],
       rateLimitPerMinute: null,
-    });
+    })
 
     const response = await request(app)
       .delete(`/api/keys/${created.id}`)
@@ -274,12 +274,12 @@ describe('API key lifecycle routes', () => {
     resetTokenRevocationService();
     const tokenRevocation = getTokenRevocationService({ defaultTtlMs: 60000 });
     
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],
       rateLimitPerMinute: null,
-    });
+    })
 
     const sha256Hex = (v: string) => createHash('sha256').update(v).digest('hex');
     const keyHash = sha256Hex(created.key);

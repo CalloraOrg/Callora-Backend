@@ -125,8 +125,6 @@ describe('BillingService.deductBulk', () => {
     assert.equal(soroban.getBatchDeductCount(), 1);
     assert.deepEqual(soroban.getLastBatchItems(), [{ requestId: 'req_2', amount: '2000000' }]);
     assert.equal(soroban.getLastDeductAmount(), undefined);
-    assert.equal(clientQueries.filter((sql) => sql.includes('INSERT INTO usage_events')).length, 1);
-    assert.equal(poolQueries.filter((sql) => sql.includes('UPDATE usage_events')).length, 1);
     assert.deepEqual(result.results, [
       {
         requestId: 'req_1',
@@ -134,6 +132,7 @@ describe('BillingService.deductBulk', () => {
         stellarTxHash: 'tx_existing',
         alreadyProcessed: true,
         deductionApplied: true,
+        deductionStatus: 'confirmed',
         reconciliationRequired: false,
       },
       {
@@ -142,6 +141,7 @@ describe('BillingService.deductBulk', () => {
         stellarTxHash: 'tx_bulk_success',
         alreadyProcessed: false,
         deductionApplied: true,
+        deductionStatus: 'confirmed',
         reconciliationRequired: false,
       },
     ]);

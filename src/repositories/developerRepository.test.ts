@@ -21,13 +21,17 @@ import * as schema from '../db/schema.js';
 // In-process module replacement: swap `src/db/index.ts` with the in-memory db
 // ---------------------------------------------------------------------------
 
+import type DatabaseConstructor from 'better-sqlite3';
+import type * as DrizzleModule from 'drizzle-orm/better-sqlite3';
+import type * as DatabaseSchema from '../db/schema.js';
+
 // Must be called BEFORE any import of the module under test.
 jest.mock('../db/index.js', () => {
   // Build the in-memory db once per test file.  Jest reuses this module mock
   // across all tests in the file, giving us a shared (but fresh-per-file) DB.
-  const Database = require('better-sqlite3');
-  const { drizzle } = require('drizzle-orm/better-sqlite3');
-  const schemaModule = require('../db/schema.js');
+  const Database = jest.requireActual<typeof DatabaseConstructor>('better-sqlite3');
+  const { drizzle } = jest.requireActual<typeof DrizzleModule>('drizzle-orm/better-sqlite3');
+  const schemaModule = jest.requireActual<typeof DatabaseSchema>('../db/schema.js');
 
   const sqlite = new Database(':memory:');
 

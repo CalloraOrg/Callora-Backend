@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { generateInvoicePdf, InvoicePdfData } from './invoicePdf';
+import { generateInvoicePdf, InvoicePdfData } from './invoicePdf.js';
 
 function makeInvoice(overrides: Partial<InvoicePdfData> = {}): InvoicePdfData {
   return {

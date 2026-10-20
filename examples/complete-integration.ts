@@ -31,7 +31,8 @@ import { createGatewayRouter } from '../src/routes/gatewayRoutes.js';
 import { RevenueSettlementService } from '../src/services/revenueSettlementService.js';
 import { InMemorySettlementStore } from '../src/services/settlementStore.js';
 import { MockSorobanSettlementClient } from '../src/services/sorobanSettlement.js';
-import type { ApiKey, ApiRegistryEntry, ApiRegistry } from '../src/types/gateway.js';
+import type { ApiKey } from '../src/types/gateway.js';
+import { InMemoryApiRegistry } from '../src/data/apiRegistry.js';
 
 // ============================================================================
 // CONSTANTS — tweak these to experiment
@@ -66,24 +67,8 @@ const usageStore       = new InMemoryUsageStore();
 const settlementStore  = new InMemorySettlementStore();
 const settlementClient = new MockSorobanSettlementClient(/* failureRate */ 0);
 
-/**
- * Lightweight registry that maps API IDs to their upstream URL and
- * developer ownership.  The settlement service uses this to route
- * accumulated usage fees back to the correct developer.
- */
-class SimpleRegistry implements ApiRegistry {
-  private entries = new Map<string, ApiRegistryEntry>();
 
-  register(entry: ApiRegistryEntry): void {
-    this.entries.set(entry.id, entry);
-  }
-
-  resolve(slugOrId: string): ApiRegistryEntry | undefined {
-    return this.entries.get(slugOrId);
-  }
-}
-
-const apiRegistry = new SimpleRegistry();
+const apiRegistry = new InMemoryApiRegistry();
 
 const apiKeys = new Map<string, ApiKey>([
   [API_KEY, { key: API_KEY, developerId: CONSUMER_ID, apiId: API_ID }],

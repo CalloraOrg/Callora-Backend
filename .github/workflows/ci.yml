@@ -32,8 +32,10 @@ jobs:
       - run: npm ci
       - name: Generate Prisma client
         run: npx prisma generate
-      - name: Typecheck (application sources)
-        run: npx tsc -p tsconfig.build.json --noEmit
+      - name: Lint repository
+        run: npm run lint
+      - name: Typecheck application and test contracts
+        run: npm run typecheck
       - name: Build
         run: npm run build
       - name: Verify build artifacts

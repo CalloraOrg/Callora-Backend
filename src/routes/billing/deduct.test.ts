@@ -10,6 +10,7 @@ import type { Pool } from 'pg';
 import { BillingService, type SorobanClient } from '../../services/billing.js';
 import { createSorobanBillingService } from '../../services/createSorobanBillingService.js';
 import { env } from '../../config/env.js';
+import { newDb } from 'pg-mem';
 
 const JWT_SECRET = 'test-deduct-secret';
 
@@ -169,6 +170,62 @@ describe('POST /api/billing/deduct - developerId validation', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error.message).toContain('Billing service is not configured');
+  });
+
+  it('retries a pending reconciliation with the same key after the deduction resolves', async () => {
+    const database = newDb();
+    database.public.none(`
+      CREATE TABLE idempotency_store (
+        scope TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        response_status INTEGER,
+        response_body TEXT,
+        response_headers JSONB,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (scope, idempotency_key)
+      );
+    `);
+    const { Pool: MemoryPool } = database.adapters.createPg();
+    const pool = new MemoryPool() as unknown as Pool;
+    let reconciled = false;
+    let deductions = 0;
+    const service = {
+      deduct: async () => {
+        deductions += 1;
+        return reconciled
+          ? { success: true, usageEventId: 'evt_reconciled', stellarTxHash: 'tx_confirmed', alreadyProcessed: true }
+          : { success: false, usageEventId: 'evt_reconciled', reconciliationRequired: true };
+      },
+    };
+    const app = buildApp(pool, service as unknown as BillingService);
+    const deduct = () => request(app)
+      .post('/api/billing/deduct')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .set('Idempotency-Key', 'reconciliation-retry')
+      .send(validPayload);
+
+    try {
+      const pending = await deduct();
+      expect(pending.status).toBe(409);
+      expect(pending.body.code).toBe('RECONCILIATION_REQUIRED');
+
+      reconciled = true;
+      const resolved = await deduct();
+      expect(resolved.status).toBe(200);
+      expect(resolved.body.stellarTxHash).toBe('tx_confirmed');
+      expect(resolved.headers['idempotent-replayed']).toBeUndefined();
+
+      const replay = await deduct();
+      expect(replay.status).toBe(200);
+      expect(replay.body).toEqual(resolved.body);
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(deductions).toBe(2);
+    } finally {
+      await pool.end();
+    }
   });
 
   it('uses an injected fake Soroban client across requests without network access', async () => {

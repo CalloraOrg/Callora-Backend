@@ -18,6 +18,7 @@ export interface IdempotencyConfig {
   allowBodyKey?: boolean;
   maxKeyLength?: number;
   keyPattern?: RegExp;
+  cacheableStatus?: (status: number) => boolean;
 }
 
 /**
@@ -31,6 +32,32 @@ export const INVALID_IDEMPOTENCY_KEY = 'INVALID_IDEMPOTENCY_KEY' as const;
 const DEFAULT_IDEMPOTENCY_METHODS = ['POST', 'PATCH'];
 const DEFAULT_KEY_MAX_LENGTH = 255;
 const DEFAULT_KEY_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const REPLAYABLE_RESPONSE_HEADERS = ['content-type', 'location', 'etag', 'retry-after', 'x-request-id'] as const;
+type CachedResponseHeaders = Partial<Record<typeof REPLAYABLE_RESPONSE_HEADERS[number], string | number | string[]>>;
+
+/** Transient outcomes must remain retryable even with a custom status policy. */
+export function isCacheableIdempotencyResponse(
+  status: number,
+  body: unknown,
+  cacheableStatus?: (status: number) => boolean
+): boolean {
+  const payload = body !== null && typeof body === 'object'
+    ? body as { code?: unknown; error?: { code?: unknown } }
+    : undefined;
+  if (
+    status >= 500 || status === 408 || status === 425 || status === 429 ||
+    payload?.code === 'RECONCILIATION_REQUIRED' ||
+    payload?.code === 'IDEMPOTENCY_IN_PROGRESS' ||
+    payload?.error?.code === 'RECONCILIATION_REQUIRED' ||
+    payload?.error?.code === 'IDEMPOTENCY_IN_PROGRESS'
+  ) {
+    return false;
+  }
+  return cacheableStatus ? cacheableStatus(status) :
+    (status >= 200 && status < 300) ||
+    status === 400 || status === 401 || status === 403 || status === 404 ||
+    status === 409 || status === 410 || status === 422;
+}
 
 function currentRequestId(req: Request): string {
   return req.id || 'unknown';
@@ -122,8 +149,8 @@ function getRawIdempotencyKey(req: Request, opts?: IdempotencyConfig): unknown {
 }
 
 /**
- * Idempotency middleware. It records the first non-5xx response for a key and
- * replays it for matching retries while rejecting mismatched payload reuse.
+ * Idempotency middleware. It records cacheable responses for a key and
+ * replays them for matching retries while rejecting mismatched payload reuse.
  */
 export async function idempotencyMiddleware(
   req: Request,
@@ -187,6 +214,7 @@ export async function idempotencyMiddleware(
       status: string;
       response_status: number;
       response_body: string;
+      response_headers?: CachedResponseHeaders | null;
       expires_at: string | Date;
     }): boolean => {
       const expiresAt = new Date(record.expires_at);
@@ -231,6 +259,10 @@ export async function idempotencyMiddleware(
             method: req.method,
             path: req.originalUrl ?? req.path,
           });
+          for (const name of REPLAYABLE_RESPONSE_HEADERS) {
+            const value = record.response_headers?.[name];
+            if (value !== undefined) res.setHeader(name, value);
+          }
           res.setHeader('Idempotent-Replayed', 'true');
           res.status(record.response_status).json(JSON.parse(record.response_body));
           return true;
@@ -258,7 +290,7 @@ export async function idempotencyMiddleware(
     };
 
     const result = await db.query(
-      `SELECT request_hash, status, response_status, response_body, expires_at
+      `SELECT request_hash, status, response_status, response_body, response_headers, expires_at
        FROM idempotency_store
        WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
       [scope, idempotencyKey]
@@ -281,6 +313,7 @@ export async function idempotencyMiddleware(
            status = EXCLUDED.status,
            response_status = NULL,
            response_body = NULL,
+           response_headers = NULL,
            expires_at = EXCLUDED.expires_at,
            created_at = EXCLUDED.created_at
        WHERE idempotency_store.expires_at <= NOW()::timestamp`,
@@ -289,7 +322,7 @@ export async function idempotencyMiddleware(
 
     if (insertResult && insertResult.rowCount === 0) {
       const existing = await db.query(
-        `SELECT request_hash, status, response_status, response_body, expires_at
+        `SELECT request_hash, status, response_status, response_body, response_headers, expires_at
          FROM idempotency_store
          WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
         [scope, idempotencyKey]
@@ -308,7 +341,35 @@ export async function idempotencyMiddleware(
       saved = true;
 
       try {
-        if (status >= 500) {
+
+        let bodyStr = '';
+        if (typeof body === 'string') {
+          bodyStr = body;
+        } else {
+          bodyStr = JSON.stringify(body) ?? '{}';
+        }
+
+        let bodyBytes = Buffer.byteLength(bodyStr);
+        let responseBody: unknown;
+        if (bodyBytes <= config.idempotency.maxBodyBytes) {
+          try {
+            responseBody = JSON.parse(bodyStr);
+          } catch {
+            responseBody = { message: bodyStr };
+            bodyStr = JSON.stringify(responseBody);
+            bodyBytes = Buffer.byteLength(bodyStr);
+          }
+        }
+        const tooLarge = bodyBytes > config.idempotency.maxBodyBytes;
+        if (tooLarge) {
+          logger.warn('[idempotency] response exceeds cache body limit', {
+            route: `${req.baseUrl ?? ''}${req.route?.path ?? req.path}`,
+            bodyBytes,
+            maxBodyBytes: config.idempotency.maxBodyBytes,
+          });
+        }
+
+        if (tooLarge || !isCacheableIdempotencyResponse(status, responseBody, opts?.cacheableStatus)) {
           await db.query('DELETE FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2', [
             scope,
             idempotencyKey,
@@ -316,24 +377,17 @@ export async function idempotencyMiddleware(
           return;
         }
 
-        let bodyStr = '';
-        if (typeof body === 'string') {
-          bodyStr = body;
-        } else {
-          bodyStr = JSON.stringify(body);
-        }
-
-        try {
-          JSON.parse(bodyStr);
-        } catch {
-          bodyStr = JSON.stringify({ message: bodyStr });
+        const headers: CachedResponseHeaders = {};
+        for (const name of REPLAYABLE_RESPONSE_HEADERS) {
+          const value = res.getHeader(name);
+          if (value !== undefined) headers[name] = value;
         }
 
         await db.query(
           `UPDATE idempotency_store
-           SET status = $1, response_status = $2, response_body = $3
+           SET status = $1, response_status = $2, response_body = $3, response_headers = $6
            WHERE scope = $4 AND idempotency_key = $5`,
-          ['completed', status, bodyStr, scope, idempotencyKey]
+          ['completed', status, bodyStr, scope, idempotencyKey, JSON.stringify(headers)]
         );
       } catch (err) {
         logger.error('[idempotency] failed to save response', {
@@ -346,6 +400,7 @@ export async function idempotencyMiddleware(
     };
 
     res.send = function (body) {
+      const result = originalSend.call(this, body);
       saveResponse(res.statusCode, body).catch(err => {
         logger.error('[idempotency] unhandled saveResponse error', {
           requestId,
@@ -354,10 +409,11 @@ export async function idempotencyMiddleware(
           err,
         });
       });
-      return originalSend.call(this, body);
+      return result;
     };
 
     res.json = function (body) {
+      const result = originalJson.call(this, body);
       saveResponse(res.statusCode, body).catch(err => {
         logger.error('[idempotency] unhandled saveResponse error', {
           requestId,
@@ -366,7 +422,7 @@ export async function idempotencyMiddleware(
           err,
         });
       });
-      return originalJson.call(this, body);
+      return result;
     };
 
     next();

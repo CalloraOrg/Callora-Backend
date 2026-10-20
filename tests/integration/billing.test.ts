@@ -100,7 +100,7 @@ const USAGE_EVENTS_DDL = `
  *                 the authenticated user correctly.
  * @param expiresIn - Token lifetime (default 1 h).
  */
-function makeToken(userId = "user_test_001", expiresIn = "1h"): string {
+function makeToken(userId = "user_test_001", expiresIn: jwt.SignOptions['expiresIn'] = "1h"): string {
   return jwt.sign(
     { sub: userId, userId, email: `${userId}@test.example` },
     JWT_SECRET,

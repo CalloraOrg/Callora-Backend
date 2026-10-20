@@ -643,7 +643,7 @@
     "/api/billing/deduct": {
       "post": {
         "summary": "Deduct billing balance for an API call",
-        "description": "Deducts USDC from the user's vault balance to pay for an API call. Authenticated and idempotent.",
+        "description": "Deducts USDC from the user's vault balance to pay for an API call. Authenticated and idempotent. Eligible cached responses set Idempotent-Replayed: true and preserve the original allowlisted response headers. Transient 408/425/429/5xx responses, RECONCILIATION_REQUIRED or IDEMPOTENCY_IN_PROGRESS body codes, and responses above IDEMPOTENCY_MAX_BODY_BYTES are not cached; retry with the same key after the condition clears.",
         "externalDocs": {
           "description": "SDK idempotency contract and retry guidance",
           "url": "https://callora.com/sdk/billing-deduct.md"
@@ -680,6 +680,11 @@
         "responses": {
           "200": {
             "description": "Billing deduction successfully processed",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/Idempotent-Replayed"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -710,6 +715,11 @@
           },
           "400": {
             "description": "Invalid request body parameters",
+            "headers": {
+              "Idempotent-Replayed": {
+                "$ref": "#/components/headers/Idempotent-Replayed"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -769,7 +779,7 @@
             }
           },
           "409": {
-            "description": "Conflict or reconciliation required",
+            "description": "Idempotency key reuse conflict or pending deduction reconciliation. RECONCILIATION_REQUIRED responses are not cached, so a retry can observe resolution.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6286,6 +6296,17 @@
     }
   },
   "components": {
+    "headers": {
+      "Idempotent-Replayed": {
+        "description": "Present as true only when a cacheable stored response is replayed. The original content-type, location, etag, retry-after and x-request-id are restored when stored; set-cookie is never persisted or replayed. Legacy rows without header metadata still replay their status and body.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "true"
+          ]
+        }
+      }
+    },
     "securitySchemes": {
       "bearerAuth": {
         "type": "http",

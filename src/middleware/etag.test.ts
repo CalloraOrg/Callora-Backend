@@ -73,7 +73,7 @@ describe('etagMatches', () => {
 // etagMiddleware — integration via supertest
 // ---------------------------------------------------------------------------
 describe('etagMiddleware', () => {
-  function makeApp(handler: Parameters<typeof express.Router.prototype.get>[1]) {
+  function makeApp(handler: express.RequestHandler) {
     const app = express();
     app.disable('etag');
     app.get('/test', etagMiddleware, handler);

@@ -1,7 +1,6 @@
 import request from 'supertest';
 import { GenericContainer, StartedTestContainer } from 'testcontainers';
-import pkg from 'pg';
-const { Pool } = pg;
+import { Pool } from 'pg';
 
 const TEST_ADMIN_API_KEY = 'test-admin-api-key';
 

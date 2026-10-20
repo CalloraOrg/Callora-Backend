@@ -19,7 +19,6 @@ const buildEvent = (
 ): UsageSseEventPayload => ({
   id: 'evt-1',
   requestId: 'req-1',
-  apiKey: 'key-1',
   apiKeyId: 'key-id-1',
   apiId: 'api-1',
   endpointId: 'endpoint-1',

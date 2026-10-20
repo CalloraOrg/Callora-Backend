@@ -88,6 +88,11 @@ const baseEntry = (overrides: Partial<AuditLogEntry> = {}): AuditLogEntry => ({
   bodyHash: null,
   details: { count: 1 },
   createdAt: '2026-06-28T10:00:00.000Z',
+  sequenceNo: 1,
+  previousHash: 'GENESIS',
+  integrityHash: 'a'.repeat(64),
+  target: null,
+  outcome: 'success',
   ...overrides,
 });
 
@@ -96,6 +101,10 @@ class MockAuditLogRepository implements AuditLogRepository {
 
   findCursor(params: FindAuditLogsCursorParams): Promise<FindAuditLogsCursorResult> {
     return Promise.resolve(this.handler(params));
+  }
+
+  findById(_id: string): Promise<AuditLogEntry | undefined> {
+    throw new Error('Unexpected single-entry lookup in a listing-only fixture');
   }
 }
 

@@ -12,6 +12,9 @@
 
 ### Fixed
 
+- Keep transient and reconciliation responses retryable instead of caching them under an idempotency key; replay deterministic responses with only approved response headers and enforce the configurable UTF-8 cache body limit.
+- Keep bulk quota updates atomic when a later developer lookup fails, rolling back earlier changes in the same SQLite transaction.
+- Restore application and test type contracts and run repository lint and typechecking in CI.
 - Require fresh, method/path-bound v1 forwarded identity signatures, reject replay with bounded memory or shared PostgreSQL storage, and restrict legacy migration mode to non-production.
 
 - Propagated `X-Correlation-Id` across the quota self-service routes and outbound webhook dispatches so quota requests and related notifications can be traced end-to-end.

@@ -1,5 +1,7 @@
+import type DatabaseConstructor from 'better-sqlite3';
+
 jest.mock('../db/index.js', () => {
-  const Database = require('better-sqlite3');
+  const Database = jest.requireActual<typeof DatabaseConstructor>('better-sqlite3');
   const sqlite = new Database(':memory:');
   sqlite.exec(`
     CREATE TABLE credits (

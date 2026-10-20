@@ -7,7 +7,7 @@ import type { SorobanSettlementClient } from '../services/sorobanSettlement.js';
 import type { SettlementStore } from '../types/developer.js';
 import type { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 
-jst.mock('../events/event.emitter.js', () => ({
+jest.mock('../events/event.emitter.js', () => ({
   calloraEvents: {
     emit: jest.fn(),
   },
@@ -25,12 +25,14 @@ function recordUsageEvent(
   const recorded: UsageEvent = {
     id: event.id,
     requestId: event.requestId,
+    apiKeyId: `key-${event.id}`,
     apiId: event.apiId,
-    developerId: event.apiId.startsWith('api_2') ? 'dev_2' : 'dev_1',
+    endpointId: `${event.apiId}-endpoint`,
+    userId: 'consumer-1',
     amountUsdc: event.amountUsdc,
     timestamp: new Date().toISOString(),
-    settled: false,
-  } as UsageEvent;
+    statusCode: 200,
+  };
   store.record(recorded);
 }
 
@@ -64,7 +66,7 @@ describe('RevenueSettlementService', () => {
       },
     ]);
 
-    distributeMock = jest.fn(async (payoutAddress: string, _amountUnits: bigint) => ({
+    distributeMock = jest.fn(async (payoutAddress: string, _amountUsdc: number) => ({
       success: true as const,
       txHash: `0xmocktx_${payoutAddress}`,
       status: 'completed' as const,
@@ -161,7 +163,7 @@ describe('RevenueSettlementService', () => {
   });
 
   it('records a failed settlement and leaves events unsettled when payout returns a failure', async () => {
-    distributeMock.mockResolvedOnce({
+    distributeMock.mockResolvedValueOnce({
       success: false,
       error: 'simulation failed',
     });
@@ -180,7 +182,7 @@ describe('RevenueSettlementService', () => {
   });
 
   it('records a failed settlement and leaves events unsettled when payout throws', async () => {
-    distributeMock.mockRejectedOnce(new Error('rpc timeout'));
+    distributeMock.mockRejectedValueOnce(new Error('rpc timeout'));
 
     recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 10 });
 
@@ -249,7 +251,7 @@ describe('RevenueSettlementService', () => {
   });
 
   it('counts an error but continues when failed-status persistence also throws', async () => {
-    distributeMock.mockResolvedOnce({
+    distributeMock.mockResolvedValueOnce({
       success: false,
       error: 'soroban rejected transaction',
     });

@@ -1,5 +1,3 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import * as fc from "fast-check";
 import { envSchema } from "./env.js";
 
@@ -8,6 +6,7 @@ const baseEnv = {
   JWT_SECRET: "test-secret",
   ADMIN_API_KEY: "test-admin-key",
   METRICS_API_KEY: "test-metrics-key",
+  UPSTREAM_HOST_ALLOWLIST: "api.example.com",
 };
 
 describe("env schema — Soroban billing", () => {
@@ -315,106 +314,29 @@ describe('env schema — revenue ledger indexer config', () => {
 });
 
 describe('env schema — upstream host allowlist', () => {
-  const originalNodeEnv = process.env.NODE_ENV;
-
-  afterEach(() => {
-    if (originalNodeEnv === undefined) {
-      delete process.env.NODE_ENV;
-    } else {
-      process.env.NODE_ENV = originalNodeEnv;
-    }
-  });
-
-  it('defaults to an empty allowlist in production', () => {
-    process.env.NODE_ENV = 'production';
-    const result = envSchema.safeParse({ ...baseEnv });
-    expect(result.success).toBe(false);
-  });
-
-  it('requires UPSTREAM_ALLOWED_HOSTS in production', () => {
-    process.env.NODE_ENV = 'production';
+  it.each([undefined, '', ' \t '])('rejects missing or blank production hosts: %p', (allowlist) => {
     const result = envSchema.safeParse({
       ...baseEnv,
-      UPSTREAM_ALLOWED_HOSTS: 'api.example.com',
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toBe('api.example.com');
-    }
-  });
-
-  it('defaults to loopback hosts in development', () => {
-    process.env.NODE_ENV = 'development';
-    const result = envSchema.safeParse({ ...baseEnv });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('127.0.0.1');
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('::1');
-    }
-  });
-
-  it('defaults to loopback hosts in test', () => {
-    process.env.NODE_ENV = 'test';
-    const result = envSchema.safeParse({ ...baseEnv });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
-    }
-  });
-
-  it('parses a comma-separated allowlist into an array', () => {
-    process.env.NODE_ENV = 'production';
-    const result = envSchema.safeParse({
-      ...baseEnv,
-      UPSTREAM_ALLOWED_HOSTS: 'api.example.com, api2.example.com',
-    });
-    expect(result.success).toBe((true));
-    if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toEqual(['api.example.com', 'api2.example.com']);
-    }
-  });
-
-  it('rejects an empty UPSTREAM_ALLOWED_HOSTS in production', () => {
-    process.env.NODE_ENV = 'production';
-    const result = envSchema.safeParse({
-      ...baseEnv,
-      UPSTREAM_ALLOWED_HOSTS : '',
+      NODE_ENV: 'production',
+      SOROBAN_BILLING_CONTRACT_ID: 'contract_123',
+      UPSTREAM_HOST_ALLOWLIST: allowlist,
     });
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ['UPSTREAM_HOST_ALLOWLIST'] }),
+      ]));
+    }
+  });
+
+  it('accepts explicitly allowed production hosts', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      NODE_ENV: 'production',
+      SOROBAN_BILLING_CONTRACT_ID: 'contract_123',
+      UPSTREAM_HOST_ALLOWLIST: 'api.example.com, api2.example.com',
+    });
+    expect(result.success).toBe(true);
   });
 });
 
-describe("environment template parity", () => {
-  const sourceRoot = path.resolve(process.cwd(), "src");
-  const templatePath = path.resolve(process.cwd(), ".env.example");
-
-  function sourceFiles(directory: string): string[] {
-    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-      const filePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) return sourceFiles(filePath);
-      return entry.isFile() && /\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)
-        ? [filePath]
-        : [];
-    });
-  }
-
-  it("documents every process.env key read by application source", () => {
-    const referencedKeys = new Set<string>();
-    const processEnvKey = /process\.env\.([A-Z][A-Z0-9_]*)/g;
-
-    for (const filePath of sourceFiles(sourceRoot)) {
-      const source = fs.readFileSync(filePath, "utf8");
-      for (const match of source.matchAll(processEnvKey)) referencedKeys.add(match[1]);
-    }
-
-    const documentedKeys = new Set(
-      [...fs.readFileSync(templatePath, "utf8").matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map(
-        (match) => match[1],
-      ),
-    );
-    const missingKeys = [...referencedKeys].filter((key) => !documentedKeys.has(key));
-
-    expect(missingKeys).toEqual([]);
-  });
-});

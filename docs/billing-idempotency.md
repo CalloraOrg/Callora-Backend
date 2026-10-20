@@ -4,11 +4,58 @@
 
 The billing system implements idempotent deductions to prevent double charges when requests are retried. This is critical for financial operations where duplicate charges can cause serious issues.
 
+## HTTP response cache policy
+
+The HTTP middleware scopes `Idempotency-Key` (or `idempotencyKey` in the body)
+to the authenticated principal and request fingerprint. This cache is separate
+from the billing service's `requestId` protection against duplicate deductions.
+
+| Response | Cached by default |
+| --- | --- |
+| 2xx | Yes |
+| 400, 401, 403, 404, ordinary 409, 410, 422 | Yes |
+| 408, 425, 429, and 5xx | No |
+| Other statuses, including 3xx and 402 | No |
+| Body `code` or `error.code` is `RECONCILIATION_REQUIRED` or `IDEMPOTENCY_IN_PROGRESS` | Never |
+| Stored response body exceeds `IDEMPOTENCY_MAX_BODY_BYTES` | Never |
+
+Non-cacheable responses delete their started cache record, so a retry with the
+same key reaches the handler after the temporary condition clears. A completed
+replay retains the original status and body and sets `Idempotent-Replayed: true`.
+The pure exported `isCacheableIdempotencyResponse` function implements the policy.
+Routes can supply a pure `IdempotencyConfig.cacheableStatus(status)` predicate to
+restrict or extend the eligible statuses; it cannot override transient statuses,
+transient body codes, or the size cap. A 402 therefore remains retryable after
+funding changes, while a cached 422 requires a corrected payload and a new key.
+
+Only `content-type`, `location`, `etag`, `retry-after`, and the original
+`x-request-id` are persisted and restored. `set-cookie` and all other response
+headers are excluded. The original request ID identifies the cached response;
+the current retry's tracing context remains separate.
+
+`IDEMPOTENCY_MAX_BODY_BYTES` is a positive integer, defaults to **262144 bytes
+(256 KiB)**, and measures the UTF-8 bytes of the stored JSON. Bodies exactly at
+the limit are eligible; larger bodies are not stored. Oversized responses log
+only the route, byte count, and configured cap, never the body or headers.
+
+Apply `0027_idempotency_response_headers.sql` before deploying the updated
+middleware. The nullable JSONB column preserves existing rows: records without
+header metadata still replay their status and body. The paired down migration
+removes only header metadata. Retention, concurrent-key ownership, and the
+separate started-record lease policy are unchanged.
+
+Deployment remains blocked until the existing three published `0026_*`
+migrations have a data-safe numbering/history resolution. Do not rename or
+replay an applied migration to make layout validation pass; the usage-status
+backfill can overwrite later reconciliation decisions. The required deployment
+history clarification is tracked in [issue #1499](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
+
+
 ## How It Works
 
 ### Idempotency Key
 
-Every billing deduction request must include a unique `request_id` idempotency key). This key is used to identify duplicate requests.
+Every billing deduction request must include a stable `requestId`. Reuse it when retrying the same deduction. The optional HTTP `Idempotency-Key` header or `idempotencyKey` body field controls the response cache described above.
 
 ```typescript
 interface BillingDeductRequest {
