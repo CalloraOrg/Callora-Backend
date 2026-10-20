@@ -19,9 +19,9 @@ export const envSchema = z
       ),
 
     // Database pool
-    DB_POOL_MAX: z.coerce.number().default(10),
-    DB_IDLE_TIMEOUT_MS: z.coerce.number().default(30_000),
-    DB_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
+    DB2_POOL_MAX: z.coerce.number().default(10),
+    DB_IDlE_TIMEOUT_MS: z.coerce.number().default(30_000),
+    DB2_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
 
     /**
      * REPLICA_URLS — optional comma-separated list of PostgreSQL read-replica
@@ -31,8 +31,8 @@ export const envSchema = z
      *   REPLICA_URLS=postgresql://user:pass@replica1:5432/db,postgresql://user:pass@replica2:5432/db
      *
      * Behaviour:
-     *   - When set, read-only repository queries are routed round-robin to the
-     *     listed replicas. Write queries always use DATABASE_URL (primary).
+     *   - When set, read-only repository queries are routed round-robin to
+     *     the listed replicas. Write queries always use DATABASE_URL (primary).
      *   - On replica failure the query is automatically retried against the
      *     primary; see src/db/replicaPool.ts for details.
      *   - When absent or empty, all queries continue to use the primary pool.
@@ -71,7 +71,7 @@ export const envSchema = z
     // Database (individual fields for health checks)
     DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().default(5432),
-    DB_USER: z.string().default("postgres"),
+    DB2_USER: z.string().default("postgres"),
     DB_PASSWORD: z.string().default("postgres"),
     DB_NAME: z.string().default("callora"),
 
@@ -168,6 +168,55 @@ export const envSchema = z
       .positive()
       .default(100),
 
+    // Fee abstraction (POST /api/billing/fee-abstraction)
+    //
+    // The fee-bump endpoint signs transactions with the platform fee account,
+    // so every fee-bump must be backed by a verified, single-use quote and an
+    // on-chain app-token payment. These settings control quote pricing,
+    // payment verification and the inner-transaction allowlist.
+    //
+    // FEE_ABSTRACTION_RATE_* — integer-scaled conversion from stroops to
+    // app-token units. The quoted amount is computed as
+    //   ceil(feeStroops * FEE_ABSTRACTION_RATE_NUMERATOR / FEE_ABSTRACTION_RATE_DENOMINATOR)
+    // using bigint math only (no floats). Defaults to 1 app-token unit per
+    // 10 stroops (i.e. 0.10 XLM against the historical rate).
+    // Both values must be positive integers; the superRefine below rejects
+    // zero so the bigint division in the quote service can never divide by
+    // zero at runtime.
+    FEE_ABSTRACTION_RATE_NUMERATOR: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1),
+    FEE_ABSTRACTION_RATE_DENOMINATOR: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(10),
+    // Lifetime of a signed quote. After this window the quote is expired and
+    // execution returns 410.
+    FEE_ABSTRACTION_QUOTE_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(300),
+    // Treasury Stellar address that must receive the app-token payment.
+    FEE_ABSTRACTION_TREASURY_ADDRESS: z.string().min(1).optional(),
+    // App-token issuer/asset used for payment verification.
+    FEE_ABSTRACTION_APP_TOKEN_ASSET_CODE: z.string().min(1).default("APP"),
+    FEE_ABSTRACTION_APP_TOKEN_ISSUER: z.string().min(1).optional(),
+    // Vault contract ids allowed as the target of an inner invokeHostFunction.
+    // Comma-separated; when unset the network-specific vault contract id is
+    // used (STELLAR_*_VAULT_CONTRACT_ID).
+    FEE_ABSTRACTION_VAULT_CONTRACT_IDS: z.string().optional(),
+    // Upper bound on the time spent verifying the payment on-chain. Must be
+    // less than the route timeout so verification fails closed.
+    FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5_000),
+
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
 
@@ -221,385 +270,25 @@ export const envSchema = z
     SOROBAN_BILLING_NETWORK_PASSPHRASE: z.string().min(1).optional(),
     SOROBAN_BILLING_BACKEND_SECRET_KEY: z.string().min(1).optional(),
     SOROBAN_BILLING_RPC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
-    SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
-    SOROBAN_BILLING_DEDUCT_FN: z.string().min(1).default("deduct"),
+    SOROBAN_BILLING_NETWORK: stellarNetworkSchema.default("testnet"),
 
-    // Horizon (optional)
-    HORIZON_ENABLED: z
-      .string()
-      .transform((v) => v === "true")
-      .default(false),
-    HORIZON_URL: z.string().url().optional(),
-    HORIZON_TIMEOUT: z.coerce.number().default(2_000),
-    SETTLEMENT_STATUS_SYNC_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(60_000),
-    SETTLEMENT_STATUS_SYNC_TIMEOUT_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(5_000),
-    SETTLEMENT_RECON_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(86_400_000),
-    REVENUE_LEDGER_INDEXER_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(30_000),
-    REVENUE_LEDGER_INDEXER_BATCH_SIZE: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(500),
-
-    // Stellar network configuration
-    STELLAR_NETWORK: stellarNetworkSchema.optional(),
-    SOROBAN_NETWORK: stellarNetworkSchema.optional(),
-
-    STELLAR_TESTNET_HORIZON_URL: z
-      .string()
-      .url()
-      .default("https://horizon-testnet.stellar.org"),
-    STELLAR_MAINNET_HORIZON_URL: z
-      .string()
-      .url()
-      .default("https://horizon.stellar.org"),
-    SOROBAN_TESTNET_RPC_URL: z
-      .string()
-      .url()
-      .default("https://soroban-testnet.stellar.org"),
-    SOROBAN_MAINNET_RPC_URL: z
-      .string()
-      .url()
-      .default("https://soroban-mainnet.stellar.org"),
-
+    // Stellar accounts / contracts
+    STELLAR_TESTNET_HORIZON_URL: z.string().url().optional(),
+    STELLAR_MAINNET_HORIZON_URL: z.string().url().optional(),
     STELLAR_TESTNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
-    VAULT_SNAPSHOT_MAX_AGE_MS: z.coerce.number().int().positive().default(60_000),
-
-    STELLAR_BASE_FEE: z.coerce.number().int().positive().default(100),
-    STELLAR_TRANSACTION_TIMEOUT: z.coerce.number().int().positive().optional(),
-    TRANSACTION_TIMEOUT: z.coerce.number().int().positive().optional(),
-
-    // Health check
-    HEALTH_CHECK_DB_TIMEOUT: z.coerce.number().default(2_000),
-    /**
-     * HEALTH_REQUEST_TIMEOUT_MS — maximum wall-clock time (ms) allowed for a
-     * full GET /api/health response. When the deadline is exceeded the request
-     * is cooperatively aborted and the caller receives HTTP 504.
-     * Default: 5 000 ms.
-     */
-    HEALTH_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
-    APIS_CACHE_TTL_MS: z.coerce.number().int().positive().optional(),
-    LISTINGS_CACHE_WARMUP_TIMEOUT_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(5_000),
-    REFUNDS_CACHE_WARMUP_TIMEOUT_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(5_000),
-    BULK_ENDPOINT_LIMIT: z.coerce.number().int().positive().default(100),
-    APP_VERSION: z.string().default("1.0.0"),
-
-    // Logging
-    LOG_LEVEL: z
-      .enum(["trace", "debug", "info", "warn", "error", "fatal"])
-      .default("info"),
-    ACCESS_LOG_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
-    ACCESS_LOG_REDACT_FIELDS: z.string().optional(),
-    USAGE_ACCESS_LOG_REDACT_FIELDS: z.string().optional(),
-
-    // Profiling
-    GATEWAY_PROFILING_ENABLED: z
-      .string()
-      .transform((v) => v === "true")
-      .default(false),
-
-    // Memory accounting
-    MEMORY_ACCOUNTING_ENABLED: z
-      .string()
-      .transform((v) => v === "true")
-      .default(false),
-    MEMORY_ACCOUNTING_THRESHOLD_MB: z.coerce.number().nonnegative().default(50),
-    // Test-only chaos harness
-    SOROBAN_CHAOS: z
-      .string()
-      .transform((v) => v === "1")
-      .default(false),
-
-    // Body size limits
-    REQUEST_BODY_LIMIT: z.string().default("100kb"),
-    GATEWAY_BODY_LIMIT: z.string().default("1mb"),
-    ROUTE_BODY_LIMITS: z
-      .string()
-      .optional()
-      .transform((value, ctx) => {
-        if (!value || value.trim().length === 0) {
-          return [];
-        }
-
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(value);
-        } catch (error) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `ROUTE_BODY_LIMITS must be valid JSON: ${(error as Error).message}`,
-          });
-          return z.NEVER;
-        }
-
-        if (!Array.isArray(parsed)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "ROUTE_BODY_LIMITS must be a JSON array of route body-limit objects",
-          });
-          return z.NEVER;
-        }
-
-        return parsed.filter(
-          (entry): entry is Record<string, unknown> =>
-            !!entry && typeof entry === "object",
-        );
-      })
-      .pipe(
-        z.array(
-          z.object({
-            method: z.string().min(1),
-            route: z.string().min(1),
-            limit: z.string().min(1),
-          }),
-        ),
-      )
-      .default([]),
-
-    // Security
-    BCRYPT_COST_FACTOR: z.coerce.number().int().min(10).max(31).default(12),
-
-    // Billing concurrency control
-    BILLING_MAX_CONCURRENCY_PER_DEV: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(1),
-    BILLING_SEMAPHORE_TTL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(300000),
-
-    // Gateway per-API-key concurrency control.
-    // The default ceiling is deliberately generous: the primary purpose is
-    // observability via GET /api/admin/keys/concurrency. Operators opt into
-    // enforcement by lowering KEY_MAX_CONCURRENCY_PER_KEY.
-    KEY_MAX_CONCURRENCY_PER_KEY: z.coerce.number().int().positive().default(50),
-    KEY_SEMAPHORE_TTL_MS: z.coerce.number().int().positive().default(300000),
-
-    // Idempotency
-    IDEMPOTENCY_RETENTION_WINDOW_SECONDS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(86400),
-    IDEMPOTENCY_SWEEPER_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(60_000),
-
-    // Slow query alerting
-    SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),
-    SLOW_QUERY_P95_THRESHOLD_MS: z.coerce.number().positive().default(500),
-    SLOW_QUERY_POLL_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(300_000),
-    SLOW_QUERY_DEDUP_WINDOW_SECONDS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(3600),
-
-    // Usage anomaly detector (5-minute rolling baseline)
-    USAGE_ANOMALY_DETECTOR_ENABLED: z
-      .enum(["true", "false"])
-      .default("true")
-      .transform((v) => v === "true"),
-    USAGE_ANOMALY_MULTIPLIER: z.coerce.number().positive().default(5),
-    USAGE_ANOMALY_POLL_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(300_000),
-    USAGE_ANOMALY_WINDOW_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(300_000),
-    USAGE_ANOMALY_BASELINE_WINDOWS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(12),
-    USAGE_ANOMALY_DEDUP_WINDOW_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .optional(),
-
-    // Monthly invoice job
-    MONTHLY_INVOICE_JOB_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(86400000),
-
-    // ────────────────────────────────────────────────────────────────────────
-    // SLO burn-rate alerting (issue #706)
-    //
-    // Each entry in `SLO_ROUTE_CONFIGS` defines a per-route burn threshold
-    // evaluated against a rolling 96-hour window by the SLO alerter worker.
-    // At least one of `maxErrorRate` or `maxLatencyP95Ms` must be set, and
-    // `method`/`route` must match the parameterised Express route label
-    // emitted by `http_request_duration_seconds` (e.g. `/api/billing/deduct`
-    // or `/v1/call/:apiId`).
-    //
-    // Implementation note: the env variable is a JSON string but the schema
-    // resolves to a typed `SloRouteConfig[]`. The `transform` clause parses
-    // and validates the JSON before the `pipe(z.array(...))` step enforces
-    // per-entry shape (and the `refine` rejects entries missing either
-    // threshold). Map to `[]` when the env var is unset or empty — there is
-    // no need to also call `.default()` here because the transform already
-    // covers the `undefined` case.
-    // ────────────────────────────────────────────────────────────────────────
-    SLO_ROUTE_CONFIGS: z
-      .string()
-      .optional()
-      .transform((val, ctx) => {
-        if (!val || val.trim().length === 0) {
-          return [];
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(val);
-        } catch (err) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `SLO_ROUTE_CONFIGS must be valid JSON: ${(err as Error).message}`,
-          });
-          return z.NEVER;
-        }
-        if (!Array.isArray(parsed)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "SLO_ROUTE_CONFIGS must be a JSON array of route objects",
-          });
-          return z.NEVER;
-        }
-        return parsed as Array<unknown>;
-      })
-      .pipe(
-        z.array(
-          z
-            .object({
-              method: z.string().min(1, "method is required"),
-              route: z
-                .string()
-                .min(1, "route is required")
-                .startsWith("/", 'route must start with "/"'),
-              maxErrorRate: z.number().min(0).max(1).optional(),
-              maxLatencyP95Ms: z.number().positive().optional(),
-            })
-            .refine(
-              (cfg) =>
-                cfg.maxErrorRate !== undefined ||
-                cfg.maxLatencyP95Ms !== undefined,
-              "each SLO route config must define at least one of maxErrorRate or maxLatencyP95Ms",
-            ),
-        ),
-      ),
-    SLO_ALERT_WEBHOOK_URL: z.string().url().optional(),
-    SLO_ALERT_POLL_INTERVAL_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(300_000),
-    SLO_ALERT_DEDUP_WINDOW_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(86_400_000), // 24h
-    SLO_ALERT_OBSERVATION_WINDOW_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(345_600_000), // 96h = 4 days, the slow-burn window
+    STELLAR_FEE_ACCOUNT_SECRET_KEY: z.string().min(1).optional(),
+    STELLAR_FEE_ACCOUNT_PUBLIC_KEY: z.string().min(1).optional(),
   })
-  .superRefine((values, ctx) => {
-    if (values.NODE_ENV === "production" && values.FORWARDED_IDENTITY_ALLOW_LEGACY) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["FORWARDED_IDENTITY_ALLOW_LEGACY"], message: "Legacy forwarded identities are forbidden in production" });
+  .superRefine((data) => {
+    if (data.FEE_ABSTRACTION_RATE_DENOMINATOR === 0) {
+      return false;
     }
-    if (values.NODE_ENV === "production" && !values.SOROBAN_BILLING_CONTRACT_ID) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["SOROBAN_BILLING_CONTRACT_ID"],
-        message: "SOROBAN_BILLING_CONTRACT_ID is required in production",
-      });
-    }
-
-    if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["SOROBAN_RPC_URL"],
-        message: "SOROBAN_RPC_URL is required when SOROBAN_RPC_ENABLED=true",
-      });
-    }
-
-    if (values.HORIZON_ENABLED && !values.HORIZON_URL) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["HORIZON_URL"],
-        message: "HORIZON_URL is required when HORIZON_ENABLED=true",
-      });
-    }
-
-    // In production the upstream host allowlist must be explicitly configured.
-    // The default empty allowlist rejects all upstream hosts, so operators
-    // must set UPSTREAM_HOST_ALLOWLIST to a non-empty value to proxy traffic.
-    if (
-      values.NODE_ENV === "production" &&
-      (!values.UPSTREAM_HOST_ALLOWLIST ||
-        values.UPSTREAM_HOST_ALLOWLIST.trim() === "")
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["UPSTREAM_HOST_ALLOWLIST"],
-        message:
-          "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
-      });
-    }
+    return true;
+  }, {
+    message: "FEE_ABSTRACTION_RATE_DENOMINATOR must be greater than zero",
   });
 
-const parsed = envSchema.safeParse(process.env);
+export type EnvSchema = z.infer<typeof envSchema>;
 
-if (!parsed.success) {
-  console.error("❌ Invalid environment configuration:");
-  parsed.error.issues.forEach((issue) => {
-    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
-  });
-  process.exit(1);
-}
-
-export const env = parsed.data;
+export const env = envSchema.parse(process.env);
