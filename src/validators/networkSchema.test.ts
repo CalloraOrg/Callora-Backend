@@ -15,8 +15,23 @@ describe('networkSchema', () => {
     expect(() => stellarNetworkQuerySchema.parse({ network: '' })).toThrow();
   });
 
-  it('defaults to testnet when network is omitted', () => {
+  it('defaults to the configured network when network is omitted', () => {
     expect(parseNetworkWithDefault({})).toBe('testnet');
     expect(parseNetworkWithDefault({ network: undefined })).toBe('testnet');
+    expect(parseNetworkWithDefault({}, 'mainnet')).toBe('mainnet');
+  });
+
+  it('uses STELLAR_NETWORK=mainnet when the network query is omitted', async () => {
+    const previousNetwork = process.env.STELLAR_NETWORK;
+    try {
+      process.env.STELLAR_NETWORK = 'mainnet';
+      jest.resetModules();
+      const configuredSchema = await import('./networkSchema.js');
+      expect(configuredSchema.parseNetworkWithDefault({})).toBe('mainnet');
+    } finally {
+      if (previousNetwork === undefined) delete process.env.STELLAR_NETWORK;
+      else process.env.STELLAR_NETWORK = previousNetwork;
+      jest.resetModules();
+    }
   });
 });

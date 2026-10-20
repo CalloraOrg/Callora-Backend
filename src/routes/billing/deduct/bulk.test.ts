@@ -5,6 +5,18 @@ import bulkRouter from './bulk.js';
 import { BillingService } from '../../../services/billing.js';
 import type { Pool } from 'pg';
 
+jest.mock('../../../middleware/requireAuth.js', () => ({
+  requireAuth: (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const userId = req.header('x-user-id');
+    if (userId) {
+      res.locals.authenticatedUser = { id: userId };
+      next();
+    } else {
+      res.status(401).json({ error: { code: 'UNAUTHORIZED' } });
+    }
+  },
+}));
+
 jest.mock('better-sqlite3', () => {
   return class MockDatabase {
     prepare() { return { get: () => null }; }
@@ -82,6 +94,19 @@ describe('Bulk Deduct API', () => {
     expect(res.body.error.details[0].message).toContain('Batch size limit of 100 items exceeded');
   });
 
+  it('rejects duplicate requestIds in a batch', async () => {
+    const res = await request(buildApp())
+      .post('/api/billing/deduct/bulk')
+      .set('x-user-id', 'user_123')
+      .send({ items: [
+        { requestId: 'same', apiId: 'api_1', endpointId: 'ep_1', apiKeyId: 'key_1', amountUsdc: '1' },
+        { requestId: 'same', apiId: 'api_1', endpointId: 'ep_2', apiKeyId: 'key_1', amountUsdc: '1' },
+      ] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('DUPLICATE_REQUEST_ID');
+  });
+
   it('returns 400 for invalid item fields (negative amount)', async () => {
     const res = await request(buildApp())
       .post('/api/billing/deduct/bulk')
@@ -124,21 +149,28 @@ describe('Bulk Deduct API', () => {
     expect(res.body.error.details[0].message).toContain('amountUsdc must be greater than zero');
   });
 
-  it('successfully processes multiple deductions sequentially', async () => {
-    const deductSpy = jest.spyOn(BillingService.prototype, 'deduct').mockImplementation(async (req) => {
-      return {
-        success: true,
-        usageEventId: `evt_${req.requestId}`,
-        stellarTxHash: `tx_${req.requestId}`,
+  it('routes the batch through deductBulk and returns aggregate results', async () => {
+    mockPool.query.mockResolvedValue({ rows: [], rowCount: 1 } as never);
+    const deductBulkSpy = jest.spyOn(BillingService.prototype, 'deductBulk').mockResolvedValue({
+      success: true,
+      entryCount: 2,
+      deductedCount: 2,
+      totalDeductedAmountUsdc: '1.75',
+      stellarTxHash: 'tx_batch',
+      results: [1, 2].map((index) => ({
+        requestId: `req_${index}`,
+        usageEventId: `evt_req_${index}`,
+        stellarTxHash: 'tx_batch',
         alreadyProcessed: false,
         deductionApplied: true,
         reconciliationRequired: false,
-      };
+      })),
     });
 
     const res = await request(buildApp())
       .post('/api/billing/deduct/bulk')
       .set('x-user-id', 'user_123')
+      .set('Idempotency-Key', 'batch-key-1')
       .send({
         items: [
           {
@@ -164,42 +196,36 @@ describe('Bulk Deduct API', () => {
       requestId: 'req_1',
       success: true,
       usageEventId: 'evt_req_1',
-      stellarTxHash: 'tx_req_1',
+      stellarTxHash: 'tx_batch',
       alreadyProcessed: false,
+      deductionApplied: true,
+      reconciliationRequired: false,
     });
     expect(res.body.results[1]).toEqual({
       requestId: 'req_2',
       success: true,
       usageEventId: 'evt_req_2',
-      stellarTxHash: 'tx_req_2',
+      stellarTxHash: 'tx_batch',
       alreadyProcessed: false,
+      deductionApplied: true,
+      reconciliationRequired: false,
     });
-
-    expect(deductSpy).toHaveBeenCalledTimes(2);
+    expect(res.body.entryCount).toBe(2);
+    expect(res.body.deductedCount).toBe(2);
+    expect(res.body.totalDeductedAmountUsdc).toBe('1.75');
+    expect(deductBulkSpy).toHaveBeenCalledTimes(1);
+    expect(deductBulkSpy.mock.calls[0][1]).toBe('batch-key-1');
   });
 
-  it('handles item level failure and continues processing the rest of batch', async () => {
-    const deductSpy = jest.spyOn(BillingService.prototype, 'deduct')
-      .mockImplementationOnce(async () => {
-        return {
-          success: false,
-          usageEventId: '',
-          alreadyProcessed: false,
-          deductionApplied: false,
-          reconciliationRequired: false,
-          error: 'Insufficient balance',
-        };
-      })
-      .mockImplementationOnce(async (req) => {
-        return {
-          success: true,
-          usageEventId: `evt_${req.requestId}`,
-          stellarTxHash: `tx_${req.requestId}`,
-          alreadyProcessed: false,
-          deductionApplied: true,
-          reconciliationRequired: false,
-        };
-      });
+  it('returns 402 when the aggregate balance check fails without partial results', async () => {
+    const deductBulkSpy = jest.spyOn(BillingService.prototype, 'deductBulk').mockResolvedValue({
+      success: false,
+      results: [],
+      entryCount: 2,
+      deductedCount: 0,
+      totalDeductedAmountUsdc: '1.5',
+      error: 'Insufficient balance: required 15000000 units, available 0',
+    });
 
     const res = await request(buildApp())
       .post('/api/billing/deduct/bulk')
@@ -223,31 +249,19 @@ describe('Bulk Deduct API', () => {
         ],
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body.results).toHaveLength(2);
-    expect(res.body.results[0]).toEqual({
-      requestId: 'req_1',
-      success: false,
-      error: 'Insufficient balance',
-    });
-    expect(res.body.results[1]).toEqual({
-      requestId: 'req_2',
-      success: true,
-      usageEventId: 'evt_req_2',
-      stellarTxHash: 'tx_req_2',
-      alreadyProcessed: false,
-    });
-
-    expect(deductSpy).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(402);
+    expect(res.body.error.code).toBe('INSUFFICIENT_BALANCE');
+    expect(deductBulkSpy).toHaveBeenCalledTimes(1);
   });
 
   it('reuses an injected service across bulk requests', async () => {
     const fakeService = {
-      deduct: jest.fn().mockResolvedValue({
+      deductBulk: jest.fn().mockResolvedValue({
         success: true,
-        usageEventId: 'evt_1',
-        stellarTxHash: 'tx_1',
-        alreadyProcessed: false,
+        entryCount: 1,
+        deductedCount: 1,
+        totalDeductedAmountUsdc: '1',
+        results: [{ requestId: 'req_1', usageEventId: 'evt_1', stellarTxHash: 'tx_1', alreadyProcessed: false, deductionApplied: true, reconciliationRequired: false }],
       }),
     };
     const app = buildApp(mockPool, fakeService as unknown as BillingService);
@@ -269,7 +283,7 @@ describe('Bulk Deduct API', () => {
       expect(res.status).toBe(200);
     }
 
-    expect(fakeService.deduct).toHaveBeenCalledTimes(2);
+    expect(fakeService.deductBulk).toHaveBeenCalledTimes(2);
     expect(app.locals.billingService).toBe(fakeService);
   });
 

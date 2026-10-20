@@ -106,10 +106,19 @@ error_codes:
     section: Billing / Soroban
     description: Billing deduction operation failed
 
+  - code: RECONCILIATION_REQUIRED
+    section: Billing / Soroban
+    description: Previous billing deduction attempt is pending reconciliation
+
   # Billing request
   - code: BILLING_REQUEST_NOT_FOUND
     section: Billing request
     description: The requested billing record was not found
+
+  # Billing forecast
+  - code: FORECAST_DATA_UNAVAILABLE
+    section: Billing forecast
+    description: Historical usage data could not be retrieved for forecast calculation
 
   # Developer / API keys
   - code: DEVELOPER_NOT_FOUND
@@ -307,6 +316,7 @@ error_codes:
     section: Misc / direct middleware responses
     description: Soroban simulation failed
 
+
   # Route-specific / auth overrides
   - code: INVALID_AUTH_HEADER
     section: Route-specific / auth overrides (documented in docs/error-codes.md)
@@ -409,3 +419,11 @@ error_codes:
   - code: BULK_QUOTA_UPDATE_FAILED
     section: Audit, logs and quotas
     description: A bulk quota update failed and was rolled back
+
+  - code: STALE_FORWARDED_IDENTITY
+    section: Authentication
+    description: Forwarded identity timestamp is missing, malformed, expired, or too far in the future
+
+  - code: REPLAYED_FORWARDED_IDENTITY
+    section: Authentication
+    description: Forwarded identity signature was already used on another request

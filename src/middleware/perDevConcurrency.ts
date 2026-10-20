@@ -1,3 +1,4 @@
+import { asyncHandler } from "../utils/asyncHandler.js";
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { DeveloperSemaphore, sharedDeveloperSemaphore } from '../utils/developerSemaphore.js';
 import { resolveRequestUserId } from './requireAuth.js';
@@ -55,8 +56,8 @@ export function createPerDevConcurrencyMiddleware(
       ? sharedDeveloperSemaphore
       : new DeveloperSemaphore(maxConcurrent, ttlMs));
 
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const { userId } = resolveRequestUserId(req);
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const { userId } = await resolveRequestUserId(req);
     if (!userId) {
       // No developer identity — pass through (other middleware will 401)
       next();
@@ -107,7 +108,7 @@ export function createPerDevConcurrencyMiddleware(
       });
 
     next();
-  };
+  });
 }
 
 /**

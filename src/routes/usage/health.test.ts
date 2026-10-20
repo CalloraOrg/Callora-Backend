@@ -42,6 +42,7 @@ import {
   type UsageHealthRouterDeps,
 } from './health.js';
 import type { HealthCheckConfig, ComponentCheck } from '../../services/healthCheck.js';
+import { mockSorobanRpc } from '../../services/healthCheck.testUtils.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -200,7 +201,7 @@ describe('GET /api/usage/health', () => {
     const app = buildApp({
       config: {
         database: { pool: healthyPool(), timeout: 2000 },
-        sorobanRpc: { url: 'https://soroban-test.example.com', timeout: 2000 },
+        sorobanRpc: mockSorobanRpc(),
         horizon: { url: 'https://horizon-testnet.example.com', timeout: 2000 },
       },
     });
@@ -270,7 +271,7 @@ describe('GET /api/usage/health', () => {
     const app = buildApp({
       config: {
         database: { pool: healthyPool(), timeout: 2000 },
-        sorobanRpc: { url: 'https://soroban-test.example.com', timeout: 2000 },
+        sorobanRpc: mockSorobanRpc({ healthError: new Error('ECONNREFUSED') }),
       },
     });
 
@@ -314,7 +315,7 @@ describe('GET /api/usage/health', () => {
     const app = buildApp({
       config: {
         database: { pool: healthyPool(), timeout: 2000 },
-        sorobanRpc: { url: 'https://soroban-test.example.com', timeout: 2000 },
+        sorobanRpc: mockSorobanRpc({ healthError: new Error('HTTP 503') }),
       },
     });
 
@@ -340,7 +341,9 @@ describe('GET /api/usage/health', () => {
     const app = buildApp({
       config: {
         database: { pool: healthyPool(), timeout: 2000 },
-        sorobanRpc: { url: 'https://soroban-test.example.com', timeout: 2000 },
+        sorobanRpc: mockSorobanRpc({
+          healthError: Object.assign(new Error('AbortError'), { name: 'AbortError' }),
+        }),
       },
     });
 
@@ -370,7 +373,7 @@ describe('GET /api/usage/health', () => {
     const app = buildApp({
       config: {
         database: { pool: healthyPool(), timeout: 2000 },
-        sorobanRpc: { url: 'https://soroban-test.example.com', timeout: 2000 },
+        sorobanRpc: mockSorobanRpc(),
         horizon: { url: 'https://horizon-testnet.example.com', timeout: 2000 },
       },
     });
@@ -382,7 +385,7 @@ describe('GET /api/usage/health', () => {
     expect(res.body.dependencies.database.status).toBe('ok');
     expect(res.body.dependencies.soroban_rpc.status).toBe('ok');
     expect(res.body.dependencies.horizon.status).toBe('down');
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(1);
   });
 
   // -------------------------------------------------------------------------

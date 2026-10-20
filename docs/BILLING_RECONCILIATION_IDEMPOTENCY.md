@@ -86,3 +86,51 @@ Reviewers should retain this evidence with the release record and verify that
 the production adapter implements the same transaction contract.
 
 The contract is part of the billing correctness boundary.
+
+## Soroban On-Chain Deduction State Machine and Pending Resolver
+
+### Deduction Status Lifecycle
+
+Every deduction in `usage_events` tracks an explicit `deduction_status`:
+- `pending`: The deduction was recorded prior to external Soroban invocation.
+- `confirmed`: The on-chain deduction succeeded and is associated with a Stellar transaction hash.
+- `voided`: The deduction was cancelled because on-chain deduction definitely did not execute.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: Phase 1 INSERT
+    pending --> confirmed: Soroban Deduct Success (Phase 3)
+    pending --> voided: Definitive Simulation/Contract Error (InsufficientBalance)
+    pending --> confirmed: Resolver: is_request_processed == true
+    pending --> voided: Resolver: is_request_processed == false AND past validity window
+    voided --> pending: Re-armed on retry inside Phase 1 lock
+    confirmed --> [*]
+    voided --> [*]
+```
+
+### Why a Charge That Happened Can Never Be Voided
+
+A deduction row is only ever transitioned from `pending` to `voided` under two mutually exclusive, strictly safe conditions:
+1. **Immediate Service Voiding**: During initial execution, Soroban simulation rejects the transaction with a definitive error (`INSUFFICIENT_BALANCE` or `CONTRACT_ERROR`). Simulation occurs before transaction submission to the ledger; therefore, no transaction envelope was submitted and no funds moved.
+2. **Pending Resolver Voiding**: The background resolver queries the vault contract via `is_request_processed(request_id)`. The row is only voided if **both** of the following criteria are met:
+   - `is_request_processed(request_id)` returns `false` (the vault contract state confirms the request was never executed).
+   - The transaction's validity window has expired (i.e. row age exceeds `validityWindowMs`, default 5 minutes). Stellar transactions enforce ledger bounds (`time_bounds` / `ledger_bounds`); once the validity window passes, any unincluded transaction cannot be submitted or accepted by validators.
+
+If `is_request_processed` returns `false` but the row is still within the validity window, the row remains `pending` because the transaction might still be in flight or included in an upcoming ledger.
+
+### Concurrency and Exactly-Once Transitions
+
+The resolver selects candidate rows using `FOR UPDATE SKIP LOCKED` and transitions rows using atomic conditional updates:
+```sql
+UPDATE usage_events
+   SET deduction_status = 'confirmed', ...
+ WHERE id = $1 AND deduction_status = 'pending'
+```
+This ensures multiple resolver instances cannot race on the same row.
+
+### Retrying After Voiding
+
+When a client retries a previously voided `requestId`:
+1. The service acquires a row lock via `SELECT ... FOR UPDATE` inside `runPhase1`.
+2. Observing `deduction_status = 'voided'`, it resets the row to `pending`, clears `stellar_tx_hash`, `resolved_at`, and `resolution_reason`, and returns `alreadyExists: false`.
+3. The request is processed cleanly as a fresh attempt.

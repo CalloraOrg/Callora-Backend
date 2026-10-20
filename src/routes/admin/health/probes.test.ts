@@ -22,6 +22,22 @@ import request from 'supertest';
 import type { Pool, QueryResult } from 'pg';
 import { errorHandler } from '../../../middleware/errorHandler.js';
 import { createAdminHealthProbesRouter } from './probes.js';
+import { mockSorobanRpc } from '../../../services/healthCheck.testUtils.js';
+import type { SorobanRpcProbeServer } from '../../../services/healthCheck.js';
+
+interface AdminHealthTestDeps {
+  pool?: Pool;
+  config?: {
+    version?: string;
+    database?: { timeout?: number };
+    sorobanRpc?: { url: string; timeout?: number };
+    horizon?: { url: string; timeout?: number };
+  };
+  sorobanRpcServerFactory?: (
+    url: string,
+    timeoutMs: number,
+  ) => SorobanRpcProbeServer;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,7 +45,7 @@ import { createAdminHealthProbesRouter } from './probes.js';
 
 const ADMIN_KEY = 'test-admin-key';
 
-function buildApp(deps = {}) {
+function buildApp(deps: AdminHealthTestDeps = {}) {
   const app = express();
   app.use(express.json());
 
@@ -43,7 +59,17 @@ function buildApp(deps = {}) {
     next();
   });
 
-  app.use('/api/admin/health/probes', createAdminHealthProbesRouter(deps));
+  app.use(
+    '/api/admin/health/probes',
+    createAdminHealthProbesRouter({
+      ...(deps.pool ? { pool: deps.pool } : {}),
+      config: deps.config,
+      sorobanRpcServerFactory: mockSorobanRpc().createServer,
+      ...(deps.sorobanRpcServerFactory
+        ? { sorobanRpcServerFactory: deps.sorobanRpcServerFactory }
+        : {}),
+    }),
+  );
   app.use(errorHandler);
   return app;
 }
@@ -135,6 +161,9 @@ describe('Admin Health Probes Endpoint', () => {
 
       const app = buildApp({
         pool,
+        sorobanRpcServerFactory: mockSorobanRpc({
+          healthError: new Error('Network error'),
+        }).createServer,
         config: {
           version: '1.0.0',
           database: { timeout: 1000 },
@@ -224,6 +253,7 @@ describe('Admin Health Probes Endpoint', () => {
         config: {
           sorobanRpc: { url: 'https://soroban-test.stellar.org', timeout: 1000 },
         },
+        sorobanRpcServerFactory: mockSorobanRpc().createServer,
       });
 
       const res = await request(app)
@@ -244,6 +274,9 @@ describe('Admin Health Probes Endpoint', () => {
         config: {
           sorobanRpc: { url: 'https://soroban-test.stellar.org', timeout: 1000 },
         },
+        sorobanRpcServerFactory: mockSorobanRpc({
+          healthError: new Error('Network error'),
+        }).createServer,
       });
 
       const res = await request(app)

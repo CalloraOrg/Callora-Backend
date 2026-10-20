@@ -1,9 +1,12 @@
 import type { Pool } from "pg";
 import { logger } from "../logger.js";
 import { InvoiceService } from "../services/InvoiceService.js";
+import { previousUtcMonthPeriod } from "../lib/periods.js";
 
 export interface MonthlyInvoiceJobOptions {
   intervalMs: number;
+  graceMs?: number;
+  clock?: () => Date;
   logger?: Pick<typeof logger, "error" | "info">;
 }
 
@@ -20,9 +23,14 @@ export function createMonthlyInvoiceJob(
 ): MonthlyInvoiceJob {
   const log = options.logger ?? logger;
   const invoiceService = new InvoiceService(pool);
+  const graceMs = options.graceMs ?? 3_600_000;
+  const clock = options.clock ?? (() => new Date());
 
   if (!Number.isInteger(options.intervalMs) || options.intervalMs <= 0) {
     throw new Error("intervalMs must be a positive integer");
+  }
+  if (!Number.isSafeInteger(graceMs) || graceMs < 0) {
+    throw new Error("graceMs must be a non-negative safe integer");
   }
 
   let timer: NodeJS.Timeout | null = null;
@@ -34,27 +42,22 @@ export function createMonthlyInvoiceJob(
       return;
     }
 
-    running = (async () => {
+    running = Promise.resolve().then(async () => {
       try {
-        const now = new Date();
+        const now = clock();
+        const period = previousUtcMonthPeriod(now);
+        const { periodId } = period;
 
-        if (now.getDate() !== 1) {
+        if (now.getTime() - period.end.getTime() < graceMs) {
           log.info(
-            "[monthlyInvoice] Not the first day of the month, skipping",
+            "[monthlyInvoice] Waiting for month-end grace period",
           );
           return;
         }
 
-        const previousMonth = new Date(
-          now.getFullYear(),
-          now.getMonth() - 1,
-          1,
-        );
-        const periodId = `${previousMonth.getFullYear()}-${String(previousMonth.getMonth() + 1).padStart(2, "0")}`;
-
         log.info("[monthlyInvoice] Starting invoice generation", { periodId });
 
-        const result = await invoiceService.generateMonthlyInvoices(periodId);
+        const result = await invoiceService.generateMonthlyInvoices(period);
 
         log.info("[monthlyInvoice] Invoice generation complete", {
           periodId,
@@ -63,12 +66,14 @@ export function createMonthlyInvoiceJob(
         });
       } catch (error) {
         log.error("[monthlyInvoice] Job failed", { error });
-      } finally {
-        running = null;
       }
-    })();
+    });
 
-    await running;
+    try {
+      await running;
+    } finally {
+      running = null;
+    }
   };
 
   return {
