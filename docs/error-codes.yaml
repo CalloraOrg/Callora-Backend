@@ -115,6 +115,10 @@ error_codes:
     section: Billing request
     description: The requested billing record was not found
 
+  - code: BILLING_REQUEST_ID_CONFLICT
+    section: Billing request
+    description: The requestId was already used for a different deduction (different user, amount, API or endpoint)
+
   # Billing forecast
   - code: FORECAST_DATA_UNAVAILABLE
     section: Billing forecast
