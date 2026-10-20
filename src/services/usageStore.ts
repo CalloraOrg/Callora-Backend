@@ -232,6 +232,24 @@ export class PostgresUsageStore implements UsageAdminStore {
     try {
       await client.query('BEGIN');
 
+      const owner = await client.query<{ developer_id: string }>(
+        `SELECT developer_id::text AS developer_id FROM apis WHERE id::text = $1 LIMIT 1`,
+        [event.apiId],
+      );
+      if (!owner.rows[0]) {
+        throw Object.assign(new Error(`Unknown API: ${event.apiId}`), { statusCode: 404, code: 'API_NOT_FOUND' });
+      }
+      const reservation = await client.query<{ usage_event_id: string }>(
+        `INSERT INTO usage_event_request_ids (request_id, usage_event_id, developer_id)
+           VALUES ($1, nextval(pg_get_serial_sequence('usage_events', 'id')), $2)
+           ON CONFLICT (request_id) DO NOTHING RETURNING usage_event_id`,
+        [event.requestId, owner.rows[0].developer_id],
+      );
+      if (!reservation.rows[0]) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+
       const insertResult = await client.query<{ id: string | number }>(
         `
           INSERT INTO usage_events (
@@ -242,14 +260,11 @@ export class PostgresUsageStore implements UsageAdminStore {
             developer_id,
             amount_usdc,
             request_id,
+            api_key,
             status_code,
             created_at
           )
-          VALUES ($1, $2, $3, $4, (
-            SELECT COALESCE(a.developer_id::text, '')
-            FROM apis a WHERE a.id = $2 LIMIT 1
-          ), $5, $6, $7, $8)
-          ON CONFLICT (request_id, developer_id) DO NOTHING
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
           RETURNING id
         `,
         [
@@ -257,8 +272,10 @@ export class PostgresUsageStore implements UsageAdminStore {
           event.apiId,
           event.endpointId,
           event.apiKeyId,
+          owner.rows[0].developer_id,
           event.amountUsdc,
           event.requestId,
+          event.apiKey,
           event.statusCode,
           event.timestamp,
         ],
@@ -309,7 +326,7 @@ export class PostgresUsageStore implements UsageAdminStore {
 
   async hasEvent(requestId: string): Promise<boolean> {
     const result = await this.db.query<{ exists: number }>(
-      'SELECT 1 AS exists FROM usage_events WHERE request_id = $1 LIMIT 1',
+      'SELECT 1 AS exists FROM usage_event_request_ids WHERE request_id = $1 LIMIT 1',
       [requestId],
     );
     return Boolean(result.rows[0]);

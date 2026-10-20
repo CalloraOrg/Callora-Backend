@@ -8,6 +8,17 @@ This document describes the core tables that power the Callora API marketplace, 
 
 ## Tables
 
+### `usage_events` and `usage_event_request_ids`
+
+`usage_events` is hash partitioned by `developer_id`; its per-partition primary
+key includes that partition key, so it cannot enforce global request ID
+uniqueness. Every writer reserves `request_id` in `usage_event_request_ids`
+within the same transaction before inserting the event. The registry primary
+key provides the global idempotency guarantee and its unique `usage_event_id`
+is the target for `revenue_ledger.usage_event_id`. The partitioned parent also
+contains `api_key VARCHAR(255)` and `status_code INTEGER NOT NULL DEFAULT 200`
+for persistent usage-store reads and writes.
+
 ### `apis`
 
 Stores the top-level API products created by developers.

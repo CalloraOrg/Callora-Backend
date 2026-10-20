@@ -72,6 +72,7 @@ export interface BillingDeductResult {
   reconciliationRequired: boolean;
   deductionStatus?: DeductionStatus;
   error?: string;
+  errorCode?: string;
   simulationDetails?: SimulationDetails;
 }
 
@@ -93,6 +94,7 @@ export interface BillingBulkDeductResult {
   totalDeductedAmountUsdc: string;
   stellarTxHash?: string;
   error?: string;
+  errorCode?: string;
   simulationDetails?: SimulationDetails;
 }
 
@@ -327,17 +329,37 @@ async function runPhase1(
   _amountInContractUnits: bigint,
 ): Promise<Phase1Result> {
   await client.query("BEGIN");
+  // Resolve the partition key before reserving the globally unique request id.
+  const owner = await client.query<{ developer_id: string }>(
+    `SELECT developer_id::text AS developer_id FROM apis WHERE id::text = $1 LIMIT 1`,
+    [request.apiId],
+  );
+  if (!owner.rows[0]) {
+    const error = new Error(`Unknown API: ${request.apiId}`) as Error & { statusCode: number; code: string };
+    error.statusCode = 404;
+    error.code = "API_NOT_FOUND";
+    throw error;
+  }
+  const developerId = owner.rows[0].developer_id;
 
-  // Lock the row (if it exists) so concurrent requests with the same
-  // request_id serialise here rather than racing to INSERT.
+  // Reserve the request id first. The parent table cannot provide global
+  // uniqueness because it is partitioned by developer_id.
+  const reserved = await client.query<{ usage_event_id: string }>(
+    `INSERT INTO usage_event_request_ids (request_id, usage_event_id, developer_id)
+       VALUES ($1, nextval(pg_get_serial_sequence('usage_events', 'id')), $2)
+       ON CONFLICT (request_id) DO NOTHING RETURNING usage_event_id`,
+    [request.requestId, developerId],
+  );
+
+  if (!reserved.rows[0]) {
   const existingEvent = await client.query<{
     id: string;
     stellar_tx_hash: string | null;
     deduction_status: string | null;
   }>(
-    `SELECT id, stellar_tx_hash, deduction_status
-       FROM usage_events
-      WHERE request_id = $1
+    `SELECT ue.id, ue.stellar_tx_hash, ue.deduction_status
+       FROM usage_event_request_ids r JOIN usage_events ue ON ue.id = r.usage_event_id
+      WHERE r.request_id = $1
         FOR UPDATE`,
     [request.requestId],
   );
@@ -377,6 +399,11 @@ async function runPhase1(
       deductionStatus: status,
     };
   }
+  // A registry row without its usage row indicates a broken invariant. Never
+  // charge again or silently manufacture a replacement.
+  await client.query("ROLLBACK");
+  throw new Error(`Request id ${request.requestId} is reserved without a usage event`);
+  }
 
   // Balance check — still inside the transaction so the connection is held,
   // but the Soroban call itself is NOT inside the transaction (see Phase 2).
@@ -389,14 +416,16 @@ async function runPhase1(
   // Committed immediately so the record survives even if Phase 2 fails.
   const insertResult = await client.query<{ id: string }>(
     `INSERT INTO usage_events
-       (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at, deduction_status)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'pending')
+       (id, user_id, api_id, endpoint_id, api_key_id, developer_id, amount_usdc, request_id, created_at, deduction_status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), 'pending')
      RETURNING id`,
     [
+      reserved.rows[0].usage_event_id,
       request.userId,
       request.apiId,
       request.endpointId,
       request.apiKeyId,
+      developerId,
       request.amountUsdc,
       request.requestId,
     ],
@@ -460,9 +489,9 @@ async function getUsageEventsByRequestIds(
   }
 
   const result = await pool.query<ExistingUsageEventRow>(
-    `SELECT request_id, id, stellar_tx_hash, deduction_status
-       FROM usage_events
-      WHERE request_id = ANY($1::text[])`,
+    `SELECT r.request_id, ue.id, ue.stellar_tx_hash, ue.deduction_status
+       FROM usage_event_request_ids r JOIN usage_events ue ON ue.id = r.usage_event_id
+      WHERE r.request_id = ANY($1::text[])`,
     [requestIds],
   );
 
@@ -477,25 +506,32 @@ async function runPhase1Bulk(
 ): Promise<BulkPhase1Result> {
   await client.query("BEGIN");
 
-  const requestIds = requests.map((request) => request.requestId);
-  const existingEvents = await client.query<ExistingUsageEventRow>(
-    `SELECT request_id, id, stellar_tx_hash, deduction_status
-       FROM usage_events
-      WHERE request_id = ANY($1::text[])
-        FOR UPDATE`,
-    [requestIds],
-  );
-
-  const rowsByRequestId = new Map<string, ExistingUsageEventRow>(
-    existingEvents.rows.map((row: ExistingUsageEventRow) => [
-      row.request_id,
-      row,
-    ]),
-  );
+  const rowsByRequestId = new Map<string, ExistingUsageEventRow>();
   const inserted: BulkInsertedUsageEvent[] = [];
 
   for (const request of requests) {
-    const existingRow = rowsByRequestId.get(request.requestId);
+    const owner = await client.query<{ developer_id: string }>(
+      `SELECT developer_id::text AS developer_id FROM apis WHERE id::text = $1 LIMIT 1`, [request.apiId],
+    );
+    if (!owner.rows[0]) {
+      const error = new Error(`Unknown API: ${request.apiId}`) as Error & { statusCode: number; code: string };
+      error.statusCode = 404;
+      error.code = "API_NOT_FOUND";
+      throw error;
+    }
+    const developerId = owner.rows[0].developer_id;
+    const reservation = await client.query<{ usage_event_id: string }>(
+      `INSERT INTO usage_event_request_ids (request_id, usage_event_id, developer_id)
+         VALUES ($1, nextval(pg_get_serial_sequence('usage_events', 'id')), $2)
+         ON CONFLICT (request_id) DO NOTHING RETURNING usage_event_id`,
+      [request.requestId, developerId],
+    );
+    const existingResult = reservation.rows[0] ? { rows: [] as ExistingUsageEventRow[] } : await client.query<ExistingUsageEventRow>(
+      `SELECT ue.request_id, ue.id, ue.stellar_tx_hash, ue.deduction_status
+         FROM usage_event_request_ids r JOIN usage_events ue ON ue.id = r.usage_event_id
+        WHERE r.request_id = $1 FOR UPDATE`, [request.requestId],
+    );
+    const existingRow = rowsByRequestId.get(request.requestId) ?? existingResult.rows[0];
     if (existingRow) {
       const status =
         (existingRow.deduction_status as DeductionStatus) ??
@@ -525,14 +561,16 @@ async function runPhase1Bulk(
 
     const insertResult = await client.query<{ id: string }>(
       `INSERT INTO usage_events
-         (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at, deduction_status)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'pending')
+         (id, user_id, api_id, endpoint_id, api_key_id, developer_id, amount_usdc, request_id, created_at, deduction_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), 'pending')
        RETURNING id`,
       [
+        reservation.rows[0].usage_event_id,
         request.userId,
         request.apiId,
         request.endpointId,
         request.apiKeyId,
+        developerId,
         request.amountUsdc,
         request.requestId,
       ],
@@ -635,6 +673,9 @@ export class BillingService {
         deductionApplied: false,
         reconciliationRequired: false,
         error: normalizeErrorMessage(error),
+        errorCode: error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code)
+          : undefined,
       };
     }
 
@@ -702,7 +743,9 @@ export class BillingService {
           stellar_tx_hash: string | null;
           deduction_status: string | null;
         }>(
-          `SELECT id, stellar_tx_hash, deduction_status FROM usage_events WHERE request_id = $1`,
+          `SELECT ue.id, ue.stellar_tx_hash, ue.deduction_status
+             FROM usage_event_request_ids r JOIN usage_events ue ON ue.id = r.usage_event_id
+            WHERE r.request_id = $1`,
           [request.requestId],
         );
         if (existing.rows.length > 0) {
@@ -729,6 +772,9 @@ export class BillingService {
         deductionApplied: false,
         reconciliationRequired: false,
         error: normalizeErrorMessage(error),
+        errorCode: error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code)
+          : undefined,
       };
     } finally {
       client.release();
@@ -864,6 +910,9 @@ export class BillingService {
         deductedCount: 0,
         totalDeductedAmountUsdc: "0",
         error: normalizeErrorMessage(error),
+        errorCode: error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code)
+          : undefined,
       };
     }
 
@@ -964,6 +1013,9 @@ export class BillingService {
         deductedCount: 0,
         totalDeductedAmountUsdc: "0",
         error: normalizeErrorMessage(error),
+        errorCode: error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code)
+          : undefined,
       };
     } finally {
       client.release();
@@ -1123,9 +1175,9 @@ export class BillingService {
       stellar_tx_hash: string | null;
       deduction_status: string | null;
     }>(
-      `SELECT id, stellar_tx_hash, deduction_status
-         FROM usage_events
-        WHERE request_id = $1`,
+      `SELECT ue.id, ue.stellar_tx_hash, ue.deduction_status
+         FROM usage_event_request_ids r JOIN usage_events ue ON ue.id = r.usage_event_id
+        WHERE r.request_id = $1`,
       [requestId],
     );
 
