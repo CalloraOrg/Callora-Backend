@@ -26,7 +26,17 @@ function makeEvent(overrides: Partial<BillingUsageEvent> = {}): BillingUsageEven
 }
 
 function makeRepo(events: BillingUsageEvent[]) {
-  return { getEvents: async () => events };
+  return {
+    getEventsInRange: async (from: Date, to: Date, options: { developerId?: string; cursor?: string; limit: number }) => {
+      const cursorId = BigInt(options.cursor ?? '0');
+      return events
+        .filter((event) => event.createdAt >= from && event.createdAt < to)
+        .filter((event) => options.developerId === undefined || event.developerId === options.developerId)
+        .filter((event) => BigInt(event.id) > cursorId)
+        .sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)))
+        .slice(0, options.limit);
+    },
+  };
 }
 
 function makeService(events: BillingUsageEvent[], store = new InMemoryExportStore(), client = new HmacObjectStorageClient()) {
@@ -44,7 +54,7 @@ function makeService(events: BillingUsageEvent[], store = new InMemoryExportStor
 // ─── runDailyExports ───────────────────────────────────────────────────────
 
 test('runDailyExports uploads CSV and JSON for a developer with events in the window', async () => {
-  const runDate = new Date('2026-06-02T00:00:00.000Z');
+  const runDate = '2026-06-01';
   const eventInWindow = makeEvent({ createdAt: new Date('2026-06-01T12:00:00.000Z') });
 
   const { service, client } = makeService([eventInWindow]);
@@ -63,7 +73,7 @@ test('runDailyExports uploads CSV and JSON for a developer with events in the wi
 });
 
 test('runDailyExports produces zero uploads when no events fall in the 24-hour window', async () => {
-  const runDate = new Date('2026-06-02T00:00:00.000Z');
+  const runDate = '2026-06-01';
   // Event is BEFORE the window
   const eventBefore = makeEvent({ createdAt: new Date('2026-05-31T23:59:59.000Z') });
 
@@ -75,9 +85,9 @@ test('runDailyExports produces zero uploads when no events fall in the 24-hour w
 });
 
 test('runDailyExports excludes events outside the 24-hour window boundary (upper bound)', async () => {
-  const runDate = new Date('2026-06-02T00:00:00.000Z');
+  const runDate = '2026-06-01';
   // Event is AT or AFTER the window end — must be excluded (window is [start, end))
-  const eventAtEnd = makeEvent({ createdAt: runDate });
+  const eventAtEnd = makeEvent({ createdAt: new Date('2026-06-02T00:00:00.000Z') });
 
   const { service, client } = makeService([eventAtEnd]);
   const records = await service.runDailyExports(runDate);
@@ -87,7 +97,7 @@ test('runDailyExports excludes events outside the 24-hour window boundary (upper
 });
 
 test('runDailyExports handles multiple developers independently', async () => {
-  const runDate = new Date('2026-06-02T00:00:00.000Z');
+  const runDate = '2026-06-01';
   const events: BillingUsageEvent[] = [
     makeEvent({ id: '1', developerId: 'dev-1', requestId: 'req-1', createdAt: new Date('2026-06-01T08:00:00.000Z') }),
     makeEvent({ id: '2', developerId: 'dev-2', requestId: 'req-2', createdAt: new Date('2026-06-01T10:00:00.000Z') }),
@@ -105,6 +115,91 @@ test('runDailyExports handles multiple developers independently', async () => {
   const dev2Keys = client.uploads.filter((u) => u.key.includes('dev-2'));
   expect(dev1Keys).toHaveLength(2); // csv + json
   expect(dev2Keys).toHaveLength(2); // csv + json
+});
+
+test('daily export is idempotent and labels the UTC day being exported', async () => {
+  const event = makeEvent({ createdAt: new Date('2026-03-01T23:59:59.999Z') });
+  const { service, client, store } = makeService([event]);
+  const first = await service.runDailyExports('2026-03-01');
+  const second = await service.runDailyExports('2026-03-01');
+
+  expect(first).toHaveLength(2);
+  expect(second).toHaveLength(0);
+  expect(client.uploads.map((upload) => upload.key)).toEqual([
+    'daily-exports/dev-1/2026-03-01.csv',
+    'daily-exports/dev-1/2026-03-01.json',
+  ]);
+  expect((await store.listByDeveloper('dev-1', { limit: 10, now: new Date() }))).toHaveLength(2);
+});
+
+test('UTC midnight belongs to the new day and expiry starts at export time', async () => {
+  jest.useFakeTimers().setSystemTime(new Date('2026-03-02T10:00:00.000Z'));
+  try {
+    const event = makeEvent({ createdAt: new Date('2026-03-02T00:00:00.000Z') });
+    const { service, client } = makeService([event]);
+    expect(await service.runDailyExports('2026-03-01')).toHaveLength(0);
+    const records = await service.runDailyExports('2026-03-02');
+    expect(records).toHaveLength(2);
+    expect(client.uploads.every((upload) => upload.key.includes('/2026-03-02.'))).toBe(true);
+    expect(records[0]?.exportedAt.toISOString()).toBe('2026-03-02T10:00:00.000Z');
+    expect(records[0]?.expiresAt.toISOString()).toBe('2026-03-09T10:00:00.000Z');
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('worker catches up a bounded number of completed UTC days', async () => {
+  jest.useFakeTimers().setSystemTime(new Date('2026-03-04T10:00:00.000Z'));
+  try {
+    const { service, client } = makeService([
+      makeEvent({ id: '1', createdAt: new Date('2026-03-01T12:00:00.000Z') }),
+      makeEvent({ id: '2', createdAt: new Date('2026-03-02T12:00:00.000Z') }),
+      makeEvent({ id: '3', createdAt: new Date('2026-03-03T12:00:00.000Z') }),
+    ]);
+    const worker = createReportExporterWorker(service, { intervalMs: 60_000, maxCatchUpDays: 3 });
+    worker.start();
+    await worker.awaitIdle();
+    worker.stop();
+    expect(client.uploads.map((upload) => upload.key)).toEqual(expect.arrayContaining([
+      'daily-exports/dev-1/2026-03-01.csv',
+      'daily-exports/dev-1/2026-03-02.csv',
+      'daily-exports/dev-1/2026-03-03.csv',
+    ]));
+    expect(client.uploads).toHaveLength(6);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('concurrent workers claim each developer day once', async () => {
+  const store = new InMemoryExportStore();
+  const { service: firstService, client: firstClient } = makeService([makeEvent()], store);
+  const { service: secondService, client: secondClient } = makeService([makeEvent()], store);
+  const [first, second] = await Promise.all([
+    firstService.runDailyExports('2026-06-01'),
+    secondService.runDailyExports('2026-06-01'),
+  ]);
+  expect(first.length + second.length).toBe(2);
+  expect(firstClient.uploads.length + secondClient.uploads.length).toBe(2);
+});
+
+test('paged ranged reads replace full table reads for large export sets', async () => {
+  const events = Array.from({ length: 50_000 }, (_, index) => makeEvent({
+    id: String(index + 1),
+    developerId: `dev-${index % 5}`,
+    createdAt: new Date('2026-06-01T12:00:00.000Z'),
+  }));
+  const repo = makeRepo(events);
+  const getPage = jest.spyOn(repo, 'getEventsInRange');
+  const client = new HmacObjectStorageClient();
+  const service = new ReportExporterService(repo, client, new InMemoryExportStore(), {
+    s3Bucket: 'test-bucket', s3Endpoint: 'https://s3.test', s3SecretAccessKey: 'test-secret', pageSize: 100,
+  });
+  await service.runDailyExports('2026-06-01');
+  expect(getPage).toHaveBeenCalledWith(expect.any(Date), expect.any(Date), expect.objectContaining({ limit: 100 }));
+  expect(getPage.mock.calls.some(([, , options]) => options.developerId !== undefined)).toBe(true);
+  expect(client.uploads).toHaveLength(10);
+  expect(client.uploads.find((upload) => upload.key.endsWith('.csv'))?.body.split('\n')).toHaveLength(10_001);
 });
 
 // ─── listExportsForDeveloper ───────────────────────────────────────────────
@@ -180,7 +275,7 @@ test('getSignedUrl returns a URL string containing the record s3Key', () => {
 // ─── worker lifecycle ─────────────────────────────────────────────────────
 
 test('worker start/stop/awaitIdle runs and cleans up without errors', async () => {
-  const runDate = new Date('2026-06-02T00:00:00.000Z');
+  const runDate = '2026-06-01';
   const event = makeEvent({ createdAt: new Date('2026-06-01T12:00:00.000Z') });
 
   const { service, client } = makeService([event]);

@@ -45,6 +45,7 @@ export interface RevenueLedgerUsageEvent {
 }
 
 export interface UsageEventsPgRepository {
+  getEventsInRange(from: Date, to: Date, options: UsageEventsRangeOptions): Promise<BillingUsageEvent[]>;
   create(event: CreateUsageEventInput): Promise<BillingUsageEvent>;
   findByUserId(userId: string, from?: Date, to?: Date, limit?: number, offset?: number): Promise<BillingUsageEvent[]>;
   findByApiId(apiId: string, from?: Date, to?: Date, limit?: number, offset?: number): Promise<BillingUsageEvent[]>;
@@ -69,6 +70,12 @@ export interface UsageEventsPgRepository {
     from: Date;
     to: Date;
   }): Promise<{ totalUnits: bigint; calls: number }>;
+}
+
+export interface UsageEventsRangeOptions {
+  developerId?: string;
+  cursor?: string;
+  limit: number;
 }
 
 export interface UsageEventsRepositoryQueryable {
@@ -242,6 +249,40 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       this.readDb = { query: readQuery };
       this.writeDb = { query: writeQuery };
     }
+  }
+
+  /** Read a bounded page of events from a half-open time range. */
+  async getEventsInRange(
+    from: Date,
+    to: Date,
+    options: UsageEventsRangeOptions,
+  ): Promise<BillingUsageEvent[]> {
+    assertValidRange(from, to);
+    const limit = normalizeLimit(options.limit);
+    if (limit === undefined || limit === 0) return [];
+
+    const params: unknown[] = [from, to];
+    const clauses = ['created_at >= $1', 'created_at < $2'];
+    if (options.developerId !== undefined) {
+      params.push(assertNonEmpty(options.developerId, 'developerId'));
+      clauses.push(`developer_id = $${params.length}`);
+    }
+    if (options.cursor !== undefined) {
+      const cursor = normalizeCursor(options.cursor);
+      params.push(BigInt(cursor ?? '0'));
+      clauses.push(`id > $${params.length}`);
+    }
+    params.push(limit);
+    const result = await this.readDb.query<UsageEventRow>(
+      `SELECT id, user_id, api_id, endpoint_id, api_key_id, developer_id,
+              amount_usdc, request_id, stellar_tx_hash, created_at
+       FROM usage_events
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY id ASC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map(mapUsageEventRow);
   }
 
   async create(event: CreateUsageEventInput): Promise<BillingUsageEvent> {
