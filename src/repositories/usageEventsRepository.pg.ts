@@ -5,7 +5,7 @@ import {
 } from './usageEventsRepository.js';
 import { encodeCursor, type CursorPayload } from '../lib/cursorPagination.js';
 import { generateCursor, decodeCursor } from '../lib/pagination.js';
-import { readQuery, writeQuery } from '../db.js';
+import { pool, readQuery, writeQuery } from '../db.js';
 
 export interface CreateUsageEventInput {
   userId: string;
@@ -42,6 +42,8 @@ export interface RevenueLedgerUsageEvent {
   apiId: string;
   amount: bigint;
   createdAt: Date;
+  stellarTxHash?: string | null;
+  deductionStatus?: 'pending' | 'confirmed' | 'voided' | null;
 }
 
 export interface UsageEventsPgRepository {
@@ -52,6 +54,13 @@ export interface UsageEventsPgRepository {
   getTotalRevenueByApi(apiId: string, from?: Date, to?: Date): Promise<bigint>;
   findUnindexedRevenueLedgerEvents(cursor?: string, limit?: number): Promise<RevenueLedgerUsageEvent[]>;
   indexRevenueLedgerEvent(event: RevenueLedgerUsageEvent, developerId: string): Promise<boolean>;
+  getRevenueLedgerCheckpoint(): Promise<string>;
+  advanceRevenueLedgerCheckpoint(id: string): Promise<void>;
+  recordRevenueLedgerSkip(id: string, reason: string, maxAttempts: number): Promise<{ attempts: number; permanent: boolean }>;
+  clearRevenueLedgerSkip(id: string): Promise<void>;
+  reverseVoidedRevenueLedgerEvents(): Promise<number>;
+  acquireRevenueLedgerIndexerLock(): Promise<boolean>;
+  releaseRevenueLedgerIndexerLock(): Promise<void>;
   findByUserIdCursor(params: {
     userId: string;
     from?: Date;
@@ -73,6 +82,10 @@ export interface UsageEventsPgRepository {
 
 export interface UsageEventsRepositoryQueryable {
   query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  connect?: () => Promise<{
+    query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
+    release(): void;
+  }>;
 }
 
 interface UsageEventRow {
@@ -98,6 +111,8 @@ interface RevenueLedgerUsageEventRow {
   api_id: string;
   amount_usdc: string | number | bigint;
   created_at: Date | string;
+  stellar_tx_hash?: string | null;
+  deduction_status?: 'pending' | 'confirmed' | 'voided' | null;
 }
 
 const assertNonEmpty = (value: string, fieldName: string): string => {
@@ -208,6 +223,8 @@ const mapRevenueLedgerUsageEventRow = (
   apiId: row.api_id,
   amount: toBigInt(row.amount_usdc, 'amount_usdc'),
   createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+  stellarTxHash: row.stellar_tx_hash,
+  deductionStatus: row.deduction_status,
 });
 
 const appendDateFilters = (params: unknown[], clauses: string[], from?: Date, to?: Date): void => {
@@ -225,6 +242,7 @@ const appendDateFilters = (params: unknown[], clauses: string[], from?: Date, to
 export class PgUsageEventsRepository implements UsageEventsPgRepository {
   private readonly readDb: UsageEventsRepositoryQueryable;
   private readonly writeDb: UsageEventsRepositoryQueryable;
+  private advisoryLockClient: Awaited<ReturnType<NonNullable<UsageEventsRepositoryQueryable['connect']>>> | undefined;
 
   /**
    * @param db - Optional injectable queryable used in tests.
@@ -238,9 +256,9 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       this.readDb = db;
       this.writeDb = db;
     } else {
-      // Production: route reads to replicas and writes to primary.
+      // Production: route reads to replicas and writes, including session locks, to the primary.
       this.readDb = { query: readQuery };
-      this.writeDb = { query: writeQuery };
+      this.writeDb = { query: writeQuery, connect: () => pool.connect() };
     }
   }
 
@@ -477,18 +495,33 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       return [];
     }
 
-    const result = await this.readDb.query<RevenueLedgerUsageEventRow>(
+    // The indexer is accounting work: always read from the primary.  Inspect
+    // the catalog first so this remains compatible with deployments that have
+    // not yet applied the deduction_status migration.
+    const statusColumn = await this.writeDb.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'usage_events' AND column_name = 'deduction_status' LIMIT 1`,
+    );
+    const statusSelect = statusColumn.rows.length ? 'ue.deduction_status' : 'NULL::text';
+    const statusPredicate = statusColumn.rows.length
+      ? `(ue.deduction_status = 'confirmed' OR ue.deduction_status = 'pending' OR ue.deduction_status = 'voided')`
+      : 'TRUE';
+    const result = await this.writeDb.query<RevenueLedgerUsageEventRow>(
       `
         SELECT
           ue.id AS usage_event_id,
           ue.api_id,
           ue.amount_usdc,
-          ue.created_at
+          ue.created_at,
+          ue.stellar_tx_hash,
+          ${statusSelect} AS deduction_status
         FROM usage_events ue
         LEFT JOIN revenue_ledger rl
           ON rl.usage_event_id = ue.id
-        WHERE ue.id > $1
+        LEFT JOIN revenue_ledger_skips rs ON rs.usage_event_id = ue.id
+        WHERE (ue.id > $1 OR (rs.usage_event_id IS NOT NULL AND rs.permanent = FALSE AND rs.next_retry_at <= NOW()))
           AND rl.usage_event_id IS NULL
+          AND ${statusPredicate}
+          AND (rs.usage_event_id IS NULL OR rs.permanent = FALSE AND rs.next_retry_at <= NOW())
         ORDER BY ue.id ASC
         LIMIT $2
       `,
@@ -498,7 +531,146 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     return result.rows.map(mapRevenueLedgerUsageEventRow);
   }
 
+  async getRevenueLedgerCheckpoint(): Promise<string> {
+    const result = await this.writeDb.query<{ last_usage_event_id: string | number | bigint }>(
+      `SELECT last_usage_event_id FROM indexer_checkpoints WHERE name = 'revenue_ledger'`,
+    );
+    return String(result.rows[0]?.last_usage_event_id ?? '0');
+  }
+
+  async advanceRevenueLedgerCheckpoint(id: string): Promise<void> {
+    await this.writeDb.query(
+      `INSERT INTO indexer_checkpoints (name, last_usage_event_id, updated_at)
+       VALUES ('revenue_ledger', $1::bigint, NOW())
+       ON CONFLICT (name) DO UPDATE SET
+         last_usage_event_id = GREATEST(indexer_checkpoints.last_usage_event_id, EXCLUDED.last_usage_event_id),
+         updated_at = NOW(),
+         locked_until = GREATEST(COALESCE(indexer_checkpoints.locked_until, NOW()), NOW() + INTERVAL '15 minutes')`, [id],
+    );
+  }
+
+  async recordRevenueLedgerSkip(id: string, reason: string, maxAttempts: number): Promise<{ attempts: number; permanent: boolean }> {
+    const result = await this.writeDb.query<{ attempts: number; permanent: boolean }>(
+      `INSERT INTO revenue_ledger_skips (usage_event_id, reason, first_seen_at, attempts, next_retry_at, permanent)
+       VALUES ($1::bigint, $2, NOW(), 1, NOW() + INTERVAL '30 seconds', FALSE)
+       ON CONFLICT (usage_event_id) DO UPDATE SET
+         reason = EXCLUDED.reason,
+         attempts = revenue_ledger_skips.attempts + 1,
+         next_retry_at = NOW() + (LEAST(3600, 30 * POWER(2, LEAST(revenue_ledger_skips.attempts - 1, 7))) * INTERVAL '1 second'),
+         permanent = CASE WHEN EXCLUDED.reason = 'pending' THEN FALSE ELSE revenue_ledger_skips.attempts + 1 >= $3 END
+       RETURNING attempts, permanent`, [id, reason, maxAttempts],
+    );
+    return result.rows[0] ?? { attempts: 1, permanent: false };
+  }
+
+  async clearRevenueLedgerSkip(id: string): Promise<void> {
+    await this.writeDb.query(`DELETE FROM revenue_ledger_skips WHERE usage_event_id = $1::bigint`, [id]);
+  }
+
+  async reverseVoidedRevenueLedgerEvents(): Promise<number> {
+    const statusColumn = await this.writeDb.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'usage_events' AND column_name = 'deduction_status' LIMIT 1`,
+    );
+    if (statusColumn.rows.length === 0) return 0;
+    const client = this.writeDb.connect ? await this.writeDb.connect() : undefined;
+    const queryable = client ?? this.writeDb;
+    let count = 0;
+    try {
+      if (client) await client.query('BEGIN');
+      const voided = await queryable.query<{
+        id: string | number;
+        usage_event_id: string | number;
+        settlement_id: string | number | null;
+      }>(
+        `SELECT rl.id, rl.usage_event_id, rl.settlement_id
+         FROM revenue_ledger rl JOIN usage_events ue ON ue.id = rl.usage_event_id
+         WHERE ue.deduction_status = 'voided' AND rl.reversed_at IS NULL
+         ORDER BY rl.id ASC`,
+      );
+
+      for (const row of voided.rows) {
+        const updated = await queryable.query<{
+          usage_event_id: string | number;
+          settlement_id: string | number | null;
+          amount_usdc: string | number;
+          api_id: string;
+          developer_id: string;
+        }>(
+          `UPDATE revenue_ledger
+           SET reversed_at = NOW(), amount_usdc = CASE WHEN settlement_id IS NULL THEN 0 ELSE amount_usdc END
+           WHERE id = $1 AND reversed_at IS NULL
+           RETURNING usage_event_id, settlement_id, amount_usdc, api_id, developer_id`,
+          [row.id],
+        );
+        const original = updated.rows[0];
+        if (!original) continue;
+        count += 1;
+        if (original.settlement_id !== null) {
+          await queryable.query(
+            `INSERT INTO revenue_ledger (api_id, developer_id, amount_usdc, reversal_of_usage_event_id, created_at, reversed_at)
+             VALUES ($1, $2, -$3::numeric, $4::bigint, NOW(), NOW())
+             ON CONFLICT (reversal_of_usage_event_id) DO NOTHING`,
+            [original.api_id, original.developer_id, original.amount_usdc, original.usage_event_id],
+          );
+        }
+      }
+      if (client) await client.query('COMMIT');
+      return count;
+    } catch (error) {
+      if (client) await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client?.release();
+    }
+  }
+
+  async acquireRevenueLedgerIndexerLock(): Promise<boolean> {
+    if (this.writeDb.connect) {
+      const client = await this.writeDb.connect();
+      try {
+        const lock = await client.query<{ locked: boolean }>(
+          `SELECT pg_try_advisory_lock(hashtext('callora:revenue-ledger-indexer')) AS locked`,
+        );
+        if (lock.rows[0]?.locked) {
+          this.advisoryLockClient = client;
+          return true;
+        }
+        client.release();
+        return false;
+      } catch {
+        // SQL emulators do not implement PostgreSQL advisory locks.
+        client.release();
+      }
+    }
+    const result = await this.writeDb.query<{ name: string }>(
+      `INSERT INTO indexer_checkpoints (name, last_usage_event_id, updated_at, locked_until)
+       VALUES ('revenue_ledger', 0, NOW(), NOW() + INTERVAL '15 minutes')
+       ON CONFLICT (name) DO UPDATE SET locked_until = NOW() + INTERVAL '15 minutes'
+       WHERE indexer_checkpoints.locked_until IS NULL OR indexer_checkpoints.locked_until < NOW()
+       RETURNING name`,
+    );
+    return result.rows.length > 0;
+  }
+
+  async releaseRevenueLedgerIndexerLock(): Promise<void> {
+    if (this.advisoryLockClient) {
+      const client = this.advisoryLockClient;
+      this.advisoryLockClient = undefined;
+      try {
+        await client.query(`SELECT pg_advisory_unlock(hashtext('callora:revenue-ledger-indexer'))`);
+      } finally {
+        client.release();
+      }
+      return;
+    }
+    await this.writeDb.query(`UPDATE indexer_checkpoints SET locked_until = NULL WHERE name = 'revenue_ledger'`);
+  }
+
   async indexRevenueLedgerEvent(event: RevenueLedgerUsageEvent, developerId: string): Promise<boolean> {
+    const statusColumn = await this.writeDb.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'usage_events' AND column_name = 'deduction_status' LIMIT 1`,
+    );
+    const confirmationPredicate = statusColumn.rows.length ? `AND ue.deduction_status = 'confirmed'` : '';
     const result = await this.writeDb.query<{ inserted: number }>(
       `
         INSERT INTO revenue_ledger (
@@ -508,12 +680,14 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
           usage_event_id,
           created_at
         )
-        SELECT $1, $2, $3::numeric, $4::bigint, $5::timestamp
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM revenue_ledger
-          WHERE usage_event_id = $4::bigint
-        )
+        SELECT $1, $2, $3::numeric, ue.id, $5::timestamp
+        FROM usage_events ue
+        WHERE ue.id = $4::bigint
+          AND ue.stellar_tx_hash IS NOT NULL
+          ${confirmationPredicate}
+          AND NOT EXISTS (
+            SELECT 1 FROM revenue_ledger existing WHERE existing.usage_event_id = ue.id
+          )
         ON CONFLICT (usage_event_id) DO NOTHING
         RETURNING 1 AS inserted
       `,

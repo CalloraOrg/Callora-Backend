@@ -36,8 +36,14 @@ function createUsageEventsRepository() {
       developer_id VARCHAR(255) NOT NULL,
       amount_usdc NUMERIC(20, 0) NOT NULL,
       usage_event_id BIGINT UNIQUE REFERENCES usage_events(id),
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      settlement_id BIGINT,
+      reversed_at TIMESTAMP,
+      reversal_of_usage_event_id BIGINT UNIQUE
     );
+
+    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMP);
+    CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMP NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
 
     CREATE INDEX idx_usage_events_user_created ON usage_events(user_id, created_at);
     CREATE INDEX idx_usage_events_api_created ON usage_events(api_id, created_at);
@@ -514,6 +520,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 100n,
       requestId: 'req-ledger-1',
+      stellarTxHash: 'tx-ledger-1',
       createdAt: new Date('2026-02-01T10:00:00.000Z'),
     });
     await repository.create({
@@ -524,6 +531,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 250n,
       requestId: 'req-ledger-2',
+      stellarTxHash: 'tx-ledger-2',
       createdAt: new Date('2026-02-02T10:00:00.000Z'),
     });
     await repository.create({
@@ -534,6 +542,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 999n,
       requestId: 'req-ledger-3',
+      stellarTxHash: 'tx-ledger-3',
       createdAt: new Date('2026-02-03T10:00:00.000Z'),
     });
 
@@ -584,6 +593,7 @@ test('indexRevenueLedgerEvent inserts idempotently by usageEventId', async () =>
       developerId: 'dev-1',
       amount: 1500n,
       requestId: 'req-ledger-insert',
+      stellarTxHash: 'tx-ledger-insert',
       createdAt: new Date('2026-02-05T10:00:00.000Z'),
     });
 

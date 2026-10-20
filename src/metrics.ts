@@ -1007,3 +1007,14 @@ export function resetBillingPendingMetrics(): void {
   billingPendingDeductions.reset();
   billingPendingResolvedTotal.reset();
 }
+
+const revenueLedgerSkippedTotal = new client.Counter({
+  name: 'revenue_ledger_skipped_total',
+  help: 'Usage events skipped while indexing developer revenue',
+  labelNames: ['reason'] as const,
+});
+register.registerMetric(revenueLedgerSkippedTotal);
+
+export function recordRevenueLedgerSkipped(reason: 'unknown_api' | 'pending' | 'voided'): void {
+  revenueLedgerSkippedTotal.inc({ reason });
+}
