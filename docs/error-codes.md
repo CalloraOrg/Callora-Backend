@@ -63,6 +63,7 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `INVALID_CONTRACT_ID` | Vault / deposit |
 | `NETWORK_UNAVAILABLE` | Vault / deposit |
 | `TRANSACTION_BUILD_FAILED` | Vault / deposit |
+| `STELLAR_ADDRESS_REQUIRED` | Vault / deposit |
 | `INTERNAL_ERROR` | Vault / deposit |
 | `INVALID_WEBHOOK_REGISTRATION` | Webhooks |
 | `INVALID_WEBHOOK_EVENT_TYPES` | Webhooks |

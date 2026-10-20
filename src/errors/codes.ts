@@ -162,6 +162,9 @@ export const ErrorCode = {
   /** Failed to build transaction */
   TRANSACTION_BUILD_FAILED: "TRANSACTION_BUILD_FAILED",
 
+  /** User does not have a Stellar address configured */
+  STELLAR_ADDRESS_REQUIRED: "STELLAR_ADDRESS_REQUIRED",
+
   /** Internal error occurred during vault operation */
   INTERNAL_ERROR: "INTERNAL_ERROR",
 
