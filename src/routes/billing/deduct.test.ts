@@ -210,7 +210,7 @@ describe('POST /api/billing/deduct - developerId validation', () => {
     try {
       const pending = await deduct();
       expect(pending.status).toBe(409);
-      expect(pending.body.code).toBe('RECONCILIATION_REQUIRED');
+      expect(pending.body.error.code).toBe('RECONCILIATION_REQUIRED');
 
       reconciled = true;
       const resolved = await deduct();
