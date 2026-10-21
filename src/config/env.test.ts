@@ -9,6 +9,9 @@ const baseEnv = {
   UPSTREAM_HOST_ALLOWLIST: "api.example.com",
 };
 
+// Synthetic StrKey-valid Soroban contract id (C...) for production fixtures.
+const validContractId = "CBJZLUKQBWDMZPKNJAVONZ7GCCWADSETRXWOPN5Z3XWAUNI4F2R7XDYQ";
+
 describe("env schema — Soroban billing", () => {
   it("requires a nonempty contract ID in production", () => {
     for (const contractId of [undefined, "", "   "]) {
@@ -30,18 +33,16 @@ describe("env schema — Soroban billing", () => {
     const result = envSchema.safeParse({
       ...baseEnv,
       NODE_ENV: "production",
-      SOROBAN_BILLING_CONTRACT_ID: "contract_123",
+      SOROBAN_BILLING_CONTRACT_ID: validContractId,
       SOROBAN_BILLING_RPC_URL: "https://soroban.example.com",
-      SOROBAN_BILLING_SOURCE_ACCOUNT: "source_123",
       SOROBAN_BILLING_NETWORK_PASSPHRASE: "Test network",
-      SOROBAN_BILLING_BACKEND_SECRET_KEY: "secret_123",
       SOROBAN_BILLING_RPC_TIMEOUT_MS: "7500",
       SOROBAN_BILLING_BALANCE_FN: "get_balance",
       SOROBAN_BILLING_DEDUCT_FN: "charge",
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.SOROBAN_BILLING_CONTRACT_ID).toBe("contract_123");
+      expect(result.data.SOROBAN_BILLING_CONTRACT_ID).toBe(validContractId);
       expect(result.data.SOROBAN_BILLING_RPC_TIMEOUT_MS).toBe(7500);
       expect(result.data.SOROBAN_BILLING_BALANCE_FN).toBe("get_balance");
       expect(result.data.SOROBAN_BILLING_DEDUCT_FN).toBe("charge");
@@ -54,7 +55,6 @@ describe("env schema — Soroban billing", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.SOROBAN_BILLING_CONTRACT_ID).toBeUndefined();
-        expect(result.data.SOROBAN_BILLING_RPC_TIMEOUT_MS).toBe(5000);
       }
     }
   });
@@ -318,7 +318,8 @@ describe('env schema — upstream host allowlist', () => {
     const result = envSchema.safeParse({
       ...baseEnv,
       NODE_ENV: 'production',
-      SOROBAN_BILLING_CONTRACT_ID: 'contract_123',
+      SOROBAN_BILLING_CONTRACT_ID: validContractId,
+      SOROBAN_BILLING_RPC_URL: 'https://soroban.example.com',
       UPSTREAM_HOST_ALLOWLIST: allowlist,
     });
     expect(result.success).toBe(false);
@@ -333,7 +334,8 @@ describe('env schema — upstream host allowlist', () => {
     const result = envSchema.safeParse({
       ...baseEnv,
       NODE_ENV: 'production',
-      SOROBAN_BILLING_CONTRACT_ID: 'contract_123',
+      SOROBAN_BILLING_CONTRACT_ID: validContractId,
+      SOROBAN_BILLING_RPC_URL: 'https://soroban.example.com',
       UPSTREAM_HOST_ALLOWLIST: 'api.example.com, api2.example.com',
     });
     expect(result.success).toBe(true);

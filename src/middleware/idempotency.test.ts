@@ -1,20 +1,27 @@
-import express, { type Request, type Response, type NextFunction, type RequestHandler } from 'express';
-import request from 'supertest';
-import { newDb } from 'pg-mem';
 import type { Pool } from 'pg';
+import { EventEmitter } from 'node:events';
+import express from 'express';
+import request from 'supertest';
+import { readFileSync } from 'node:fs';
+import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
+import { newDb, DataType } from 'pg-mem';
 import { logger } from '../logger.js';
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import {
   idempotencyMiddleware,
+  createIdempotencyMiddleware,
+  type IdempotencyLease,
   calculateRequestHash,
   IDEMPOTENCY_KEY_REUSE_MISMATCH,
   INVALID_IDEMPOTENCY_KEY,
-  createIdempotencyMiddleware,
   isCacheableIdempotencyResponse,
   type IdempotencyConfig,
 } from './idempotency.js';
+import { errorEnvelopeSchema } from './envelope.js';
 
 /** Mirrors DEFAULT_KEY_MAX_LENGTH in idempotency.ts (not exported). */
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+const next = jest.fn();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,7 +32,7 @@ function makeDb(rows: Record<string, unknown>[] = []) {
   // First call: SELECT existing, non-expired key
   mock.query.mockResolvedValueOnce({ rows });
   // All subsequent calls (INSERT / UPDATE / DELETE): succeed
-  mock.query.mockResolvedValue({ rows: [] });
+  mock.query.mockResolvedValue({ rows: rows.length ? [] : [{ lease_token: '2026-01-01 00:00:00.123456' }] });
   return mock;
 }
 
@@ -51,6 +58,7 @@ function makeReq(overrides: Partial<{
 
 function makeRes(userId = 'user-1'): Partial<Response> & { locals: { authenticatedUser: { id: string } }; statusCode: number; setHeader: jest.Mock; getHeader: jest.Mock; json: jest.Mock; send: jest.Mock } {
   return {
+    once: jest.fn(),
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
     send: jest.fn().mockReturnThis(),
@@ -59,6 +67,24 @@ function makeRes(userId = 'user-1'): Partial<Response> & { locals: { authenticat
     locals: { authenticatedUser: { id: userId } },
     statusCode: 200,
   };
+}
+
+/** PostgreSQL-semantics store: migrations run as written, NOW() driven by `clock`. */
+async function createIdempotencyPool(clock: () => Date): Promise<Pool> {
+  const memory = newDb();
+  // pg-mem lacks PostgreSQL's timestamp formatting function. Only presentation
+  // is supplied here; ownership comparisons and mutations run as SQL.
+  memory.public.registerFunction({ name: 'to_char', args: [DataType.timestamp, DataType.text], returns: DataType.text,
+    implementation: (value: Date) => value.toISOString().replace('T', ' ').replace('Z', '000') });
+
+  memory.getSchema('pg_catalog').registerFunction({ name: 'now', args: [], returns: DataType.timestamptz, impure: true, implementation: clock }, true);
+  const adapter = memory.adapters.createPg();
+  const db: Pool = new adapter.Pool();
+  await db.query(readFileSync('migrations/004_create_idempotency_store.sql', 'utf8'));
+  await db.query(readFileSync('migrations/0025_idempotency_store_scope.sql', 'utf8'));
+  await db.query(readFileSync('migrations/0027_idempotency_lease.sql', 'utf8'));
+  await db.query(readFileSync('migrations/0028_idempotency_response_headers.sql', 'utf8'));
+  return db;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +189,18 @@ describe('idempotencyMiddleware — unit', () => {
     expect(mockDb.query).not.toHaveBeenCalled();
   });
 
+  it('rejects overlong keys without accessing the database', async () => {
+    const db = makeDb();
+    const req = makeReq({ idempotencyKeyHeader: 'k'.repeat(MAX_IDEMPOTENCY_KEY_LENGTH + 1) }) as Request;
+    req.app = { locals: { dbPool: db } } as unknown as Request['app'];
+    const res = makeRes();
+    const next = jest.fn();
+    await idempotencyMiddleware(req, res as Response, next);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(db.query).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed Idempotency-Key values with the standard error envelope', async () => {
     const mockDb = makeDb();
     const req = makeReq({ idempotencyKeyHeader: 'bad key with spaces' }) as Request;
@@ -180,6 +218,7 @@ describe('idempotencyMiddleware — unit', () => {
         requestId: 'req-idem-test',
       })
     );
+    expect(errorEnvelopeSchema.safeParse(res.json.mock.calls[0][0]).success).toBe(true);
     expect(next).not.toHaveBeenCalled();
     expect(mockDb.query).not.toHaveBeenCalled();
   });
@@ -215,7 +254,7 @@ describe('idempotencyMiddleware — unit', () => {
     expect(mockDb.query).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining('INSERT INTO idempotency_store'),
-      ['user-1', 'test-key-123', expect.any(String), 'started', expect.any(String)]
+      ['user-1', 'test-key-123', expect.any(String), '86400 seconds', '60 seconds']
     );
     expect(mockDb.query.mock.calls[1][0]).toContain('ON CONFLICT (scope, idempotency_key)');
     expect(mockDb.query.mock.calls[0][0]).toContain('expires_at > NOW()');
@@ -294,12 +333,13 @@ describe('idempotencyMiddleware — payload mismatch (issue #427)', () => {
 
     await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
 
-    const responseBody = (res.json as jest.Mock).mock.calls[0][0];
-    expect(responseBody.error.details).toMatchObject({
-      idempotencyKey: 'test-key-123',
-      incomingPayloadFingerprint: expectedIncoming,
-      storedPayloadFingerprint: 'stored-hash-abc',
-    });
+    const responseBody = res.json.mock.calls[0][0];
+    expect(errorEnvelopeSchema.safeParse(responseBody).success).toBe(true);
+    expect(responseBody.error.details).toEqual(expect.arrayContaining([
+      { field: 'idempotencyKey', message: 'test-key-123', code: IDEMPOTENCY_KEY_REUSE_MISMATCH },
+      { field: 'incomingPayloadFingerprint', message: expectedIncoming, code: IDEMPOTENCY_KEY_REUSE_MISMATCH },
+      { field: 'storedPayloadFingerprint', message: 'stored-hash-abc', code: IDEMPOTENCY_KEY_REUSE_MISMATCH },
+    ]));
   });
 
   it('mismatch details list top-level body keys (sorted)', async () => {
@@ -313,12 +353,17 @@ describe('idempotencyMiddleware — payload mismatch (issue #427)', () => {
     const body = { zzz: '1', aaa: '2', mmm: '3' };
     const req = makeReq({ body }) as Request;
     const res = makeRes();
+    const next = jest.fn();
     (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
 
     await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
 
-    const responseBody = (res.json as jest.Mock).mock.calls[0][0];
-    expect(responseBody.error.details.incomingFields).toEqual(['aaa', 'mmm', 'zzz']);
+    const responseBody = res.json.mock.calls[0][0];
+    expect(responseBody.error.details.slice(-3)).toEqual([
+      { field: 'incomingFields', message: 'aaa', code: IDEMPOTENCY_KEY_REUSE_MISMATCH },
+      { field: 'incomingFields', message: 'mmm', code: IDEMPOTENCY_KEY_REUSE_MISMATCH },
+      { field: 'incomingFields', message: 'zzz', code: IDEMPOTENCY_KEY_REUSE_MISMATCH },
+    ]);
   });
 
   it('does NOT leak stored values — only fingerprints and field names are returned', async () => {
@@ -427,379 +472,227 @@ describe('idempotencyMiddleware — in-progress and error paths', () => {
 
 });
 
-// ---------------------------------------------------------------------------
-// Per-user scoping — issue #1273
-// ---------------------------------------------------------------------------
+describe('idempotency leases and response lifecycle (PostgreSQL semantics)', () => {
+  let db: Pool;
+  let now: Date;
+  const body = { amountUsdc: '1.00', apiId: 'api-1' };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const row = async () => (await db.query('SELECT * FROM idempotency_store')).rows[0];
 
-interface ScopedRow {
-  request_hash: string;
-  status: string;
-  response_status: number;
-  response_body: string;
-  expires_at: string;
-}
-
-/** Stateful in-memory idempotency_store keyed by (scope, key). */
-function makeScopedPool() {
-  const store = new Map<string, ScopedRow>();
-  const composite = (scope: string, key: string) => `${scope}::${key}`;
-
-  const query = jest.fn(async (text: string, params: unknown[] = []) => {
-    if (text.includes('DELETE FROM idempotency_store WHERE expires_at')) {
-      return { rows: [] };
-    }
-    if (text.includes('SELECT request_hash')) {
-      const [scope, key] = params as [string, string];
-      const row = store.get(composite(scope, key));
-      return { rows: row ? [row] : [] };
-    }
-    if (text.includes('INSERT INTO idempotency_store')) {
-      const [scope, key, requestHash, status, expiresAt] = params as [
-        string,
-        string,
-        string,
-        string,
-        string,
-      ];
-      if (store.has(composite(scope, key))) {
-        return { rows: [], rowCount: 0 };
-      }
-      store.set(composite(scope, key), {
-        request_hash: requestHash,
-        status,
-        response_status: 0,
-        response_body: '',
-        expires_at: expiresAt,
-      });
-      return { rows: [], rowCount: 1 };
-    }
-    if (text.includes('UPDATE idempotency_store')) {
-      const [status, responseStatus, responseBody, scope, key] = params as [
-        string,
-        number,
-        string,
-        string,
-        string,
-      ];
-      const row = store.get(composite(scope, key));
-      if (row) {
-        store.set(composite(scope, key), {
-          ...row,
-          status,
-          response_status: responseStatus,
-          response_body: responseBody,
-        });
-      }
-      return { rows: [] };
-    }
-    if (text.includes('DELETE FROM idempotency_store WHERE scope')) {
-      const [scope, key] = params as [string, string];
-      store.delete(composite(scope, key));
-      return { rows: [] };
-    }
-    return { rows: [] };
+  beforeEach(async () => {
+    now = new Date('2026-01-01T00:00:00Z');
+    db = await createIdempotencyPool(() => now);
   });
+  afterEach(async () => { jest.restoreAllMocks(); await db.end(); });
 
-  return { query, store, composite } as unknown as {
-    query: jest.Mock;
-    store: Map<string, ScopedRow>;
-    composite: (scope: string, key: string) => string;
-  };
-}
-
-describe('idempotencyMiddleware — per-user key scoping (issue #1273)', () => {
-  async function invoke(userId: string, db: unknown, req = makeReq() as Request) {
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = {
-      locals: { dbPool: db },
-    };
-    const res = makeRes(userId);
-    const next = jest.fn();
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-    return { req, res, next };
-  }
-
-  it('lets two users use the same key independently', async () => {
-    const db = makeScopedPool();
-
-    const first = await invoke('user-a', db);
-    expect(first.next).toHaveBeenCalledTimes(1);
-
-    const second = await invoke('user-b', db);
-    // No cross-tenant mismatch/replay: user-b gets its own record.
-    expect(second.next).toHaveBeenCalledTimes(1);
-    expect(second.res.status).not.toHaveBeenCalledWith(409);
-
-    expect(db.store.has(db.composite('user-a', 'test-key-123'))).toBe(true);
-    expect(db.store.has(db.composite('user-b', 'test-key-123'))).toBe(true);
-  });
-
-  it('replays the stored response only for the owning user', async () => {
-    const db = makeScopedPool();
-
-    const first = await invoke('user-a', db);
-    first.res.statusCode = 200;
-    first.res.json({ success: true, txHash: 'tx-a' });
-    await new Promise(resolve => process.nextTick(resolve));
-
-    // Same user retries the same key → replay.
-    const retry = await invoke('user-a', db);
-    expect(retry.res.setHeader).toHaveBeenCalledWith('Idempotent-Replayed', 'true');
-    expect(retry.res.json).toHaveBeenCalledWith({ success: true, txHash: 'tx-a' });
-    expect(retry.next).not.toHaveBeenCalled();
-
-    // A different user with the same key is unaffected by the replay.
-    const other = await invoke('user-b', db);
-    expect(other.next).toHaveBeenCalledTimes(1);
-  });
-});
-
-// Keep next defined at module scope for use in the describe blocks above
-const next = jest.fn();
-
-// ---------------------------------------------------------------------------
-// Concurrency — duplicate idempotency keys in simultaneous requests
-// ---------------------------------------------------------------------------
-
-describe('idempotencyMiddleware — concurrent duplicate keys', () => {
-  /**
-   * A pool whose INSERT ... ON CONFLICT returns rowCount 0 when the key
-   * already exists, mirroring Postgres semantics for the atomic insert.
-   */
-  function makeConcurrentPool() {
-    const store = new Map<string, ScopedRow>();
-    const composite = (scope: string, key: string) => `${scope}::${key}`;
-
-    const query = jest.fn(async (text: string, params: unknown[] = []) => {
-      if (text.includes('DELETE FROM idempotency_store WHERE expires_at')) {
-        return { rows: [] };
-      }
-      if (text.includes('SELECT request_hash')) {
-        const [scope, key] = params as [string, string];
-        const row = store.get(composite(scope, key));
-        return { rows: row ? [row] : [] };
-      }
-      if (text.includes('INSERT INTO idempotency_store')) {
-        const [scope, key, requestHash, status, expiresAt] = params as [
-          string,
-          string,
-          string,
-          string,
-          string,
-        ];
-        if (store.has(composite(scope, key))) {
-          return { rows: [], rowCount: 0 };
-        }
-        store.set(composite(scope, key), {
-          request_hash: requestHash,
-          status,
-          response_status: 0,
-          response_body: '',
-          expires_at: expiresAt,
-        });
-        return { rows: [], rowCount: 1 };
-      }
-      if (text.includes('UPDATE idempotency_store')) {
-        const [status, responseStatus, responseBody, scope, key] = params as [
-          string,
-          number,
-          string,
-          string,
-          string,
-        ];
-        const row = store.get(composite(scope, key));
-        if (row) {
-          store.set(composite(scope, key), {
-            ...row,
-            status,
-            response_status: responseStatus,
-            response_body: responseBody,
-          });
-        }
-        return { rows: [] };
-      }
-      if (text.includes('DELETE FROM idempotency_store WHERE scope')) {
-        const [scope, key] = params as [string, string];
-        store.delete(composite(scope, key));
-        return { rows: [] };
-      }
-      return { rows: [] };
+  // A writable response double exercises late finishes and transport loss without
+  // sleeps or dangling sockets. HTTP cases below additionally use real Express.
+  async function invoke(userId = 'user-1', requestBody = body) {
+    const req = makeReq({ body: requestBody }) as Request;
+    req.app = { locals: { dbPool: db } } as unknown as Request['app'];
+    const events = new EventEmitter();
+    const headers: Record<string, string> = {};
+    const res = Object.assign(events, {
+      locals: { authenticatedUser: { id: userId } } as { authenticatedUser: { id: string }; idempotency?: IdempotencyLease },
+      statusCode: 200,
+      status: jest.fn(function (this: { statusCode: number }, code: number) { this.statusCode = code; return this; }),
+      setHeader: jest.fn((name: string, value: string) => { headers[name] = value; }),
+      getHeader: (name: string) => headers[name],
+      write: jest.fn(() => true),
+      end: jest.fn(function (this: EventEmitter) { this.emit('finish'); return this; }),
+      json: jest.fn(function (this: { end(chunk: string): unknown }, value: unknown) { this.end(JSON.stringify(value)); return this; }),
     });
-
-    return { query, store, composite } as unknown as {
-      query: jest.Mock;
-      store: Map<string, ScopedRow>;
-      composite: (scope: string, key: string) => string;
-    };
+    const next = jest.fn();
+    await idempotencyMiddleware(req, res as unknown as Response, next);
+    await flush();
+    return { res, next };
   }
 
-  it('lets exactly one of two simultaneous requests proceed and returns 409 IDEMPOTENCY_IN_PROGRESS to the other', async () => {
-    const db = makeConcurrentPool();
-    const body = { amountUsdc: '1.00', apiId: 'api-1' };
+  function app(handler: express.RequestHandler) {
+    const server = express();
+    server.locals.dbPool = db;
+    server.use(express.json());
+    server.use((_req, res, next) => { res.locals.authenticatedUser = { id: 'user-1' }; next(); });
+    server.post('/api/billing/deduct', createIdempotencyMiddleware(), handler);
+    return server;
+  }
+  const post = (server: express.Express) => request(server).post('/api/billing/deduct').set('Idempotency-Key', 'test-key-123').send(body);
 
-    const reqA = makeReq({ body }) as Request;
-    const reqB = makeReq({ body }) as Request;
-    (reqA as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
-    (reqB as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
-
-    const resA = makeRes();
-    const resB = makeRes();
-    const nextA = jest.fn();
-    const nextB = jest.fn();
-
-    await Promise.all([
-      idempotencyMiddleware(reqA, resA as Response, nextA as unknown as NextFunction),
-      idempotencyMiddleware(reqB, resB as Response, nextB as unknown as NextFunction),
-    ]);
-
-    const proceeded = [nextA, nextB].filter(n => n.mock.calls.length === 1).length;
-    expect(proceeded).toBe(1);
-
-    const blocked = [resA, resB].find(r => (r.status as jest.Mock).mock.calls.some(c => c[0] === 409));
-    expect(blocked).toBeDefined();
-    expect(blocked!.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        error: expect.objectContaining({ code: 'IDEMPOTENCY_IN_PROGRESS' }),
-      })
-    );
+  it.each(['204 end', 'sendStatus', 'json', 'send', 'end chunk', 'stream', 'binary'])('captures and replays %s through finish', async (mode) => {
+    const handler = jest.fn((_req: Request, res: Response) => {
+      if (mode === '204 end') res.status(204).end();
+      else if (mode === 'sendStatus') res.sendStatus(202);
+      else if (mode === 'json') res.status(201).json({ saved: true });
+      else if (mode === 'send') res.send('plain response');
+      else if (mode === 'end chunk') res.end('final chunk');
+      else if (mode === 'binary') res.type('application/octet-stream').end(Buffer.from([0, 255, 128]));
+      else { res.type('text/plain'); res.write('first '); res.end('last'); }
+    });
+    const server = app(handler);
+    const first = await post(server);
+    await flush();
+    expect((await row()).status).toBe('completed');
+    const replay = await post(server);
+    expect(replay.status).toBe(first.status);
+    expect(replay.text).toBe(first.text);
+    expect(replay.body).toEqual(first.body);
+    expect(replay.headers['content-type']).toBe(first.headers['content-type']);
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('does not overwrite the in-progress record when the second insert conflicts', async () => {
-    const db = makeConcurrentPool();
-    const body = { amountUsdc: '1.00', apiId: 'api-1' };
+  it('releases a disconnected request and immediately executes a retry', async () => {
+    const first = await invoke();
+    expect(first.next).toHaveBeenCalledWith();
+    first.res.emit('close');
+    await flush();
+    expect(await row()).toBeUndefined();
+    const retry = await invoke();
+    expect(retry.next).toHaveBeenCalledWith();
+  });
 
-    const reqA = makeReq({ body }) as Request;
-    const reqB = makeReq({ body }) as Request;
-    (reqA as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
-    (reqB as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
+  it('takes over a crashed request after expiry exactly once', async () => {
+    await invoke();
+    now = new Date(now.getTime() + 61_000);
+    const attempts = await Promise.all([invoke(), invoke()]);
+    expect(attempts.filter(result => result.next.mock.calls.length === 1)).toHaveLength(1);
+    expect(attempts.filter(result => result.res.statusCode === 409)).toHaveLength(1);
+  });
 
-    await Promise.all([
-      idempotencyMiddleware(reqA, makeRes() as Response, jest.fn() as unknown as NextFunction),
-      idempotencyMiddleware(reqB, makeRes() as Response, jest.fn() as unknown as NextFunction),
-    ]);
+  it('blocks same-payload retries inside the lease and mismatches even after expiry', async () => {
+    await invoke();
+    const retry = await invoke();
+    expect(retry.next).not.toHaveBeenCalled();
+    expect(retry.res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.objectContaining({ code: 'IDEMPOTENCY_IN_PROGRESS' }) }));
+    now = new Date(now.getTime() + 61_000);
+    const mismatch = await invoke('user-1', { ...body, amountUsdc: '2.00' });
+    expect(mismatch.next).not.toHaveBeenCalled();
+    expect(mismatch.res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.objectContaining({ code: IDEMPOTENCY_KEY_REUSE_MISMATCH }) }));
+  });
 
-    const stored = db.store.get(db.composite('user-1', 'test-key-123'));
-    expect(stored).toBeDefined();
-    expect(stored!.status).toBe('started');
+  it.each(['finish', 'close', '5xx'])('fences the old owner on late %s after takeover', async (mode) => {
+    const old = await invoke();
+    now = new Date(now.getTime() + 61_000);
+    const replacement = await invoke();
+    const owned = await row();
+    if (mode === 'close') old.res.emit('close');
+    else { old.res.statusCode = mode === '5xx' ? 500 : 200; old.res.json({ old: true }); }
+    await flush();
+    expect(await row()).toEqual(owned);
+    replacement.res.json({ replacement: true });
+    await flush();
+    expect((await row()).status).toBe('completed');
+  });
+
+  it('renews the lease and fences a lost owner from renewing', async () => {
+    const first = await invoke();
+    now = new Date(now.getTime() + 40_000);
+    await first.res.locals.idempotency!.renew();
+    now = new Date(now.getTime() + 30_000);
+    expect((await invoke()).res.statusCode).toBe(409);
+    first.res.json({ renewed: true });
+    await flush();
+    expect((await row()).status).toBe('completed');
+    await expect(first.res.locals.idempotency!.renew()).rejects.toThrow('already ended');
+  });
+
+  it('rejects renewal after expiry or takeover', async () => {
+    const first = await invoke();
+    now = new Date(now.getTime() + 61_000);
+    await expect(first.res.locals.idempotency!.renew()).rejects.toThrow('ownership lost');
+    await invoke();
+    await expect(first.res.locals.idempotency!.renew()).rejects.toThrow('ownership lost');
+  });
+
+  it('serializes completion behind a pending renewal', async () => {
+    const first = await invoke();
+    now = new Date(now.getTime() + 40_000);
+    const renewal = first.res.locals.idempotency!.renew();
+    // Let the renewal enter its SQL statement before the finish event.
+    await Promise.resolve();
+    first.res.json({ result: true });
+    await renewal;
+    await flush();
+    expect((await row()).status).toBe('completed');
+  });
+
+  it('does not cache a response above the body cap, deletes the row and warns with route and size', async () => {
+    const warning = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const handler = jest.fn((_req: Request, res: Response) => { res.write('x'.repeat(256 * 1024)); res.end('overflow'); });
+    const server = app(handler);
+    expect((await post(server)).status).toBe(200);
+    await flush();
+    expect(await row()).toBeUndefined();
+    expect((await post(server)).status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(warning).toHaveBeenCalledWith('[idempotency] response exceeds cache body limit', {
+      route: '/api/billing/deduct',
+      bodyBytes: 256 * 1024 + 'overflow'.length,
+      maxBodyBytes: 256 * 1024,
+    });
+  });
+
+  it('logs a failed save and releases its lease for an immediate retry', async () => {
+    const first = await invoke();
+    const log = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const query = db.query.bind(db);
+    jest.spyOn(db, 'query').mockImplementation(((sql: string, params: unknown[]) => {
+      if (sql.includes("SET status = 'completed'")) return Promise.reject(new Error('save failed'));
+      return query(sql, params);
+    }) as typeof db.query);
+    first.res.json({ saved: false });
+    await flush();
+    expect(log).toHaveBeenCalledWith('[idempotency] failed to save response', expect.objectContaining({ err: expect.any(Error) }));
+    expect(await row()).toBeUndefined();
+    expect((await invoke()).next).toHaveBeenCalledWith();
+  });
+
+  it('logs failed disconnect cleanup and leaves only a bounded lease', async () => {
+    const first = await invoke();
+    const log = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+    jest.spyOn(db, 'query').mockImplementationOnce(() => Promise.reject(new Error('offline')));
+    first.res.emit('close');
+    await flush();
+    expect(log).toHaveBeenCalled();
+    now = new Date(now.getTime() + 61_000);
+    expect((await invoke()).next).toHaveBeenCalledWith();
+  });
+
+  it('preserves per-user scoping, cacheable 4xx replay and 5xx retry behavior', async () => {
+    const first = await invoke('user-a');
+    first.res.statusCode = 400;
+    first.res.json({ invalid: true });
+    await flush();
+    expect((await invoke('user-a')).res.statusCode).toBe(400);
+    const other = await invoke('user-b');
+    expect(other.next).toHaveBeenCalledWith();
+    other.res.statusCode = 500;
+    other.res.json({ failed: true });
+    await flush();
+    expect((await invoke('user-b')).next).toHaveBeenCalledWith();
+  });
+
+  it('atomically replaces a retention-expired record', async () => {
+    const first = await invoke();
+    first.res.json({ old: true });
+    await flush();
+    now = new Date(now.getTime() + 86_401_000);
+    expect((await invoke('user-1', { ...body, amountUsdc: '2.00' })).next).toHaveBeenCalledWith();
+  });
+
+  it('forwards acquisition database errors without running the handler', async () => {
+    jest.spyOn(db, 'query').mockImplementationOnce(() => Promise.reject(new Error('unavailable')));
+    const result = await invoke();
+    expect(result.next).toHaveBeenCalledWith(expect.objectContaining({ message: 'unavailable' }));
   });
 });
 
 // ---------------------------------------------------------------------------
-// 5xx cleanup — a failed handler must leave no stored record
+// Response cache policy over real Express and the same PostgreSQL-semantics store
 // ---------------------------------------------------------------------------
 
-describe('idempotencyMiddleware — 5xx cleanup enables retry', () => {
-  it('removes the stored record after a 500 so a retry can proceed', async () => {
-    const db = makeScopedPool();
-    const body = { amountUsdc: '1.00', apiId: 'api-1' };
-
-    const req = makeReq({ body }) as Request;
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
-    const res = makeRes();
-    const next = jest.fn();
-
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-    expect(next).toHaveBeenCalledTimes(1);
-    expect(db.store.has(db.composite('user-1', 'test-key-123'))).toBe(true);
-
-    res.statusCode = 500;
-    res.json({ error: 'Internal Server Error' });
-    await new Promise(resolve => process.nextTick(resolve));
-
-    expect(db.store.has(db.composite('user-1', 'test-key-123'))).toBe(false);
-
-    // Retry with the same key must be allowed to proceed.
-    const retryReq = makeReq({ body }) as Request;
-    (retryReq as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
-    const retryRes = makeRes();
-    const retryNext = jest.fn();
-    await idempotencyMiddleware(retryReq, retryRes as Response, retryNext as unknown as NextFunction);
-
-    expect(retryNext).toHaveBeenCalledTimes(1);
-    expect(retryRes.status).not.toHaveBeenCalledWith(409);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Replay verbatim — a 201 response is returned unchanged on retry
-// ---------------------------------------------------------------------------
-
-describe('idempotencyMiddleware — 201 replay is verbatim', () => {
-  it('replays the exact 201 status and body on retry', async () => {
-    const db = makeScopedPool();
-    const body = { amountUsdc: '1.00', apiId: 'api-1' };
-
-    const req = makeReq({ body }) as Request;
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
-    const res = makeRes();
-    const next = jest.fn();
-
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-    expect(next).toHaveBeenCalledTimes(1);
-
-    const createdBody = { success: true, txHash: 'tx-created', id: 'res-1' };
-    res.statusCode = 201;
-    res.json(createdBody);
-    await new Promise(resolve => process.nextTick(resolve));
-
-    const retryReq = makeReq({ body }) as Request;
-    (retryReq as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: db } };
-    const retryRes = makeRes();
-    const retryNext = jest.fn();
-    await idempotencyMiddleware(retryReq, retryRes as Response, retryNext as unknown as NextFunction);
-
-    expect(retryRes.setHeader).toHaveBeenCalledWith('Idempotent-Replayed', 'true');
-    expect(retryRes.status).toHaveBeenCalledWith(201);
-    expect(retryRes.json).toHaveBeenCalledWith(createdBody);
-    expect(retryNext).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Key length validation
-// ---------------------------------------------------------------------------
-
-describe('idempotencyMiddleware — key length validation', () => {
-  it('returns 400 INVALID_IDEMPOTENCY_KEY when the key exceeds maxKeyLength', async () => {
-    const mockDb = makeDb();
-    const tooLong = 'k'.repeat(MAX_IDEMPOTENCY_KEY_LENGTH + 1);
-    const req = makeReq({ idempotencyKeyHeader: tooLong }) as Request;
-    const res = makeRes();
-    const next = jest.fn();
-    (req as unknown as { app: { locals: { dbPool: unknown } } }).app = { locals: { dbPool: mockDb } };
-
-    await idempotencyMiddleware(req, res as Response, next as unknown as NextFunction);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        error: expect.objectContaining({ code: INVALID_IDEMPOTENCY_KEY }),
-      })
-    );
-    expect(next).not.toHaveBeenCalled();
-    expect(mockDb.query).not.toHaveBeenCalled();
-  });
-});
-
-function createHttpIdempotencyApp(handler: RequestHandler, options?: IdempotencyConfig) {
-  const database = newDb();
-  database.public.none(`
-    CREATE TABLE idempotency_store (
-      scope TEXT NOT NULL,
-      idempotency_key TEXT NOT NULL,
-      request_hash TEXT NOT NULL,
-      status TEXT NOT NULL,
-      response_status INTEGER,
-      response_body TEXT,
-      response_headers JSONB,
-      expires_at TIMESTAMP NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (scope, idempotency_key)
-    );
-  `);
-  const { Pool: MemoryPool } = database.adapters.createPg();
-  const pool = new MemoryPool() as unknown as Pool;
+async function createHttpIdempotencyApp(handler: RequestHandler, options?: IdempotencyConfig) {
+  const pool = await createIdempotencyPool(() => new Date());
   const app = express();
   app.locals.dbPool = pool;
   app.use(express.json());
@@ -807,10 +700,17 @@ function createHttpIdempotencyApp(handler: RequestHandler, options?: Idempotency
   return { app, pool };
 }
 
+async function postOperation(app: express.Express, key: string) {
+  const response = await request(app).post('/operation').set('Idempotency-Key', key).send({});
+  // The finish-time save runs after the response is flushed; let it settle before a retry reads the store.
+  await new Promise(resolve => setImmediate(resolve));
+  return response;
+}
+
 describe('idempotency response cache policy over HTTP', () => {
   it('replays original response headers without persisting cookies', async () => {
     let operations = 0;
-    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
       operations += 1;
       res.status(201)
         .set('Location', '/resources/created-1')
@@ -821,8 +721,8 @@ describe('idempotency response cache policy over HTTP', () => {
         .json({ id: 'created-1' });
     });
     try {
-      const original = await request(app).post('/operation').set('Idempotency-Key', 'headers').send({});
-      const replay = await request(app).post('/operation').set('Idempotency-Key', 'headers').send({});
+      const original = await postOperation(app, 'headers');
+      const replay = await postOperation(app, 'headers');
       expect(original.status).toBe(201);
       expect(replay.status).toBe(201);
       expect(replay.body).toEqual(original.body);
@@ -847,17 +747,85 @@ describe('idempotency response cache policy over HTTP', () => {
     }
   });
 
+  it('replays compressed JSON with its encoding instead of corrupting the response', async () => {
+    let operations = 0;
+    const payload = { id: 'compressed-resource' };
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      res.status(201).type('application/json').set('Content-Encoding', 'gzip')
+        .send(gzipSync(JSON.stringify(payload)));
+    });
+    try {
+      const original = await postOperation(app, 'encoded-response');
+      const replay = await postOperation(app, 'encoded-response');
+      expect(original.body).toEqual(payload);
+      expect(replay.status).toBe(201);
+      expect(replay.body).toEqual(payload);
+      expect(replay.headers['content-encoding']).toBe('gzip');
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(operations).toBe(1);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it.each([
+    ['gzip', gzipSync],
+    ['deflate', deflateSync],
+    ['br', brotliCompressSync],
+  ] as const)('does not cache compressed transient JSON (%s)', async (encoding, compress) => {
+    let operations = 0;
+    let pending = true;
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      if (pending) {
+        res.status(409).type('application/json').set('Content-Encoding', encoding)
+          .send(compress(JSON.stringify({ error: { code: 'RECONCILIATION_REQUIRED' } })));
+      } else {
+        res.json({ resolved: true });
+      }
+    });
+    try {
+      expect((await postOperation(app, 'compressed-transient')).status).toBe(409);
+      pending = false;
+      const retry = await postOperation(app, 'compressed-transient');
+      expect(retry.status).toBe(200);
+      expect(retry.body).toEqual({ resolved: true });
+      expect(operations).toBe(2);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('bounds decoded policy inspection instead of retaining a compressed oversized response', async () => {
+    let operations = 0;
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      res.type('application/json').set('Content-Encoding', 'gzip')
+        .send(gzipSync(JSON.stringify({ payload: 'x'.repeat(256 * 1024) })));
+    });
+    try {
+      await postOperation(app, 'compressed-oversized');
+      const stored = await pool.query('SELECT idempotency_key FROM idempotency_store');
+      expect(stored.rows).toEqual([]);
+      await postOperation(app, 'compressed-oversized');
+      expect(operations).toBe(2);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('does not cache a UTF-8 response above the body cap and logs only bounded metadata', async () => {
     const warning = jest.spyOn(logger, 'warn');
     let operations = 0;
     const response = 'é'.repeat(128 * 1024);
-    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
       operations += 1;
       res.json(response);
     });
     try {
-      const original = await request(app).post('/operation').set('Idempotency-Key', 'large-body').send({});
-      const retry = await request(app).post('/operation').set('Idempotency-Key', 'large-body').send({});
+      const original = await postOperation(app, 'large-body');
+      const retry = await postOperation(app, 'large-body');
       expect(original.status).toBe(200);
       expect(retry.status).toBe(200);
       expect(retry.body).toBe(response);
@@ -880,17 +848,17 @@ describe('idempotency response cache policy over HTTP', () => {
   it('allows a retry after a rate-limit response clears', async () => {
     let limited = true;
     let operations = 0;
-    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
       operations += 1;
       if (limited) res.status(429).set('Retry-After', '3').json({ code: 'RATE_LIMITED' });
       else res.json({ accepted: true });
     });
     try {
-      const limitedResponse = await request(app).post('/operation').set('Idempotency-Key', 'rate-limit').send({});
+      const limitedResponse = await postOperation(app, 'rate-limit');
       expect(limitedResponse.status).toBe(429);
       expect(limitedResponse.headers['retry-after']).toBe('3');
       limited = false;
-      const retry = await request(app).post('/operation').set('Idempotency-Key', 'rate-limit').send({});
+      const retry = await postOperation(app, 'rate-limit');
       expect(retry.status).toBe(200);
       expect(retry.body).toEqual({ accepted: true });
       expect(retry.headers['idempotent-replayed']).toBeUndefined();
@@ -900,15 +868,38 @@ describe('idempotency response cache policy over HTTP', () => {
     }
   });
 
+  it('retries a nested reconciliation envelope until the deduction resolves, then replays it', async () => {
+    let resolved = false;
+    let operations = 0;
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
+      if (resolved) res.json({ success: true, operations });
+      else res.status(409).json({ success: false, error: { code: 'RECONCILIATION_REQUIRED', message: 'pending' } });
+    });
+    try {
+      expect((await postOperation(app, 'reconcile')).status).toBe(409);
+      resolved = true;
+      const settled = await postOperation(app, 'reconcile');
+      expect(settled.status).toBe(200);
+      expect(settled.headers['idempotent-replayed']).toBeUndefined();
+      const replay = await postOperation(app, 'reconcile');
+      expect(replay.body).toEqual({ success: true, operations: 2 });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(operations).toBe(2);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('replays deterministic validation failures without running the operation twice', async () => {
     let operations = 0;
-    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
       operations += 1;
       res.status(422).json({ code: 'INVALID_AMOUNT' });
     });
     try {
-      const original = await request(app).post('/operation').set('Idempotency-Key', 'validation').send({});
-      const replay = await request(app).post('/operation').set('Idempotency-Key', 'validation').send({});
+      const original = await postOperation(app, 'validation');
+      const replay = await postOperation(app, 'validation');
       expect(original.status).toBe(422);
       expect(replay.status).toBe(422);
       expect(replay.body).toEqual({ code: 'INVALID_AMOUNT' });
@@ -919,8 +910,47 @@ describe('idempotency response cache policy over HTTP', () => {
     }
   });
 
-  it('replays a pre-migration response whose stored headers are null', async () => {
-    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+  it('replays pre-migration rows with null headers, including envelope headers from earlier deployments', async () => {
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
+      res.sendStatus(500);
+    });
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const requestHash = calculateRequestHash(undefined, {}, 'POST', '/operation');
+    try {
+      await pool.query(
+        `INSERT INTO idempotency_store
+         (scope, idempotency_key, request_hash, status, response_status, response_body, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        ['anonymous', 'legacy', requestHash, 'completed', 200, JSON.stringify({ legacy: 'original' }), expiresAt]
+      );
+      const replay = await postOperation(app, 'legacy');
+      expect(replay.status).toBe(200);
+      expect(replay.body).toEqual({ legacy: 'original' });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+
+      const envelope = 'idempotency-response-v1\n' + JSON.stringify({
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        body: Buffer.from('envelope original').toString('base64'),
+      });
+      await pool.query(
+        `INSERT INTO idempotency_store
+         (scope, idempotency_key, request_hash, status, response_status, response_body, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        ['anonymous', 'legacy-envelope', requestHash, 'completed', 201, envelope, expiresAt]
+      );
+      const envelopeReplay = await postOperation(app, 'legacy-envelope');
+      expect(envelopeReplay.status).toBe(201);
+      expect(envelopeReplay.text).toBe('envelope original');
+      expect(envelopeReplay.headers['content-type']).toBe('text/plain; charset=utf-8');
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('never re-runs a pre-1499 hash-only row whose response was not stored', async () => {
+    let operations = 0;
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
+      operations += 1;
       res.sendStatus(500);
     });
     try {
@@ -928,13 +958,19 @@ describe('idempotency response cache policy over HTTP', () => {
         `INSERT INTO idempotency_store
          (scope, idempotency_key, request_hash, status, response_status, response_body, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        ['anonymous', 'legacy', calculateRequestHash(undefined, {}, 'POST', '/operation'),
-          'completed', 200, JSON.stringify({ legacy: 'original' }), new Date(Date.now() + 60_000).toISOString()]
+        ['anonymous', 'hash-only', calculateRequestHash(undefined, {}, 'POST', '/operation'), 'completed', 200,
+          'idempotency-response-v1\n' + JSON.stringify({ bytes: 1, sha256: 'a'.repeat(64) }),
+          new Date(Date.now() + 60_000).toISOString()]
       );
-      const replay = await request(app).post('/operation').set('Idempotency-Key', 'legacy').send({});
-      expect(replay.status).toBe(200);
-      expect(replay.body).toEqual({ legacy: 'original' });
-      expect(replay.headers['idempotent-replayed']).toBe('true');
+      const replay = await postOperation(app, 'hash-only');
+      expect(replay.status).toBe(409);
+      expect(replay.body.error.code).toBe('IDEMPOTENCY_RESPONSE_TOO_LARGE');
+      expect(errorEnvelopeSchema.safeParse(replay.body).success).toBe(true);
+      expect(replay.body.error.details).toEqual([
+        { field: 'bytes', message: '1', code: 'IDEMPOTENCY_RESPONSE_TOO_LARGE' },
+        { field: 'sha256', message: 'a'.repeat(64), code: 'IDEMPOTENCY_RESPONSE_TOO_LARGE' },
+      ]);
+      expect(operations).toBe(0);
     } finally {
       await pool.end();
     }
@@ -944,13 +980,13 @@ describe('idempotency response cache policy over HTTP', () => {
     'applies a custom status policy to %i without overriding transient exclusions',
     async (status, cached) => {
       let operations = 0;
-      const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+      const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
         operations += 1;
         res.status(status).json({ operation: operations });
       }, { cacheableStatus: candidate => candidate === 418 || candidate === 429 });
       try {
-        await request(app).post('/operation').set('Idempotency-Key', 'custom').send({});
-        const retry = await request(app).post('/operation').set('Idempotency-Key', 'custom').send({});
+        await postOperation(app, 'custom');
+        const retry = await postOperation(app, 'custom');
         expect(retry.status).toBe(status);
         expect(retry.body).toEqual({ operation: cached ? 1 : 2 });
         expect(retry.headers['idempotent-replayed']).toBe(cached ? 'true' : undefined);
@@ -964,13 +1000,13 @@ describe('idempotency response cache policy over HTTP', () => {
   it('caches a JSON response exactly at the 256 KiB byte boundary', async () => {
     let operations = 0;
     const response = 'x'.repeat(262142);
-    const { app, pool } = createHttpIdempotencyApp((_req, res) => {
+    const { app, pool } = await createHttpIdempotencyApp((_req, res) => {
       operations += 1;
       res.json(response);
     });
     try {
-      await request(app).post('/operation').set('Idempotency-Key', 'at-cap').send({});
-      const replay = await request(app).post('/operation').set('Idempotency-Key', 'at-cap').send({});
+      await postOperation(app, 'at-cap');
+      const replay = await postOperation(app, 'at-cap');
       expect(replay.status).toBe(200);
       expect(replay.body).toBe(response);
       expect(replay.headers['idempotent-replayed']).toBe('true');

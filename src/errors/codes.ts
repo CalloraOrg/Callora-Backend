@@ -222,6 +222,9 @@ export const ErrorCode = {
   /** Idempotency key conflict with different request */
   IDEMPOTENCY_CONFLICT: "IDEMPOTENCY_CONFLICT",
 
+  /** Legacy hash-only idempotency record whose response was never stored; the operation is not re-run. Fetch the resource by identifier. New oversized responses are not cached. */
+  IDEMPOTENCY_RESPONSE_TOO_LARGE: "IDEMPOTENCY_RESPONSE_TOO_LARGE",
+
   /** Request with this idempotency key is still in progress */
   IDEMPOTENCY_IN_PROGRESS: "IDEMPOTENCY_IN_PROGRESS",
 

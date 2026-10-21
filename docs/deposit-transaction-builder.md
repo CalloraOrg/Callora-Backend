@@ -77,69 +77,35 @@ Requires authentication via `x-user-id` header.
 
 #### Error Responses
 
-##### 400 Bad Request - Invalid Amount Format
+Errors use the standard `{success:false,error:{code,message,details?},requestId,timestamp}`
+envelope. Validation details are an array of `{field,message,code}` entries,
+not an arbitrary object. The submitted `provided` value, and `configured`
+network for a network mismatch, remain top-level diagnostics.
+
+| HTTP | Condition |
+|---|---|
+| 400 | Missing/invalid amount, network, source account, or transaction input |
+| 401 | Authentication required |
+| 404 | No vault exists for the authenticated user on the requested network |
+| 500 | Invalid vault contract configuration or an unexpected internal failure |
+| 502 | Transaction construction or simulation failure |
+| 503 | Stellar network unavailable |
+
+For example, an invalid network produces:
 
 ```json
 {
-  "error": "Amount must have exactly 7 decimal places (e.g., \"100.0000000\")",
-  "code": "INVALID_AMOUNT_FORMAT",
-  "provided": "100.00"
-}
-```
-
-##### 400 Bad Request - Invalid Network
-
-```json
-{
-  "error": "network must be either \"testnet\" or \"mainnet\"",
-  "code": "INVALID_NETWORK",
-  "provided": "devnet"
-}
-```
-
-##### 400 Bad Request - Invalid Source Account
-
-```json
-{
-  "error": "source_account must be a valid Stellar public key (G...)",
-  "code": "INVALID_SOURCE_ACCOUNT",
-  "provided": "invalid_key"
-}
-```
-
-##### 401 Unauthorized
-
-```json
-{
-  "error": "Authentication required",
-  "code": "UNAUTHORIZED"
-}
-```
-
-##### 404 Not Found - Vault Not Found
-
-```json
-{
-  "error": "Vault not found for user on network 'testnet'. Please create a vault first.",
-  "code": "VAULT_NOT_FOUND"
-}
-```
-
-##### 500 Internal Server Error - Invalid Contract
-
-```json
-{
-  "error": "Invalid vault contract configuration. Please contact support.",
-  "code": "INVALID_CONTRACT_ID"
-}
-```
-
-##### 503 Service Unavailable - Network Error
-
-```json
-{
-  "error": "Unable to connect to Stellar network. Please try again later.",
-  "code": "NETWORK_UNAVAILABLE"
+  "success": false,
+  "error": {
+    "code": "INVALID_NETWORK",
+    "message": "network must be either \"testnet\" or \"mainnet\"",
+    "details": [
+      {"field": "body.network", "message": "must be testnet or mainnet", "code": "INVALID_NETWORK"}
+    ]
+  },
+  "provided": "devnet",
+  "requestId": "req-example",
+  "timestamp": "2026-10-21T12:00:00.000Z"
 }
 ```
 

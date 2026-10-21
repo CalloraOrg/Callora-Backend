@@ -28,17 +28,23 @@ restrict or extend the eligible statuses; it cannot override transient statuses,
 transient body codes, or the size cap. A 402 therefore remains retryable after
 funding changes, while a cached 422 requires a corrected payload and a new key.
 
-Only `content-type`, `location`, `etag`, `retry-after`, and the original
-`x-request-id` are persisted and restored. `set-cookie` and all other response
-headers are excluded. The original request ID identifies the cached response;
-the current retry's tracing context remains separate.
+Only `content-type`, `content-encoding`, `location`, `etag`, `retry-after`, and the original
+`x-request-id` are persisted and restored. The encoding is required to interpret
+the captured bytes correctly, including records written by the earlier lease
+implementation. `set-cookie` and all other response headers are excluded. The
+original request ID identifies the cached response; the retry's tracing context remains separate.
 
 `IDEMPOTENCY_MAX_BODY_BYTES` is a positive integer, defaults to **262144 bytes
-(256 KiB)**, and measures the UTF-8 bytes of the stored JSON. Bodies exactly at
+(256 KiB)**, and measures the response body bytes as sent. Bodies exactly at
 the limit are eligible; larger bodies are not stored. Oversized responses log
 only the route, byte count, and configured cap, never the body or headers.
 
-Apply `0027_idempotency_response_headers.sql` before deploying the updated
+Policy inspection decodes `gzip`, `deflate`, and `br` before checking transient
+JSON body codes; stored response bytes remain unchanged. Decoding is bounded by
+the same byte cap. Unsupported/invalid encodings or decoded bodies exceeding
+that inspection budget release the owned key instead of retaining an unsafe reply.
+
+Apply `0028_idempotency_response_headers.sql` after `0027_idempotency_lease` and before deploying the updated
 middleware. The nullable JSONB column preserves existing rows: records without
 header metadata still replay their status and body. The paired down migration
 removes only header metadata. Retention, concurrent-key ownership, and the
@@ -264,7 +270,7 @@ const requestId = `req_${uuidv4()}`;
 
 ```typescript
 // Check if a request was already processed
-const existing = await billingService.getByRequestId('req_abc123');
+const existing = await billingService.getByRequestId('req_abc123', user.id);
 
 if (existing) {
   console.log('Request already processed');
@@ -646,3 +652,45 @@ UPDATE usage_events SET status = 'applied' WHERE stellar_tx_hash IS NOT NULL;
 - [Idempotency Keys - Stripe Documentation](https://stripe.com/docs/api/idempotent_requests)
 - [PostgreSQL Unique Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS)
 - (Database Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+
+## HTTP idempotency leases and response replay
+
+`Idempotency-Key` records have two independent lifetimes. Completed responses
+retain the configured `IDEMPOTENCY_RETENTION_WINDOW_SECONDS` (default 86400).
+An unfinished request owns a shorter `IDEMPOTENCY_LEASE_SECONDS` lease (default
+60 seconds). Keep this above the longest route timeout; handlers that may run
+longer must await `res.locals.idempotency.renew()` before their lease expires.
+The billing deduct route renews around its Soroban-backed deduction.
+
+All lease timestamps and expiry checks use PostgreSQL `NOW()`. An expired
+`started` record can be claimed atomically only by an identical request hash.
+Changed payloads still return `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`; an unexpired
+lease returns `409 IDEMPOTENCY_IN_PROGRESS`. Renewal rejects if ownership has
+expired or changed. Save, renew and disconnect cleanup compare the exact lease
+timestamp, including database microseconds. A late original request cannot
+save over or delete a replacement owner's record.
+
+Completion is recorded on the response `finish` event, including `json`,
+`send`, `sendStatus`, empty `204 end()`, `end(chunk)`, and streaming responses.
+Only responses allowed by the HTTP response cache policy are stored. Every other outcome, including 5xx, 408, 425, 429 and transient body codes, releases the key so the next retry executes. A connection
+`close` without `finish` releases only that request's lease for immediate retry.
+A failed completion write is logged and cleanup is attempted; if the database
+is unavailable, lease expiry still allows recovery without waiting 24 hours.
+
+Replay retains status, raw body bytes, and the allowlisted headers
+(`content-type`, `content-encoding`, `location`, `etag`, `retry-after`, `x-request-id`). Bodies above
+`IDEMPOTENCY_MAX_BODY_BYTES` are never stored: the row is deleted, a warning with
+the route and size is logged, and a retry executes the handler again. Hash-only
+rows left by the superseded retention path still return `409
+IDEMPOTENCY_RESPONSE_TOO_LARGE` until they expire, so an operation that already
+ran is never re-executed. Billing clients can look up a deduction with
+`GET /api/billing/deduct/request/:requestId`; do not generate a new identifier
+to retry a charge.
+
+The lease prevents stale database writes, but cannot cancel an external side
+effect after a disconnect or crash. Billing's persistent request identifier and
+Soroban idempotency remain necessary. Apply migrations `0027_idempotency_lease`
+and `0028_idempotency_response_headers`, and drain old application instances before enabling takeover: old binaries do
+not fence writes. Existing completed JSON records remain replayable. On rollback,
+roll back the application before removing the lease column; new response-format
+records are not readable by the old middleware and must age out before rollback.

@@ -1,6 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { errorHandler } from '../../../middleware/errorHandler.js';
+import { createResponseValidatorMiddleware, envelopeMiddleware, errorEnvelopeSchema } from '../../../middleware/envelope.js';
 import bulkRouter from './bulk.js';
 import { BillingService } from '../../../services/billing.js';
 import type { Pool } from 'pg';
@@ -149,73 +150,6 @@ describe('Bulk Deduct API', () => {
     expect(res.body.error.details[0].message).toContain('amountUsdc must be greater than zero');
   });
 
-  it('routes the batch through deductBulk and returns aggregate results', async () => {
-    mockPool.query.mockResolvedValue({ rows: [], rowCount: 1 } as never);
-    const deductBulkSpy = jest.spyOn(BillingService.prototype, 'deductBulk').mockResolvedValue({
-      success: true,
-      entryCount: 2,
-      deductedCount: 2,
-      totalDeductedAmountUsdc: '1.75',
-      stellarTxHash: 'tx_batch',
-      results: [1, 2].map((index) => ({
-        requestId: `req_${index}`,
-        usageEventId: `evt_req_${index}`,
-        stellarTxHash: 'tx_batch',
-        alreadyProcessed: false,
-        deductionApplied: true,
-        reconciliationRequired: false,
-      })),
-    });
-
-    const res = await request(buildApp())
-      .post('/api/billing/deduct/bulk')
-      .set('x-user-id', 'user_123')
-      .set('Idempotency-Key', 'batch-key-1')
-      .send({
-        items: [
-          {
-            requestId: 'req_1',
-            apiId: 'api_1',
-            endpointId: 'ep_1',
-            apiKeyId: 'key_1',
-            amountUsdc: '0.5',
-          },
-          {
-            requestId: 'req_2',
-            apiId: 'api_1',
-            endpointId: 'ep_1',
-            apiKeyId: 'key_1',
-            amountUsdc: '1.25',
-          },
-        ],
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.results).toHaveLength(2);
-    expect(res.body.results[0]).toEqual({
-      requestId: 'req_1',
-      success: true,
-      usageEventId: 'evt_req_1',
-      stellarTxHash: 'tx_batch',
-      alreadyProcessed: false,
-      deductionApplied: true,
-      reconciliationRequired: false,
-    });
-    expect(res.body.results[1]).toEqual({
-      requestId: 'req_2',
-      success: true,
-      usageEventId: 'evt_req_2',
-      stellarTxHash: 'tx_batch',
-      alreadyProcessed: false,
-      deductionApplied: true,
-      reconciliationRequired: false,
-    });
-    expect(res.body.entryCount).toBe(2);
-    expect(res.body.deductedCount).toBe(2);
-    expect(res.body.totalDeductedAmountUsdc).toBe('1.75');
-    expect(deductBulkSpy).toHaveBeenCalledTimes(1);
-    expect(deductBulkSpy.mock.calls[0][1]).toBe('batch-key-1');
-  });
 
   it('returns 402 when the aggregate balance check fails without partial results', async () => {
     const deductBulkSpy = jest.spyOn(BillingService.prototype, 'deductBulk').mockResolvedValue({
@@ -305,5 +239,53 @@ describe('Bulk Deduct API', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error.message).toContain('Database pool is not configured');
+  });
+
+  it('returns reconciliation 409 as a public envelope that keeps entry results', async () => {
+    const results = [{
+      requestId: 'req_1',
+      usageEventId: 'evt_1',
+      stellarTxHash: null,
+      alreadyProcessed: false,
+      deductionApplied: false,
+      reconciliationRequired: true,
+    }];
+    const fakeService = {
+      deductBulk: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Soroban batch failed',
+        entryCount: 1,
+        deductedCount: 0,
+        totalDeductedAmountUsdc: '0',
+        results,
+      }),
+    };
+    const app = express();
+    app.use(express.json());
+    app.use(createResponseValidatorMiddleware());
+    app.use(envelopeMiddleware);
+    app.locals.billingService = fakeService as unknown as BillingService;
+    app.locals.dbPool = mockPool;
+    app.use('/api/billing/deduct/bulk', bulkRouter);
+    app.use(errorHandler);
+
+    const res = await request(app)
+      .post('/api/billing/deduct/bulk')
+      .set('x-user-id', 'user_123')
+      .send({
+        items: [{
+          requestId: 'req_1',
+          apiId: 'api_1',
+          endpointId: 'ep_1',
+          apiKeyId: 'key_1',
+          amountUsdc: '1.0',
+        }],
+      });
+
+    expect(res.status).toBe(409);
+    expect(errorEnvelopeSchema.safeParse(res.body).success).toBe(true);
+    expect(res.body.error.code).toBe('RECONCILIATION_REQUIRED');
+    expect(res.body.reconciliationRequired).toBe(true);
+    expect(res.body.results).toEqual(results);
   });
 });

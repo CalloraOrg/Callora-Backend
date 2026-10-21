@@ -3,6 +3,8 @@ import { DataType, newDb } from 'pg-mem';
 
 import {
   PgUsageEventsRepository,
+  CorruptUsageAmountError,
+  CorruptAmountError,
   type UsageEventsRepositoryQueryable,
 } from './usageEventsRepository.pg.js';
 
@@ -79,6 +81,30 @@ test('create stores a usage event and returns the persisted record', async () =>
     assert.equal(event.requestId, 'req-1');
     assert.equal(event.stellarTxHash, 'stellar-hash-1');
     assert.deepEqual(event.createdAt, createdAt);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('getEventsInRange uses a half-open UTC range, developer filter, and ID cursor pages', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+  try {
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 1n, requestId: 'r1', createdAt: new Date('2026-03-01T00:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 2n, requestId: 'r2', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u2', apiId: 'a2', endpointId: 'e2', apiKeyId: 'k2', developerId: 'dev-2', amount: 3n, requestId: 'r3', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 4n, requestId: 'r4', createdAt: new Date('2026-03-02T00:00:00.000Z') });
+
+    const from = new Date('2026-03-01T00:00:00.000Z');
+    const to = new Date('2026-03-02T00:00:00.000Z');
+    const firstPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', limit: 1 });
+    const secondPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', cursor: firstPage[0]?.id, limit: 1 });
+    assert.equal(firstPage.length, 1);
+    assert.equal(secondPage.length, 1);
+    assert.equal(firstPage[0]?.createdAt.toISOString(), '2026-03-01T00:00:00.000Z');
+    assert.equal(secondPage[0]?.createdAt.toISOString(), '2026-03-01T12:00:00.000Z');
+    assert.equal(firstPage[0]?.developerId, 'dev-1');
+    const unfiltered = await repository.getEventsInRange(from, to, { limit: 10 });
+    assert.equal(unfiltered.length, 3);
   } finally {
     await pool.end();
   }
@@ -470,6 +496,43 @@ test('repository surfaces malformed amount values from the database', async () =
     malformedStringRepository.findByApiId('api-weather'),
     /amount_usdc must be stored as an integer string in smallest units\./,
   );
+});
+
+test('Scenario 6: Pg repository reads a value "1.5" (corrupt) and raises typed error naming the row id', async () => {
+  const corruptRowId = 'row-corrupt-999';
+  const corruptRepository = new PgUsageEventsRepository({
+    async query<T = unknown>() {
+      return {
+        rows: [
+          {
+            id: corruptRowId,
+            user_id: 'user-1',
+            api_id: 'api-weather',
+            endpoint_id: 'endpoint-1',
+            api_key_id: 'key-1',
+            developer_id: 'dev-1',
+            amount_usdc: '1.5',
+            request_id: 'req-corrupt',
+            stellar_tx_hash: null,
+            created_at: new Date('2026-02-01T10:00:00.000Z'),
+          },
+        ] as T[],
+      };
+    },
+  });
+
+  let caughtError: unknown;
+  try {
+    await corruptRepository.findByUserId('user-1');
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.ok(caughtError instanceof CorruptUsageAmountError, 'Must be instance of CorruptUsageAmountError');
+  assert.ok(caughtError instanceof CorruptAmountError, 'Must be instance of CorruptAmountError');
+  assert.equal((caughtError as CorruptUsageAmountError).rowId, corruptRowId);
+  assert.match((caughtError as Error).message, new RegExp(corruptRowId));
+  assert.equal((caughtError as Error).name, 'CorruptUsageAmountError');
 });
 
 test('repository accepts bigint values returned directly from the database driver', async () => {

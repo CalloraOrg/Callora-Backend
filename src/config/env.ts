@@ -1,5 +1,34 @@
 import "dotenv/config";
 import { z } from "zod";
+import { Keypair, StrKey } from "@stellar/stellar-sdk";
+
+// StrKey validators are defined inline here (rather than imported from
+// src/validators/stellarKeys.ts) so that env parsing has no dependency on
+// modules that may be mid-edit. Each schema reports only the variable name
+// and the failing rule — never the key material itself.
+const contractId = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((v) => StrKey.isValidContract(v), {
+    message: "must be a valid Stellar contract id (C...)",
+  });
+
+const publicKey = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((v) => StrKey.isValidEd25519PublicKey(v), {
+    message: "must be a valid Stellar public key (G...)",
+  });
+
+const secretKey = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((v) => StrKey.isValidEd25519SecretSeed(v), {
+    message: "must be a valid Stellar secret seed (S...)",
+  });
 
 const stellarNetworkSchema = z.enum(["testnet", "mainnet"]);
 
@@ -216,10 +245,10 @@ export const envSchema = z
 
     // Billing RPC (the contract must be configured in production)
     SOROBAN_BILLING_RPC_URL: z.string().url().optional(),
-    SOROBAN_BILLING_CONTRACT_ID: z.string().trim().min(1).optional(),
-    SOROBAN_BILLING_SOURCE_ACCOUNT: z.string().min(1).optional(),
+    SOROBAN_BILLING_CONTRACT_ID: contractId.optional(),
+    SOROBAN_BILLING_SOURCE_ACCOUNT: publicKey.optional(),
     SOROBAN_BILLING_NETWORK_PASSPHRASE: z.string().min(1).optional(),
-    SOROBAN_BILLING_BACKEND_SECRET_KEY: z.string().min(1).optional(),
+    SOROBAN_BILLING_BACKEND_SECRET_KEY: secretKey.optional(),
     SOROBAN_BILLING_RPC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
     SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
     SOROBAN_BILLING_DEDUCT_FN: z.string().min(1).default("deduct"),
@@ -241,6 +270,7 @@ export const envSchema = z
       .int()
       .positive()
       .default(5_000),
+    SETTLEMENT_MAX_RETRIES: z.coerce.number().int().positive().default(5),
     SETTLEMENT_RECON_INTERVAL_MS: z.coerce
       .number()
       .int()
@@ -278,10 +308,14 @@ export const envSchema = z
       .url()
       .default("https://soroban-mainnet.stellar.org"),
 
-    STELLAR_TESTNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID: z.string().min(1).optional(),
+    STELLAR_TESTNET_VAULT_CONTRACT_ID: contractId.optional(),
+    STELLAR_MAINNET_VAULT_CONTRACT_ID: contractId.optional(),
+    STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID: contractId.optional(),
+    STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID: contractId.optional(),
+    STELLAR_TESTNET_REVENUE_POOL_CONTRACT_ID: contractId.optional(),
+    STELLAR_MAINNET_REVENUE_POOL_CONTRACT_ID: contractId.optional(),
+    STELLAR_TESTNET_USDC_CONTRACT_ID: contractId.optional(),
+    STELLAR_MAINNET_USDC_CONTRACT_ID: contractId.optional(),
     VAULT_SNAPSHOT_MAX_AGE_MS: z.coerce.number().int().positive().default(60_000),
 
     STELLAR_BASE_FEE: z.coerce.number().int().positive().default(100),
@@ -407,6 +441,7 @@ export const envSchema = z
     KEY_SEMAPHORE_TTL_MS: z.coerce.number().int().positive().default(300000),
 
     // Idempotency
+    IDEMPOTENCY_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
     IDEMPOTENCY_RETENTION_WINDOW_SECONDS: z.coerce
       .number()
       .int()
@@ -547,6 +582,14 @@ export const envSchema = z
       .int()
       .positive()
       .default(345_600_000), // 96h = 4 days, the slow-burn window
+
+    // Explicit opt-in to allow the testnet passphrase when NODE_ENV=production.
+    // The demo deployment sets this deliberately; every other production
+    // deployment must leave it unset so a testnet/mainnet mix-up fails fast.
+    ALLOW_TESTNET_IN_PRODUCTION: z
+      .string()
+      .transform((v) => v === "true")
+      .default(false),
   })
   .superRefine((values, ctx) => {
     if (values.NODE_ENV === "production" && values.FORWARDED_IDENTITY_ALLOW_LEGACY) {
@@ -590,6 +633,124 @@ export const envSchema = z
         message:
           "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
       });
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Stellar / Soroban network consistency checks.
+    //
+    // These run after the per-field StrKey refinements above, so by the time
+    // we reach this block every contract id, public key and secret seed has
+    // already been validated. The checks below only compare *validated*
+    // values, so a mismatch here is always a real network/contract mismatch
+    // rather than a typo in the key material.
+    //
+    // IMPORTANT: never interpolate a secret value into an issue message.
+    // Only the variable name and the failing rule are reported.
+    // ──────────────────────────────────────────────────────────────────────
+    const activeNetwork = values.STELLAR_NETWORK ?? values.SOROBAN_NETWORK;
+
+    const activeNetworkPassphrase =
+      activeNetwork === "mainnet"
+        ? "Public Global Stellar Network ; September 2015"
+        : activeNetwork === "testnet"
+          ? "Test SDF Network ; September 2015"
+          : undefined;
+
+    const activeNetworkRpcUrl =
+      activeNetwork === "mainnet"
+        ? values.SOROBAN_MAINNET_RPC_URL
+        : activeNetwork === "testnet"
+          ? values.SOROBAN_TESTNET_RPC_URL
+          : undefined;
+
+    const activeVaultContractId =
+      activeNetwork === "mainnet"
+        ? values.STELLAR_MAINNET_VAULT_CONTRACT_ID
+        : activeNetwork === "testnet"
+          ? values.STELLAR_TESTNET_VAULT_CONTRACT_ID
+          : undefined;
+
+    // 1. Billing passphrase must match the active network when both are set.
+    if (
+      values.SOROBAN_BILLING_NETWORK_PASSPHRASE !== undefined &&
+      activeNetworkPassphrase !== undefined &&
+      values.SOROBAN_BILLING_NETWORK_PASSPHRASE !== activeNetworkPassphrase
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SOROBAN_BILLING_NETWORK_PASSPHRASE"],
+        message:
+          "SOROBAN_BILLING_NETWORK_PASSPHRASE does not match the active STELLAR_NETWORK; unset it to derive from the network or set it to the active network's passphrase",
+      });
+    }
+
+    // 2. Production must not silently run against the testnet passphrase.
+    if (
+      values.NODE_ENV === "production" &&
+      activeNetwork === "testnet" &&
+      !values.ALLOW_TESTNET_IN_PRODUCTION
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["STELLAR_NETWORK"],
+        message:
+          "STELLAR_NETWORK=testnet is not allowed in production unless ALLOW_TESTNET_IN_PRODUCTION=true",
+      });
+    }
+
+    // 3. Production must not fall back to the localhost Soroban RPC.
+    if (
+      values.NODE_ENV === "production" &&
+      values.SOROBAN_BILLING_RPC_URL === undefined &&
+      values.SOROBAN_RPC_URL === undefined &&
+      activeNetworkRpcUrl === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SOROBAN_BILLING_RPC_URL"],
+        message:
+          "SOROBAN_BILLING_RPC_URL (or SOROBAN_RPC_URL) is required in production; the localhost fallback is disabled outside development and test",
+      });
+    }
+
+    // 4. Billing contract id must agree with the active vault id. When it
+    //    differs it is treated as an explicit override and logged once at
+    //    startup (see src/services/createSorobanBillingService.ts).
+    if (
+      values.SOROBAN_BILLING_CONTRACT_ID !== undefined &&
+      activeVaultContractId !== undefined &&
+      values.SOROBAN_BILLING_CONTRACT_ID !== activeVaultContractId
+    ) {
+      // No issue: this is a supported override. The warning is emitted by
+      // the billing service factory so it fires exactly once per process.
+    }
+
+    // 5. The billing secret key must derive the configured source account.
+    //    The public key is computed lazily here to avoid pulling the StrKey
+    //    dependency into the hot path when the secret is unset.
+    if (
+      values.SOROBAN_BILLING_BACKEND_SECRET_KEY !== undefined &&
+      values.SOROBAN_BILLING_SOURCE_ACCOUNT !== undefined
+    ) {
+      let derivedPublicKey: string | undefined;
+      try {
+        derivedPublicKey = Keypair.fromSecret(
+          values.SOROBAN_BILLING_BACKEND_SECRET_KEY,
+        ).publicKey();
+      } catch {
+        derivedPublicKey = undefined;
+      }
+      if (
+        derivedPublicKey !== undefined &&
+        derivedPublicKey !== values.SOROBAN_BILLING_SOURCE_ACCOUNT
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["SOROBAN_BILLING_BACKEND_SECRET_KEY"],
+          message:
+            "SOROBAN_BILLING_BACKEND_SECRET_KEY does not derive SOROBAN_BILLING_SOURCE_ACCOUNT",
+        });
+      }
     }
   });
 

@@ -60,7 +60,7 @@ Idempotency records are retained for **24 hours** by default. This means:
 
 **HTTP 2xx** (status from upstream)
 
-The request is forwarded to the upstream service. The response (status, headers, body) is cached for the Idempotency-Key.
+The request is forwarded to the upstream service. Cacheable responses (status, body and allowlisted headers) are stored for the Idempotency-Key; transient outcomes are not.
 
 **Header in response**:
 - No special header is added on first request; the gateway behaves transparently.
@@ -277,3 +277,42 @@ Keys are automatically expunged after 24 hours.
 - [Stripe Idempotent Requests](https://stripe.com/docs/api/idempotent_requests)
 - [Idempotency Keys RFC Draft](https://datatracker.ietf.org/doc/draft-idempotency-header-sent-upstream/)
 - [PostgreSQL Unique Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS)
+
+## In-flight lease and bounded replay
+
+The 24-hour retention window applies to completed results. Unfinished requests
+instead have an `IDEMPOTENCY_LEASE_SECONDS` lease (default 60 seconds). Configure
+it above the longest route timeout. A matching retry can atomically take over
+an expired lease; inside the lease it receives `409 IDEMPOTENCY_IN_PROGRESS`.
+A different payload still receives `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`, including
+after lease expiry. Long-running handlers must await
+`res.locals.idempotency.renew()` before expiry; ownership loss rejects renewal.
+
+The database supplies the lease clock. All completion, renewal and cleanup
+writes match the owning lease timestamp, so late responses cannot overwrite a
+new owner's result. Disconnects before `finish` release the lease immediately.
+A crash leaves only the short lease to expire. External upstream side effects
+cannot be undone by this mechanism; upstream operations still need their own
+idempotency when retried after a crash or disconnect.
+
+Responses complete on `finish`, including empty 204s, `sendStatus`, `end(chunk)`
+and streams. Only deterministic outcomes are stored: 2xx and 400, 401, 403, 404,
+409, 410 and 422, per the [billing response cache policy](billing-idempotency.md#http-response-cache-policy).
+Replays preserve status, body bytes, and only `content-type`, `content-encoding`,
+`location`, `etag`, `retry-after` and `x-request-id`; encoding preserves the captured
+wire representation, while `set-cookie` and unrelated upstream headers are never stored.
+Any other outcome, including 5xx, 408, 425, 429, reconciliation and in-progress
+responses, deletes the started record so the next retry is forwarded upstream.
+Failed saves also release the lease (with logged errors on persistence failure);
+an unavailable database may delay recovery until lease expiry.
+
+Bodies above **256 KiB** (`IDEMPOTENCY_MAX_BODY_BYTES`) are not stored: the record is
+deleted, a warning with the route and size is logged, and a retry is forwarded upstream
+again. Use upstream operations that are safe to repeat for responses that may exceed the
+cap. See [billing idempotency](billing-idempotency.md#http-idempotency-leases-and-response-replay)
+for migration and deployment requirements.
+
+Compressed JSON (`gzip`, `deflate`, `br`) is decoded under the same byte budget
+for transient-code policy checks. The original encoded bytes and encoding are
+replayed unchanged when eligible; a decoding failure or decoded-size overflow
+releases the key rather than caching an uninspectable response.

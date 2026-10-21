@@ -18,7 +18,7 @@
  *   ✓  rejects a token signed with a wrong secret (401)
  *   ✓  rejects a valid JWT whose tokenId is not in the store (401)
  *   ✓  rejects an explicitly revoked token (401 + REVOKED_TOKEN)
- *   ✓  returns 200 + { accessToken, tokenType } for a valid token
+ *   returns 200 + { success, data: { accessToken, refreshToken, tokenType } } for a valid token
  *   ✓  returns x-request-id in every response
  *
  * Graceful-shutdown drain
@@ -33,7 +33,9 @@
 import request from 'supertest';
 import express from 'express';
 import type { Server } from 'http';
+import type { Socket } from 'net';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
 import { createInFlightDrainTracker, createGracefulShutdownHandler } from '../lifecycle/shutdown.js';
 import { createRefreshTokenRouter } from './refresh-token.js';
@@ -42,7 +44,7 @@ import { RefreshTokenService } from '../services/refreshTokenService.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import type { RefreshToken } from '../types/auth.js';
-import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
+import type { ConsumeResult, NewRefreshTokenTemplate, RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -124,6 +126,28 @@ class MockRefreshTokenRepository implements RefreshTokenRepository {
     return n;
   }
 
+  async consumeRefreshToken(
+    tokenId: string,
+    userId: string,
+    tokenHash: string,
+    newToken: NewRefreshTokenTemplate,
+  ): Promise<ConsumeResult> {
+    const found = Array.from(this.tokens.values()).find((t) => t.id === tokenId && t.userId === userId);
+    if (!found) return { status: 'not_found' };
+    if (found.isRevoked) return { status: 'revoked' };
+    if (found.expiresAt <= new Date()) return { status: 'expired' };
+    if (found.tokenHash !== tokenHash) return { status: 'hash_mismatch' };
+
+    found.isRevoked = true;
+    found.lastUsedAt = new Date();
+
+    // Insert the replacement inheriting familyId, as the repository does.
+    const newId = newToken.id ?? crypto.randomUUID();
+    const record: RefreshToken = { id: newId, familyId: found.familyId, ...newToken };
+    this.tokens.set(newId, record);
+    return { status: 'consumed', token: { ...found } };
+  }
+
   async listRefreshTokens(
     userId: string,
     limit: number,
@@ -145,8 +169,7 @@ interface TestApp {
   drainTracker: ReturnType<typeof createInFlightDrainTracker>;
 }
 
-function buildApp(): TestApp {
-  const repo = new MockRefreshTokenRepository();
+function buildApp(repo: MockRefreshTokenRepository = new MockRefreshTokenRepository()): TestApp {
   const refreshTokenService = new RefreshTokenService({
     jwtSecret: TEST_SECRET,
     accessTokenExpiry: '15m',
@@ -302,20 +325,26 @@ describe('POST /api/refresh-token — happy path', () => {
   });
 
   it('returns 200 with accessToken and tokenType for a valid refresh token', async () => {
-    const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
+    const { refreshToken, stored } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
 
     const res = await request(testApp.app)
       .post('/api/refresh-token')
       .send({ refreshToken });
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('accessToken');
-    expect(res.body.tokenType).toBe('Bearer');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveProperty('accessToken');
+    expect(res.body.data.tokenType).toBe('Bearer');
 
     // Verify the returned access token is a valid JWT with the right claims
-    const decoded = jwt.verify(res.body.accessToken, TEST_SECRET) as any;
+    const decoded = jwt.verify(res.body.data.accessToken, TEST_SECRET) as jwt.JwtPayload;
     expect(decoded.userId).toBe('user-abc');
     expect(decoded.type).toBe('access');
+
+    // The presented refresh token was consumed (CAS) and a rotated one returned.
+    const consumed = await testApp.repo.findRefreshTokenById(stored.id, stored.userId);
+    expect(consumed?.isRevoked).toBe(true);
+    expect(typeof res.body.data.refreshToken).toBe('string');
   });
 
   it('includes x-request-id in every response', async () => {
@@ -373,6 +402,22 @@ describe('POST /api/refresh-token — revoked token', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/refresh-token — graceful shutdown drain', () => {
+  // Release any held consume and close any server a failing test left open, so a
+  // failure here cannot leave sockets or handlers pending for later suites.
+  let releaseConsume: (() => void) | undefined;
+  let openServer: Server | undefined;
+
+  afterEach(async () => {
+    releaseConsume?.();
+    releaseConsume = undefined;
+    const srv = openServer;
+    openServer = undefined;
+    if (srv?.listening) {
+      srv.closeAllConnections();
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+    }
+  });
+
   it('drain subsystem is named refresh-token', () => {
     const { drainTracker } = buildApp();
     expect(drainTracker.subsystem.name).toBe('refresh-token');
@@ -406,40 +451,37 @@ describe('POST /api/refresh-token — graceful shutdown drain', () => {
   it('SIGTERM waits for an in-flight request to finish before the shutdown handler resolves', async () => {
     /**
      * This test directly exercises the production wiring:
-     *   - A real HTTP server is started on an ephemeral port.
-     *   - The refresh-token drain tracker is registered as a DrainableSubsystem.
-     *   - We start a long-running request (delayed by a setTimeout inside a
-     *     mock controller), fire SIGTERM (via gracefulShutdown), and verify
-     *     that the shutdown promise does not resolve until the request finishes.
+     *   - The real router (drain middleware + AuthController) on a listening server.
+     *   - The real atomic consume path, held open inside the repository CAS.
+     *   - The drain tracker registered as a DrainableSubsystem with the shutdown handler.
      */
-
-    // Slow controller: holds the response open for `delay` ms then responds.
-    let resolveDelayedResponse: (() => void) | undefined;
-    const delayedResponseSettled = new Promise<void>((resolve) => {
-      resolveDelayedResponse = resolve;
+    let markConsumeEntered: () => void = () => {};
+    const consumeEntered = new Promise<void>((resolve) => {
+      markConsumeEntered = () => resolve();
+    });
+    const consumeGate = new Promise<void>((resolve) => {
+      releaseConsume = () => resolve();
     });
 
-    const slowApp = express();
-    slowApp.use(express.json());
+    class GatedConsumeRepository extends MockRefreshTokenRepository {
+      override async consumeRefreshToken(
+        tokenId: string,
+        userId: string,
+        tokenHash: string,
+        newToken: NewRefreshTokenTemplate,
+      ): Promise<ConsumeResult> {
+        markConsumeEntered();
+        await consumeGate;
+        return super.consumeRefreshToken(tokenId, userId, tokenHash, newToken);
+      }
+    }
 
-    const drainTracker = createInFlightDrainTracker('refresh-token');
+    const { app, refreshTokenService, repo, drainTracker } = buildApp(new GatedConsumeRepository());
+    openServer = app.listen(0);
+    const server = openServer;
 
-    slowApp.post(
-      '/api/refresh-token',
-      drainTracker.middleware,
-      (_req, res) => {
-        // Don't respond immediately — simulate an in-flight DB call.
-        setTimeout(() => {
-          res.json({ accessToken: 'fake', tokenType: 'Bearer' });
-          resolveDelayedResponse?.();
-        }, 80);
-      },
-    );
-
-    const server = slowApp.listen(0) as Server;
-
-    const activeConnections = new Set<any>();
-    server.on('connection', (socket: any) => {
+    const activeConnections = new Set<Socket>();
+    server.on('connection', (socket: Socket) => {
       activeConnections.add(socket);
       socket.once('close', () => activeConnections.delete(socket));
     });
@@ -453,27 +495,32 @@ describe('POST /api/refresh-token — graceful shutdown drain', () => {
       subsystems: [drainTracker.subsystem],
     });
 
-    // Fire the slow request — don't await supertest yet, just start it.
-    const requestPromise = request(slowApp)
+    const { refreshToken } = await seedValidToken(refreshTokenService, repo);
+
+    // superagent is lazy: the request is only dispatched by end()/then().
+    // Connection: close lets server.close() complete once this response is sent.
+    const responsePromise = request(server)
       .post('/api/refresh-token')
-      .send({ refreshToken: 'any' });
+      .set('Connection', 'close')
+      .send({ refreshToken })
+      .then((response) => response);
+    await consumeEntered;
 
-    // Give the request time to enter the handler before triggering shutdown.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    // Trigger graceful shutdown — should NOT resolve until the request finishes.
+    // Trigger graceful shutdown while the request is still inside the consume.
     const shutdownPromise = shutdown('SIGTERM');
-
     let shutdownResolved = false;
     void shutdownPromise.then(() => { shutdownResolved = true; });
 
-    // Wait for the delayed response to be sent.
-    await delayedResponseSettled;
-    await requestPromise; // ensure supertest drains the socket
+    // The consume is still held, so the drain must not have completed yet.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(shutdownResolved).toBe(false);
 
-    // Now the shutdown can complete.
+    releaseConsume?.();
+    const res = await responsePromise;
     const exitCode = await shutdownPromise;
 
+    expect(res.status).toBe(200);
+    expect(res.body.data.accessToken).toEqual(expect.any(String));
     expect(exitCode).toBe(0);
     expect(shutdownResolved).toBe(true);
     expect(closeDatabase).toHaveBeenCalledTimes(1);
