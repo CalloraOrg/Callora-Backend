@@ -8765,8 +8765,7 @@
         "type": "object",
         "required": [
           "success",
-          "requestId",
-          "timestamp"
+          "data"
         ],
         "properties": {
           "success": {
@@ -8775,13 +8774,7 @@
               true
             ]
           },
-          "requestId": {
-            "type": "string"
-          },
-          "timestamp": {
-            "type": "string",
-            "format": "date-time"
-          }
+          "data": {}
         }
       },
       "BillingHistoryRow": {

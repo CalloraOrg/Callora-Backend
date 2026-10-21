@@ -1,4 +1,3 @@
--- destructive-approved: #1532
 -- Migration: Drop orphan billing_requests index [b#billing-history]
 --
 -- The index idx_billing_requests_lookup_hot was created by billing_index.sql
