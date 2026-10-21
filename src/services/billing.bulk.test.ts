@@ -134,6 +134,7 @@ describe('BillingService.deductBulk', () => {
         stellarTxHash: 'tx_existing',
         alreadyProcessed: true,
         deductionApplied: true,
+        deductionStatus: 'confirmed',
         reconciliationRequired: false,
       },
       {
@@ -142,6 +143,7 @@ describe('BillingService.deductBulk', () => {
         stellarTxHash: 'tx_bulk_success',
         alreadyProcessed: false,
         deductionApplied: true,
+        deductionStatus: 'confirmed',
         reconciliationRequired: false,
       },
     ]);

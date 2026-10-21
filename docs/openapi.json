@@ -504,18 +504,6 @@
                       "requestId": "req-123",
                       "timestamp": "2026-01-01T00:00:00.000Z"
                     }
-                  },
-                  "stellarAddressRequired": {
-                    "summary": "User missing Stellar address",
-                    "value": {
-                      "success": false,
-                      "error": {
-                        "code": "STELLAR_ADDRESS_REQUIRED",
-                        "message": "User does not have a Stellar address configured. Please update your profile."
-                      },
-                      "requestId": "req-123",
-                      "timestamp": "2026-01-01T00:00:00.000Z"
-                    }
                   }
                 }
               }
@@ -8340,7 +8328,6 @@
           "INVALID_CONTRACT_ID",
           "NETWORK_UNAVAILABLE",
           "TRANSACTION_BUILD_FAILED",
-          "STELLAR_ADDRESS_REQUIRED",
           "INTERNAL_ERROR",
           "INVALID_WEBHOOK_REGISTRATION",
           "INVALID_WEBHOOK_EVENT_TYPES",

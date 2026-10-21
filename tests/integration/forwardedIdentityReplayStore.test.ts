@@ -11,7 +11,7 @@ describePostgres("PostgreSQL forwarded replay claims", () => {
   const store = new PostgresForwardedIdentityReplayStore((sql, values) => pool.query(sql, values));
   beforeAll(async () => {
     await pool.query(`CREATE SCHEMA ${schema}`);
-    await pool.query(readFileSync("migrations/0026_forwarded_identity_replays.sql", "utf8"));
+    await pool.query(readFileSync("migrations/0027_forwarded_identity_replays.sql", "utf8"));
   });
   afterAll(async () => {
     await pool.query(`DROP SCHEMA ${schema} CASCADE`);

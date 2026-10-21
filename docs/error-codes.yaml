@@ -223,10 +223,6 @@ error_codes:
     section: Vault / deposit
     description: Failed to build transaction
 
-  - code: STELLAR_ADDRESS_REQUIRED
-    section: Vault / deposit
-    description: User does not have a Stellar address configured
-
   - code: INTERNAL_ERROR
     section: Vault / deposit
     description: Internal error occurred during vault operation
