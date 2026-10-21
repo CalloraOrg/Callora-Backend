@@ -16,7 +16,7 @@ function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-async function getMetricValue(outcome: 'hit' | 'miss' | 'revoked' | 'expired'): Promise<number> {
+async function getMetricValue(outcome: 'hit' | 'miss' | 'revoked' | 'expired' | 'error'): Promise<number> {
   const metric = register.getSingleMetric('gateway_api_key_lookup_total');
   if (!metric) return 0;
   const data = await (metric as { get: () => Promise<{ values: Array<{ labels: Record<string, string>; value: number }> }> }).get();
@@ -564,6 +564,115 @@ describe('gatewayApiKeyAuth middleware', () => {
       [validPrefix, 'testnet']
     );
     expect(await getMetricValue('miss')).toBe(1);
+  });
+
+  describe('database-backed expiry and failure handling', () => {
+    function dbRow(expiresAt: Date | string | null) {
+      return {
+        api_key_id: 'key_1',
+        user_id: 'user_1',
+        api_id: 'api_1',
+        prefix: validPrefix,
+        key_hash: sha256Hex(validApiKey),
+        revoked: false,
+        scopes: [],
+        rate_limit_per_minute: null,
+        created_at: null,
+        last_used_at: null,
+        expires_at: expiresAt,
+        user: { id: 'user_1' },
+        vault: null,
+      };
+    }
+
+    function buildDbApp(
+      query: jest.Mock,
+      extra?: { dbTimeoutMs?: number; resolveApiContext?: () => never },
+    ) {
+      const app = express();
+      app.get(
+        '/gateway/:apiId',
+        createDatabaseGatewayApiKeyAuthMiddleware({
+          db: { query },
+          dbTimeoutMs: extra?.dbTimeoutMs,
+          resolveApiContext:
+            extra?.resolveApiContext ??
+            (() => ({ api: { id: 'api_1' }, endpoint: { endpointId: 'ep_1' } })),
+          getApiId(api: Record<string, unknown>) {
+            return String(api.id);
+          },
+        }),
+        (_req, res) => {
+          res.json({ ok: true });
+        },
+      );
+      app.use(errorHandler);
+      return app;
+    }
+
+    it('rejects a database key whose expires_at is in the past', async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [dbRow(new Date(Date.now() - 60_000))] });
+      const res = await request(buildDbApp(query)).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Unauthorized: API key has expired');
+      expect(await getMetricValue('expired')).toBe(1);
+    });
+
+    it('accepts a database key whose expires_at is in the future', async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [dbRow(new Date(Date.now() + 60_000))] });
+      const res = await request(buildDbApp(query)).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+    });
+
+    it('accepts a database key with NULL expires_at', async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [dbRow(null)] });
+      const res = await request(buildDbApp(query)).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects a previously cached key once its expiry has passed', async () => {
+      const soon = new Date(Date.now() + 200);
+      const query = jest.fn().mockResolvedValue({ rows: [dbRow(soon)] });
+      const app = buildDbApp(query);
+      const first = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(first.status).toBe(200);
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const second = await request(app).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(second.status).toBe(401);
+      expect(await getMetricValue('expired')).toBe(1);
+    });
+
+    it('returns 503 when the candidate lookup rejects', async () => {
+      const query = jest.fn().mockRejectedValue(new Error('db down'));
+      const res = await request(buildDbApp(query)).get('/gateway/api_1').set('x-api-key', validApiKey);
+      expect(res.status).toBe(503);
+      expect(await getMetricValue('error')).toBe(1);
+    });
+
+    it('returns 503 when resolveApiContext rejects', async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [] });
+      const res = await request(
+        buildDbApp(query, {
+          resolveApiContext: () => {
+            throw new Error('registry down');
+          },
+        }),
+      )
+        .get('/gateway/api_1')
+        .set('x-api-key', validApiKey);
+      expect(res.status).toBe(503);
+    });
+
+    it('returns 503 within the deadline when the lookup hangs', async () => {
+      const query = jest.fn().mockReturnValue(new Promise(() => undefined));
+      const started = Date.now();
+      const res = await request(buildDbApp(query, { dbTimeoutMs: 100 }))
+        .get('/gateway/api_1')
+        .set('x-api-key', validApiKey);
+      expect(res.status).toBe(503);
+      expect(Date.now() - started).toBeLessThan(2000);
+    });
   });
 
   describe('verification cache', () => {
