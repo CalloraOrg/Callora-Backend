@@ -6723,99 +6723,6 @@
           }
         }
       },
-      "SuccessEnvelope": {
-        "type": "object",
-        "description": "Canonical success envelope. The endpoint payload is carried in data; each operation narrows data via allOf.",
-        "required": [
-          "success",
-          "data",
-          "requestId",
-          "timestamp"
-        ],
-        "properties": {
-          "success": {
-            "type": "boolean",
-            "const": true
-          },
-          "data": {
-            "description": "Endpoint-specific payload"
-          },
-          "meta": {
-            "type": "object",
-            "description": "Optional top-level response metadata",
-            "additionalProperties": true
-          },
-          "requestId": {
-            "type": "string",
-            "description": "Correlation ID for the request"
-          },
-          "timestamp": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "BillingHistoryRow": {
-        "type": "object",
-        "description": "A consumer charge sourced from usage_events.",
-        "required": [
-          "id",
-          "userId",
-          "apiId",
-          "endpointId",
-          "apiKeyId",
-          "requestId",
-          "amountUsdc",
-          "stellarTxHash",
-          "status",
-          "createdAt"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "usage_events row id"
-          },
-          "userId": {
-            "type": "string"
-          },
-          "apiId": {
-            "type": "string"
-          },
-          "endpointId": {
-            "type": "string"
-          },
-          "apiKeyId": {
-            "type": "string"
-          },
-          "requestId": {
-            "type": "string"
-          },
-          "amountUsdc": {
-            "type": "string",
-            "pattern": "^\\d+\\.\\d{7}$",
-            "description": "USDC amount as an exact decimal string with 7 fractional digits, e.g. 0.0012345"
-          },
-          "stellarTxHash": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Stellar transaction hash; null until confirmed"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "confirmed",
-              "pending"
-            ],
-            "description": "confirmed when stellarTxHash is present, otherwise pending"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
       "BillingDeductRequest": {
         "type": "object",
         "required": [
@@ -8549,6 +8456,84 @@
               "null"
             ],
             "maxLength": 1000
+          }
+        }
+      },
+      "SuccessEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BillingHistoryRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "apiId",
+          "endpointId",
+          "apiKeyId",
+          "requestId",
+          "amountUsdc",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "apiId": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "apiKeyId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "amountUsdc": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d{1,7})?$"
+          },
+          "stellarTxHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "pending"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

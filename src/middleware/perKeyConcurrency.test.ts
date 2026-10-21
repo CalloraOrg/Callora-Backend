@@ -1,3 +1,7 @@
+import { once } from 'node:events';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
 import express from 'express';
 import request from 'supertest';
 
@@ -38,13 +42,43 @@ function buildApp(
   return app;
 }
 
+/** Servers bound by the current test; drained in afterEach. */
+let openServers: Server[] = [];
+
+/**
+ * Binds the app once to a real loopback port and returns its base URL, so every
+ * request in the test shares this one listener instead of supertest binding a
+ * new one per call.
+ */
+async function startServer(app: express.Express): Promise<string> {
+  const server = app.listen(0, '127.0.0.1');
+  openServers.push(server);
+  await once(server, 'listening');
+  const { port } = server.address() as AddressInfo;
+  return `http://127.0.0.1:${port}`;
+}
+
+/** Stops accepting, drops any keep-alive sockets, and waits for 'close'. */
+async function stopServers(): Promise<void> {
+  const servers = openServers;
+  openServers = [];
+  await Promise.all(
+    servers.map(async (server) => {
+      const closed = once(server, 'close');
+      server.close();
+      server.closeAllConnections();
+      await closed;
+    }),
+  );
+}
+
 /** Fires a request without awaiting it, so it can overlap with others. */
 function fireRequest(
-  app: express.Express,
+  baseUrl: string,
   keyId: string,
 ): Promise<request.Response> {
   return new Promise((resolve, reject) => {
-    request(app)
+    request(baseUrl)
       .get('/v1/call/demo')
       .set('x-test-key-id', keyId)
       .end((err, res) => (err ? reject(err) : resolve(res)));
@@ -58,7 +92,8 @@ describe('perKeyConcurrency middleware', () => {
     semaphore = new KeySemaphore(50, 1000);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopServers();
     semaphore.clear();
   });
 
@@ -66,9 +101,9 @@ describe('perKeyConcurrency middleware', () => {
     test('holds a slot on the shared semaphore while a request is in flight', async () => {
       // This is the behaviour that makes the admin stats endpoint meaningful:
       // without it, getCurrentActiveSlotCounts() is permanently empty.
-      const app = buildApp(semaphore, 50, 120);
+      const baseUrl = await startServer(buildApp(semaphore, 50, 120));
 
-      const inFlight = fireRequest(app, 'key-tracked');
+      const inFlight = fireRequest(baseUrl, 'key-tracked');
       await new Promise((r) => setTimeout(r, 40));
 
       expect(semaphore.getActiveSlotCount('key-tracked')).toBe(1);
@@ -79,9 +114,9 @@ describe('perKeyConcurrency middleware', () => {
     });
 
     test('releases the slot once the response finishes', async () => {
-      const app = buildApp(semaphore, 50, 50);
+      const baseUrl = await startServer(buildApp(semaphore, 50, 50));
 
-      const res = await fireRequest(app, 'key-release');
+      const res = await fireRequest(baseUrl, 'key-release');
       expect(res.status).toBe(200);
 
       // Slot release happens on the 'finish' event; allow it to settle.
@@ -92,10 +127,10 @@ describe('perKeyConcurrency middleware', () => {
     test('releases the slot for synchronous handlers', async () => {
       // Regression guard: a handler that responds synchronously may emit
       // 'finish' before the slot callback attaches its listeners.
-      const app = buildApp(semaphore, 50, 0);
+      const baseUrl = await startServer(buildApp(semaphore, 50, 0));
 
       for (let i = 0; i < 5; i++) {
-        const res = await fireRequest(app, 'key-sync');
+        const res = await fireRequest(baseUrl, 'key-sync');
         expect(res.status).toBe(200);
       }
 
@@ -104,12 +139,12 @@ describe('perKeyConcurrency middleware', () => {
     });
 
     test('counts concurrent requests for the same key', async () => {
-      const app = buildApp(semaphore, 50, 150);
+      const baseUrl = await startServer(buildApp(semaphore, 50, 150));
 
       const reqs = [
-        fireRequest(app, 'key-multi'),
-        fireRequest(app, 'key-multi'),
-        fireRequest(app, 'key-multi'),
+        fireRequest(baseUrl, 'key-multi'),
+        fireRequest(baseUrl, 'key-multi'),
+        fireRequest(baseUrl, 'key-multi'),
       ];
       await new Promise((r) => setTimeout(r, 50));
 
@@ -120,9 +155,9 @@ describe('perKeyConcurrency middleware', () => {
     });
 
     test('tracks distinct keys independently', async () => {
-      const app = buildApp(semaphore, 50, 150);
+      const baseUrl = await startServer(buildApp(semaphore, 50, 150));
 
-      const reqs = [fireRequest(app, 'key-a'), fireRequest(app, 'key-b')];
+      const reqs = [fireRequest(baseUrl, 'key-a'), fireRequest(baseUrl, 'key-b')];
       await new Promise((r) => setTimeout(r, 50));
 
       expect(semaphore.getCurrentActiveSlotCounts()).toEqual({
@@ -135,10 +170,10 @@ describe('perKeyConcurrency middleware', () => {
     });
 
     test('releases the slot when the client disconnects mid-flight', async () => {
-      const app = buildApp(semaphore, 50, 500);
+      const baseUrl = await startServer(buildApp(semaphore, 50, 500));
 
       await new Promise<void>((resolve) => {
-        const req = request(app).get('/v1/call/demo').set('x-test-key-id', 'key-abort');
+        const req = request(baseUrl).get('/v1/call/demo').set('x-test-key-id', 'key-abort');
         req.end(() => {});
         setTimeout(() => {
           req.abort();
@@ -154,12 +189,12 @@ describe('perKeyConcurrency middleware', () => {
 
   describe('limit enforcement', () => {
     test('rejects with 429 once the key is at its limit', async () => {
-      const app = buildApp(semaphore, 1, 200);
+      const baseUrl = await startServer(buildApp(semaphore, 1, 200));
 
-      const inFlight = fireRequest(app, 'key-limited');
+      const inFlight = fireRequest(baseUrl, 'key-limited');
       await new Promise((r) => setTimeout(r, 40));
 
-      const rejected = await fireRequest(app, 'key-limited');
+      const rejected = await fireRequest(baseUrl, 'key-limited');
       expect(rejected.status).toBe(429);
       expect(rejected.body.code).toBe('TOO_MANY_REQUESTS');
       expect(rejected.body.message).toContain('Concurrency limit');
@@ -169,37 +204,37 @@ describe('perKeyConcurrency middleware', () => {
     });
 
     test('one key hitting its limit does not affect another key', async () => {
-      const app = buildApp(semaphore, 1, 200);
+      const baseUrl = await startServer(buildApp(semaphore, 1, 200));
 
-      const busy = fireRequest(app, 'key-busy');
+      const busy = fireRequest(baseUrl, 'key-busy');
       await new Promise((r) => setTimeout(r, 40));
 
-      const rejected = await fireRequest(app, 'key-busy');
+      const rejected = await fireRequest(baseUrl, 'key-busy');
       expect(rejected.status).toBe(429);
 
-      const other = await fireRequest(app, 'key-idle');
+      const other = await fireRequest(baseUrl, 'key-idle');
       expect(other.status).toBe(200);
 
       await busy;
     });
 
     test('allows requests again after in-flight requests drain', async () => {
-      const app = buildApp(semaphore, 1, 50);
+      const baseUrl = await startServer(buildApp(semaphore, 1, 50));
 
-      const first = await fireRequest(app, 'key-drain');
+      const first = await fireRequest(baseUrl, 'key-drain');
       expect(first.status).toBe(200);
 
-      const second = await fireRequest(app, 'key-drain');
+      const second = await fireRequest(baseUrl, 'key-drain');
       expect(second.status).toBe(200);
     });
 
     test('a rejected request does not consume a slot', async () => {
-      const app = buildApp(semaphore, 1, 200);
+      const baseUrl = await startServer(buildApp(semaphore, 1, 200));
 
-      const inFlight = fireRequest(app, 'key-no-leak');
+      const inFlight = fireRequest(baseUrl, 'key-no-leak');
       await new Promise((r) => setTimeout(r, 40));
 
-      await fireRequest(app, 'key-no-leak'); // 429
+      await fireRequest(baseUrl, 'key-no-leak'); // 429
       expect(semaphore.getActiveSlotCount('key-no-leak')).toBe(1);
 
       await inFlight;
@@ -210,9 +245,9 @@ describe('perKeyConcurrency middleware', () => {
 
   describe('requests without an API key', () => {
     test('passes through untracked when no key record is present', async () => {
-      const app = buildApp(semaphore, 1, 0);
+      const baseUrl = await startServer(buildApp(semaphore, 1, 0));
 
-      const res = await request(app).get('/v1/call/demo');
+      const res = await request(baseUrl).get('/v1/call/demo');
       expect(res.status).toBe(200);
       expect(semaphore.getTotalActiveSlotCount()).toBe(0);
     });
@@ -234,7 +269,9 @@ describe('perKeyConcurrency middleware', () => {
         (_req, res) => res.json({ ok: true }),
       );
 
-      const res = await request(app).get('/v1/call/demo');
+      const baseUrl = await startServer(app);
+
+      const res = await request(baseUrl).get('/v1/call/demo');
       expect(res.status).toBe(200);
       expect(semaphore.getTotalActiveSlotCount()).toBe(0);
     });

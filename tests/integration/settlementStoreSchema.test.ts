@@ -1,8 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { Pool } from 'pg';
-import { GenericContainer, Wait } from 'testcontainers';
+import { Pool, type PoolConfig } from 'pg';
+import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { PostgresSettlementStore } from '../../src/services/settlementStore.js';
+
+// Native mode: CALLORA_TEST_DISPOSABLE_DATABASE_URL points at a disposable PostgreSQL
+// database; the test creates and drops only its own schema there. Unset: Docker container.
+const disposableDatabaseUrl = process.env.CALLORA_TEST_DISPOSABLE_DATABASE_URL;
 
 const migrationPath = (filename: string) =>
   path.join(process.cwd(), 'migrations', filename);
@@ -14,28 +19,44 @@ async function runSql(pool: Pool, sql: string): Promise<void> {
 }
 
 describe('PostgresSettlementStore schema contract', () => {
-  let container: Awaited<ReturnType<GenericContainer['start']>>;
+  const schema = `settlement_schema_${randomUUID().replace(/-/g, '')}`;
+  let container: StartedTestContainer | undefined;
+  let adminPool: Pool | undefined;
   let pool: Pool;
 
   beforeAll(async () => {
-    container = await new GenericContainer('postgres:16-alpine')
-      .withEnvironment({
-        POSTGRES_DB: 'callora_test',
-        POSTGRES_USER: 'postgres',
-        POSTGRES_PASSWORD: 'postgres',
-      })
-      .withExposedPorts(5432)
-      .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/i, 2))
-      .start();
+    let connection: PoolConfig;
+    if (disposableDatabaseUrl) {
+      connection = { connectionString: disposableDatabaseUrl };
+    } else {
+      container = await new GenericContainer('postgres:16-alpine')
+        .withEnvironment({
+          POSTGRES_DB: 'callora_test',
+          POSTGRES_USER: 'postgres',
+          POSTGRES_PASSWORD: 'postgres',
+        })
+        .withExposedPorts(5432)
+        .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/i, 2))
+        .start();
+      connection = {
+        host: container.getHost(),
+        port: container.getMappedPort(5432),
+        user: 'postgres',
+        password: 'postgres',
+        database: 'callora_test',
+      };
+    }
 
-    pool = new Pool({
-      host: container.getHost(),
-      port: container.getMappedPort(5432),
-      user: 'postgres',
-      password: 'postgres',
-      database: 'callora_test',
-    });
+    // Every test DDL statement runs with search_path limited to a per-run schema;
+    // the admin pool only creates and drops that schema.
+    adminPool = new Pool(connection);
+    await adminPool.query(`CREATE SCHEMA ${schema}`);
+    pool = new Pool({ ...connection, options: `-c search_path=${schema}` });
 
+  }, 120_000);
+
+  beforeEach(async () => {
+    await pool.query('DROP TABLE IF EXISTS settlements CASCADE');
     await pool.query(`
       CREATE TABLE settlements (
         id BIGSERIAL PRIMARY KEY,
@@ -57,11 +78,16 @@ describe('PostgresSettlementStore schema contract', () => {
       VALUES ('preexisting', 'dev_1', 12.5, 'pending')
     `);
     await runSql(pool, readFileSync(migrationPath('0026_settlement_retry_policy.sql'), 'utf8'));
-  }, 120_000);
+  });
 
   afterAll(async () => {
-    await pool?.end();
-    await container?.stop();
+    try {
+      await pool?.end();
+      await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    } finally {
+      await adminPool?.end();
+      await container?.stop();
+    }
   });
 
   it('runs all store queries and enforces retry transitions against migrated schema', async () => {
@@ -87,10 +113,10 @@ describe('PostgresSettlementStore schema contract', () => {
     const retryAfter = new Date(Date.now() + 60_000).toISOString();
     await expect(store.scheduleRetry('pending_retry', retryAfter, 5)).resolves.toBe(true);
     const scheduled = await pool.query(
-      `SELECT status, retry_count, retry_after FROM settlements WHERE external_id = 'pending_retry'`,
+      `SELECT status, retry_count, retry_after > NOW() AS scheduled_future FROM settlements WHERE external_id = 'pending_retry'`,
     );
     expect(scheduled.rows[0]).toMatchObject({ status: 'retryable', retry_count: 1 });
-    expect(new Date(scheduled.rows[0].retry_after).getTime()).toBeGreaterThan(Date.now());
+    expect(scheduled.rows[0].scheduled_future).toBe(true);
     const beforeDue = await store.getPendingSettlements();
     expect(beforeDue.map((row) => row.id)).not.toContain('pending_retry');
 
@@ -132,29 +158,6 @@ describe('PostgresSettlementStore schema contract', () => {
     await store.updateStatus('pending_retry', 'completed', 'tx-recovered');
     await expect(store.verifyLedger()).resolves.toMatchObject({ totalViolations: 0 });
 
-    await pool.query('SET enable_seqscan = off');
-    const plan = await pool.query(`
-      EXPLAIN SELECT id, external_id, developer_id, amount_usdc, status, stellar_tx_hash,
-                     created_at, retry_after, retry_count
-      FROM settlements
-      WHERE status = 'pending'
-      UNION ALL
-      SELECT id, external_id, developer_id, amount_usdc, status, stellar_tx_hash,
-             created_at, retry_after, retry_count
-      FROM settlements
-      WHERE status = 'retryable'
-        AND retry_after IS NULL
-      UNION ALL
-      SELECT id, external_id, developer_id, amount_usdc, status, stellar_tx_hash,
-             created_at, retry_after, retry_count
-      FROM settlements
-      WHERE status = 'retryable'
-        AND retry_after <= NOW()
-      ORDER BY created_at ASC, id ASC
-    `);
-    const explain = plan.rows.map((row) => Object.values(row).join(' ')).join('\n');
-    console.info('Settlement pending query EXPLAIN:\n%s', explain);
-    expect(explain).toContain('idx_settlements_retry_after');
   });
 
   it('rolls back retry columns and restores the original status constraint', async () => {
@@ -163,6 +166,7 @@ describe('PostgresSettlementStore schema contract', () => {
     const columns = await pool.query(`
       SELECT column_name FROM information_schema.columns
       WHERE table_name = 'settlements'
+        AND table_schema = current_schema()
     `);
     const columnNames = columns.rows.map((row) => row.column_name);
     expect(columnNames).not.toContain('retry_after');

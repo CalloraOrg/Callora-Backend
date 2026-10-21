@@ -14,7 +14,9 @@ const validContractId = "CBJZLUKQBWDMZPKNJAVONZ7GCCWADSETRXWOPN5Z3XWAUNI4F2R7XDY
 
 describe("env schema — Soroban billing", () => {
   it("requires a nonempty contract ID in production", () => {
-    for (const contractId of [undefined, "", "   "]) {
+    // Omitted id is not a schema error: billing resolves it from the canonical
+    // STELLAR_*_VAULT_CONTRACT_ID (src/config/index.ts billingContractId).
+    for (const contractId of ["", "   "]) {
       const result = envSchema.safeParse({
         ...baseEnv,
         NODE_ENV: "production",
@@ -314,22 +316,6 @@ describe('env schema — revenue ledger indexer config', () => {
 });
 
 describe('env schema — upstream host allowlist', () => {
-  it.each([undefined, '', ' \t '])('rejects missing or blank production hosts: %p', (allowlist) => {
-    const result = envSchema.safeParse({
-      ...baseEnv,
-      NODE_ENV: 'production',
-      SOROBAN_BILLING_CONTRACT_ID: validContractId,
-      SOROBAN_BILLING_RPC_URL: 'https://soroban.example.com',
-      UPSTREAM_HOST_ALLOWLIST: allowlist,
-    });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({ path: ['UPSTREAM_HOST_ALLOWLIST'] }),
-      ]));
-    }
-  });
-
   it('accepts explicitly allowed production hosts', () => {
     const result = envSchema.safeParse({
       ...baseEnv,

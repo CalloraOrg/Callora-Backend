@@ -16,6 +16,9 @@
 - Scope billing status and duplicate-request lookups to the authenticated payer, reject body-supplied payer overrides, and prevent another account's request ID from exposing or mutating its charge.
 - Keep bulk quota updates atomic when a later developer lookup fails, rolling back earlier changes in the same SQLite transaction.
 - Restore application and test type contracts and run repository lint and typechecking in CI.
+- Keep fee-bump quotes equal to signed envelope fees, including high inner fees and Soroban resource fees, and read the documented `FEE_BUMPER_SECRET_KEY` signer setting.
+- Require a verified, quote-bound on-chain app-token payment before fee signing; consume quote/payment once in a database transaction, enforce expiry with the database clock, and round fractional token charges up to payable units.
+- Classify PostgreSQL-only quote and replay-header migrations correctly during SQLite demo bootstrap; production SQL remains unchanged.
 - Require fresh, method/path-bound v1 forwarded identity signatures, reject replay with bounded memory or shared PostgreSQL storage, and restrict legacy migration mode to non-production.
 
 - Propagated `X-Correlation-Id` across the quota self-service routes and outbound webhook dispatches so quota requests and related notifications can be traced end-to-end.
