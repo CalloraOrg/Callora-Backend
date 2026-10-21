@@ -250,7 +250,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   // Per-user billing rate limiter (100 requests per 60 seconds by default).
   const billingRateLimiter = createBillingRateLimitMiddleware(
-    config.creditsRateLimit.billingRateLimit,
+    config.billingRateLimit,
   );
   billingMiddlewares.push(billingRateLimiter);
   if (billingConcurrency) {
