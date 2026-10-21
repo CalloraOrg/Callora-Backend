@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { ServiceUnavailableError } from '../errors/index.js';
 
 type PrismaClientLike = {
   $disconnect: () => Promise<void>;
@@ -16,16 +17,30 @@ const nodeRequire: NodeRequire =
 type PrismaClientConstructor = new (options?: unknown) => PrismaClientLike;
 
 function getPrismaClient(): PrismaClientLike {
+  if (process.env.DEMO_MODE === 'true') {
+    throw new ServiceUnavailableError('Database service is unavailable in demo mode');
+  }
+
   if (!prisma) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error("DATABASE_URL environment variable is required");
     }
     const adapter = new PrismaPg({ connectionString });
-    const { PrismaClient } = nodeRequire('../generated/prisma/client.js') as {
-      PrismaClient: PrismaClientConstructor;
-    };
-    prisma = new PrismaClient({ adapter }) as unknown as PrismaClientLike;
+    try {
+      const { PrismaClient } = nodeRequire('../generated/prisma/client.js') as {
+        PrismaClient: PrismaClientConstructor;
+      };
+      prisma = new PrismaClient({ adapter }) as unknown as PrismaClientLike;
+    } catch (err: unknown) {
+      if (
+        (err as { code?: string })?.code === 'MODULE_NOT_FOUND' ||
+        (err instanceof Error && err.message.includes('Cannot find module'))
+      ) {
+        throw new ServiceUnavailableError('Database service is unavailable in demo mode');
+      }
+      throw err;
+    }
   }
   return prisma;
 }
@@ -39,6 +54,9 @@ export async function disconnectPrisma(): Promise<void> {
 
 export default new Proxy({} as PrismaClientLike, {
   get(_target, prop, receiver) {
+    if (prop === '$disconnect') {
+      return disconnectPrisma;
+    }
     const client = getPrismaClient();
     const value = Reflect.get(client, prop, receiver);
     return typeof value === "function" ? value.bind(client) : value;
