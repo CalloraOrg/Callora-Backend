@@ -3,6 +3,8 @@ import { DataType, newDb } from 'pg-mem';
 
 import {
   PgUsageEventsRepository,
+  CorruptUsageAmountError,
+  CorruptAmountError,
   type UsageEventsRepositoryQueryable,
 } from './usageEventsRepository.pg.js';
 
@@ -470,6 +472,43 @@ test('repository surfaces malformed amount values from the database', async () =
     malformedStringRepository.findByApiId('api-weather'),
     /amount_usdc must be stored as an integer string in smallest units\./,
   );
+});
+
+test('Scenario 6: Pg repository reads a value "1.5" (corrupt) and raises typed error naming the row id', async () => {
+  const corruptRowId = 'row-corrupt-999';
+  const corruptRepository = new PgUsageEventsRepository({
+    async query<T = unknown>() {
+      return {
+        rows: [
+          {
+            id: corruptRowId,
+            user_id: 'user-1',
+            api_id: 'api-weather',
+            endpoint_id: 'endpoint-1',
+            api_key_id: 'key-1',
+            developer_id: 'dev-1',
+            amount_usdc: '1.5',
+            request_id: 'req-corrupt',
+            stellar_tx_hash: null,
+            created_at: new Date('2026-02-01T10:00:00.000Z'),
+          },
+        ] as T[],
+      };
+    },
+  });
+
+  let caughtError: unknown;
+  try {
+    await corruptRepository.findByUserId('user-1');
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.ok(caughtError instanceof CorruptUsageAmountError, 'Must be instance of CorruptUsageAmountError');
+  assert.ok(caughtError instanceof CorruptAmountError, 'Must be instance of CorruptAmountError');
+  assert.equal((caughtError as CorruptUsageAmountError).rowId, corruptRowId);
+  assert.match((caughtError as Error).message, new RegExp(corruptRowId));
+  assert.equal((caughtError as Error).name, 'CorruptUsageAmountError');
 });
 
 test('repository accepts bigint values returned directly from the database driver', async () => {

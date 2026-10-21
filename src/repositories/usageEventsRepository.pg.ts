@@ -20,7 +20,7 @@ export interface CreateUsageEventInput {
    * Defaults to '' for backward compatibility but callers should supply this.
    */
   developerId?: string;
-  amount: bigint;
+  amount: bigint | string | number;
   requestId: string;
   stellarTxHash?: string | null;
   createdAt?: Date;
@@ -171,7 +171,32 @@ const normalizeCursor = (cursor?: string): string | undefined => {
   return trimmed;
 };
 
-const toBigInt = (value: string | number | bigint | null, fieldName: string): bigint => {
+export class CorruptUsageAmountError extends Error {
+  public readonly rowId?: string;
+  public readonly fieldName: string;
+  public readonly rawValue: unknown;
+
+  constructor(
+    message: string,
+    options?: { rowId?: string; fieldName?: string; rawValue?: unknown },
+  ) {
+    super(message);
+    this.name = 'CorruptUsageAmountError';
+    this.rowId = options?.rowId;
+    this.fieldName = options?.fieldName ?? 'amount_usdc';
+    this.rawValue = options?.rawValue;
+    Object.setPrototypeOf(this, CorruptUsageAmountError.prototype);
+  }
+}
+
+export const CorruptAmountError = CorruptUsageAmountError;
+export type CorruptAmountError = CorruptUsageAmountError;
+
+export const toBigInt = (
+  value: string | number | bigint | null,
+  fieldName: string,
+  rowId?: string,
+): bigint => {
   if (value === null || value === undefined) {
     return 0n;
   }
@@ -180,27 +205,35 @@ const toBigInt = (value: string | number | bigint | null, fieldName: string): bi
     return value;
   }
 
+  const rowContext = rowId ? ` (row: ${rowId})` : '';
+
   if (typeof value === 'number') {
     if (!Number.isInteger(value)) {
-      throw new Error(`${fieldName} must be an integer value.`);
+      throw new CorruptUsageAmountError(
+        `${fieldName} must be an integer value.${rowContext}`,
+        { rowId, fieldName, rawValue: value },
+      );
     }
 
     return BigInt(value);
   }
 
-  const trimmed = value.trim();
-  // Handle potential DECIMAL(20, 7) string format from PG (e.g. "100.0000000")
-  const [integerPart, fractionalPart] = trimmed.split('.');
-  
-  if (fractionalPart && !/^[0]+$/.test(fractionalPart)) {
-    throw new Error(`${fieldName} must be stored as an integer string in smallest units. Got: ${value}`);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!/^-?\d+$/.test(trimmed)) {
+      throw new CorruptUsageAmountError(
+        `${fieldName} must be stored as an integer string in smallest units. Got: ${value}${rowContext}`,
+        { rowId, fieldName, rawValue: value },
+      );
+    }
+
+    return BigInt(trimmed);
   }
 
-  if (!integerPart || !/^-?\d+$/.test(integerPart)) {
-    throw new Error(`${fieldName} must be stored as an integer string in smallest units. Got: ${value}`);
-  }
-
-  return BigInt(integerPart);
+  throw new CorruptUsageAmountError(
+    `${fieldName} must be stored as an integer string in smallest units. Got: ${String(value)}${rowContext}`,
+    { rowId, fieldName, rawValue: value },
+  );
 };
 
 const mapUsageEventRow = (row: UsageEventRow): BillingUsageEvent => ({
@@ -210,7 +243,7 @@ const mapUsageEventRow = (row: UsageEventRow): BillingUsageEvent => ({
   endpointId: row.endpoint_id,
   apiKeyId: row.api_key_id,
   developerId: row.developer_id,
-  amount: toBigInt(row.amount_usdc, 'amount_usdc'),
+  amount: toBigInt(row.amount_usdc, 'amount_usdc', String(row.id)),
   requestId: row.request_id,
   stellarTxHash: row.stellar_tx_hash,
   createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
@@ -221,7 +254,7 @@ const mapRevenueLedgerUsageEventRow = (
 ): RevenueLedgerUsageEvent => ({
   usageEventId: String(row.usage_event_id),
   apiId: row.api_id,
-  amount: toBigInt(row.amount_usdc, 'amount_usdc'),
+  amount: toBigInt(row.amount_usdc, 'amount_usdc', String(row.usage_event_id)),
   createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
 });
 
@@ -266,7 +299,10 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const apiKeyId = assertNonEmpty(event.apiKeyId, 'apiKeyId');
     const developerId = (event.developerId ?? '').trim();
     const requestId = assertNonEmpty(event.requestId, 'requestId');
-    const amount = assertAmount(event.amount).toString();
+    const amountVal = typeof event.amount === 'bigint'
+      ? assertAmount(event.amount)
+      : assertAmount(toBigInt(event.amount, 'amount'));
+    const amount = amountVal.toString();
 
     const result = await this.writeDb.query<UsageEventRow>(
       `
@@ -432,7 +468,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       endpoint: event.endpoint_id,
       userId: event.user_id,
       occurredAt: event.created_at instanceof Date ? event.created_at : new Date(event.created_at),
-      revenue: toBigInt(event.amount_usdc, 'amount_usdc'),
+      revenue: toBigInt(event.amount_usdc, 'amount_usdc', String(event.id)),
       // Attach cursor info for response
       _cursor: nextCursor,
     }));
