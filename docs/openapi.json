@@ -645,7 +645,9 @@
         "summary": "Get billing history for the authenticated consumer",
         "description": "Returns cursor-paginated billing-history rows sourced from usage_events (the table that BillingService.runPhase1 writes into). Ordered by (created_at DESC, id DESC). Amount is a 7-decimal USDC string. Status is \"confirmed\" when stellar_tx_hash is present, \"pending\" otherwise.",
         "operationId": "getBillingHistory",
-        "tags": ["Billing"],
+        "tags": [
+          "Billing"
+        ],
         "security": [
           {
             "bearerAuth": []
@@ -687,7 +689,10 @@
                       "properties": {
                         "data": {
                           "type": "object",
-                          "required": ["data", "meta"],
+                          "required": [
+                            "data",
+                            "meta"
+                          ],
                           "properties": {
                             "data": {
                               "type": "array",
@@ -697,7 +702,10 @@
                             },
                             "meta": {
                               "type": "object",
-                              "required": ["limit", "hasMore"],
+                              "required": [
+                                "limit",
+                                "hasMore"
+                              ],
                               "properties": {
                                 "limit": {
                                   "type": "integer"
@@ -8423,6 +8431,84 @@
               "null"
             ],
             "maxLength": 1000
+          }
+        }
+      },
+      "SuccessEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BillingHistoryRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "apiId",
+          "endpointId",
+          "apiKeyId",
+          "requestId",
+          "amountUsdc",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "apiId": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "apiKeyId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "amountUsdc": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d{1,7})?$"
+          },
+          "stellarTxHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "pending"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
