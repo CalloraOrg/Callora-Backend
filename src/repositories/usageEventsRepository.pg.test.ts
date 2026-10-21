@@ -86,6 +86,30 @@ test('create stores a usage event and returns the persisted record', async () =>
   }
 });
 
+test('getEventsInRange uses a half-open UTC range, developer filter, and ID cursor pages', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+  try {
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 1n, requestId: 'r1', createdAt: new Date('2026-03-01T00:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 2n, requestId: 'r2', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u2', apiId: 'a2', endpointId: 'e2', apiKeyId: 'k2', developerId: 'dev-2', amount: 3n, requestId: 'r3', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 4n, requestId: 'r4', createdAt: new Date('2026-03-02T00:00:00.000Z') });
+
+    const from = new Date('2026-03-01T00:00:00.000Z');
+    const to = new Date('2026-03-02T00:00:00.000Z');
+    const firstPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', limit: 1 });
+    const secondPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', cursor: firstPage[0]?.id, limit: 1 });
+    assert.equal(firstPage.length, 1);
+    assert.equal(secondPage.length, 1);
+    assert.equal(firstPage[0]?.createdAt.toISOString(), '2026-03-01T00:00:00.000Z');
+    assert.equal(secondPage[0]?.createdAt.toISOString(), '2026-03-01T12:00:00.000Z');
+    assert.equal(firstPage[0]?.developerId, 'dev-1');
+    const unfiltered = await repository.getEventsInRange(from, to, { limit: 10 });
+    assert.equal(unfiltered.length, 3);
+  } finally {
+    await pool.end();
+  }
+});
+
 test('create is idempotent on requestId and returns the existing row on conflict', async () => {
   const { repository, pool } = createUsageEventsRepository();
 

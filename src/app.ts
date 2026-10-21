@@ -191,7 +191,7 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
   const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
   const reportExporterService = new ReportExporterService(
-    { getEvents: async () => [] },
+    { getEventsInRange: async () => [] },
     new HmacObjectStorageClient(),
     new InMemoryExportStore(),
     {
