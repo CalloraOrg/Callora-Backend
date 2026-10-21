@@ -12,7 +12,8 @@
 
 ### Fixed
 
-- Keep transient and reconciliation responses retryable instead of caching them under an idempotency key; replay deterministic responses with only approved response headers and enforce the configurable UTF-8 cache body limit.
+- Keep transient and reconciliation responses retryable instead of caching them under an idempotency key; preserve lease fencing and byte-faithful encoded replay, inspect compressed JSON under a bounded byte budget, and replay only approved headers.
+- Scope billing status and duplicate-request lookups to the authenticated payer, reject body-supplied payer overrides, and prevent another account's request ID from exposing or mutating its charge.
 - Keep bulk quota updates atomic when a later developer lookup fails, rolling back earlier changes in the same SQLite transaction.
 - Restore application and test type contracts and run repository lint and typechecking in CI.
 - Require fresh, method/path-bound v1 forwarded identity signatures, reject replay with bounded memory or shared PostgreSQL storage, and restrict legacy migration mode to non-production.

@@ -96,57 +96,59 @@ export class DepositController {
       // Step 3: Validate amount format
       const validation = AmountValidator.validateUsdcAmount(requestBody.amount_usdc);
       if (!validation.valid) {
-        res.status(400).json(
-          errorEnvelope(
+        res.status(400).json({
+          ...errorEnvelope(
             'INVALID_AMOUNT_FORMAT',
             validation.error!,
             requestId,
-            { provided: requestBody.amount_usdc }
-          )
-        );
+            [{ field: 'body.amount_usdc', message: validation.error!, code: 'INVALID_AMOUNT_FORMAT' }]
+          ),
+          provided: requestBody.amount_usdc,
+        });
         return;
       }
 
       // Step 4: Validate and default network
       const network = (requestBody.network ?? config.stellar.network) as StellarNetwork;
       if (network !== 'testnet' && network !== 'mainnet') {
-        res.status(400).json(
-          errorEnvelope(
+        res.status(400).json({
+          ...errorEnvelope(
             'INVALID_NETWORK',
             'network must be either "testnet" or "mainnet"',
             requestId,
-            { provided: requestBody.network }
-          )
-        );
+            [{ field: 'body.network', message: 'network must be either "testnet" or "mainnet"', code: 'INVALID_NETWORK' }]
+          ),
+          provided: requestBody.network,
+        });
         return;
       }
 
       if (network !== config.stellar.network) {
-        res.status(400).json(
-          errorEnvelope(
+        res.status(400).json({
+          ...errorEnvelope(
             'NETWORK_MISMATCH',
             `Configured network is '${config.stellar.network}'. Cross-network requests are not allowed.`,
             requestId,
-            {
-              provided: network,
-              configured: config.stellar.network,
-            }
-          )
-        );
+            [{ field: 'body.network', message: 'must match the configured network', code: 'NETWORK_MISMATCH' }]
+          ),
+          provided: network,
+          configured: config.stellar.network,
+        });
         return;
       }
 
       // Step 5: Validate source account if provided
       if (requestBody.source_account) {
         if (!this.isValidStellarPublicKey(requestBody.source_account)) {
-          res.status(400).json(
-            errorEnvelope(
+          res.status(400).json({
+            ...errorEnvelope(
               'INVALID_SOURCE_ACCOUNT',
               'source_account must be a valid Stellar public key (G...)',
               requestId,
-              { provided: requestBody.source_account }
-            )
-          );
+              [{ field: 'body.source_account', message: 'must be a valid Stellar public key (G...)', code: 'INVALID_SOURCE_ACCOUNT' }]
+            ),
+            provided: requestBody.source_account,
+          });
           return;
         }
       }

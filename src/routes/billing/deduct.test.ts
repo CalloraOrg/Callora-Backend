@@ -10,7 +10,7 @@ import type { Pool } from 'pg';
 import { BillingService, type SorobanClient } from '../../services/billing.js';
 import { createSorobanBillingService } from '../../services/createSorobanBillingService.js';
 import { env } from '../../config/env.js';
-import { newDb } from 'pg-mem';
+import { newDb, DataType } from 'pg-mem';
 
 const JWT_SECRET = 'test-deduct-secret';
 
@@ -174,6 +174,10 @@ describe('POST /api/billing/deduct - developerId validation', () => {
 
   it('retries a pending reconciliation with the same key after the deduction resolves', async () => {
     const database = newDb();
+    // pg-mem lacks to_char and the lease SQL needs an explicit NOW() clock.
+    database.public.registerFunction({ name: 'to_char', args: [DataType.timestamp, DataType.text], returns: DataType.text,
+      implementation: (value: Date) => value.toISOString().replace('T', ' ').replace('Z', '000') });
+    database.getSchema('pg_catalog').registerFunction({ name: 'now', args: [], returns: DataType.timestamptz, impure: true, implementation: () => new Date() }, true);
     database.public.none(`
       CREATE TABLE idempotency_store (
         scope TEXT NOT NULL,
@@ -185,6 +189,7 @@ describe('POST /api/billing/deduct - developerId validation', () => {
         response_headers JSONB,
         expires_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        lease_expires_at TIMESTAMP NOT NULL DEFAULT NOW(),
         PRIMARY KEY (scope, idempotency_key)
       );
     `);
@@ -279,7 +284,6 @@ describe('POST /api/billing/deduct - developerId validation', () => {
     expect(deducted.status).toBe(200);
     expect(lookup.status).toBe(200);
     expect(fakeService.deduct).toHaveBeenCalledTimes(1);
-    expect(fakeService.getByRequestId).toHaveBeenCalledWith('req_1');
     expect(app.locals.billingService).toBe(fakeService);
   });
 

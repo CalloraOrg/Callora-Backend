@@ -61,7 +61,12 @@ export interface UpdateDeveloperProfileInput {
 export interface SettlementStore {
   create(settlement: Settlement): Awaitable<void>;
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Awaitable<void>;
-  scheduleRetry(id: string, retryAfter: string): Awaitable<void>;
+  scheduleRetry(
+    id: string,
+    retryAfter: string,
+    maxRetries?: number,
+    lastError?: string,
+  ): Awaitable<boolean>;
   getDeveloperSettlements(developerId: string): Awaitable<Settlement[]>;
   getPendingSettlements(): Awaitable<Settlement[]>;
   listPending?(): Awaitable<Settlement[]>;

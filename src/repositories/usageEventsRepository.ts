@@ -1,3 +1,5 @@
+import { encodeCursor, type CursorPayload } from '../lib/cursorPagination.js';
+
 export type GroupBy = 'hour' | 'day' | 'week' | 'month';
 
 export interface UsageEvent {
@@ -9,6 +11,31 @@ export interface UsageEvent {
   occurredAt: Date;
   revenue: bigint;
   stellarTxHash?: string | null;
+}
+
+/**
+ * A single row in the consumer billing-history feed.
+ * `amountUsdc` is the human-readable 7-decimal string (e.g. "0.0012345").
+ * `status` is derived from stellar_tx_hash: "confirmed" when the hash is
+ * present, "pending" otherwise.
+ */
+export interface ConsumerChargeRow {
+  id: string;
+  userId: string;
+  apiId: string;
+  endpointId: string;
+  apiKeyId: string;
+  requestId: string;
+  amountUsdc: string;
+  stellarTxHash: string | null;
+  status: 'confirmed' | 'pending';
+  createdAt: Date;
+}
+
+export interface ListChargesResult {
+  charges: ConsumerChargeRow[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export interface UsageEventQuery {
@@ -84,6 +111,20 @@ export interface UsageEventsRepository {
     from: Date;
     to: Date;
   }): Promise<{ totalUnits: bigint; calls: number }>;
+  /**
+   * Returns paginated billing-history rows for the consumer identified by
+   * `userId`, ordered by (created_at DESC, id DESC) for stable keyset
+   * pagination.  Fetches `limit + 1` rows to detect whether a next page
+   * exists without a COUNT(*).
+   *
+   * `cursor` is the opaque cursor produced by `encodeCursor` from the last
+   * row of the previous page.  When absent the first page is returned.
+   */
+  listChargesByConsumer(params: {
+    userId: string;
+    limit: number;
+    cursor?: CursorPayload;
+  }): Promise<ListChargesResult>;
 }
 
 export class InMemoryUsageEventsRepository implements UsageEventsRepository {
@@ -357,5 +398,73 @@ export class InMemoryUsageEventsRepository implements UsageEventsRepository {
 
     return { totalUnits, calls };
   }
-}
 
+  async listChargesByConsumer(params: {
+    userId: string;
+    limit: number;
+    cursor?: CursorPayload;
+  }): Promise<ListChargesResult> {
+    // Filter to this consumer's rows only
+    let filtered = this.events.filter((e) => e.userId === params.userId);
+
+    // Apply keyset condition when a cursor is present: keep rows that come
+    // *before* the cursor in DESC order, i.e. (created_at, id) < cursor.
+    if (params.cursor) {
+      const { timestamp: ts, id: cursorId } = params.cursor;
+      filtered = filtered.filter((e) => {
+        const eTime = (e as unknown as { createdAt?: Date }).createdAt ?? e.occurredAt;
+        if (eTime < ts) return true;
+        if (eTime.getTime() === ts.getTime()) {
+          return String(e.id) < cursorId;
+        }
+        return false;
+      });
+    }
+
+    // Sort DESC by (createdAt, id) — mirrors the SQL ORDER BY
+    filtered = [...filtered].sort((a, b) => {
+      const aTime = ((a as unknown as { createdAt?: Date }).createdAt ?? a.occurredAt).getTime();
+      const bTime = ((b as unknown as { createdAt?: Date }).createdAt ?? b.occurredAt).getTime();
+      if (bTime !== aTime) return bTime - aTime;
+      return String(b.id) < String(a.id) ? -1 : String(b.id) > String(a.id) ? 1 : 0;
+    });
+
+    // Lookahead by one to detect next page
+    const lookahead = filtered.slice(0, params.limit + 1);
+    const hasMore = lookahead.length > params.limit;
+    const page = hasMore ? lookahead.slice(0, params.limit) : lookahead;
+
+    const charges: ConsumerChargeRow[] = page.map((e) => {
+      const createdAt = (e as unknown as { createdAt?: Date }).createdAt ?? e.occurredAt;
+      const rawAmount = (e as unknown as { amount?: bigint }).amount ?? e.revenue ?? 0n;
+      // Format as 7-decimal USDC string from smallest-unit bigint
+      const units = rawAmount;
+      const intPart = units / 10_000_000n;
+      const fracPart = units % 10_000_000n;
+      const amountUsdc = `${intPart}.${String(fracPart).padStart(7, '0')}`;
+      return {
+        id: String(e.id),
+        userId: e.userId,
+        apiId: e.apiId,
+        endpointId: e.endpoint,
+        apiKeyId: (e as unknown as { apiKeyId?: string }).apiKeyId ?? '',
+        requestId: (e as unknown as { requestId?: string }).requestId ?? '',
+        amountUsdc,
+        stellarTxHash: e.stellarTxHash ?? null,
+        status: e.stellarTxHash ? 'confirmed' : 'pending',
+        createdAt,
+      };
+    });
+
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor(
+            (lastRow as unknown as { createdAt?: Date }).createdAt ?? lastRow.occurredAt,
+            String(lastRow.id),
+          )
+        : null;
+
+    return { charges, nextCursor, hasMore };
+  }
+}

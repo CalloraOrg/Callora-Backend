@@ -4,6 +4,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   BadGatewayError,
   BadRequestError,
+  ForbiddenError,
   GatewayTimeoutError,
   NotFoundError,
   PaymentRequiredError,
@@ -15,7 +16,7 @@ import {
   requireAuth,
   type AuthenticatedLocals,
 } from "../../middleware/requireAuth.js";
-import { idempotencyMiddleware } from "../../middleware/idempotency.js";
+import { idempotencyMiddleware, type IdempotencyLease } from "../../middleware/idempotency.js";
 import { billingDeductHistogramMiddleware } from "../../middleware/metricsHistogram.js";
 import { SorobanRpcError } from "../../services/sorobanBilling.js";
 import { redactSimulationDetails } from "../../lib/simulationDiagnostics.js";
@@ -59,7 +60,7 @@ function requirePositiveAmount(value: unknown): string {
 // function so Express dispatches it as normal middleware.
 const idempotencyHandler = (
   req: Request,
-  res: Response<unknown, AuthenticatedLocals>,
+  res: Response<unknown, AuthenticatedLocals & { idempotency?: IdempotencyLease }>,
   next: NextFunction,
 ) => idempotencyMiddleware(req, res, next);
 
@@ -101,7 +102,7 @@ router.post(
   billingDeductHistogramMiddleware,
   async (
     req: Request,
-    res: Response<unknown, AuthenticatedLocals>,
+    res: Response<unknown, AuthenticatedLocals & { idempotency?: IdempotencyLease }>,
     next: NextFunction,
   ) => {
     try {
@@ -128,8 +129,16 @@ router.post(
       )
         ? requireString(body.developerId, "developerId")
         : user.id;
+      // Payer is the authenticated account; body developerId may only name that same account.
+      if (developerId !== user.id) {
+        next(new ForbiddenError("Cannot bill another account", "FORBIDDEN"));
+        return;
+      }
 
       const billingService = getBillingService(req);
+      // Renew around the potentially slow Soroban deduction. Ownership loss
+      // propagates through the existing error handler; stale saves stay fenced.
+      await res.locals.idempotency?.renew();
       const result = await billingService.deduct({
         requestId,
         userId: developerId,
@@ -139,6 +148,8 @@ router.post(
         amountUsdc,
         idempotencyKey,
       });
+
+      await res.locals.idempotency?.renew();
 
       if (!result.success) {
         if (result.simulationDetails) {
@@ -220,7 +231,7 @@ router.get(
   requireAuth,
   async (
     req: Request,
-    res: Response<unknown, AuthenticatedLocals>,
+    res: Response<unknown, AuthenticatedLocals & { idempotency?: IdempotencyLease }>,
     next: NextFunction,
   ) => {
     try {
@@ -232,7 +243,7 @@ router.get(
 
       const requestId = requireString(req.params.requestId, "requestId");
       const billingService = getBillingService(req);
-      const result = await billingService.getByRequestId(requestId);
+      const result = await billingService.getByRequestId(requestId, user.id);
 
       if (!result) {
         next(

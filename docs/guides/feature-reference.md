@@ -334,7 +334,7 @@ Grafana dashboards are committed under [`docs/dashboards/`](./docs/dashboards/RE
 The application exposes a standard Prometheus text-format metrics endpoint at `GET /api/metrics`.
 It automatically tracks:
 - `http_requests_total` and `http_request_duration_seconds` for REST API endpoints.
-- `gateway_api_key_lookup_total{outcome}` to track API key lookups in the gateway auth middleware, with `outcome` labels of `hit`, `miss`, `revoked`, or `expired`.
+- `gateway_api_key_lookup_total{outcome}` to track API key lookups in the gateway auth middleware, with `outcome` labels of `hit`, `miss`, `revoked`, `expired`, or `error` (lookup failure; the request receives 503).
 - Default Node.js system metrics (CPU, RAM, Event Loop).
 
 #### Production Security:

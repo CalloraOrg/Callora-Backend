@@ -615,7 +615,7 @@ export function recordCacheMiss(): void {
 //
 // Metric: gateway_api_key_lookup_total
 //   Type:    Counter
-//   Labels:  outcome — hit | miss | revoked | expired
+//   Labels:  outcome — hit | miss | revoked | expired | error
 //   Purpose: Track API key lookup outcomes in gateway auth middleware.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -627,7 +627,7 @@ const gatewayApiKeyLookupTotal = new client.Counter({
 
 register.registerMetric(gatewayApiKeyLookupTotal);
 
-export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired';
+export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired' | 'error';
 
 export function recordApiKeyLookup(outcome: ApiKeyLookupOutcome): void {
   gatewayApiKeyLookupTotal.inc({ outcome });

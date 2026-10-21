@@ -83,10 +83,14 @@ router.post(
           return;
         }
         if (result.results.some((entry) => entry.reconciliationRequired)) {
-          res.status(409).json(errorEnvelope('RECONCILIATION_REQUIRED', 'Billing deduction requires reconciliation', req.id ?? '', {
+          res.status(409).json({
+            success: false,
+            error: { code: 'RECONCILIATION_REQUIRED', message: 'Billing deduction requires reconciliation' },
             reconciliationRequired: true,
             results: result.results,
-          }));
+            requestId: req.id ?? '',
+            timestamp: new Date().toISOString(),
+          });
           return;
         }
         next(new InternalServerError(result.error ?? 'Bulk billing deduction failed', 'BILLING_DEDUCTION_FAILED'));

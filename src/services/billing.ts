@@ -35,8 +35,14 @@ import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
 import { logger } from "../logger.js";
+import {
+  parseUsdcToContractUnits,
+  formatContractUnitsToUsdc,
+  USDC_7_DECIMAL_FACTOR,
+} from "../lib/usdcUnits.js";
 
-const USDC_7_DECIMAL_FACTOR = 10_000_000n;
+export { parseUsdcToContractUnits, formatContractUnitsToUsdc };
+
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
 
 /**
@@ -136,25 +142,6 @@ export interface BillingServiceOptions {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-export function parseUsdcToContractUnits(amountUsdc: string): bigint {
-  const trimmed = amountUsdc.trim();
-  if (!/^\d+(\.\d{1,7})?$/.test(trimmed)) {
-    throw new Error(
-      "amountUsdc must be a positive decimal with at most 7 fractional digits",
-    );
-  }
-
-  const [wholePart, fractionalPart = ""] = trimmed.split(".");
-  const whole = BigInt(wholePart);
-  const fraction = BigInt((fractionalPart + "0000000").slice(0, 7));
-  const result = whole * USDC_7_DECIMAL_FACTOR + fraction;
-
-  if (result <= 0n) {
-    throw new Error("amountUsdc must be greater than zero");
-  }
-
-  return result;
-}
 
 /**
  * Classifies an error as transient based on type and category, not substring matching.
@@ -227,19 +214,7 @@ export function isTransientSorobanError(error: unknown): boolean {
   return classifyTransientError(error);
 }
 
-export function formatContractUnitsToUsdc(amount: bigint): string {
-  const whole = amount / USDC_7_DECIMAL_FACTOR;
-  const fraction = amount % USDC_7_DECIMAL_FACTOR;
 
-  if (fraction === 0n) {
-    return whole.toString();
-  }
-
-  return `${whole.toString()}.${fraction
-    .toString()
-    .padStart(7, "0")
-    .replace(/0+$/, "")}`;
-}
 
 function buildBulkDeductIdempotencyKey(requestIds: string[]): string {
   return createHash("sha256")
@@ -324,7 +299,7 @@ interface BulkPhase1Result {
 async function runPhase1(
   client: PoolClient,
   request: BillingDeductRequest,
-  _amountInContractUnits: bigint,
+  amountInContractUnits: bigint,
 ): Promise<Phase1Result> {
   await client.query("BEGIN");
 
@@ -338,8 +313,9 @@ async function runPhase1(
     `SELECT id, stellar_tx_hash, deduction_status
        FROM usage_events
       WHERE request_id = $1
+        AND user_id = $2
         FOR UPDATE`,
-    [request.requestId],
+    [request.requestId, request.userId],
   );
 
   if (existingEvent.rows.length > 0) {
@@ -397,7 +373,7 @@ async function runPhase1(
       request.apiId,
       request.endpointId,
       request.apiKeyId,
-      request.amountUsdc,
+      amountInContractUnits.toString(),
       request.requestId,
     ],
   );
@@ -454,6 +430,7 @@ async function runPhase3Bulk(
 async function getUsageEventsByRequestIds(
   pool: Pool,
   requestIds: string[],
+  userId: string,
 ): Promise<Map<string, ExistingUsageEventRow>> {
   if (requestIds.length === 0) {
     return new Map<string, ExistingUsageEventRow>();
@@ -462,8 +439,9 @@ async function getUsageEventsByRequestIds(
   const result = await pool.query<ExistingUsageEventRow>(
     `SELECT request_id, id, stellar_tx_hash, deduction_status
        FROM usage_events
-      WHERE request_id = ANY($1::text[])`,
-    [requestIds],
+      WHERE request_id = ANY($1::text[])
+        AND user_id = $2`,
+    [requestIds, userId],
   );
 
   return new Map<string, ExistingUsageEventRow>(
@@ -474,16 +452,19 @@ async function getUsageEventsByRequestIds(
 async function runPhase1Bulk(
   client: PoolClient,
   requests: BillingDeductRequest[],
+  amountByRequestId: Map<string, bigint>,
 ): Promise<BulkPhase1Result> {
   await client.query("BEGIN");
 
+  // Batches are single-account: the route maps every item to the authenticated user.
   const requestIds = requests.map((request) => request.requestId);
   const existingEvents = await client.query<ExistingUsageEventRow>(
     `SELECT request_id, id, stellar_tx_hash, deduction_status
        FROM usage_events
       WHERE request_id = ANY($1::text[])
+        AND user_id = $2
         FOR UPDATE`,
-    [requestIds],
+    [requestIds, requests[0].userId],
   );
 
   const rowsByRequestId = new Map<string, ExistingUsageEventRow>(
@@ -523,6 +504,11 @@ async function runPhase1Bulk(
       continue;
     }
 
+    const amountInContractUnits = amountByRequestId.get(request.requestId);
+    if (amountInContractUnits === undefined) {
+      throw new Error(`Missing amount for request ${request.requestId}`);
+    }
+
     const insertResult = await client.query<{ id: string }>(
       `INSERT INTO usage_events
          (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at, deduction_status)
@@ -533,7 +519,7 @@ async function runPhase1Bulk(
         request.apiId,
         request.endpointId,
         request.apiKeyId,
-        request.amountUsdc,
+        amountInContractUnits.toString(),
         request.requestId,
       ],
     );
@@ -639,7 +625,7 @@ export class BillingService {
     }
 
     // --- Idempotency precheck: return early if request has already been processed ---
-    const existing = await this.getByRequestId(request.requestId);
+    const existing = await this.getByRequestId(request.requestId, request.userId);
     if (existing && existing.deductionStatus !== "voided") {
       return {
         ...existing,
@@ -702,8 +688,10 @@ export class BillingService {
           stellar_tx_hash: string | null;
           deduction_status: string | null;
         }>(
-          `SELECT id, stellar_tx_hash, deduction_status FROM usage_events WHERE request_id = $1`,
-          [request.requestId],
+          `SELECT id, stellar_tx_hash, deduction_status
+             FROM usage_events
+            WHERE request_id = $1 AND user_id = $2`,
+          [request.requestId, request.userId],
         );
         if (existing.rows.length > 0) {
           const status =
@@ -720,6 +708,16 @@ export class BillingService {
             deductionStatus: status,
           };
         }
+        logger.warn(
+          `[BillingService] request_id already used by another account: ${normalizeErrorMessage(error)}`,
+        );
+        return {
+          success: false,
+          usageEventId: "",
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: false,
+        };
       }
 
       return {
@@ -871,6 +869,7 @@ export class BillingService {
     const existingRows = await getUsageEventsByRequestIds(
       this.pool,
       requestIds,
+      requests[0].userId,
     );
 
     let totalNewAmount = 0n;
@@ -917,7 +916,7 @@ export class BillingService {
     const client = await this.pool.connect();
     let phase1: BulkPhase1Result;
     try {
-      phase1 = await runPhase1Bulk(client, requests);
+      phase1 = await runPhase1Bulk(client, requests, amountByRequestId);
     } catch (error) {
       try {
         await client.query("ROLLBACK");
@@ -933,7 +932,20 @@ export class BillingService {
         const recoveredRows = await getUsageEventsByRequestIds(
           this.pool,
           requestIds,
+          requests[0].userId,
         );
+        if (requests.some((request) => !recoveredRows.has(request.requestId))) {
+          logger.warn(
+            `[BillingService] Bulk request_id owned by another account: ${normalizeErrorMessage(error)}`,
+          );
+          return {
+            success: false,
+            results: [],
+            entryCount: requests.length,
+            deductedCount: 0,
+            totalDeductedAmountUsdc: "0",
+          };
+        }
         return {
           success: true,
           results: requests.map((request) => {
@@ -1117,7 +1129,11 @@ export class BillingService {
     };
   }
 
-  async getByRequestId(requestId: string): Promise<BillingDeductResult | null> {
+  // Owner-scoped: another account's request reads as missing.
+  async getByRequestId(
+    requestId: string,
+    userId: string,
+  ): Promise<BillingDeductResult | null> {
     const result = await this.pool.query<{
       id: string;
       stellar_tx_hash: string | null;
@@ -1125,8 +1141,9 @@ export class BillingService {
     }>(
       `SELECT id, stellar_tx_hash, deduction_status
          FROM usage_events
-        WHERE request_id = $1`,
-      [requestId],
+        WHERE request_id = $1
+          AND user_id = $2`,
+      [requestId, userId],
     );
 
     if (result.rows.length === 0) return null;

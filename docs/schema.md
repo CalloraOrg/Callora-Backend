@@ -121,3 +121,41 @@ api_id: integer('api_id')
 ```
 
 This is the single source of truth for new migrations generated via `drizzle-kit`.
+
+---
+
+## Billing & Ledger Tables (PostgreSQL)
+
+### `usage_events`
+
+Tracks every proxied API invocation and Soroban billing deduction. Hash-partitioned on `developer_id` across 16 partitions (`usage_events_p0` .. `usage_events_p15`).
+
+| Column            | Type           | Constraints                              | Description                                                                              |
+|-------------------|----------------|------------------------------------------|------------------------------------------------------------------------------------------|
+| `id`              | BIGSERIAL      | Part of PRIMARY KEY `(id, developer_id)` | Monotonic surrogate identifier                                                           |
+| `user_id`         | VARCHAR(255)   | NOT NULL                                 | Identifier of the API consumer                                                           |
+| `api_id`          | VARCHAR(255)   | NOT NULL                                 | Associated API ID                                                                        |
+| `endpoint_id`     | VARCHAR(255)   | NOT NULL                                 | Specific endpoint invoked                                                                |
+| `api_key_id`      | VARCHAR(255)   | NOT NULL                                 | API key used for the request                                                             |
+| `developer_id`    | VARCHAR(255)   | NOT NULL DEFAULT ''                      | API owner and hash partition key                                                         |
+| `amount_usdc`     | NUMERIC(30, 0) | NOT NULL, `CHECK (amount_usdc > 0)`      | **Integer contract units** ("stroops", 7 decimals). 1 USDC = 10,000,000 contract units.  |
+| `request_id`      | VARCHAR(255)   | Part of UNIQUE `(request_id, developer_id)` | Idempotency correlation ID                                                            |
+| `stellar_tx_hash` | VARCHAR(64)    | NULLABLE                                 | On-chain Soroban deduction transaction hash                                              |
+| `created_at`      | TIMESTAMP      | NOT NULL DEFAULT NOW()                   | Creation timestamp                                                                       |
+
+> **Canonical Storage Unit**: `amount_usdc` is stored exclusively in 7-decimal integer contract units (`1 USDC = 10,000,000`). No fractional or decimal floating point values are stored. All writers convert at the system boundary before writing to PostgreSQL.
+
+### `revenue_ledger`
+
+Maintains per-developer revenue accrual for settled and unsettled usage events.
+
+| Column           | Type           | Constraints                         | Description                                                                             |
+|------------------|----------------|-------------------------------------|-----------------------------------------------------------------------------------------|
+| `id`             | BIGSERIAL      | PRIMARY KEY                         | Surrogate key                                                                           |
+| `api_id`         | VARCHAR(255)   | NOT NULL                            | Associated API ID                                                                       |
+| `developer_id`   | VARCHAR(255)   | NOT NULL                            | Developer earning revenue                                                               |
+| `amount_usdc`    | NUMERIC(30, 0) | NOT NULL, `CHECK (amount_usdc > 0)` | **Integer contract units** ("stroops", 7 decimals). 1 USDC = 10,000,000 contract units. |
+| `usage_event_id` | BIGINT         | UNIQUE REFERENCES usage_events(id)  | Originating usage event                                                                 |
+| `settlement_id`  | BIGINT         | REFERENCES settlements(id)          | Batch payout settlement ID (NULL until settled)                                         |
+| `created_at`     | TIMESTAMP      | NOT NULL DEFAULT NOW()              | Record timestamp                                                                        |
+

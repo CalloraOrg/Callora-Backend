@@ -32,7 +32,7 @@ NNNN_lowercase-description.down.sql
 
 Versions up to `0021` (including the mixed-width prefixes and historical
 duplicates) are legacy. The enforced new sequence begins at `0022`; because
-`0022` through `0027` already exist, the next new migration is `0028`. Do not
+`0022` through `0027` already exist and the unpublished response-header addition takes `0028`, so the next new migration is `0029`. Do not
 reuse a prefix: **one forward migration per numeric version**. In particular,
 the three legacy `0014_*` forward migrations are a collision to preserve, not
 a pattern to copy. Add new versions consecutively, without gaps.
@@ -41,8 +41,7 @@ The published `0026_*` files currently collide. This is a blocking policy
 violation, not a new legacy exception. Do not rename or replay them without
 checking deployed PostgreSQL history: the usage-status backfill can overwrite
 later reconciliation decisions. See the [deployment-history request](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
-The unpublished response-header addition uses `0027`; its version must be
-reconciled with the final approved collision repair before deployment.
+The unpublished response-header addition is `0028_idempotency_response_headers`, the first version free after the published `0022`–`0027` files. Reconcile it with the approved collision repair before deployment.
 
 ## Rollback policy
 

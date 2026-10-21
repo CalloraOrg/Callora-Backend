@@ -93,14 +93,20 @@ async function createTestSchema(pool: Pool): Promise<void> {
   // Idempotency store for the idempotency middleware
   await pool.query(`
     CREATE TABLE IF NOT EXISTS idempotency_store (
-      idempotency_key VARCHAR(255) PRIMARY KEY,
+      scope VARCHAR(255) NOT NULL DEFAULT 'anonymous',
+      idempotency_key VARCHAR(255) NOT NULL,
       request_hash VARCHAR(64) NOT NULL,
       status VARCHAR(50) NOT NULL,
       response_status INTEGER,
       response_body TEXT,
+      response_headers JSONB,
       expires_at TIMESTAMP NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      lease_expires_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
+  `);
+  await runSql(pool, `
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_idempotency_store_scope_key ON idempotency_store(scope, idempotency_key)
   `);
 
   // Refresh tokens table (matching the production schema)
