@@ -268,6 +268,7 @@ export const config = {
   },
   routeBodyLimits: env.ROUTE_BODY_LIMITS,
   idempotency: {
+    leaseSeconds: env.IDEMPOTENCY_LEASE_SECONDS,
     retentionWindowSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
     sweeperIntervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
   },
