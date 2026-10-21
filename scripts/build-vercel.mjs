@@ -46,7 +46,17 @@ const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const { prisma: _cli, ...dependencies } = pkg.dependencies;
 writeFileSync(
   `${out}/package.json`,
-  JSON.stringify({ name: "callora-backend-demo", private: true, type: "module", engines: { node: "24.x" }, dependencies: { ...dependencies, "better-sqlite3": "^12.2.0" } }, null, 2),
+  JSON.stringify(
+    {
+      name: "callora-backend-demo",
+      private: true,
+      type: "module",
+      engines: pkg.engines ?? { node: "20.x" },
+      dependencies,
+    },
+    null,
+    2,
+  ),
 );
 writeFileSync(
   `${out}/vercel.json`,
