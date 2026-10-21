@@ -17,17 +17,80 @@ This document outlines the refresh token strategy implemented in the Callora Bac
 2. **Refresh Token** (JWT)
    - Long-lived (7 days default)
    - Contains user ID and unique token ID
-   - Stored securely in database with hash
+   - Stored securely in database with SHA-256 hash
    - Can be revoked immediately
    - Used to obtain new access tokens
 
 ### Security Features
 
 - **Token Hashing**: Refresh tokens are stored as SHA-256 hashes in the database
-- **Token Rotation**: Each refresh generates a new access token
+- **Atomic Single-Use Rotation**: Each refresh is a single conditional UPDATE on the primary database — no replica reads in the consume path
+- **Family-based Theft Detection**: Token families span the entire rotation lineage; reuse of any member revokes all tokens for the user
 - **Revocation Support**: Refresh tokens can be revoked individually or all at once
 - **Rate Limiting**: Token usage is tracked with timestamps
 - **Secure Verification**: Multiple layers of token validation
+
+---
+
+## Atomic Rotation (CAS)
+
+### The Problem with Non-atomic Rotation
+
+Before this change the refresh flow had three separate steps:
+1. Read the stored token record (could go to a replica)
+2. Check `isRevoked`, expiry, and hash
+3. `UPDATE … SET is_revoked = true` (unconditional, no `AND is_revoked = false`)
+
+**Race condition:** Two concurrent requests with the same token both pass step 2 before either completes step 3. Both receive a fresh token pair in the same family. Single-use rotation is defeated and theft is undetectable.
+
+**Replica lag:** With `REPLICA_URLS` configured, step 1 could read from a replica. A token revoked moments ago on the primary still looks valid to a stale replica.
+
+### The Fix: Compare-and-Set on the Primary
+
+The entire rotation — consume + insert — is now a single primary-side transaction:
+
+```sql
+-- Step 1: Atomic consume (one row returned = won the CAS; zero rows = lost)
+UPDATE refresh_tokens
+SET    is_revoked = true,
+       last_used_at = NOW()
+WHERE  id         = $1           -- from JWT payload
+  AND  user_id    = $2           -- from JWT payload
+  AND  token_hash = $3           -- SHA-256(rawToken) — hash equality, not timing-safe
+  AND  is_revoked = false        -- guard: only one winner
+  AND  expires_at > NOW()        -- guard: not expired
+RETURNING *;
+
+-- Step 2 (same transaction): Insert the new token
+INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at,
+                            last_used_at, is_revoked, family_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+```
+
+When the UPDATE returns zero rows the method re-reads on the **primary** to classify the failure:
+
+| Re-read outcome | Returned status | Controller error code |
+|---|---|---|
+| Row missing | `not_found` | `INVALID_REFRESH_TOKEN` |
+| `is_revoked = true` | `revoked` → triggers `handleReuse` | `REVOKED_TOKEN` |
+| `expires_at ≤ NOW` | `expired` | `EXPIRED_TOKEN` |
+| Hash mismatch | `hash_mismatch` | `INVALID_REFRESH_TOKEN` |
+
+**Exactly one winner.** For N concurrent requests with the same token, the PostgreSQL row-level lock on the UPDATE ensures exactly one UPDATE succeeds. All others receive `'revoked'`, triggering `handleReuse` which revokes the entire family.
+
+### Double-submit Policy
+
+A legitimate network retry that re-sends the original refresh token after the first request succeeded will also land on `'revoked'` (the token was already consumed). The entire family is revoked and the user must re-authenticate.
+
+This is the intentional policy, aligned with common OAuth 2.0 guidance: the window for an undetected theft is eliminated at the cost of requiring re-authentication on a genuine retry. Clients should implement idempotency via the `Idempotency-Key` header to avoid triggering this on retries.
+
+### No Replica Reads in the Consume Path
+
+`consumeRefreshToken` acquires a dedicated client from the primary pool (`pool.connect()`) and runs both the UPDATE and the INSERT in a single `BEGIN … COMMIT` block. `REPLICA_URLS`, if set, is never consulted for refresh-token security decisions.
+
+The secondary re-read (to classify failures) also uses the same dedicated primary client within the transaction context before `ROLLBACK`.
+
+---
 
 ## Implementation Details
 
@@ -42,11 +105,16 @@ CREATE TABLE refresh_tokens (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_used_at TIMESTAMP WITH TIME ZONE,
     is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    family_id UUID NOT NULL,
     INDEX idx_refresh_tokens_user_id (user_id),
     INDEX idx_refresh_tokens_expires_at (expires_at),
     INDEX idx_refresh_tokens_hash (token_hash)
 );
 ```
+
+### Family Propagation
+
+The `family_id` is **not** passed by the service to `consumeRefreshToken`. The repository reads it from the consumed row's `RETURNING *` and writes it into the new token automatically. This ensures the family chain is maintained by the repository layer with no risk of the service passing an incorrect family.
 
 ### API Endpoints
 
@@ -60,67 +128,51 @@ Refresh an access token using a valid refresh token.
 }
 ```
 
-**Response:**
+**Response (success):**
 ```json
 {
   "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiJ9...",
   "tokenType": "Bearer"
 }
 ```
 
+**Error codes:**
+
+| Code | HTTP | Condition |
+|---|---|---|
+| `MISSING_REFRESH_TOKEN` | 400 | Body field absent |
+| `INVALID_REFRESH_TOKEN` | 401 | JWT invalid / not_found / hash_mismatch |
+| `EXPIRED_TOKEN` | 401 | Token exists but expired |
+| `REVOKED_TOKEN` | 401 | Token already consumed (theft signal; all tokens revoked) |
+| `REFRESH_FAILED` | 401 | Unexpected server error |
+
 #### POST /auth/revoke
 Revoke a specific refresh token.
-
-**Request:**
-```json
-{
-  "refreshToken": "eyJhbGciOiJIUzI1NiJ9..."
-}
-```
-
-**Response:**
-```json
-{
-  "message": "Token revoked successfully"
-}
-```
 
 #### POST /auth/revoke-all
 Revoke all refresh tokens for the authenticated user.
 
-**Response:**
-```json
-{
-  "message": "All tokens revoked successfully"
-}
-```
-
 #### GET /auth/tokens
 Get information about active tokens for the authenticated user.
 
-**Response:**
-```json
-{
-  "activeRefreshTokens": 2,
-  "maxAllowedTokens": 5
-}
-```
+---
 
 ## Security Considerations
+
+### Hash Comparison
+
+The `token_hash` comparison in the SQL `WHERE` clause uses standard SQL string equality, not a timing-safe comparison. This is acceptable because:
+1. The hash itself is a SHA-256 digest — not a direct secret.
+2. The token ID (`id`) is already verified by the JWT signature before the SQL query runs.
+3. The SQL comparison does not leak information through timing in the same way a string comparison in application code would.
+
+The JavaScript `verifyTokenHash` method (used for the explicit hash verification in non-atomic paths) retains `crypto.timingSafeEqual`.
 
 ### Token Storage
 - Refresh tokens must be stored securely on the client (e.g., httpOnly cookies, secure storage)
 - Access tokens can be stored in memory or short-term storage
 - Never expose refresh tokens in URLs or browser storage
-
-### Token Validation
-The system performs multiple validation checks:
-1. JWT signature verification
-2. Token type validation (access vs refresh)
-3. Database record existence
-4. Token hash verification
-5. Expiration check
-6. Revocation status check
 
 ### Rate Limiting & Abuse Prevention
 - Tokens track last used timestamp
@@ -134,50 +186,16 @@ If a refresh token is compromised:
 2. Or revoke all tokens: `POST /auth/revoke-all`
 3. Monitor token usage logs for suspicious activity
 
-## Migration Strategy
-
-### Current State
-- System uses 24-hour JWT tokens with no refresh mechanism
-- Tokens must be re-issued daily
-- No ability to revoke tokens before expiration
-
-### Migration Steps
-
-1. **Database Migration**
-   ```sql
-   -- Add refresh_tokens table
-   -- See schema section above
-   ```
-
-2. **Code Updates**
-   - Update auth endpoint to return token pairs
-   - Add refresh token service and repository
-   - Implement new auth controller methods
-   - Add routes for refresh operations
-
-3. **Client Migration**
-   - Update clients to handle token pairs
-   - Implement automatic token refresh logic
-   - Handle token revocation scenarios
-
-4. **Gradual Rollout**
-   - Maintain backward compatibility during transition
-   - Allow clients to opt-in to refresh token flow
-   - Monitor for issues before full rollout
+---
 
 ## Configuration
 
 ### Environment Variables
 
 ```bash
-# JWT Configuration
 JWT_SECRET=your-super-secret-key
-
-# Token Expiry Times
-ACCESS_TOKEN_EXPIRY=15m  # 15 minutes
-REFRESH_TOKEN_EXPIRY=7d  # 7 days
-
-# Token Limits
+ACCESS_TOKEN_EXPIRY=15m   # 15 minutes
+REFRESH_TOKEN_EXPIRY=7d   # 7 days
 MAX_REFRESH_TOKENS_PER_USER=5
 ```
 
@@ -191,25 +209,22 @@ const refreshTokenService = new RefreshTokenService({
 });
 ```
 
+---
+
 ## Testing
 
 ### Test Coverage
 
-- ✅ Token creation and validation
-- ✅ Refresh token flow
-- ✅ Token revocation (individual and all)
-- ✅ Security validations (hash verification, expiration)
-- ✅ Error handling and edge cases
-- ✅ Database operations
-- ✅ Rate limiting and cleanup
+- ✅ Single refresh → new pair; old row revoked; family preserved
+- ✅ 10 concurrent refreshes → exactly 1 success; rest `REVOKED_TOKEN`; family fully revoked
+- ✅ Revoked token reuse → `REVOKED_TOKEN`; all user tokens revoked
+- ✅ Expired token → `EXPIRED_TOKEN`
+- ✅ Hash mismatch → `INVALID_REFRESH_TOKEN`
+- ✅ Failed insert rolls back → old token remains valid
+- ✅ REPLICA_URLS set; replica stale → consume still sees primary; reuse detected
+- ✅ `listRefreshTokens` / `countActiveTokens` still use `readQuery` (replica-OK)
 
-### Security Tests
-
-- Token substitution attacks
-- Token enumeration prevention
-- Revoked token rejection
-- Expired token handling
-- Malformed token rejection
+---
 
 ## Monitoring & Logging
 
@@ -220,65 +235,29 @@ const refreshTokenService = new RefreshTokenService({
 - Security-related failures
 
 ### Log Events
-- Successful token refreshes
-- Token revocation actions
-- Security violations (hash mismatches, revoked tokens)
-- Database cleanup operations
+- `[AuthController] Token pair rotated successfully (atomic CAS)` — successful rotation
+- `[AuthController] Theft signal: revoked token presented again — all user tokens revoked` — reuse detected
+- `[RefreshTokenService] Atomic token rotation succeeded` — CAS won
+- `[RefreshTokenService] Refresh token reuse detected — revoking ALL user tokens as theft countermeasure.`
 
-## Best Practices
-
-### For Clients
-1. Store refresh tokens securely (httpOnly cookies recommended)
-2. Implement automatic token refresh before access token expiry
-3. Handle token revocation gracefully
-4. Limit concurrent refresh attempts
-5. Clear tokens on logout
-
-### For Server
-1. Always validate tokens through multiple layers
-2. Use secure random token generation
-3. Implement proper error handling (don't leak token details)
-4. Regular cleanup of expired tokens
-5. Monitor for unusual token usage patterns
+---
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"Invalid refresh token"**
-   - Check token format and signature
-   - Verify token hasn't expired
-   - Ensure token exists in database
+1. **"Invalid refresh token"** (`INVALID_REFRESH_TOKEN`)
+   - JWT signature invalid or token not found in DB
+   - Hash mismatch (different token presented for same ID)
 
-2. **"Token has been revoked"**
-   - Token was manually revoked
-   - All tokens were revoked for user
-   - Security event detected
+2. **"Token has been revoked"** (`REVOKED_TOKEN`)
+   - Token was already consumed by a prior refresh
+   - Double-submit (same token sent twice) — re-authenticate
+   - Theft scenario: the attacker rotated the stolen token first
 
-3. **Database connection errors**
-   - Verify database connectivity
-   - Check table existence
-   - Review permissions
+3. **"Refresh token has expired"** (`EXPIRED_TOKEN`)
+   - Token's `expires_at` is in the past; obtain a new pair by logging in again
 
-### Debug Information
-
-Enable debug logging to troubleshoot:
-```bash
-DEBUG=auth:*
-```
-
-## Future Enhancements
-
-1. **Token Rotation**: Implement refresh token rotation for enhanced security
-2. **Device Management**: Track tokens by device/browser
-3. **Anomaly Detection**: AI-powered token usage analysis
-4. **Multi-factor Refresh**: Additional verification for sensitive operations
-5. **Token Scoping**: Different token types for different permissions
-
-## Compliance
-
-This implementation follows security best practices and is designed to be compliant with:
-- OWASP JWT security guidelines
-- GDPR data protection requirements
-- SOC 2 security controls
-- Industry standard authentication patterns
+4. **Database connection errors**
+   - `consumeRefreshToken` acquires a dedicated primary client via `pool.connect()`
+   - Ensure `DATABASE_URL` points to the primary (writable) database

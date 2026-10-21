@@ -307,6 +307,10 @@ error_codes:
     section: Idempotency
     description: Idempotency key conflict with different request
 
+  - code: IDEMPOTENCY_RESPONSE_TOO_LARGE
+    section: Idempotency
+    description: The original response exceeded the replay limit; fetch the resource by identifier.
+
   - code: IDEMPOTENCY_IN_PROGRESS
     section: Idempotency
     description: Request with this idempotency key is still in progress

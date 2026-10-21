@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, RequestHandler } from 'express';
-import { ForbiddenError, NotFoundError, UnauthorizedError } from '../errors/index.js';
+import { ForbiddenError, NotFoundError, UnauthorizedError, ServiceUnavailableError } from '../errors/index.js';
 import { recordApiKeyLookup } from '../metrics.js';
 
 export const API_KEY_PREFIX_LENGTH = 16;
@@ -85,11 +85,22 @@ export interface DatabaseGatewayApiKeyRow {
   created_at: string | Date | null;
   last_used_at: string | Date | null;
   plan_tier: string | null;
+  expires_at?: string | Date | null;
   user: Record<string, unknown> | null;
   vault: Record<string, unknown> | null;
 }
 
 const SHA256_HEX_LENGTH = 64;
+
+const DEFAULT_DB_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Gateway auth lookup timed out')), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 const VERIFICATION_CACHE_MAX_ENTRIES = 1000;
 
@@ -224,6 +235,7 @@ export function createGatewayApiKeyAuthMiddleware<
   const handleForbidden = forbidden;
 
   return async (req, res, next) => {
+  try {
     const extracted = extractApiKey(req);
     if (!extracted.apiKey) {
       // No key was provided or the header format was invalid
@@ -325,6 +337,10 @@ export function createGatewayApiKeyAuthMiddleware<
     res.locals.apiKeyTier = matchedCandidate.apiKeyRecord.tier;
 
     next();
+  } catch (err) {
+    recordApiKeyLookup('error');
+    next(new ServiceUnavailableError('Gateway authentication unavailable'));
+  }
   };
 }
 
@@ -367,6 +383,8 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
 >(
   options: Omit<GatewayApiKeyAuthOptions<TApi, TEndpoint>, 'getApiKeyCandidates'> & {
     db: GatewayAuthQueryable;
+    /** Deadline for the candidate lookup query; exceeding it yields a 503. */
+    dbTimeoutMs?: number;
     vaultNetwork?: string | ((req: Request) => string | null | undefined);
   },
 ): RequestHandler {
@@ -378,7 +396,8 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
           ? options.vaultNetwork(req)
           : options.vaultNetwork;
 
-      const result = await options.db.query<DatabaseGatewayApiKeyRow>(
+      const result = await withTimeout(
+        options.db.query<DatabaseGatewayApiKeyRow>(
         `
           SELECT
             ak.id AS api_key_id,
@@ -392,6 +411,7 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
             ak.created_at,
             ak.last_used_at,
             ak.plan_tier,
+            ak.expires_at,
             row_to_json(u) AS "user",
             row_to_json(v) AS vault
           FROM api_keys ak
@@ -409,6 +429,8 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
           WHERE ak.prefix = $1
         `,
         [prefix, network ?? null],
+        ),
+        options.dbTimeoutMs ?? DEFAULT_DB_TIMEOUT_MS,
       );
 
       return result.rows.map((row) => ({
@@ -423,6 +445,7 @@ export function createDatabaseGatewayApiKeyAuthMiddleware<
           rateLimitPerMinute: row.rate_limit_per_minute,
           createdAt: row.created_at ?? undefined,
           lastUsedAt: row.last_used_at ?? undefined,
+          expiresAt: row.expires_at ?? undefined,
           tier: row.plan_tier ?? undefined,
         },
         user: row.user ?? {},

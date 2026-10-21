@@ -599,3 +599,42 @@ UPDATE usage_events SET status = 'applied' WHERE stellar_tx_hash IS NOT NULL;
 - [Idempotency Keys - Stripe Documentation](https://stripe.com/docs/api/idempotent_requests)
 - [PostgreSQL Unique Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS)
 - (Database Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+
+## HTTP idempotency leases and response replay
+
+`Idempotency-Key` records have two independent lifetimes. Completed responses
+retain the configured `IDEMPOTENCY_RETENTION_WINDOW_SECONDS` (default 86400).
+An unfinished request owns a shorter `IDEMPOTENCY_LEASE_SECONDS` lease (default
+60 seconds). Keep this above the longest route timeout; handlers that may run
+longer must await `res.locals.idempotency.renew()` before their lease expires.
+The billing deduct route renews around its Soroban-backed deduction.
+
+All lease timestamps and expiry checks use PostgreSQL `NOW()`. An expired
+`started` record can be claimed atomically only by an identical request hash.
+Changed payloads still return `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`; an unexpired
+lease returns `409 IDEMPOTENCY_IN_PROGRESS`. Renewal rejects if ownership has
+expired or changed. Save, renew and disconnect cleanup compare the exact lease
+timestamp, including database microseconds. A late original request cannot
+save over or delete a replacement owner's record.
+
+Completion is recorded on the response `finish` event, including `json`,
+`send`, `sendStatus`, empty `204 end()`, `end(chunk)`, and streaming responses.
+Non-5xx responses remain cacheable; 5xx responses release the key. A connection
+`close` without `finish` releases only that request's lease for immediate retry.
+A failed completion write is logged and cleanup is attempted; if the database
+is unavailable, lease expiry still allows recovery without waiting 24 hours.
+
+Replay retains status, raw body bytes, content type and content encoding. At
+most 256 KiB of response bytes are buffered. Larger responses store only size
+and a SHA-256 hash, then return `409 IDEMPOTENCY_RESPONSE_TOO_LARGE` on retry
+(with `Idempotent-Replayed: true`), instructing the client to fetch the resource
+instead. For billing, use `GET /api/billing/deduct/request/:requestId` with the
+original request identifier. Do not generate a new identifier to retry a charge.
+
+The lease prevents stale database writes, but cannot cancel an external side
+effect after a disconnect or crash. Billing's persistent request identifier and
+Soroban idempotency remain necessary. Apply migration `0027_idempotency_lease`
+and drain old application instances before enabling takeover: old binaries do
+not fence writes. Existing completed JSON records remain replayable. On rollback,
+roll back the application before removing the lease column; new response-format
+records are not readable by the old middleware and must age out before rollback.
