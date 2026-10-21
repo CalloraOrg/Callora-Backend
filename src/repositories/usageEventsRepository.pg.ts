@@ -2,6 +2,8 @@ import {
   type UsageEvent,
   type UsageEventQuery,
   type UserUsageEventQuery,
+  type ConsumerChargeRow,
+  type ListChargesResult,
 } from './usageEventsRepository.js';
 import { encodeCursor, type CursorPayload } from '../lib/cursorPagination.js';
 import { generateCursor, decodeCursor } from '../lib/pagination.js';
@@ -69,6 +71,19 @@ export interface UsageEventsPgRepository {
     from: Date;
     to: Date;
   }): Promise<{ totalUnits: bigint; calls: number }>;
+  /**
+   * Returns paginated billing-history rows for the consumer identified by
+   * `userId`, ordered by (created_at DESC, id DESC) for stable keyset
+   * pagination.  Fetches `limit + 1` rows to detect next-page existence.
+   *
+   * Uses idx_usage_events_user_created for the scan; the (id DESC) tiebreak
+   * within the same timestamp keeps ordering deterministic.
+   */
+  listChargesByConsumer(params: {
+    userId: string;
+    limit: number;
+    cursor?: CursorPayload;
+  }): Promise<ListChargesResult>;
 }
 
 export interface UsageEventsRepositoryQueryable {
@@ -856,5 +871,131 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const calls = Number(row?.calls ?? 0);
 
     return { totalUnits, calls };
+  }
+
+  /**
+   * Returns paginated billing-history rows for the consumer identified by
+   * `userId`, ordered by (created_at DESC, id DESC).
+   *
+   * Index hit: idx_usage_events_user_created (user_id, created_at).
+   * The `id DESC` tiebreak within the same timestamp uses the PK index.
+   *
+   * Amount formatting: amount_usdc is stored as an integer in the
+   * smallest unit (1 unit = 0.0000001 USDC).  We format it as a 7-decimal
+   * string in PostgreSQL to avoid BigInt division in JS.
+   *
+   * Status derivation:
+   *   - stellar_tx_hash IS NOT NULL → "confirmed"
+   *   - NULL                        → "pending"
+   */
+  async listChargesByConsumer(params: {
+    userId: string;
+    limit: number;
+    cursor?: CursorPayload;
+  }): Promise<ListChargesResult> {
+    const { userId, limit, cursor } = params;
+    const fetchLimit = limit + 1;
+
+    // $1 = userId, $2 = fetchLimit (no cursor branch)
+    // $1 = userId, $2 = ts, $3 = id, $4 = fetchLimit (cursor branch)
+    let sql: string;
+    let sqlParams: unknown[];
+
+    if (cursor) {
+      sql = `
+        SELECT
+          id::text                            AS id,
+          user_id,
+          api_id,
+          endpoint_id,
+          api_key_id,
+          request_id,
+          TO_CHAR(
+            (amount_usdc / 10000000)::numeric(28, 7),
+            'FM999999999999990.0000000'
+          )                                   AS amount_usdc,
+          stellar_tx_hash,
+          CASE WHEN stellar_tx_hash IS NOT NULL THEN 'confirmed' ELSE 'pending' END AS status,
+          created_at
+        FROM usage_events
+        WHERE user_id = $1
+          AND (created_at < $2 OR (created_at = $2 AND id < $3))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $4
+      `;
+      sqlParams = [
+        assertNonEmpty(userId, 'userId'),
+        cursor.timestamp,
+        BigInt(cursor.id),
+        fetchLimit,
+      ];
+    } else {
+      sql = `
+        SELECT
+          id::text                            AS id,
+          user_id,
+          api_id,
+          endpoint_id,
+          api_key_id,
+          request_id,
+          TO_CHAR(
+            (amount_usdc / 10000000)::numeric(28, 7),
+            'FM999999999999990.0000000'
+          )                                   AS amount_usdc,
+          stellar_tx_hash,
+          CASE WHEN stellar_tx_hash IS NOT NULL THEN 'confirmed' ELSE 'pending' END AS status,
+          created_at
+        FROM usage_events
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+      `;
+      sqlParams = [assertNonEmpty(userId, 'userId'), fetchLimit];
+    }
+
+    interface ChargeRow {
+      id: string;
+      user_id: string;
+      api_id: string;
+      endpoint_id: string;
+      api_key_id: string;
+      request_id: string;
+      amount_usdc: string;
+      stellar_tx_hash: string | null;
+      status: 'confirmed' | 'pending';
+      created_at: Date | string;
+    }
+
+    const result = await this.readDb.query<ChargeRow>(sql, sqlParams);
+    const rows = result.rows;
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    const charges: ConsumerChargeRow[] = page.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      apiId: row.api_id,
+      endpointId: row.endpoint_id,
+      apiKeyId: row.api_key_id,
+      requestId: row.request_id,
+      amountUsdc: row.amount_usdc,
+      stellarTxHash: row.stellar_tx_hash,
+      status: row.status,
+      createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+    }));
+
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor(
+            lastRow.created_at instanceof Date
+              ? lastRow.created_at
+              : new Date(lastRow.created_at),
+            lastRow.id,
+          )
+        : null;
+
+    return { charges, nextCursor, hasMore };
   }
 }
