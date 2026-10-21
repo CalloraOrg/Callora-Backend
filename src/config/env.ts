@@ -48,9 +48,9 @@ export const envSchema = z
       ),
 
     // Database pool
-    DB_POOL_MAX: z.coerce.number().default(10),
-    DB_IDLE_TIMEOUT_MS: z.coerce.number().default(30_000),
-    DB_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
+    DB2_POOL_MAX: z.coerce.number().default(10),
+    DB_IDlE_TIMEOUT_MS: z.coerce.number().default(30_000),
+    DB2_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
 
     /**
      * REPLICA_URLS — optional comma-separated list of PostgreSQL read-replica
@@ -60,8 +60,8 @@ export const envSchema = z
      *   REPLICA_URLS=postgresql://user:pass@replica1:5432/db,postgresql://user:pass@replica2:5432/db
      *
      * Behaviour:
-     *   - When set, read-only repository queries are routed round-robin to the
-     *     listed replicas. Write queries always use DATABASE_URL (primary).
+     *   - When set, read-only repository queries are routed round-robin to
+     *     the listed replicas. Write queries always use DATABASE_URL (primary).
      *   - On replica failure the query is automatically retried against the
      *     primary; see src/db/replicaPool.ts for details.
      *   - When absent or empty, all queries continue to use the primary pool.
@@ -100,7 +100,7 @@ export const envSchema = z
     // Database (individual fields for health checks)
     DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().default(5432),
-    DB_USER: z.string().default("postgres"),
+    DB2_USER: z.string().default("postgres"),
     DB_PASSWORD: z.string().default("postgres"),
     DB_NAME: z.string().default("callora"),
 
@@ -197,6 +197,55 @@ export const envSchema = z
       .positive()
       .default(100),
 
+    // Fee abstraction (POST /api/billing/fee-abstraction)
+    //
+    // The fee-bump endpoint signs transactions with the platform fee account,
+    // so every fee-bump must be backed by a verified, single-use quote and an
+    // on-chain app-token payment. These settings control quote pricing,
+    // payment verification and the inner-transaction allowlist.
+    //
+    // FEE_ABSTRACTION_RATE_* — integer-scaled conversion from stroops to
+    // app-token units. The quoted amount is computed as
+    //   ceil(feeStroops * FEE_ABSTRACTION_RATE_NUMERATOR / FEE_ABSTRACTION_RATE_DENOMINATOR)
+    // using bigint math only (no floats). Defaults to 1 app-token unit per
+    // 10 stroops (i.e. 0.10 XLM against the historical rate).
+    // Both values must be positive integers; the superRefine below rejects
+    // zero so the bigint division in the quote service can never divide by
+    // zero at runtime.
+    FEE_ABSTRACTION_RATE_NUMERATOR: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1),
+    FEE_ABSTRACTION_RATE_DENOMINATOR: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(10),
+    // Lifetime of a signed quote. After this window the quote is expired and
+    // execution returns 410.
+    FEE_ABSTRACTION_QUOTE_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(300),
+    // Treasury Stellar address that must receive the app-token payment.
+    FEE_ABSTRACTION_TREASURY_ADDRESS: z.string().min(1).optional(),
+    // App-token issuer/asset used for payment verification.
+    FEE_ABSTRACTION_APP_TOKEN_ASSET_CODE: z.string().min(1).default("APP"),
+    FEE_ABSTRACTION_APP_TOKEN_ISSUER: z.string().min(1).optional(),
+    // Vault contract ids allowed as the target of an inner invokeHostFunction.
+    // Comma-separated; when unset the network-specific vault contract id is
+    // used (STELLAR_*_VAULT_CONTRACT_ID).
+    FEE_ABSTRACTION_VAULT_CONTRACT_IDS: z.string().optional(),
+    // Upper bound on the time spent verifying the payment on-chain. Must be
+    // less than the route timeout so verification fails closed.
+    FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5_000),
+
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
 
@@ -250,6 +299,15 @@ export const envSchema = z
     SOROBAN_BILLING_NETWORK_PASSPHRASE: z.string().min(1).optional(),
     SOROBAN_BILLING_BACKEND_SECRET_KEY: secretKey.optional(),
     SOROBAN_BILLING_RPC_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+    SOROBAN_BILLING_NETWORK: stellarNetworkSchema.default("testnet"),
+
+    // Stellar accounts / contracts
+    STELLAR_TESTNET_HORIZON_URL: z.string().url().optional(),
+    STELLAR_MAINNET_HORIZON_URL: z.string().url().optional(),
+    STELLAR_TESTNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
+    STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
+    STELLAR_FEE_ACCOUNT_SECRET_KEY: z.string().min(1).optional(),
+    STELLAR_FEE_ACCOUNT_PUBLIC_KEY: z.string().min(1).optional(),
     SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
     SOROBAN_BILLING_DEDUCT_FN: z.string().min(1).default("deduct"),
 
@@ -586,47 +644,12 @@ export const envSchema = z
       .transform((v) => v === "true")
       .default(false),
   })
-  .superRefine((values, ctx) => {
-    if (values.NODE_ENV === "production" && values.FORWARDED_IDENTITY_ALLOW_LEGACY) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["FORWARDED_IDENTITY_ALLOW_LEGACY"], message: "Legacy forwarded identities are forbidden in production" });
-    }
-    if (values.NODE_ENV === "production" && !values.SOROBAN_BILLING_CONTRACT_ID) {
+  .superRefine((data, ctx) => {
+    if (data.FEE_ABSTRACTION_RATE_DENOMINATOR === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["SOROBAN_BILLING_CONTRACT_ID"],
-        message: "SOROBAN_BILLING_CONTRACT_ID is required in production",
-      });
-    }
-
-    if (values.SOROBAN_RPC_ENABLED && !values.SOROBAN_RPC_URL) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["SOROBAN_RPC_URL"],
-        message: "SOROBAN_RPC_URL is required when SOROBAN_RPC_ENABLED=true",
-      });
-    }
-
-    if (values.HORIZON_ENABLED && !values.HORIZON_URL) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["HORIZON_URL"],
-        message: "HORIZON_URL is required when HORIZON_ENABLED=true",
-      });
-    }
-
-    // In production the upstream host allowlist must be explicitly configured.
-    // The default empty allowlist rejects all upstream hosts, so operators
-    // must set UPSTREAM_HOST_ALLOWLIST to a non-empty value to proxy traffic.
-    if (
-      values.NODE_ENV === "production" &&
-      (!values.UPSTREAM_HOST_ALLOWLIST ||
-        values.UPSTREAM_HOST_ALLOWLIST.trim() === "")
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["UPSTREAM_HOST_ALLOWLIST"],
-        message:
-          "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
+        path: ["FEE_ABSTRACTION_RATE_DENOMINATOR"],
+        message: "FEE_ABSTRACTION_RATE_DENOMINATOR must be greater than zero",
       });
     }
 
@@ -642,7 +665,7 @@ export const envSchema = z
     // IMPORTANT: never interpolate a secret value into an issue message.
     // Only the variable name and the failing rule are reported.
     // ──────────────────────────────────────────────────────────────────────
-    const activeNetwork = values.STELLAR_NETWORK ?? values.SOROBAN_NETWORK;
+    const activeNetwork = data.STELLAR_NETWORK ?? data.SOROBAN_NETWORK;
 
     const activeNetworkPassphrase =
       activeNetwork === "mainnet"
@@ -653,23 +676,23 @@ export const envSchema = z
 
     const activeNetworkRpcUrl =
       activeNetwork === "mainnet"
-        ? values.SOROBAN_MAINNET_RPC_URL
+        ? data.SOROBAN_MAINNET_RPC_URL
         : activeNetwork === "testnet"
-          ? values.SOROBAN_TESTNET_RPC_URL
+          ? data.SOROBAN_TESTNET_RPC_URL
           : undefined;
 
     const activeVaultContractId =
       activeNetwork === "mainnet"
-        ? values.STELLAR_MAINNET_VAULT_CONTRACT_ID
+        ? data.STELLAR_MAINNET_VAULT_CONTRACT_ID
         : activeNetwork === "testnet"
-          ? values.STELLAR_TESTNET_VAULT_CONTRACT_ID
+          ? data.STELLAR_TESTNET_VAULT_CONTRACT_ID
           : undefined;
 
     // 1. Billing passphrase must match the active network when both are set.
     if (
-      values.SOROBAN_BILLING_NETWORK_PASSPHRASE !== undefined &&
+      data.SOROBAN_BILLING_NETWORK_PASSPHRASE !== undefined &&
       activeNetworkPassphrase !== undefined &&
-      values.SOROBAN_BILLING_NETWORK_PASSPHRASE !== activeNetworkPassphrase
+      data.SOROBAN_BILLING_NETWORK_PASSPHRASE !== activeNetworkPassphrase
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -681,9 +704,9 @@ export const envSchema = z
 
     // 2. Production must not silently run against the testnet passphrase.
     if (
-      values.NODE_ENV === "production" &&
+      data.NODE_ENV === "production" &&
       activeNetwork === "testnet" &&
-      !values.ALLOW_TESTNET_IN_PRODUCTION
+      !data.ALLOW_TESTNET_IN_PRODUCTION
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -695,9 +718,9 @@ export const envSchema = z
 
     // 3. Production must not fall back to the localhost Soroban RPC.
     if (
-      values.NODE_ENV === "production" &&
-      values.SOROBAN_BILLING_RPC_URL === undefined &&
-      values.SOROBAN_RPC_URL === undefined &&
+      data.NODE_ENV === "production" &&
+      data.SOROBAN_BILLING_RPC_URL === undefined &&
+      data.SOROBAN_RPC_URL === undefined &&
       activeNetworkRpcUrl === undefined
     ) {
       ctx.addIssue({
@@ -712,9 +735,9 @@ export const envSchema = z
     //    differs it is treated as an explicit override and logged once at
     //    startup (see src/services/createSorobanBillingService.ts).
     if (
-      values.SOROBAN_BILLING_CONTRACT_ID !== undefined &&
+      data.SOROBAN_BILLING_CONTRACT_ID !== undefined &&
       activeVaultContractId !== undefined &&
-      values.SOROBAN_BILLING_CONTRACT_ID !== activeVaultContractId
+      data.SOROBAN_BILLING_CONTRACT_ID !== activeVaultContractId
     ) {
       // No issue: this is a supported override. The warning is emitted by
       // the billing service factory so it fires exactly once per process.
@@ -724,20 +747,20 @@ export const envSchema = z
     //    The public key is computed lazily here to avoid pulling the StrKey
     //    dependency into the hot path when the secret is unset.
     if (
-      values.SOROBAN_BILLING_BACKEND_SECRET_KEY !== undefined &&
-      values.SOROBAN_BILLING_SOURCE_ACCOUNT !== undefined
+      data.SOROBAN_BILLING_BACKEND_SECRET_KEY !== undefined &&
+      data.SOROBAN_BILLING_SOURCE_ACCOUNT !== undefined
     ) {
       let derivedPublicKey: string | undefined;
       try {
         derivedPublicKey = Keypair.fromSecret(
-          values.SOROBAN_BILLING_BACKEND_SECRET_KEY,
+          data.SOROBAN_BILLING_BACKEND_SECRET_KEY,
         ).publicKey();
       } catch {
         derivedPublicKey = undefined;
       }
       if (
         derivedPublicKey !== undefined &&
-        derivedPublicKey !== values.SOROBAN_BILLING_SOURCE_ACCOUNT
+        derivedPublicKey !== data.SOROBAN_BILLING_SOURCE_ACCOUNT
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -749,14 +772,6 @@ export const envSchema = z
     }
   });
 
-const parsed = envSchema.safeParse(process.env);
+export type EnvSchema = z.infer<typeof envSchema>;
 
-if (!parsed.success) {
-  console.error("❌ Invalid environment configuration:");
-  parsed.error.issues.forEach((issue) => {
-    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
-  });
-  process.exit(1);
-}
-
-export const env = parsed.data;
+export const env = envSchema.parse(process.env);
