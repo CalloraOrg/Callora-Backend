@@ -270,6 +270,7 @@ export const envSchema = z
       .int()
       .positive()
       .default(5_000),
+    SETTLEMENT_MAX_RETRIES: z.coerce.number().int().positive().default(5),
     SETTLEMENT_RECON_INTERVAL_MS: z.coerce
       .number()
       .int()

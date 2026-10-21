@@ -258,6 +258,7 @@ export const config = {
   settlementSync: {
     intervalMs: env.SETTLEMENT_STATUS_SYNC_INTERVAL_MS,
     timeoutMs: env.SETTLEMENT_STATUS_SYNC_TIMEOUT_MS,
+    maxRetries: env.SETTLEMENT_MAX_RETRIES,
   },
   settlementRecon: {
     intervalMs: env.SETTLEMENT_RECON_INTERVAL_MS,

@@ -6,6 +6,14 @@ This document outlines the invariants, persistence semantics, and testing approa
 
 ## Core Invariants
 
+### Settlement Retry Policy (PostgresSettlementStore)
+- **Retry State**: `retry_after`, `retry_count`, and `last_error` persist reconciliation state.
+- **Eligible Transitions**: Only `pending` and `retryable` settlements can be scheduled again.
+- **Bounded Attempts**: `SETTLEMENT_MAX_RETRIES` defaults to 5; after the cap the row becomes `failed` and records the failure reason.
+- **Backoff**: Retry delays use equal jitter over exponential intervals starting at 30 seconds, capped at 30 minutes.
+- **Pending Query Index**: `idx_settlements_retry_after` is partial on rows with `status = 'retryable'`.
+- **Migration**: `migrations/0026_settlement_retry_policy.sql` adds the retry state; its `.down.sql` rollback restores the original status constraint.
+
 ### 1. Data Persistence Invariants
 - **Settlement Immutability**: Once created, settlement core fields (`id`, `developerId`, `amount`, `created_at`) never change
 - **Status Mutability**: Only `status` and `tx_hash` fields can be modified after creation
