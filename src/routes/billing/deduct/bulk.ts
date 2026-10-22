@@ -82,6 +82,16 @@ router.post(
           next(new PaymentRequiredError(result.error, 'INSUFFICIENT_BALANCE'));
           return;
         }
+        if (result.results.some((entry) => entry.conflict)) {
+          res.status(409).json(errorEnvelope('BILLING_REQUEST_ID_CONFLICT', 'requestId already used for a different deduction', req.id ?? '', {
+            results: result.results.map((entry) => ({
+              requestId: entry.requestId,
+              success: !entry.conflict,
+              ...(entry.conflict ? { conflict: true } : {}),
+            })),
+          }));
+          return;
+        }
         if (result.results.some((entry) => entry.reconciliationRequired)) {
           res.status(409).json(errorEnvelope('RECONCILIATION_REQUIRED', 'Billing deduction requires reconciliation', req.id ?? '', {
             reconciliationRequired: true,
