@@ -44,6 +44,8 @@ jobs:
           NODE_ENV: test
       - name: Build Vercel bundle
         run: npm run build:vercel
+      - name: Smoke test Vercel bundle
+        run: node scripts/smoke-vercel-bundle.mjs
 
   openapi-compat:
     if: github.event_name == 'pull_request'

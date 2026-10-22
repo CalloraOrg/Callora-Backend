@@ -83,6 +83,7 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `IP_NOT_ALLOWED` | IP allowlist |
 | `DATABASE_NOT_AVAILABLE` | DB / infrastructure |
 | `IDEMPOTENCY_CONFLICT` | Idempotency |
+| `IDEMPOTENCY_RESPONSE_TOO_LARGE` | Idempotency |
 | `IDEMPOTENCY_IN_PROGRESS` | Idempotency |
 | `SIMULATION_FAILED` | Misc / direct middleware responses |
 | `INVALID_AUTH_HEADER` | Route-specific / auth overrides (documented in docs/error-codes.md) |

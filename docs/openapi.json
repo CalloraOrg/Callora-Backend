@@ -640,6 +640,148 @@
         }
       }
     },
+    "/api/billing": {
+      "get": {
+        "summary": "Get billing history for the authenticated consumer",
+        "description": "Returns cursor-paginated billing-history rows sourced from usage_events (the table that BillingService.runPhase1 writes into). Ordered by (created_at DESC, id DESC). Amount is a 7-decimal USDC string. Status is \"confirmed\" when stellar_tx_hash is present, \"pending\" otherwise.",
+        "operationId": "getBillingHistory",
+        "tags": [
+          "Billing"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of rows to return (1–100, default 20)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque base64 keyset cursor from the previous page's nextCursor",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Billing history page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "data",
+                            "meta"
+                          ],
+                          "properties": {
+                            "data": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/BillingHistoryRow"
+                              }
+                            },
+                            "meta": {
+                              "type": "object",
+                              "required": [
+                                "limit",
+                                "hasMore"
+                              ],
+                              "properties": {
+                                "limit": {
+                                  "type": "integer"
+                                },
+                                "nextCursor": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "hasMore": {
+                                  "type": "boolean"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "firstPage": {
+                    "summary": "First page of billing history",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "data": [
+                          {
+                            "id": "42",
+                            "userId": "user-123",
+                            "apiId": "api-abc",
+                            "endpointId": "ep-1",
+                            "apiKeyId": "key-xyz",
+                            "requestId": "req-001",
+                            "amountUsdc": "0.0012345",
+                            "stellarTxHash": "a1b2c3...",
+                            "status": "confirmed",
+                            "createdAt": "2026-10-01T12:00:00.000Z"
+                          }
+                        ],
+                        "meta": {
+                          "limit": 20,
+                          "nextCursor": "eyJ0aW1lc3RhbXAiOi4uLn0=",
+                          "hasMore": true
+                        }
+                      },
+                      "requestId": "req-id-uuid",
+                      "timestamp": "2026-10-19T20:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/billing/deduct": {
       "post": {
         "summary": "Deduct billing balance for an API call",
@@ -7905,6 +8047,7 @@
           "IP_NOT_ALLOWED",
           "DATABASE_NOT_AVAILABLE",
           "IDEMPOTENCY_CONFLICT",
+          "IDEMPOTENCY_RESPONSE_TOO_LARGE",
           "IDEMPOTENCY_IN_PROGRESS",
           "BILLING_REQUEST_ID_CONFLICT",
           "SIMULATION_FAILED",
@@ -8315,6 +8458,84 @@
               "null"
             ],
             "maxLength": 1000
+          }
+        }
+      },
+      "SuccessEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BillingHistoryRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "apiId",
+          "endpointId",
+          "apiKeyId",
+          "requestId",
+          "amountUsdc",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "apiId": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "apiKeyId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "amountUsdc": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d{1,7})?$"
+          },
+          "stellarTxHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "pending"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
