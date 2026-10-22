@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { adminAuth } from './adminAuth.js';
+import { generateKeyPairSync } from 'node:crypto';
 
 const TEST_API_KEY = 'test-admin-api-key';
 const TEST_JWT_SECRET = 'test-jwt-secret';
@@ -145,7 +146,6 @@ describe('adminAuth middleware — unit', () => {
 
     it('returns 401 when the JWT is signed with an algorithm other than HS256', () => {
       // Need a key pair for RS256
-      const { generateKeyPairSync } = require('crypto');
       const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
       const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, privateKey, { expiresIn: '1h', algorithm: 'RS256' });
       const res = makeRes();

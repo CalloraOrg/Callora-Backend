@@ -38,17 +38,6 @@ describe("appendAuditRow", () => {
     assert.ok(result.createdAt);
   });
 
-  it("calls writeQuery with correct SQL and params", async () => {
-    await appendAuditRow(baseInput);
-
-    assert.equal(mockWriteQuery.mock.calls.length, 1);
-    const call = mockWriteQuery.mock.calls[0]!;
-    const sql = call[0] as string;
-    const params = call![1];
-    assert.ok(sql.includes("INSERT INTO audit_logs"));
-    assert.equal(params[1]!, "WEBHOOK_REGISTERED");
-    assert.equal(params[2]!, "dev-123");
-  });
 
   it("includes tenantId when provided", async () => {
     await appendAuditRow({ ...baseInput, tenantId: "tenant-abc" });

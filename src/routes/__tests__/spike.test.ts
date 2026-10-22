@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import request from 'supertest';
 import express from 'express';
 import { createSpikeRouter, type SpikeRecord, MAX_SPIKE_DELAY_MS } from '../spike.js';

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from '@jest/globals'
 import { DeliveryConflictError, InMemoryDurableDeliveryStore, enqueueDurableDelivery } from './durableDelivery.js'
 
 const makeInput = (n: number, overrides: Record<string, unknown> = {}) => ({
@@ -33,17 +33,18 @@ describe('durable delivery state transition matrix', () => {
     expect(await store.complete(second!, 'worker-b', 6)).toBe(true)
   })
 
-  it.each([
+  it.each<[number, number]>([
     [1, 10], [2, 20], [3, 40], [4, 80], [5, 160],
   ])('uses bounded exponential delay after attempt %i', async (attempt, delay) => {
     const store = new InMemoryDurableDeliveryStore()
     await enqueueDurableDelivery(store, makeInput(22, { maxAttempts: 10, baseDelayMs: 10 }), 0)
     let claim = await store.claim('tenant-1', 'event-22', 'worker-0', 0)
     for (let index = 1; index < attempt; index++) {
-      await store.fail(claim!, `failure-${index}`, 'x', claim!.nextAttemptAt)
-      claim = await store.claim('tenant-1', 'event-22', `worker-${index}`, claim!.nextAttemptAt)
+      const failed = await store.fail(claim!, `worker-${index - 1}`, 'x', claim!.nextAttemptAt)
+      expect(failed?.status).toBe('retrying')
+      claim = await store.claim('tenant-1', 'event-22', `worker-${index}`, failed!.nextAttemptAt)
     }
-    const failed = await store.fail(claim!, 'x', 1000)
+    const failed = await store.fail(claim!, `worker-${attempt - 1}`, 'x', 1000)
     expect(failed?.nextAttemptAt).toBe(1000 + delay)
   })
 

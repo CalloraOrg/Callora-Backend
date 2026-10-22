@@ -158,7 +158,7 @@ describe('envelopeValidator', () => {
         error: {
           code: 'VALIDATION_ERROR',
           message: 'Invalid input',
-          details: [{ field: 'email', issue: 'invalid format' }],
+          details: [{ field: 'email', message: 'invalid format', code: 'INVALID_FORMAT' }],
         },
         requestId: 'req-123',
         timestamp: new Date().toISOString(),

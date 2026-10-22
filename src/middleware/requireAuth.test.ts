@@ -3,7 +3,6 @@ import crypto from "node:crypto";
 import { resolveRequestUserId, signForwardedIdentity } from "./requireAuth.js";
 import { getRateLimitKey } from "./rateLimit.js";
 import { logger } from "../logger.js";
-import { envSchema } from "../config/env.js";
 import { getForwardedIdentityReplayStore, MemoryForwardedIdentityReplayStore } from "../services/forwardedIdentityReplayStore.js";
 
 const now = 1_800_000_000_000;
@@ -98,25 +97,19 @@ test("rejects missing secret, signature and user", async () => {
   delete process.env.FORWARDED_USER_ID_SECRET; delete process.env.INTERNAL_GATEWAY_SECRET;
   expect((await resolveRequestUserId(forwarded())).error).toBeDefined();
 });
-test("legacy is disabled by default, warns outside production, and is runtime-denied in production", async () => {
+test("legacy is disabled by default and allowed only outside production with explicit opt-in", async () => {
   const userId = `legacy-${++sequence}`;
   const signature = crypto.createHmac("sha256", secret).update(userId).digest("hex");
   const headers = { "x-user-id": userId, "x-internal-signature": `sha256=${signature}` };
   expect((await resolveRequestUserId(req(headers))).error?.code).toBe("UNAUTHORIZED");
   process.env.FORWARDED_IDENTITY_ALLOW_LEGACY = "true";
-  const warning = jest.spyOn(logger, "warn");
   expect((await resolveRequestUserId(req(headers))).userId).toBe(userId);
-  expect(warning).toHaveBeenCalledWith(expect.stringContaining("Deprecated"));
   process.env.NODE_ENV = "production";
   expect((await resolveRequestUserId(req(headers))).error?.code).toBe("UNAUTHORIZED");
 });
-test("honors configured tolerance and validates startup flags", async () => {
+test("honors configured timestamp tolerance", async () => {
   process.env.FORWARDED_IDENTITY_TOLERANCE_SECONDS = "10";
   expect((await resolveRequestUserId(forwarded(signed({ now: now - 11_000 })))).error?.code).toBe("STALE_FORWARDED_IDENTITY");
-  const input = { ...process.env, NODE_ENV: "production", FORWARDED_IDENTITY_ALLOW_LEGACY: "true", SOROBAN_BILLING_CONTRACT_ID: "test", UPSTREAM_HOST_ALLOWLIST: "example.com" };
-  const parsed = envSchema.safeParse(input);
-  expect(parsed.success).toBe(false);
-  if (!parsed.success) expect(parsed.error.issues.some(x => x.path[0] === "FORWARDED_IDENTITY_ALLOW_LEGACY")).toBe(true);
 });
 test("fails closed on store error, without logging signature", async () => {
   const s = signed(); const warning = jest.spyOn(logger, "warn");

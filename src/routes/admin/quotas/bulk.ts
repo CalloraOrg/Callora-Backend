@@ -35,19 +35,19 @@ export function createAdminQuotaBulkRouter(deps: AdminQuotaBulkRouterDeps = {}):
   router.post(
     '/bulk-update',
     validate({ body: quotaBulkUpdateSchema }),
-    async (req, res, next) => {
+    (req, res, next) => {
       try {
         const { items } = req.body as z.infer<typeof quotaBulkUpdateSchema>;
 
-        await db.transaction(async (tx) => {
+        db.transaction((tx) => {
           for (const item of items) {
-            const rows = await tx
+            const developer = tx
               .select({ plan_overrides: schema.developers.plan_overrides })
               .from(schema.developers)
               .where(eq(schema.developers.user_id, item.developer_id))
-              .limit(1);
+              .limit(1)
+              .get();
 
-            const developer = rows[0];
             if (!developer) {
               throw new NotFoundError(`Developer not found: ${item.developer_id}`);
             }
@@ -68,10 +68,11 @@ export function createAdminQuotaBulkRouter(deps: AdminQuotaBulkRouterDeps = {}):
               updated_at: new Date().toISOString(),
             };
 
-            await tx
+            tx
               .update(schema.developers)
               .set({ plan_overrides: JSON.stringify(mergedOverrides) })
-              .where(eq(schema.developers.user_id, item.developer_id));
+              .where(eq(schema.developers.user_id, item.developer_id))
+              .run();
           }
         });
 

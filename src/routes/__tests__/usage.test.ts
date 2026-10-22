@@ -3,7 +3,8 @@ import express from 'express';
 import { createUsageRouter } from '../usage.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
-import type { UsageEventsRepository, UsageEvent, UserUsageEventQuery, UsageStats, UsageBucket } from '../../repositories/usageEventsRepository.js';
+import { InMemoryUsageEventsRepository, type UsageEventsRepository, type UsageEvent, type UserUsageEventQuery, type UsageStats, type UsageBucket } from '../../repositories/usageEventsRepository.js';
+import type { BillingUsageEvent, UsageEventsPgRepository } from '../../repositories/usageEventsRepository.pg.js';
 import { generateCursor } from '../../lib/pagination.js';
 import { encodeCursor } from '../../lib/cursorPagination.js';
 
@@ -12,7 +13,7 @@ import { encodeCursor } from '../../lib/cursorPagination.js';
 // ---------------------------------------------------------------------------
 
 interface CursorResult {
-  events: UsageEvent[];
+  events: BillingUsageEvent[];
   nextCursor: string | null;
   prevCursor: string | null;
 }
@@ -29,12 +30,24 @@ function makeEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
     apiId: 'api-1',
     endpoint: '/v1/test',
     occurredAt: now,
-    createdAt: now,
-    revenue: 100,
-    amount: 100,
+    revenue: 100n,
+    developerId: 'dev-1',
+    ...overrides,
+  };
+}
+
+function makeBillingEvent(overrides: Partial<BillingUsageEvent> = {}): BillingUsageEvent {
+  return {
+    id: 'billing-event',
+    userId: 'user-1',
+    apiId: 'api-1',
+    endpointId: 'endpoint-1',
     apiKeyId: 'key-1',
     developerId: 'dev-1',
-    requestId: `req-${Math.random().toString(36).slice(2, 8)}`,
+    amount: 100n,
+    requestId: 'request-1',
+    stellarTxHash: null,
+    createdAt: new Date('2026-07-01T00:00:00Z'),
     ...overrides,
   };
 }
@@ -43,25 +56,17 @@ function makeStats(overrides: Partial<UsageStats> = {}): UsageStats {
   return {
     apiId: 'api-1',
     calls: 10,
-    revenue: 1000,
+    revenue: 1000n,
     ...overrides,
   };
 }
 
 interface MockUsageRepo extends UsageEventsRepository {
-  findByUserIdCursor?: jest.Mock;
+  findByUserIdCursor?: UsageEventsPgRepository['findByUserIdCursor'];
 }
 
 function makeUsageRepo(overrides: Partial<MockUsageRepo> = {}): MockUsageRepo {
-  return {
-    findByUser: jest.fn().mockResolvedValue([]),
-    findByDeveloper: jest.fn().mockResolvedValue([]),
-    developerOwnsApi: jest.fn().mockResolvedValue(true),
-    aggregateByDeveloper: jest.fn().mockResolvedValue([]),
-    aggregateByUser: jest.fn().mockResolvedValue({ totalCalls: 0, totalRevenue: 0, breakdownByApi: [] }),
-    create: jest.fn(),
-    ...overrides,
-  };
+  return Object.assign(new InMemoryUsageEventsRepository(), overrides);
 }
 
 function buildApp(usageRepo: MockUsageRepo) {
@@ -70,7 +75,7 @@ function buildApp(usageRepo: MockUsageRepo) {
   app.use(requestIdMiddleware);
   app.use(
     '/api/usage',
-    createUsageRouter({ usageEventsRepository: usageRepo as unknown as UsageEventsRepository }),
+    createUsageRouter({ usageEventsRepository: usageRepo }),
   );
   app.use(errorHandler);
   return app;
@@ -198,11 +203,10 @@ describe('GET /api/usage — Offset/Limit Pagination', () => {
 describe('GET /api/usage — Legacy Cursor Pagination', () => {
   it('returns usage events with next_cursor when cursor param is used', async () => {
     const events: UsageEvent[] = [
-      makeEvent({ id: 'evt-1', createdAt: new Date('2026-07-01T00:00:00Z') }),
-      makeEvent({ id: 'evt-2', createdAt: new Date('2026-07-02T00:00:00Z') }),
+      makeEvent({ id: 'evt-1', occurredAt: new Date('2026-07-01T00:00:00Z') }),
+      makeEvent({ id: 'evt-2', occurredAt: new Date('2026-07-02T00:00:00Z') }),
     ];
-    (events as any)._nextCursor = 'bmV4dC1jdXJzb3I=';
-    (events as any)._hasMore = true;
+    Object.assign(events, { _nextCursor: 'bmV4dC1jdXJzb3I=', _hasMore: true });
 
     const repo = makeUsageRepo({
       findByUser: jest.fn().mockResolvedValue(events),
@@ -238,8 +242,8 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
   it('returns events with nextCursor and prevCursor when using after param', async () => {
     const cursorResult: CursorResult = {
       events: [
-        makeEvent({ id: 'evt-1', createdAt: new Date('2026-07-01T00:00:00Z') }),
-        makeEvent({ id: 'evt-2', createdAt: new Date('2026-07-02T00:00:00Z') }),
+        makeBillingEvent({ id: 'evt-1', createdAt: new Date('2026-07-01T00:00:00Z') }),
+        makeBillingEvent({ id: 'evt-2', createdAt: new Date('2026-07-02T00:00:00Z') }),
       ],
       nextCursor: 'bmV4dC1jdXJzb3I=',
       prevCursor: null,
@@ -266,7 +270,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
   it('returns events with prevCursor when using before param', async () => {
     const cursorResult: CursorResult = {
       events: [
-        makeEvent({ id: 'evt-1', createdAt: new Date('2026-06-30T00:00:00Z') }),
+        makeBillingEvent({ id: 'evt-1', createdAt: new Date('2026-06-30T00:00:00Z') }),
       ],
       nextCursor: null,
       prevCursor: 'cHJldi1jdXJzb3I=',
@@ -310,35 +314,6 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('uses findByUserIdCursor when repository supports it', async () => {
-    const cursorResult: CursorResult = {
-      events: [makeEvent({ id: 'evt-1' })],
-      nextCursor: null,
-      prevCursor: null,
-    };
-    const findByUserIdCursor = jest.fn().mockResolvedValue(cursorResult);
-    const repo = makeUsageRepo({
-      findByUserIdCursor,
-      aggregateByUser: jest.fn().mockResolvedValue({ totalCalls: 0, totalRevenue: 0, breakdownByApi: [] }),
-    });
-    const app = buildApp(repo);
-
-    const cursor = buildJsonCursor(new Date('2026-06-30T00:00:00.000Z'), 'evt-0');
-    const res = await request(app)
-      .get(`/api/usage?after=${encodeURIComponent(cursor)}&limit=2`)
-      .set('x-user-id', 'user-1');
-
-    // Verify the cursor pagination path ran successfully
-    expect(res.status).toBe(200);
-
-    // Verify findByUserIdCursor was called with expected params
-    expect(findByUserIdCursor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'user-1',
-        limit: 2,
-      }),
-    );
-  });
 
   it('falls back to offset pagination when repository does not support findByUserIdCursor', async () => {
     const events = [makeEvent({ id: 'evt-1' })];

@@ -8,11 +8,11 @@ import {
   formatUnitsToUsdc,
   getPeriodDays,
 } from './forecast.js';
+import type { BillingForecastRouterDeps } from './forecast.js';
 import {
   PgUsageEventsRepository,
   type UsageEventsRepositoryQueryable,
 } from '../../repositories/usageEventsRepository.pg.js';
-import type { UsageEventsRepository } from '../../repositories/usageEventsRepository.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 
@@ -57,12 +57,7 @@ function createPgMemRepository() {
   };
 }
 
-function buildApp(options: {
-  usageEventsRepository?: UsageEventsRepository | {
-    sumSpendByConsumer: (query: { userId: string; from: Date; to: Date }) => Promise<{ totalUnits: bigint; calls: number }>;
-  };
-  pool?: unknown;
-} = {}) {
+function buildApp(options: BillingForecastRouterDeps = {}) {
   const app = express();
   app.use(express.json());
   app.use(requestIdMiddleware);

@@ -4,6 +4,8 @@
  * This ensures consistent client parsing and contract stability.
  */
 
+import type { ValidationErrorDetail } from '../middleware/validate.js';
+
 export interface SuccessEnvelope<T = unknown> {
   success: true;
   data: T;
@@ -29,7 +31,7 @@ export interface ErrorEnvelope {
   error: {
     code: string;
     message: string;
-    details?: unknown;
+    details?: ValidationErrorDetail[];
     /** Present only for simulation failures; additive and optional. */
     simulationDetails?: SimulationDetailsSummary;
   };

@@ -5,6 +5,8 @@ import {
   FeeBumpTransaction,
   Networks,
   Operation,
+  xdr,
+  BASE_FEE,
 } from '@stellar/stellar-sdk';
 import { config } from '../config/index.js';
 import { logger } from '../logger.js';
@@ -54,6 +56,8 @@ export class FeeBumperInvalidTransactionError extends Error {
 export interface FeeQuote {
   baseFeeStroops: bigint;
   feeBumpFeeStroops: bigint;
+  /** Per-op outer fee rate; the envelope charges rate × (inner_ops + 1) + inner resource fee. */
+  outerPerOpFeeStroops: bigint;
   feeBumpFeeXlm: string;
   appTokenAmount: string;
   network: string;
@@ -81,14 +85,14 @@ function getNetworkPassphrase(): string {
 }
 
 function getFeeKeypair(): Keypair {
-  const secretKey = process.env.FEE_BUMPING_SECRET_KEY;
+  const secretKey = process.env.FEE_BUMPER_SECRET_KEY;
   if (!secretKey) {
     throw new FeeBumperConfigError('FEE_BUMPER_SECRET_KEY is not configured');
   }
   try {
     return Keypair.fromSecret(secretKey);
   } catch {
-    throw new FeeBumperConfigError('FEE_BUMPING_SECRET_KEY is not a valid Stellar secret key');
+    throw new FeeBumperConfigError('FEE_BUMPER_SECRET_KEY is not a valid Stellar secret key');
   }
 }
 
@@ -102,8 +106,44 @@ function parseInnerTransaction(innerXdr: string): Transaction {
 }
 
 /**
+ * Soroban resource fee declared by the inner envelope (0 for classic). Read via
+ * the public XDR envelope: `Transaction` exposes no `sorobanData` accessor.
+ */
+function getInnerResourceFee(innerTx: Transaction): bigint {
+  const envelope = innerTx.toEnvelope();
+  if (envelope.switch() !== xdr.EnvelopeType.envelopeTypeTx()) {
+    return 0n;
+  }
+  const sorobanData = envelope.v1().tx().ext().value();
+  return sorobanData ? sorobanData.resourceFee().toBigInt() : 0n;
+}
+
+/**
+ * Per-operation outer fee rate. The configured multiplier is the policy floor; it is raised
+ * to the SDK's own minimums (inner per-op inclusion rate rounded up, and BASE_FEE) so that
+ * buildFeeBumpTransaction never rejects a valid inner transaction.
+ */
+function getOuterPerOpFee(innerTx: Transaction): bigint {
+  const opCount = BigInt(innerTx.operations.length);
+  if (opCount === 0n) {
+    throw new FeeBumperInvalidTransactionError('inner transaction has no operations');
+  }
+  const innerFee = BigInt(innerTx.fee);
+  const resourceFee = getInnerResourceFee(innerTx);
+  if (innerFee < resourceFee) {
+    throw new FeeBumperInvalidTransactionError('inner fee is below its Soroban resource fee');
+  }
+  // ceil((fee - resourceFee) / ops): the SDK requires base >= this rational value.
+  const innerInclusionRate = (innerFee - resourceFee + opCount - 1n) / opCount;
+  const sdkBaseFee = BigInt(BASE_FEE);
+  const sdkMinimum = sdkBaseFee > innerInclusionRate ? sdkBaseFee : innerInclusionRate;
+  const policyFloor = BigInt(config.stellar.baseFee) * FEE_BUMP_MULTIPLIER;
+  return policyFloor > sdkMinimum ? policyFloor : sdkMinimum;
+}
+
+/**
  * Calculate a fee-bump quote for a given inner transaction XDR.
- * The outer fee is `inner resource fee + base_fee * (inner_ops + 1) * multiplier`,
+ * The outer fee is `inner resource fee + outer_per_op_fee × (inner_ops + 1)`,
  * computed entirely in bigint stroops.
  */
 export function calculateFeeQuote(innerXdr: string): FeeQuote {
@@ -111,17 +151,18 @@ export function calculateFeeQuote(innerXdr: string): FeeQuote {
 
   const opCount = BigInt(innerTx.operations.length);
   const baseFeeStroops = BigInt(config.stellar.baseFee);
-  const resourceFee = BigInt(innerTx.sorobanData?.resourceFee ?? 0);
-  // fee-bump outer fee: resource fee + multiplier × base_fee × (inner_ops + 1)
-  const feeBumpFeeStroops =
-    resourceFee + baseFeeStroops * FEE_BUMP_MULTIPLIER * (opCount + 1n);
+  const resourceFee = getInnerResourceFee(innerTx);
+  const outerPerOpFeeStroops = getOuterPerOpFee(innerTx);
+  // fee-bump outer fee: resource fee + per-op outer fee × (inner_ops + 1)
+  const feeBumpFeeStroops = resourceFee + outerPerOpFeeStroops * (opCount + 1n);
   const feeBumpFeeXlm = formatStroops(feeBumpFeeStroops);
   const { numerator, denominator } = getRate();
-  const appTokenUnits = (feeBumpFeeStroops * numerator) / denominator;
+  const appTokenUnits = (feeBumpFeeStroops * numerator + denominator - 1n) / denominator;
 
   return {
     baseFeeStroops,
     feeBumpFeeStroops,
+    outerPerOpFeeStroops,
     feeBumpFeeXlm,
     appTokenAmount: appTokenUnits.toString(),
     network: config.stellar.network,
@@ -225,11 +266,12 @@ export function createFeeBumpTransaction(innerXdr: string): FeeBumpResult {
     network: config.stellar.network,
   });
 
+  // SDK charges per-op rate × (inner_ops + 1) + inner resource fee, so pass the per-op rate.
   let feeBumpTx: FeeBumpTransaction;
   try {
     feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
       feeKeypair,
-      quote.feeBumpFeeStroops.toString(),
+      quote.outerPerOpFeeStroops.toString(),
       innerTx,
       passphrase,
     );
@@ -252,6 +294,6 @@ export function createFeeBumpTransaction(innerXdr: string): FeeBumpResult {
   return {
     feeBumpXdr: feeBumpTx.toXDR(),
     feeAccountPublicKey: feeKeypair.publicKey(),
-    feeStroops: quote.feeBumpFeeStroops,
+    feeStroops: BigInt(feeBumpTx.fee),
   };
 }

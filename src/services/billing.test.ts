@@ -593,7 +593,7 @@ describe('BillingService.getByRequestId', () => {
     const soroban = createMockSorobanClient();
     const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
 
-    const result = await svc.getByRequestId('req_existing');
+    const result = await svc.getByRequestId('req_existing', 'user_1');
 
     assert.ok(result !== null);
     assert.equal(result?.usageEventId, '123');
@@ -608,7 +608,7 @@ describe('BillingService.getByRequestId', () => {
     const soroban = createMockSorobanClient();
     const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
 
-    const result = await svc.getByRequestId('req_missing');
+    const result = await svc.getByRequestId('req_missing', 'user_1');
 
     assert.equal(result, null);
   });
@@ -621,7 +621,7 @@ describe('BillingService.getByRequestId', () => {
     const soroban = createMockSorobanClient();
     const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
 
-    const result = await svc.getByRequestId('req_failed_soroban');
+    const result = await svc.getByRequestId('req_failed_soroban', 'user_1');
 
     assert.ok(result !== null);
     assert.equal(result?.success, false);

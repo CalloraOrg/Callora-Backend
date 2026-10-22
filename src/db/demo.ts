@@ -51,6 +51,7 @@ export const MIGRATION_DIALECT_MANIFEST: Record<string, MigrationDialect> = {
   "0026_usage_events_deduction_status.sql": "postgres",
   "0027_drop_billing_requests_index.sql": "both",
   "0027_idempotency_lease.sql": "postgres",
+  "0027_fee_abstraction_quotes.sql": "postgres",
 };
 
 /**

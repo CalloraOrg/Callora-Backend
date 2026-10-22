@@ -90,7 +90,7 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
   const router = Router();
   const broadcaster = deps.broadcaster ?? defaultUsageSseBroadcaster;
 
-  router.get('/', requireAuth, async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+  router.get('/', requireAuth, (req, res: Response<unknown, AuthenticatedLocals>, next) => {
     const user = res.locals.authenticatedUser;
     if (!user) {
       next(new UnauthorizedError());

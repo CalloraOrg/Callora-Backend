@@ -2,6 +2,10 @@ import request from 'supertest';
 import { z } from 'zod';
 import { createApp } from '../../src/app.js';
 import { envelopeSchema, errorEnvelopeSchema, successEnvelopeSchema } from '../../src/middleware/envelope.js';
+import { InMemoryUsageEventsRepository } from '../../src/repositories/usageEventsRepository.js';
+import { InMemoryApiRepository } from '../../src/repositories/apiRepository.js';
+import type { DeveloperRepository } from '../../src/repositories/developerRepository.js';
+import type { Api } from '../../src/db/schema.js';
 
 jest.mock('uuid', () => ({ v4: () => 'mock-contract-uuid' }));
 
@@ -164,8 +168,6 @@ describe('Envelope Contract: All API Responses', () => {
 });
 
 describe('Envelope Contract: Paginated & Data Responses', () => {
-  const { InMemoryUsageEventsRepository } = require('../../src/repositories/usageEventsRepository.js');
-  const { InMemoryApiRepository } = require('../../src/repositories/apiRepository.js');
 
   const seedRepository = () =>
     new InMemoryUsageEventsRepository([
@@ -189,7 +191,7 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
       },
     ]);
 
-  const sampleApis = [
+  const sampleApis: Api[] = [
     {
       id: 101,
       developer_id: 11,
@@ -205,7 +207,7 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
     },
   ];
 
-  const developerRepository = {
+  const developerRepository: DeveloperRepository = {
     async findByUserId(userId: string) {
       if (userId === 'dev-1') {
         return {
@@ -235,8 +237,16 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
         updated_at: new Date(),
       };
     },
-    async upsertProfile(userId: string, data: unknown) {
-      return { id: 1, user_id: userId, ...(typeof data === 'object' && data !== null ? data : {}), updated_at: new Date() };
+    async upsertProfile(userId, data) {
+      const existing = await this.findByUserId(userId) ?? await this.getOrCreateByUserId(userId);
+      return {
+        ...existing,
+        name: data.name ?? existing.name,
+        website: data.website ?? existing.website,
+        description: data.description ?? existing.description,
+        category: data.category ?? existing.category,
+        updated_at: new Date(),
+      };
     },
   };
 

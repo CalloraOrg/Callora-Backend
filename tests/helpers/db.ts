@@ -1,4 +1,5 @@
 import { newDb, DataType } from 'pg-mem';
+import type { Pool } from 'pg';
 
 export function createTestDb() {
   const db = newDb();
@@ -13,6 +14,18 @@ export function createTestDb() {
       return `00000000-0000-4000-a000-${String(counter).padStart(12, '0')}`;
     },
   });
+
+  // pg-mem lacks to_char, and the idempotency lease SQL needs an explicit NOW() clock.
+  db.public.registerFunction({
+    name: 'to_char',
+    args: [DataType.timestamp, DataType.text],
+    returns: DataType.text,
+    implementation: (value: Date) => value.toISOString().replace('T', ' ').replace('Z', '000'),
+  });
+  db.getSchema('pg_catalog').registerFunction(
+    { name: 'now', args: [], returns: DataType.timestamptz, impure: true, implementation: () => new Date() },
+    true,
+  );
 
   db.public.none(`
     CREATE TABLE IF NOT EXISTS users (
@@ -44,14 +57,21 @@ export function createTestDb() {
     );
 
     CREATE TABLE IF NOT EXISTS idempotency_store (
-      idempotency_key VARCHAR(255) PRIMARY KEY,
+      scope VARCHAR(255) NOT NULL DEFAULT 'anonymous',
+      idempotency_key VARCHAR(255) NOT NULL,
       request_hash VARCHAR(64) NOT NULL,
       status VARCHAR(50) NOT NULL,
       response_status INTEGER,
       response_body TEXT,
+      response_headers JSONB,
       expires_at TIMESTAMP NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      lease_expires_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
+
+    -- Scoped uniqueness: the same key may be used by different principals.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_idempotency_store_scope_key
+      ON idempotency_store (scope, idempotency_key);
   `);
 
   const { Pool } = db.adapters.createPg();
@@ -84,4 +104,30 @@ export async function resetTestDb(pool: any) {
     console.error('Failed to reset test database:', error);
     throw error;
   }
+}
+
+/**
+ * Creates usage_events with the columns the billing write and read paths use:
+ * migration 001 base columns, developer_id (0011), and the deduction lifecycle
+ * columns (0026_usage_events_deduction_status).
+ */
+export async function createUsageEventsTable(pool: Pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id BIGSERIAL PRIMARY KEY,
+      developer_id VARCHAR(255) NOT NULL DEFAULT '',
+      user_id VARCHAR(255) NOT NULL,
+      api_id VARCHAR(255) NOT NULL,
+      endpoint_id VARCHAR(255) NOT NULL,
+      api_key_id VARCHAR(255) NOT NULL,
+      amount_usdc NUMERIC(20, 0) NOT NULL CHECK (amount_usdc > 0),
+      request_id VARCHAR(255) NOT NULL UNIQUE,
+      stellar_tx_hash VARCHAR(64),
+      deduction_status VARCHAR(16) NOT NULL DEFAULT 'pending'
+        CHECK (deduction_status IN ('pending', 'confirmed', 'voided')),
+      resolved_at TIMESTAMP,
+      resolution_reason TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
 }

@@ -34,6 +34,7 @@ import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
+import { logger } from "../logger.js";
 import {
   parseUsdcToContractUnits,
   formatContractUnitsToUsdc,
@@ -312,8 +313,9 @@ async function runPhase1(
     `SELECT id, stellar_tx_hash, deduction_status
        FROM usage_events
       WHERE request_id = $1
+        AND user_id = $2
         FOR UPDATE`,
-    [request.requestId],
+    [request.requestId, request.userId],
   );
 
   if (existingEvent.rows.length > 0) {
@@ -428,6 +430,7 @@ async function runPhase3Bulk(
 async function getUsageEventsByRequestIds(
   pool: Pool,
   requestIds: string[],
+  userId: string,
 ): Promise<Map<string, ExistingUsageEventRow>> {
   if (requestIds.length === 0) {
     return new Map<string, ExistingUsageEventRow>();
@@ -436,8 +439,9 @@ async function getUsageEventsByRequestIds(
   const result = await pool.query<ExistingUsageEventRow>(
     `SELECT request_id, id, stellar_tx_hash, deduction_status
        FROM usage_events
-      WHERE request_id = ANY($1::text[])`,
-    [requestIds],
+      WHERE request_id = ANY($1::text[])
+        AND user_id = $2`,
+    [requestIds, userId],
   );
 
   return new Map<string, ExistingUsageEventRow>(
@@ -452,13 +456,15 @@ async function runPhase1Bulk(
 ): Promise<BulkPhase1Result> {
   await client.query("BEGIN");
 
+  // Batches are single-account: the route maps every item to the authenticated user.
   const requestIds = requests.map((request) => request.requestId);
   const existingEvents = await client.query<ExistingUsageEventRow>(
     `SELECT request_id, id, stellar_tx_hash, deduction_status
        FROM usage_events
       WHERE request_id = ANY($1::text[])
+        AND user_id = $2
         FOR UPDATE`,
-    [requestIds],
+    [requestIds, requests[0].userId],
   );
 
   const rowsByRequestId = new Map<string, ExistingUsageEventRow>(
@@ -619,7 +625,7 @@ export class BillingService {
     }
 
     // --- Idempotency precheck: return early if request has already been processed ---
-    const existing = await this.getByRequestId(request.requestId);
+    const existing = await this.getByRequestId(request.requestId, request.userId);
     if (existing && existing.deductionStatus !== "voided") {
       return {
         ...existing,
@@ -682,8 +688,10 @@ export class BillingService {
           stellar_tx_hash: string | null;
           deduction_status: string | null;
         }>(
-          `SELECT id, stellar_tx_hash, deduction_status FROM usage_events WHERE request_id = $1`,
-          [request.requestId],
+          `SELECT id, stellar_tx_hash, deduction_status
+             FROM usage_events
+            WHERE request_id = $1 AND user_id = $2`,
+          [request.requestId, request.userId],
         );
         if (existing.rows.length > 0) {
           const status =
@@ -700,6 +708,16 @@ export class BillingService {
             deductionStatus: status,
           };
         }
+        logger.warn(
+          `[BillingService] request_id already used by another account: ${normalizeErrorMessage(error)}`,
+        );
+        return {
+          success: false,
+          usageEventId: "",
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: false,
+        };
       }
 
       return {
@@ -851,6 +869,7 @@ export class BillingService {
     const existingRows = await getUsageEventsByRequestIds(
       this.pool,
       requestIds,
+      requests[0].userId,
     );
 
     let totalNewAmount = 0n;
@@ -913,7 +932,20 @@ export class BillingService {
         const recoveredRows = await getUsageEventsByRequestIds(
           this.pool,
           requestIds,
+          requests[0].userId,
         );
+        if (requests.some((request) => !recoveredRows.has(request.requestId))) {
+          logger.warn(
+            `[BillingService] Bulk request_id owned by another account: ${normalizeErrorMessage(error)}`,
+          );
+          return {
+            success: false,
+            results: [],
+            entryCount: requests.length,
+            deductedCount: 0,
+            totalDeductedAmountUsdc: "0",
+          };
+        }
         return {
           success: true,
           results: requests.map((request) => {
@@ -1097,7 +1129,11 @@ export class BillingService {
     };
   }
 
-  async getByRequestId(requestId: string): Promise<BillingDeductResult | null> {
+  // Owner-scoped: another account's request reads as missing.
+  async getByRequestId(
+    requestId: string,
+    userId: string,
+  ): Promise<BillingDeductResult | null> {
     const result = await this.pool.query<{
       id: string;
       stellar_tx_hash: string | null;
@@ -1105,8 +1141,9 @@ export class BillingService {
     }>(
       `SELECT id, stellar_tx_hash, deduction_status
          FROM usage_events
-        WHERE request_id = $1`,
-      [requestId],
+        WHERE request_id = $1
+          AND user_id = $2`,
+      [requestId, userId],
     );
 
     if (result.rows.length === 0) return null;

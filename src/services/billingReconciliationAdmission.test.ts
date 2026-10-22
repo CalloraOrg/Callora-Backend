@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, jest } from '@jest/globals'
 import { BillingConflictError, InMemoryBillingAdmissionStore, admitBillingEvent, providerEventFingerprint } from './billingReconciliationAdmission.js'
 
 const base = (overrides: Record<string, unknown> = {}) => ({
@@ -24,7 +24,7 @@ describe('billing reconciliation admission', () => {
     expect(store.getBalance('dev-1')).toBe(1250)
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['amount', { amountMinor: 1251 }],
     ['invoice', { invoiceId: 'invoice-2' }],
     ['developer', { developerId: 'dev-2' }],
@@ -55,7 +55,7 @@ describe('billing reconciliation admission', () => {
     expect(store.getRecord('tenant-b', 'evt-001')).toBeDefined()
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['empty tenant', { tenantId: '' }],
     ['empty event id', { providerEventId: '' }],
     ['empty invoice', { invoiceId: ' ' }],
@@ -72,8 +72,8 @@ describe('billing reconciliation admission', () => {
 
   it('rolls back both ledger and reconciliation record when insert fails', async () => {
     const store = new InMemoryBillingAdmissionStore()
-    const failing = { ...store, insertReconciliation: async () => { throw new Error('write failed') } } as any
-    await expect(admitBillingEvent(failing, base())).rejects.toThrow('write failed')
+    jest.spyOn(store, 'insertReconciliation').mockRejectedValueOnce(new Error('write failed'))
+    await expect(admitBillingEvent(store, base())).rejects.toThrow('write failed')
     expect(store.getBalance('dev-1')).toBe(0)
     expect(store.getRecord('tenant-a', 'evt-001')).toBeUndefined()
   })
@@ -109,7 +109,7 @@ describe('billing reconciliation admission', () => {
     expect(store.getBalance('dev-1')).toBe(30)
   })
 
-  it('reports identity mismatch when a same fingerprint has changed identity', async () => {
+  it('rejects a changed invoice under the original provider event key', async () => {
     const store = new InMemoryBillingAdmissionStore()
     await admitBillingEvent(store, base())
     const altered = base({ invoiceId: 'invoice-2', payload: base().payload })

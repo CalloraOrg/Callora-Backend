@@ -48,9 +48,9 @@ export const envSchema = z
       ),
 
     // Database pool
-    DB2_POOL_MAX: z.coerce.number().default(10),
-    DB_IDlE_TIMEOUT_MS: z.coerce.number().default(30_000),
-    DB2_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
+    DB_POOL_MAX: z.coerce.number().default(10),
+    DB_IDLE_TIMEOUT_MS: z.coerce.number().default(30_000),
+    DB_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
 
     /**
      * REPLICA_URLS — optional comma-separated list of PostgreSQL read-replica
@@ -100,7 +100,7 @@ export const envSchema = z
     // Database (individual fields for health checks)
     DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().default(5432),
-    DB2_USER: z.string().default("postgres"),
+    DB_USER: z.string().default("postgres"),
     DB_PASSWORD: z.string().default("postgres"),
     DB_NAME: z.string().default("callora"),
 
@@ -222,8 +222,8 @@ export const envSchema = z
       .int()
       .positive()
       .default(10),
-    // Lifetime of a signed quote. After this window the quote is expired and
-    // execution returns 410.
+    // Lifetime of a persisted quote. Expired quotes cannot be consumed;
+    // execution returns 409.
     FEE_ABSTRACTION_QUOTE_TTL_SECONDS: z.coerce
       .number()
       .int()
@@ -302,10 +302,6 @@ export const envSchema = z
     SOROBAN_BILLING_NETWORK: stellarNetworkSchema.default("testnet"),
 
     // Stellar accounts / contracts
-    STELLAR_TESTNET_HORIZON_URL: z.string().url().optional(),
-    STELLAR_MAINNET_HORIZON_URL: z.string().url().optional(),
-    STELLAR_TESTNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_FEE_ACCOUNT_SECRET_KEY: z.string().min(1).optional(),
     STELLAR_FEE_ACCOUNT_PUBLIC_KEY: z.string().min(1).optional(),
     SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
@@ -370,6 +366,10 @@ export const envSchema = z
     STELLAR_MAINNET_VAULT_CONTRACT_ID: contractId.optional(),
     STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID: contractId.optional(),
     STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID: contractId.optional(),
+    STELLAR_TESTNET_REVENUE_POOL_CONTRACT_ID: contractId.optional(),
+    STELLAR_MAINNET_REVENUE_POOL_CONTRACT_ID: contractId.optional(),
+    STELLAR_TESTNET_USDC_CONTRACT_ID: contractId.optional(),
+    STELLAR_MAINNET_USDC_CONTRACT_ID: contractId.optional(),
     VAULT_SNAPSHOT_MAX_AGE_MS: z.coerce.number().int().positive().default(60_000),
 
     STELLAR_BASE_FEE: z.coerce.number().int().positive().default(100),
@@ -506,6 +506,7 @@ export const envSchema = z
       .int()
       .positive()
       .default(60_000),
+    IDEMPOTENCY_MAX_BODY_BYTES: z.coerce.number().int().positive().default(256 * 1024),
 
     // Slow query alerting
     SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),

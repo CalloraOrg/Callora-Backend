@@ -16,7 +16,7 @@ function resolveBillingRpcUrl(): string {
   const explicit = env.SOROBAN_BILLING_RPC_URL ?? env.SOROBAN_RPC_URL;
   if (explicit) return explicit;
 
-  const activeRpcUrl = config.stellar.rpcUrl;
+  const activeRpcUrl = config.stellar.sorobanRpcUrl;
   if (activeRpcUrl) return activeRpcUrl;
 
   if (config.nodeEnv === "development" || config.nodeEnv === "test") {
@@ -64,7 +64,7 @@ export function createSorobanBillingService(
       networkPassphrase: resolveBillingNetworkPassphrase(),
       requestTimeoutMs: env.SOROBAN_BILLING_RPC_TIMEOUT_MS,
       balanceFunctionName: env.SOROBAN_BILLING_BALANCE_FN,
-      deductFunctionName: env.SOROBAN_BILLING_DETUCT_FN,
+      deductFunctionName: env.SOROBAN_BILLING_DEDUCT_FN,
     }),
   );
   return processBillingService;

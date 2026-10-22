@@ -14,6 +14,7 @@
 
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import { asyncHandler } from '../../utils/asyncHandler.js';
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
@@ -232,7 +233,7 @@ export function createExportsHealthRouter(
    * @returns 200 when overall status is `ok` or `degraded`.
    * @returns 503 when overall status is `down`.
    */
-  router.get('/', async (req: Request, res: Response) => {
+  router.get('/', asyncHandler(async (req: Request, res: Response) => {
     // ------------------------------------------------------------------
     // 1. Resolve correlation ID
     // ------------------------------------------------------------------
@@ -289,7 +290,7 @@ export function createExportsHealthRouter(
     });
 
     res.status(httpStatus).json(body);
-  });
+  }));
 
   return router;
 }

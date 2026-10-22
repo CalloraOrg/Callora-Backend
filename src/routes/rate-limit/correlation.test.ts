@@ -11,12 +11,13 @@
 
 import express from 'express';
 import request from 'supertest';
-import { createRateLimitRouter, type RateLimitRouterDeps } from '../rate-limit.js';
+import { createRateLimitRouter } from '../rate-limit.js';
+import type { RateLimitHealthDeps } from './health.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 import { InMemoryRestRateLimiter } from '../../middleware/restRateLimit.js';
 
-function buildApp(deps: RateLimitRouterDeps = {}) {
+function buildApp(deps: Partial<RateLimitHealthDeps> = {}) {
   const app = express();
   app.use(requestIdMiddleware);
   app.use(

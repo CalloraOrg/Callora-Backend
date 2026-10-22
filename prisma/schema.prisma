@@ -13,7 +13,6 @@ model User {
   created_at      DateTime @default(now())
 
   invoices Invoice[]
-  feeAbstractionQuotes FeeAbstractionQuote[]
 
   @@map("users")
 }
@@ -58,24 +57,20 @@ model InvoiceLineItem {
 }
 
 model FeeAbstractionQuote {
-  id                     String   @id @default(uuid()) @db.Uuid
-  user_id               String   @db.Uuid
-  inner_tx_hash         String   @unique
-  fee_stroops           BigInt
-  app_token_amount      BigInt
-  app_token_asset       String
-  treasury_address       String
-  status                 String   @default("pending") // pending | consumed | expired
-  expires_at             DateTime
-  app_token_payment_tx_id String?  @unique
-  consumed_at            DateTime?
-  created_at             DateTime @default(now())
-  updated_at             DateTime @default(now()) @updatedAt
-
-  user User @relation(fields: [user_id], references: [id])
+  id                      String    @id @default(uuid()) @db.Uuid
+  user_id                 String    @db.Uuid
+  inner_tx_hash           String
+  fee_stroops             BigInt
+  app_token_amount        BigInt
+  network                 String
+  status                  String    @default("pending") // pending | consumed | expired
+  // Partial unique index in SQL (WHERE NOT NULL); a plain unique index is equivalent since NULLs are distinct.
+  app_token_payment_tx_id String?   @unique(map: "unique_fee_abstraction_payment_tx_id")
+  expires_at              DateTime  @db.Timestamptz(6)
+  created_at              DateTime  @default(now()) @db.Timestamptz(6)
+  consumed_at             DateTime? @db.Timestamptz(6)
 
   @@index([user_id])
-  @@index([status])
-  @@index([expires_at])
+  @@index([inner_tx_hash])
   @@map("fee_abstraction_quotes")
 }

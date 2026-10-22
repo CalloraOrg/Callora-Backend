@@ -313,7 +313,7 @@ error_codes:
 
   - code: IDEMPOTENCY_RESPONSE_TOO_LARGE
     section: Idempotency
-    description: The original response exceeded the replay limit; fetch the resource by identifier.
+    description: Legacy hash-only idempotency record whose response was never stored; the operation is not re-run. Fetch the resource by identifier. New oversized responses are not cached.
 
   - code: IDEMPOTENCY_IN_PROGRESS
     section: Idempotency

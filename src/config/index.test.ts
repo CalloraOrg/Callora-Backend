@@ -157,21 +157,44 @@ describe('config validation', () => {
     });
   });
 
-  it('should call process.exit(1) when required env vars are missing', async () => {
-    // Remove fields that have no defaults — env.ts will fail to parse and call process.exit(1)
+  it('fails closed at import when required env vars are missing', async () => {
     delete process.env.JWT_SECRET;
     delete process.env.ADMIN_API_KEY;
     delete process.env.METRICS_API_KEY;
 
-    const exitMock = jest
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never);
-
-    await jest.isolateModulesAsync(async () => {
-      await import('./env.js');
+    // Dynamic import: env.ts parses process.env at module load, so each import must run after the env mutation above.
+    const error = await import('./env.js').then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: ['JWT_SECRET'] }),
+        expect.objectContaining({ path: ['ADMIN_API_KEY'] }),
+        expect.objectContaining({ path: ['METRICS_API_KEY'] }),
+      ]),
     });
+  });
 
-    expect(exitMock).toHaveBeenCalledWith(1);
-    exitMock.mockRestore();
+  it('rejects a missing or blank production upstream allowlist after a valid import', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.ADMIN_API_KEY = 'test-admin-key';
+    process.env.METRICS_API_KEY = 'test-metrics-key';
+    process.env.SOROBAN_BILLING_RPC_URL = 'https://soroban.example.com';
+    process.env.UPSTREAM_URL = 'https://api.example.com';
+    process.env.UPSTREAM_HOST_ALLOWLIST = 'api.example.com';
+    // Dynamic import: each module load must observe the env state set in this test.
+    await expect(import('./index.js')).resolves.toBeDefined();
+
+    for (const allowlist of [undefined, '', ' \t ']) {
+      jest.resetModules();
+      if (allowlist === undefined) {
+        delete process.env.UPSTREAM_HOST_ALLOWLIST;
+      } else {
+        process.env.UPSTREAM_HOST_ALLOWLIST = allowlist;
+      }
+      await expect(import('./index.js')).rejects.toThrow();
+    }
   });
 });

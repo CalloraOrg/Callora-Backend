@@ -15,4 +15,8 @@ describe('idempotency lease configuration', () => {
   it.each(['0', '-1', '1.5', 'invalid'])('rejects invalid lease %s', (value) => {
     expect(envSchema.safeParse({ ...required, IDEMPOTENCY_LEASE_SECONDS: value }).success).toBe(false);
   });
+  it('rejects non-positive and fractional configured cached response body caps', () => {
+    expect(envSchema.safeParse({ ...required, IDEMPOTENCY_MAX_BODY_BYTES: '0' }).success).toBe(false);
+    expect(envSchema.safeParse({ ...required, IDEMPOTENCY_MAX_BODY_BYTES: '1.5' }).success).toBe(false);
+  });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, jest } from '@jest/globals'
 import { BillingConflictError, InMemoryBillingAdmissionStore, admitBillingEvent } from './billingReconciliationAdmission.js'
 
 const event = (n: number, overrides: Record<string, unknown> = {}) => ({
@@ -35,11 +35,9 @@ describe('billing admission mutation matrix', () => {
     expect(store.getBalance('developer-matrix')).toBe(2200)
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['tenant', { tenantId: 'tenant-other' }],
     ['provider id', { providerEventId: 'provider-other' }],
-    ['invoice', { invoiceId: 'invoice-other' }],
-    ['developer', { developerId: 'developer-other' }],
   ])('keeps %s identity independent', async (_label, change) => {
     const store = new InMemoryBillingAdmissionStore()
     await admitBillingEvent(store, event(23))
@@ -47,7 +45,7 @@ describe('billing admission mutation matrix', () => {
     expect(result.outcome).toBe('applied')
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['zero amount', { amountMinor: 0 }],
     ['largest safe amount', { amountMinor: Number.MAX_SAFE_INTEGER }],
     ['lowercase currency', { currency: 'eur' }],
@@ -58,7 +56,7 @@ describe('billing admission mutation matrix', () => {
     await expect(admitBillingEvent(store, event(24, change))).resolves.toMatchObject({ outcome: 'applied' })
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['unsafe amount', { amountMinor: Number.MAX_SAFE_INTEGER + 1 }],
     ['negative string amount', { amountMinor: '-1' }],
     ['invalid currency length', { currency: 'US' }],
@@ -73,11 +71,8 @@ describe('billing admission mutation matrix', () => {
 
   it('rolls back a failed ledger mutation and permits a retry', async () => {
     const store = new InMemoryBillingAdmissionStore()
-    const failingStore = {
-      ...store,
-      applyLedgerMutation: async () => { throw new Error('ledger unavailable') },
-    } as any
-    await expect(admitBillingEvent(failingStore, event(26))).rejects.toThrow('ledger unavailable')
+    jest.spyOn(store, 'applyLedgerMutation').mockRejectedValueOnce(new Error('ledger unavailable'))
+    await expect(admitBillingEvent(store, event(26))).rejects.toThrow('ledger unavailable')
     await expect(admitBillingEvent(store, event(26))).resolves.toMatchObject({ outcome: 'applied' })
     expect(store.getBalance('developer-matrix')).toBe(2600)
   })

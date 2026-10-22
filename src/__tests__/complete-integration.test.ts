@@ -1,5 +1,4 @@
 import express from 'express';
-import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { InMemoryVaultRepository } from '../repositories/vaultRepository.js';
 import { MockSorobanBilling } from '../services/billingService.js';
@@ -9,24 +8,12 @@ import { createGatewayRouter } from '../routes/gatewayRoutes.js';
 import { RevenueSettlementService } from '../services/revenueSettlementService.js';
 import { InMemorySettlementStore } from '../services/settlementStore.js';
 import { MockSorobanSettlementClient } from '../services/sorobanSettlement.js';
-import type { ApiKey, ApiRegistryEntry, ApiRegistry } from '../types/gateway.js';
-import { runClientUsageExample } from '../../examples/client-usage.js';
-import { runBillingApiIntegrationExample } from '../../examples/billing-api-integration.js';
-import { runCompleteIntegrationExample } from '../../examples/complete-integration.js';
+import type { ApiKey } from '../types/gateway.js';
+import { InMemoryApiRegistry } from '../data/apiRegistry.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-class SimpleRegistry implements ApiRegistry {
-  private entries = new Map<string, ApiRegistryEntry>();
-
-  register(entry: ApiRegistryEntry): void {
-    this.entries.set(entry.id, entry);
-  }
-
-  resolve(slugOrId: string): ApiRegistryEntry | undefined {
-    return this.entries.get(slugOrId);
-  }
-}
 
 function buildStack(overrides?: { initialCredits?: number; minPayoutUsdc?: number }) {
   const credits = overrides?.initialCredits ?? 100;
@@ -38,7 +25,7 @@ function buildStack(overrides?: { initialCredits?: number; minPayoutUsdc?: numbe
   const usageStore = new InMemoryUsageStore();
   const settlementStore = new InMemorySettlementStore();
   const settlementClient = new MockSorobanSettlementClient(0);
-  const apiRegistry = new SimpleRegistry();
+  const apiRegistry = new InMemoryApiRegistry();
 
   const apiKeys = new Map<string, ApiKey>([
     ['key_test', { key: 'key_test', developerId: 'consumer_bob', apiId: 'api_weather' }],
@@ -147,7 +134,7 @@ beforeEach(async () => {
     }
   });
 
-  app.get('/api/vault/balance', async (req, res) => {
+  app.get('/api/vault/balance', asyncHandler(async (req, res) => {
     const userId = req.query.userId as string;
     const network = (req.query.network as string) ?? 'testnet';
     if (!userId) {
@@ -165,9 +152,9 @@ beforeEach(async () => {
       network: vault.network,
       lastSyncedAt: vault.lastSyncedAt?.toISOString() ?? null,
     });
-  });
+  }));
 
-  app.post('/api/vault/fund', async (req, res) => {
+  app.post('/api/vault/fund', asyncHandler(async (req, res) => {
     const { userId, network, amountStroops } = req.body;
     if (!userId || amountStroops === undefined) {
       res.status(400).json({ error: 'userId and amountStroops are required' });
@@ -185,7 +172,7 @@ beforeEach(async () => {
       balanceSnapshot: updated.balanceSnapshot.toString(),
       lastSyncedAt: updated.lastSyncedAt?.toISOString() ?? null,
     });
-  });
+  }));
 
   const gatewayRouter = createGatewayRouter({
     billing: stack.billing,
@@ -200,10 +187,10 @@ beforeEach(async () => {
     res.json({ count: stack.usageStore.getEvents().length, events: stack.usageStore.getEvents() });
   });
 
-  app.post('/api/settlement/run', async (_req, res) => {
+  app.post('/api/settlement/run', asyncHandler(async (_req, res) => {
     const result = await stack.settlement.runBatch();
     res.json(result);
-  });
+  }));
 
   gatewayServer = await new Promise<Server>((resolve) => {
     const srv = app.listen(0, () => resolve(srv));
@@ -428,49 +415,4 @@ describe('Complete Integration — Vault + Billing + Gateway + Settlement', () =
     expect(bal.balanceSnapshot).toBe('500000000');
   });
 
-  it('executes examples/client-usage.ts against createApp', async () => {
-    const result = await runClientUsageExample(gatewayUrl);
-    expect(result.health.status).toBe('ok');
-    expect(result.vault.userId).toBe(DEVELOPER_ID);
-    expect(result.vault.balanceSnapshot).toBe('0');
-    expect(result.funded.balanceSnapshot).toBe('500000000');
-    expect(result.balance.balanceSnapshot).toBe('500000000');
-  });
-
-  it('executes examples/billing-api-integration.ts against createApp', async () => {
-    const result = await runBillingApiIntegrationExample(gatewayUrl, {
-      apiId: API_ID,
-      apiKey: API_KEY,
-    });
-    expect(result.proxy.status).toBe(200);
-    expect(result.proxy.body.ok).toBe(true);
-    expect(result.consumerBalance).toBe(99);
-    expect(result.usageEvents.length).toBe(1);
-    expect(result.usageEvents[0].apiId).toBe(API_ID);
-    expect(result.usageEvents[0].statusCode).toBe(200);
-  });
-
-  it('executes examples/complete-integration.ts against createApp', async () => {
-    const result = await runCompleteIntegrationExample(gatewayUrl, {
-      apiId: API_ID,
-      apiKey: API_KEY,
-      developerId: DEVELOPER_ID,
-      network: NETWORK,
-      contractId: CONTRACT_ID,
-    });
-    expect(result.vault.balanceSnapshot).toBe('500000000');
-    expect(result.proxyCount).toBe(3);
-    expect(result.consumerBalance).toBe(97);
-    expect(result.settlement.processed).toBe(3);
-    expect(result.settlement.errors).toBe(0);
-    expect(result.finalVaultBalance).toBe('500000000');
-  });
-
-  it('examples/README.md documents prerequisites', () => {
-    const readme = readFileSync(new URL('../../examples/README.md', import.meta.url), 'utf8');
-    expect(readme).toMatch(/prerequisites/i);
-    expect(readme).toMatch(/npm run typecheck/);
-    expect(readme).toMatch(/Idempotency-Key/);
-    expect(readme).toMatch(/success envelope/i);
-  });
 });

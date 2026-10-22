@@ -67,12 +67,13 @@ Configuration is validated with Zod at startup (`src/config/env.ts`); the server
 | Variable | Required | Description |
 | --- | --- | --- |
 | `PORT` | no (3000) | HTTP port |
-| `NODE_ENV` | no | `development` \| `production` \| `test`. Production additionally requires `SOROBAN_BILLING_CONTRACT_ID`, `UPSTREAM_HOST_ALLOWLIST` |
+| `NODE_ENV` | no | `development` \| `production` \| `test`. Production rejects proxy upstreams outside the explicitly configured host allowlist |
 | `DATABASE_URL` | yes | PostgreSQL connection string (metering, billing, audit) |
 | `JWT_SECRET` | yes | Secret for access/refresh tokens |
 | `ADMIN_API_KEY` | yes | Key for `/api/admin/*` (`x-admin-api-key` header) |
 | `METRICS_API_KEY` | yes | Key for `/api/metrics` |
 | `UPSTREAM_URL`, `UPSTREAM_HOST_ALLOWLIST` | prod | Default upstream and allowed upstream hosts for the proxy (SSRF guard) |
+| `SOROBAN_BILLING_CONTRACT_ID` | for billing | Billing contract; falls back to the selected network's `STELLAR_*_VAULT_CONTRACT_ID`. Billing is unavailable when neither is configured |
 | `CORS_ALLOWED_ORIGINS` | no | Comma separated browser origins |
 | `DEMO_MODE` | no | `true` = ephemeral SQLite + seeded catalog (see below) |
 | `SQLITE_PATH` | no | SQLite file path (default `./database.db`; `/tmp/callora.db` on Vercel) |

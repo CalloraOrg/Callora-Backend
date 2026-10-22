@@ -45,6 +45,8 @@ const FIXED_UPDATED_AT = '2026-07-28T01:00:00.000Z';
  * non-deterministic data.
  */
 class MockTenantRepository implements TenantRepository {
+  list = jest.fn(async (_actorId: string): Promise<TenantRecord[]> => []);
+
   create = jest.fn(
     async (input: CreateTenantInput, actorId: string): Promise<TenantRecord> => ({
       id: 'ten_fixture_001',

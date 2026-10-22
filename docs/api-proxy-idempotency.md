@@ -60,7 +60,7 @@ Idempotency records are retained for **24 hours** by default. This means:
 
 **HTTP 2xx** (status from upstream)
 
-The request is forwarded to the upstream service. The response (status, headers, body) is cached for the Idempotency-Key.
+The request is forwarded to the upstream service. Cacheable responses (status, body and allowlisted headers) are stored for the Idempotency-Key; transient outcomes are not.
 
 **Header in response**:
 - No special header is added on first request; the gateway behaves transparently.
@@ -296,15 +296,23 @@ cannot be undone by this mechanism; upstream operations still need their own
 idempotency when retried after a crash or disconnect.
 
 Responses complete on `finish`, including empty 204s, `sendStatus`, `end(chunk)`
-and streams. Non-5xx status caching is unchanged. Replays preserve status, body
-bytes, content type and content encoding; other upstream headers are not stored.
-5xx and failed saves release the lease (with logged errors on persistence
-failure); an unavailable database may delay recovery until lease expiry.
+and streams. Only deterministic outcomes are stored: 2xx and 400, 401, 403, 404,
+409, 410 and 422, per the [billing response cache policy](billing-idempotency.md#http-response-cache-policy).
+Replays preserve status, body bytes, and only `content-type`, `content-encoding`,
+`location`, `etag`, `retry-after` and `x-request-id`; encoding preserves the captured
+wire representation, while `set-cookie` and unrelated upstream headers are never stored.
+Any other outcome, including 5xx, 408, 425, 429, reconciliation and in-progress
+responses, deletes the started record so the next retry is forwarded upstream.
+Failed saves also release the lease (with logged errors on persistence failure);
+an unavailable database may delay recovery until lease expiry.
 
-Only responses up to **256 KiB** are buffered for replay. Larger responses store
-a SHA-256 hash and byte count. Retrying returns **409
-`IDEMPOTENCY_RESPONSE_TOO_LARGE`** with those details and an instruction to fetch
-the resource by identifier, rather than execute the operation again. This
-response includes `Idempotent-Replayed: true`. See
-[billing idempotency](billing-idempotency.md#http-idempotency-leases-and-response-replay)
+Bodies above **256 KiB** (`IDEMPOTENCY_MAX_BODY_BYTES`) are not stored: the record is
+deleted, a warning with the route and size is logged, and a retry is forwarded upstream
+again. Use upstream operations that are safe to repeat for responses that may exceed the
+cap. See [billing idempotency](billing-idempotency.md#http-idempotency-leases-and-response-replay)
 for migration and deployment requirements.
+
+Compressed JSON (`gzip`, `deflate`, `br`) is decoded under the same byte budget
+for transient-code policy checks. The original encoded bytes and encoding are
+replayed unchanged when eligible; a decoding failure or decoded-size overflow
+releases the key rather than caching an uninspectable response.
