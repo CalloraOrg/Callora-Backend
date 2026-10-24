@@ -41,7 +41,7 @@ Both routes live under `/api/admin` and require admin credentials — an `x-admi
 
 ### `GET /api/admin/keys/concurrency`
 
-Snapshot of every key with at least one request in flight. Keys sitting at zero are omitted.
+Snapshot of every key with at least one request in flight. Keys sitting at zero are omitted. When no key limiter is registered in the concurrency registry (`gateway.key`), the endpoint returns `registered: false`.
 
 ```json
 {
@@ -49,6 +49,16 @@ Snapshot of every key with at least one request in flight. Keys sitting at zero 
     "keyCounts": { "key_abc": 2, "key_def": 1 },
     "totalActive": 3,
     "maxConcurrencyPerKey": 50,
+    "campaign": "GrantFox FWC26"
+  }
+}
+```
+
+When no key limiter is registered:
+```json
+{
+  "data": {
+    "registered": false,
     "campaign": "GrantFox FWC26"
   }
 }

@@ -12,6 +12,8 @@ import request from 'supertest';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { DeveloperSemaphore } from '../../utils/developerSemaphore.js';
 import { createAdminDevMetricsRouter } from './metrics.js';
+import { concurrencyRegistry } from '../../services/concurrencyRegistry.js';
+import { register } from '../../metrics.js';
 
 const ADMIN_KEY = 'test-admin-key';
 
@@ -493,5 +495,112 @@ describe('DeveloperSemaphore — new helper methods', () => {
     const sem = new DeveloperSemaphore(7, 1000);
     expect(sem.maxConcurrency).toBe(7);
     sem.clear();
+  });
+
+  it('getTotalQueuedCount and getQueuedCount track queued requests correctly', async () => {
+    const sem = new DeveloperSemaphore(1, 1000);
+    expect(sem.getTotalQueuedCount()).toBe(0);
+    expect(sem.getQueuedCount('dev')).toBe(0);
+
+    let releaseFirst: () => void = () => {};
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const p1 = sem.withSlot('dev', () => firstHeld);
+    // Allow p1 to acquire slot
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(sem.getActiveSlotCount('dev')).toBe(1);
+    expect(sem.getQueuedCount('dev')).toBe(0);
+
+    const p2 = sem.withSlot('dev', async () => {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(sem.getQueuedCount('dev')).toBe(1);
+    expect(sem.getTotalQueuedCount()).toBe(1);
+
+    releaseFirst();
+    await Promise.all([p1, p2]);
+
+    expect(sem.getQueuedCount('dev')).toBe(0);
+    expect(sem.getTotalQueuedCount()).toBe(0);
+    sem.clear();
+  });
+});
+
+describe('concurrencyRegistry & Prometheus metrics', () => {
+  afterEach(() => {
+    concurrencyRegistry.clear();
+  });
+
+  it('registers and unregisters limiters, updating prometheus gauges', async () => {
+    const sem = new DeveloperSemaphore(1, 1000);
+    concurrencyRegistry.register('test.limiter', sem, 'developer');
+
+    expect(concurrencyRegistry.has('test.limiter')).toBe(true);
+    expect(concurrencyRegistry.get('test.limiter')?.limiter).toBe(sem);
+
+    let metrics = await register.metrics();
+    expect(metrics).toContain('concurrency_active_slots{limiter="test.limiter"} 0');
+    expect(metrics).toContain('concurrency_queued{limiter="test.limiter"} 0');
+
+    let releaseSlot: () => void = () => {};
+    const slotHeld = new Promise<void>((resolve) => {
+      releaseSlot = resolve;
+    });
+
+    const p1 = sem.withSlot('dev1', () => slotHeld);
+    await new Promise((r) => setTimeout(r, 10));
+
+    metrics = await register.metrics();
+    expect(metrics).toContain('concurrency_active_slots{limiter="test.limiter"} 1');
+    expect(metrics).toContain('concurrency_queued{limiter="test.limiter"} 0');
+
+    const p2 = sem.withSlot('dev1', async () => {});
+    await new Promise((r) => setTimeout(r, 10));
+
+    metrics = await register.metrics();
+    expect(metrics).toContain('concurrency_queued{limiter="test.limiter"} 1');
+
+    releaseSlot();
+    await Promise.all([p1, p2]);
+
+    metrics = await register.metrics();
+    expect(metrics).toContain('concurrency_active_slots{limiter="test.limiter"} 0');
+    expect(metrics).toContain('concurrency_queued{limiter="test.limiter"} 0');
+
+    concurrencyRegistry.unregister('test.limiter');
+    expect(concurrencyRegistry.has('test.limiter')).toBe(false);
+  });
+
+  it('includes registered limiters in /api/admin/metrics/concurrency response', async () => {
+    const sem1 = new DeveloperSemaphore(2, 1000);
+    const sem2 = new DeveloperSemaphore(1, 1000);
+    concurrencyRegistry.register('billing.route', sem1, 'developer');
+    concurrencyRegistry.register('billing.service', sem2, 'developer');
+
+    const app = express();
+    app.use((req, res, next) => {
+      res.locals.adminActor = 'admin-api-key';
+      next();
+    });
+    app.use('/api/admin/metrics', createAdminDevMetricsRouter());
+
+    const res = await request(app).get('/api/admin/metrics/concurrency');
+    expect(res.status).toBe(200);
+    expect(res.body.data.limiters).toBeDefined();
+    expect(res.body.data.limiters['billing.route']).toMatchObject({
+      active: 0,
+      queued: 0,
+      limit: 2,
+      type: 'developer',
+    });
+    expect(res.body.data.limiters['billing.service']).toMatchObject({
+      active: 0,
+      queued: 0,
+      limit: 1,
+      type: 'developer',
+    });
   });
 });

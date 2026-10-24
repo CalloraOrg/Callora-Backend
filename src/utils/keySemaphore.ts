@@ -21,11 +21,24 @@ interface KeyState {
 
 export class KeySemaphore {
   private readonly keys = new Map<string, KeyState>();
+  private onStateChange?: () => void;
 
   constructor(
     private readonly maxConcurrencyPerKey = 1,
     private readonly ttlMs = 300_000,
   ) {}
+
+  setOnStateChange(listener?: () => void): void {
+    this.onStateChange = listener;
+  }
+
+  private notifyStateChange(): void {
+    try {
+      this.onStateChange?.();
+    } catch {
+      // Ignore listener error
+    }
+  }
 
   /**
    * Execute `fn` while holding a concurrency slot for the given API key.
@@ -63,6 +76,20 @@ export class KeySemaphore {
     return total;
   }
 
+  /** Returns the total number of queued/waiting requests across all keys. */
+  getTotalQueuedCount(): number {
+    let total = 0;
+    for (const state of this.keys.values()) {
+      total += state.queue.length;
+    }
+    return total;
+  }
+
+  /** Returns the queue length for a specific key. */
+  getQueuedCount(keyId: string): number {
+    return this.keys.get(keyId)?.queue.length ?? 0;
+  }
+
   /** Returns the active slot count for a specific key, or 0 if not tracked. */
   getActiveSlotCount(keyId: string): number {
     return this.keys.get(keyId)?.activeCount ?? 0;
@@ -87,14 +114,17 @@ export class KeySemaphore {
     if (state.queue.length === 0 && state.activeCount < this.maxConcurrencyPerKey) {
       this.clearEvictionTimer(state);
       state.activeCount += 1;
+      this.notifyStateChange();
       return Promise.resolve(() => this.releaseSlot(keyId));
     }
 
     return new Promise<() => void>((resolve) => {
       state.queue.push((release) => {
         this.clearEvictionTimer(state);
+        this.notifyStateChange();
         resolve(release);
       });
+      this.notifyStateChange();
     });
   }
 
@@ -107,10 +137,12 @@ export class KeySemaphore {
     if (state.queue.length > 0) {
       const next = state.queue.shift()!;
       next(() => this.releaseSlot(keyId));
+      this.notifyStateChange();
       return;
     }
 
     state.activeCount -= 1;
+    this.notifyStateChange();
 
     if (state.activeCount === 0) {
       this.scheduleEviction(keyId, state);

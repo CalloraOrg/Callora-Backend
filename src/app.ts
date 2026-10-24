@@ -94,6 +94,8 @@ import {
 } from "./middleware/restRateLimit.js";
 import type { RestRateLimitOptions } from "./middleware/restRateLimit.js";
 import { createPerDevConcurrencyMiddleware } from "./middleware/perDevConcurrency.js";
+import { DeveloperSemaphore } from "./utils/developerSemaphore.js";
+import { concurrencyRegistry } from "./services/concurrencyRegistry.js";
 import { auditEnrichMiddleware } from "./middleware/auditEnrich.js";
 import { asyncHandler } from "./utils/asyncHandler.js";
 import { createRouteBodyLimitMiddleware } from "./middleware/routeBodyLimit.js";
@@ -180,7 +182,13 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     restRateLimitOptions,
     restRateLimiter,
   );
+  const billingRouteSemaphore = new DeveloperSemaphore(
+    config.billingConcurrency.maxPerDeveloper,
+    config.billingConcurrency.semaphoreTtlMs,
+  );
+  concurrencyRegistry.register('billing.route', billingRouteSemaphore, 'developer');
   const perDevConcurrency = createPerDevConcurrencyMiddleware({
+    semaphore: billingRouteSemaphore,
     maxConcurrent: config.billingConcurrency.maxPerDeveloper,
     ttlMs: config.billingConcurrency.semaphoreTtlMs,
   });

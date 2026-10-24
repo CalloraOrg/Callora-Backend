@@ -17,11 +17,24 @@ interface DeveloperState {
 
 export class DeveloperSemaphore {
   private readonly developers = new Map<string, DeveloperState>();
+  private onStateChange?: () => void;
 
   constructor(
     private readonly maxConcurrencyPerDeveloper = 1,
     private readonly ttlMs = 300_000,
   ) {}
+
+  setOnStateChange(listener?: () => void): void {
+    this.onStateChange = listener;
+  }
+
+  private notifyStateChange(): void {
+    try {
+      this.onStateChange?.();
+    } catch {
+      // Ignore listener error
+    }
+  }
 
   async withSlot<T>(developerId: string, fn: () => Promise<T>): Promise<T> {
     const release = await this.acquireSlot(developerId);
@@ -50,6 +63,20 @@ export class DeveloperSemaphore {
     return total;
   }
 
+  /** Returns the total number of queued/waiting requests across all developers. */
+  getTotalQueuedCount(): number {
+    let total = 0;
+    for (const state of this.developers.values()) {
+      total += state.queue.length;
+    }
+    return total;
+  }
+
+  /** Returns the queue length for a specific developer. */
+  getQueuedCount(developerId: string): number {
+    return this.developers.get(developerId)?.queue.length ?? 0;
+  }
+
   /** Returns the active slot count for a specific developer, or 0 if not tracked. */
   getActiveSlotCount(developerId: string): number {
     return this.developers.get(developerId)?.activeCount ?? 0;
@@ -65,6 +92,29 @@ export class DeveloperSemaphore {
     return this.maxConcurrencyPerDeveloper;
   }
 
+  /**
+   * Synchronously attempts to acquire a slot for a developer.
+   * If capacity is available and no requests are queued, increments activeCount
+   * and returns an idempotent release function.
+   * If capacity is not available or a queue exists, returns null.
+   */
+  tryAcquire(developerId: string): (() => void) | null {
+    const state = this.getOrCreateState(developerId);
+    if (state.queue.length === 0 && state.activeCount < this.maxConcurrencyPerDeveloper) {
+      this.clearEvictionTimer(state);
+      state.activeCount += 1;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        this.releaseSlot(developerId);
+      };
+    }
+    return null;
+  }
+
   private acquireSlot(developerId: string): Promise<() => void> {
     const state = this.getOrCreateState(developerId);
 
@@ -73,14 +123,17 @@ export class DeveloperSemaphore {
     if (state.queue.length === 0 && state.activeCount < this.maxConcurrencyPerDeveloper) {
       this.clearEvictionTimer(state);
       state.activeCount += 1;
+      this.notifyStateChange();
       return Promise.resolve(() => this.releaseSlot(developerId));
     }
 
     return new Promise<() => void>((resolve) => {
       state.queue.push((release) => {
         this.clearEvictionTimer(state);
+        this.notifyStateChange();
         resolve(release);
       });
+      this.notifyStateChange();
     });
   }
 
@@ -93,10 +146,12 @@ export class DeveloperSemaphore {
     if (state.queue.length > 0) {
       const next = state.queue.shift()!;
       next(() => this.releaseSlot(developerId));
+      this.notifyStateChange();
       return;
     }
 
     state.activeCount -= 1;
+    this.notifyStateChange();
 
     if (state.activeCount === 0) {
       this.scheduleEviction(developerId, state);

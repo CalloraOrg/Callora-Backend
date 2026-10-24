@@ -6,6 +6,7 @@ import { getClientIp } from '../../../lib/clientIp.js';
 import { logger } from '../../../logger.js';
 import { validate } from '../../../middleware/validate.js';
 import { KeySemaphore, sharedKeySemaphore } from '../../../utils/keySemaphore.js';
+import { concurrencyRegistry } from '../../../services/concurrencyRegistry.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const GRANTFOX_FWC26_CAMPAIGN = 'GrantFox FWC26';
@@ -43,6 +44,17 @@ export function createAdminKeyConcurrencyRouter(
   // GET /concurrency — snapshot of all active key concurrency counts
   router.get('/concurrency', (req, res, next) => {
     try {
+      const isRegistered = deps.keySemaphore ? true : concurrencyRegistry.has('gateway.key');
+      if (!isRegistered) {
+        res.json({
+          data: {
+            registered: false,
+            campaign: GRANTFOX_FWC26_CAMPAIGN,
+          },
+        });
+        return;
+      }
+
       const keyCounts = keySemaphore.getCurrentActiveSlotCounts();
       const totalActive = keySemaphore.getTotalActiveSlotCount();
 
@@ -79,6 +91,17 @@ export function createAdminKeyConcurrencyRouter(
     validate({ params: keyIdParamsSchema }),
     (req, res, next) => {
       try {
+        const isRegistered = deps.keySemaphore ? true : concurrencyRegistry.has('gateway.key');
+        if (!isRegistered) {
+          res.json({
+            data: {
+              registered: false,
+              campaign: GRANTFOX_FWC26_CAMPAIGN,
+            },
+          });
+          return;
+        }
+
         const { keyId } = req.params;
         const activeCount = keySemaphore.getActiveSlotCount(keyId);
         const atLimit = keySemaphore.isAtLimit(keyId);
