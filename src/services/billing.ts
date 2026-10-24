@@ -34,9 +34,14 @@ import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
-import { logger } from "../logger.js";
+import {
+  parseUsdcToContractUnits,
+  formatContractUnitsToUsdc,
+  USDC_7_DECIMAL_FACTOR,
+} from "../lib/usdcUnits.js";
 
-const USDC_7_DECIMAL_FACTOR = 10_000_000n;
+export { parseUsdcToContractUnits, formatContractUnitsToUsdc };
+
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
 
 /**
@@ -138,25 +143,6 @@ export interface BillingServiceOptions {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-export function parseUsdcToContractUnits(amountUsdc: string): bigint {
-  const trimmed = amountUsdc.trim();
-  if (!/^\d+(\.\d{1,7})?$/.test(trimmed)) {
-    throw new Error(
-      "amountUsdc must be a positive decimal with at most 7 fractional digits",
-    );
-  }
-
-  const [wholePart, fractionalPart = ""] = trimmed.split(".");
-  const whole = BigInt(wholePart);
-  const fraction = BigInt((fractionalPart + "0000000").slice(0, 7));
-  const result = whole * USDC_7_DECIMAL_FACTOR + fraction;
-
-  if (result <= 0n) {
-    throw new Error("amountUsdc must be greater than zero");
-  }
-
-  return result;
-}
 
 /**
  * Classifies an error as transient based on type and category, not substring matching.
@@ -229,19 +215,7 @@ export function isTransientSorobanError(error: unknown): boolean {
   return classifyTransientError(error);
 }
 
-export function formatContractUnitsToUsdc(amount: bigint): string {
-  const whole = amount / USDC_7_DECIMAL_FACTOR;
-  const fraction = amount % USDC_7_DECIMAL_FACTOR;
 
-  if (fraction === 0n) {
-    return whole.toString();
-  }
-
-  return `${whole.toString()}.${fraction
-    .toString()
-    .padStart(7, "0")
-    .replace(/0+$/, "")}`;
-}
 
 function buildBulkDeductIdempotencyKey(requestIds: string[]): string {
   return createHash("sha256")
@@ -326,7 +300,7 @@ interface BulkPhase1Result {
 async function runPhase1(
   client: PoolClient,
   request: BillingDeductRequest,
-  _amountInContractUnits: bigint,
+  amountInContractUnits: bigint,
 ): Promise<Phase1Result> {
   await client.query("BEGIN");
   // Resolve the partition key before reserving the globally unique request id.
@@ -426,7 +400,7 @@ async function runPhase1(
       request.endpointId,
       request.apiKeyId,
       developerId,
-      request.amountUsdc,
+      amountInContractUnits.toString(),
       request.requestId,
     ],
   );
@@ -503,6 +477,7 @@ async function getUsageEventsByRequestIds(
 async function runPhase1Bulk(
   client: PoolClient,
   requests: BillingDeductRequest[],
+  amountByRequestId: Map<string, bigint>,
 ): Promise<BulkPhase1Result> {
   await client.query("BEGIN");
 
@@ -559,6 +534,11 @@ async function runPhase1Bulk(
       continue;
     }
 
+    const amountInContractUnits = amountByRequestId.get(request.requestId);
+    if (amountInContractUnits === undefined) {
+      throw new Error(`Missing amount for request ${request.requestId}`);
+    }
+
     const insertResult = await client.query<{ id: string }>(
       `INSERT INTO usage_events
          (id, user_id, api_id, endpoint_id, api_key_id, developer_id, amount_usdc, request_id, created_at, deduction_status)
@@ -571,7 +551,7 @@ async function runPhase1Bulk(
         request.endpointId,
         request.apiKeyId,
         developerId,
-        request.amountUsdc,
+        amountInContractUnits.toString(),
         request.requestId,
       ],
     );
@@ -966,7 +946,7 @@ export class BillingService {
     const client = await this.pool.connect();
     let phase1: BulkPhase1Result;
     try {
-      phase1 = await runPhase1Bulk(client, requests);
+      phase1 = await runPhase1Bulk(client, requests, amountByRequestId);
     } catch (error) {
       try {
         await client.query("ROLLBACK");

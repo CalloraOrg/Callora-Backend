@@ -1,3 +1,4 @@
+-- dialect: postgres
 -- Global idempotency registry for hash-partitioned usage events. PostgreSQL
 -- cannot enforce request_id uniqueness on a partitioned table without the
 -- partition key, so request IDs are reserved here in the same transaction.

@@ -23,7 +23,7 @@ export type DeveloperCategory = (typeof developerCategoryEnum)[number];
 export interface Settlement {
   id: string;
   developerId: string; // the dev receiving the payout
-  amount: number;
+  amount: bigint;      // payout in contract units (1 USDC = 10,000,000)
   /** pending → retryable (tx_failed_too_early) → completed | failed */
   status: 'pending' | 'retryable' | 'completed' | 'failed';
   tx_hash: string | null;
@@ -36,9 +36,9 @@ export interface Settlement {
 }
 
 export interface RevenueSummary {
-  total_earned: number;
-  pending: number;
-  available_to_withdraw: number;
+  total_earned: bigint;
+  pending: bigint;
+  available_to_withdraw: bigint;
 }
 
 export interface DeveloperRevenueResponse {
@@ -61,7 +61,12 @@ export interface UpdateDeveloperProfileInput {
 export interface SettlementStore {
   create(settlement: Settlement): Awaitable<void>;
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Awaitable<void>;
-  scheduleRetry(id: string, retryAfter: string): Awaitable<void>;
+  scheduleRetry(
+    id: string,
+    retryAfter: string,
+    maxRetries?: number,
+    lastError?: string,
+  ): Awaitable<boolean>;
   getDeveloperSettlements(developerId: string): Awaitable<Settlement[]>;
   getPendingSettlements(): Awaitable<Settlement[]>;
   listPending?(): Awaitable<Settlement[]>;

@@ -245,6 +245,333 @@
         }
       }
     },
+    "/api/vault/deposit/prepare": {
+      "post": {
+        "summary": "Prepare an unsigned Stellar/Soroban transaction for depositing USDC into a vault",
+        "operationId": "prepareDepositTransaction",
+        "description": "Builds an unsigned transaction XDR for the vault deposit function. The transaction is simulated via Soroban RPC and assembled with prepareTransaction so it contains sorobanData (footprint, resource fees, auth entries). The caller must sign and submit the returned XDR. Requires authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "amount_usdc"
+                ],
+                "properties": {
+                  "amount_usdc": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d{7}$",
+                    "description": "USDC amount with exactly 7 decimal places (e.g., \"100.0000000\")"
+                  },
+                  "network": {
+                    "type": "string",
+                    "enum": [
+                      "testnet",
+                      "mainnet"
+                    ],
+                    "description": "Stellar network. Defaults to the configured active network."
+                  },
+                  "source_account": {
+                    "type": "string",
+                    "pattern": "^G[A-Z0-9]{55}$",
+                    "description": "Optional custom source account for the transaction (Stellar public key). Defaults to the authenticated user's Stellar address."
+                  }
+                }
+              },
+              "examples": {
+                "basic": {
+                  "summary": "Basic deposit preparation",
+                  "value": {
+                    "amount_usdc": "100.0000000",
+                    "network": "testnet"
+                  }
+                },
+                "withSourceAccount": {
+                  "summary": "Deposit with custom source account",
+                  "value": {
+                    "amount_usdc": "50.0000000",
+                    "network": "testnet",
+                    "source_account": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Unsigned transaction prepared successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "xdr",
+                        "network",
+                        "contractId",
+                        "amount",
+                        "operation",
+                        "metadata"
+                      ],
+                      "properties": {
+                        "xdr": {
+                          "type": "string",
+                          "description": "Base64-encoded unsigned transaction XDR with sorobanData"
+                        },
+                        "network": {
+                          "type": "string",
+                          "enum": [
+                            "testnet",
+                            "mainnet"
+                          ]
+                        },
+                        "contractId": {
+                          "type": "string",
+                          "description": "Vault contract ID"
+                        },
+                        "amount": {
+                          "type": "string",
+                          "pattern": "^\\d+\\.\\d{7}$",
+                          "description": "Deposit amount in USDC"
+                        },
+                        "operation": {
+                          "type": "object",
+                          "required": [
+                            "type",
+                            "function",
+                            "args"
+                          ],
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "invoke_contract"
+                            },
+                            "function": {
+                              "type": "string",
+                              "const": "deposit"
+                            },
+                            "args": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "value"
+                                ],
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "address",
+                                      "i128"
+                                    ]
+                                  },
+                                  "value": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "metadata": {
+                          "type": "object",
+                          "required": [
+                            "fee",
+                            "timeout",
+                            "resourceFee",
+                            "minResourceFee",
+                            "latestLedger"
+                          ],
+                          "properties": {
+                            "fee": {
+                              "type": "string",
+                              "description": "Base fee in stroops"
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "description": "Transaction timeout in seconds"
+                            },
+                            "resourceFee": {
+                              "type": "string",
+                              "description": "Resource fee from Soroban simulation in stroops"
+                            },
+                            "minResourceFee": {
+                              "type": "string",
+                              "description": "Minimum resource fee from Soroban simulation in stroops"
+                            },
+                            "latestLedger": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Latest ledger sequence from Soroban simulation"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingAmount": {
+                    "summary": "Missing amount_usdc",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "MISSING_AMOUNT",
+                        "message": "amount_usdc is required"
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  },
+                  "invalidAmountFormat": {
+                    "summary": "Invalid amount format",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_AMOUNT_FORMAT",
+                        "message": "Amount must have exactly 7 decimal places (e.g., \"100.0000000\")",
+                        "details": [
+                          {
+                            "field": "amount_usdc",
+                            "message": "Amount must have exactly 7 decimal places (e.g., \"100.0000000\")",
+                            "code": "custom"
+                          }
+                        ]
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  },
+                  "invalidNetwork": {
+                    "summary": "Invalid network",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_NETWORK",
+                        "message": "network must be either \"testnet\" or \"mainnet\""
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  },
+                  "invalidSourceAccount": {
+                    "summary": "Invalid source account",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_SOURCE_ACCOUNT",
+                        "message": "source_account must be a valid Stellar public key (G...)"
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The caller has no vault on the requested network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Soroban simulation or transaction preparation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "simulationFailed": {
+                    "summary": "Soroban simulation failed",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "SIMULATION_FAILED",
+                        "message": "Soroban simulation failed. See diagnostics for details.",
+                        "simulationDetails": {
+                          "errorCode": 8,
+                          "errorMessage": "BelowMinDeposit",
+                          "eventCount": 0,
+                          "footprintPresent": true
+                        }
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stellar network or Soroban RPC is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/billing/credits/grant": {
       "post": {
         "summary": "Grant GrantFox FWC26 prepaid credits",
@@ -640,6 +967,148 @@
         }
       }
     },
+    "/api/billing": {
+      "get": {
+        "summary": "Get billing history for the authenticated consumer",
+        "description": "Returns cursor-paginated billing-history rows sourced from usage_events (the table that BillingService.runPhase1 writes into). Ordered by (created_at DESC, id DESC). Amount is a 7-decimal USDC string. Status is \"confirmed\" when stellar_tx_hash is present, \"pending\" otherwise.",
+        "operationId": "getBillingHistory",
+        "tags": [
+          "Billing"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of rows to return (1–100, default 20)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque base64 keyset cursor from the previous page's nextCursor",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Billing history page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "data",
+                            "meta"
+                          ],
+                          "properties": {
+                            "data": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/BillingHistoryRow"
+                              }
+                            },
+                            "meta": {
+                              "type": "object",
+                              "required": [
+                                "limit",
+                                "hasMore"
+                              ],
+                              "properties": {
+                                "limit": {
+                                  "type": "integer"
+                                },
+                                "nextCursor": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "hasMore": {
+                                  "type": "boolean"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "firstPage": {
+                    "summary": "First page of billing history",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "data": [
+                          {
+                            "id": "42",
+                            "userId": "user-123",
+                            "apiId": "api-abc",
+                            "endpointId": "ep-1",
+                            "apiKeyId": "key-xyz",
+                            "requestId": "req-001",
+                            "amountUsdc": "0.0012345",
+                            "stellarTxHash": "a1b2c3...",
+                            "status": "confirmed",
+                            "createdAt": "2026-10-01T12:00:00.000Z"
+                          }
+                        ],
+                        "meta": {
+                          "limit": 20,
+                          "nextCursor": "eyJ0aW1lc3RhbXAiOi4uLn0=",
+                          "hasMore": true
+                        }
+                      },
+                      "requestId": "req-id-uuid",
+                      "timestamp": "2026-10-19T20:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/billing/deduct": {
       "post": {
         "summary": "Deduct billing balance for an API call",
@@ -784,6 +1253,18 @@
                       "requestId": "req-abc123"
                     }
                   },
+                  "requestIdConflict": {
+                    "summary": "requestId already used for a different deduction",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BILLING_REQUEST_ID_CONFLICT",
+                        "message": "requestId already used for a different deduction"
+                      },
+                      "requestId": "req-abc123",
+                      "timestamp": "2026-07-28T10:00:00.000Z"
+                    }
+                  },
                   "reconciliationRequired": {
                     "summary": "Previous deduction attempt pending reconciliation",
                     "value": {
@@ -873,6 +1354,20 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BillingBulkDeductErrorResponse"
+                },
+                "examples": {
+                  "requestIdConflict": {
+                    "summary": "A bulk item reuses a requestId with different deduction fields",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "BILLING_REQUEST_ID_CONFLICT",
+                        "message": "requestId already used for a different deduction"
+                      },
+                      "requestId": "req-abc123",
+                      "timestamp": "2026-07-28T10:00:00.000Z"
+                    }
+                  }
                 }
               }
             }
@@ -7879,7 +8374,9 @@
           "IP_NOT_ALLOWED",
           "DATABASE_NOT_AVAILABLE",
           "IDEMPOTENCY_CONFLICT",
+          "IDEMPOTENCY_RESPONSE_TOO_LARGE",
           "IDEMPOTENCY_IN_PROGRESS",
+          "BILLING_REQUEST_ID_CONFLICT",
           "SIMULATION_FAILED",
           "INVALID_AUTH_HEADER",
           "MISSING_TOKEN",
@@ -8288,6 +8785,77 @@
               "null"
             ],
             "maxLength": 1000
+          }
+        }
+      },
+      "SuccessEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {}
+        }
+      },
+      "BillingHistoryRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "apiId",
+          "endpointId",
+          "apiKeyId",
+          "requestId",
+          "amountUsdc",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "apiId": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "apiKeyId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "amountUsdc": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d{1,7})?$"
+          },
+          "stellarTxHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "pending"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

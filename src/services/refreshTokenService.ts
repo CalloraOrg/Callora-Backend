@@ -37,7 +37,7 @@ export class RefreshTokenService {
   /**
    * Hash a refresh token for secure storage
    */
-  private hashToken(token: string): string {
+  hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
   }
 
@@ -129,7 +129,7 @@ export class RefreshTokenService {
   /**
    * Extract token ID from refresh token without full verification
    */
-  private extractTokenId(token: string): string | null {
+  extractTokenId(token: string): string | null {
     try {
       const decoded = jwt.decode(token) as RefreshTokenPayload;
       return decoded?.tokenId || null;
@@ -228,6 +228,109 @@ export class RefreshTokenService {
     });
 
     return newPair;
+  }
+
+  /**
+   * Atomically rotate a refresh token using a single compare-and-set on the
+   * primary database.
+   *
+   * This replaces the legacy three-step flow (read → check → rotate) with a
+   * single repository call that:
+   *   1. Runs `UPDATE ... WHERE is_revoked = false AND expires_at > NOW() RETURNING *`
+   *      (the consume) and inserts the new token in one database transaction.
+   *   2. Re-reads on the primary to classify zero-row failures.
+   *
+   * Because the consume guard and the new token insert run in a single primary-
+   * side transaction, exactly one concurrent request can succeed for a given
+   * token; all others receive the 'revoked' outcome and trigger handleReuse.
+   *
+   * Policy: a legitimate double-submit (e.g. network retry) also lands on
+   * 'revoked' and revokes the whole family. This matches common OAuth 2.0
+   * guidance — the window for an undetected theft is eliminated at the cost
+   * of requiring the client to re-authenticate on a genuine retry.
+   *
+   * @param rawToken      - The raw refresh token string from the request body.
+   * @param tokenPayload  - Decoded JWT payload (tokenId, userId).
+   * @param walletAddress - Optional wallet address embedded in the new access token.
+   * @param repository    - Token repository (must implement consumeRefreshToken).
+   */
+  async atomicRotateRefreshToken(
+    rawToken: string,
+    tokenPayload: RefreshTokenPayload,
+    walletAddress: string | undefined,
+    repository: RefreshTokenRepository,
+  ): Promise<
+    | { outcome: 'success'; tokens: TokenPair }
+    | { outcome: 'revoked' }
+    | { outcome: 'not_found' }
+    | { outcome: 'expired' }
+    | { outcome: 'hash_mismatch' }
+  > {
+    const tokenHash = this.hashToken(rawToken);
+
+    // Build the new token pair before the DB round trip so we can pass the
+    // token hash into the same transaction.  familyId is NOT set here — the
+    // repository copies it from the consumed row, ensuring family continuity.
+    const newPair = this.createTokenPair(tokenPayload.userId, walletAddress);
+    const newTokenTemplate = this.buildNewTokenTemplate(tokenPayload.userId, newPair.refreshToken);
+
+    const result = await repository.consumeRefreshToken(
+      tokenPayload.tokenId,
+      tokenPayload.userId,
+      tokenHash,
+      newTokenTemplate,
+    );
+
+    if (result.status === 'consumed') {
+      logger.info('[RefreshTokenService] Atomic token rotation succeeded', {
+        userId: tokenPayload.userId,
+        consumedTokenId: result.token.id,
+        familyId: result.token.familyId,
+      });
+      return { outcome: 'success', tokens: newPair };
+    }
+
+    if (result.status === 'revoked') {
+      // Theft signal: present the consumed token back to handleReuse.
+      // handleReuse only uses userId; synthesise a minimal record.
+      await this.handleReuse(
+        {
+          id: tokenPayload.tokenId,
+          userId: tokenPayload.userId,
+          tokenHash,
+          familyId: '',
+          isRevoked: true,
+          expiresAt: new Date(0),
+          createdAt: new Date(0),
+        },
+        repository,
+      );
+    }
+
+    return { outcome: result.status };
+  }
+
+  /**
+   * Build the new token template (without familyId) for consumeRefreshToken.
+   * The repository will copy familyId from the consumed row.
+   */
+  private buildNewTokenTemplate(userId: string, refreshToken: string) {
+    const tokenId = this.extractTokenId(refreshToken);
+    if (!tokenId) {
+      throw new Error('Invalid refresh token: cannot extract token ID');
+    }
+
+    const expiresAt = new Date();
+    expiresAt.setSeconds(expiresAt.getSeconds() + this.parseExpiry(this.refreshTokenExpiry));
+
+    return {
+      id: tokenId,
+      userId,
+      tokenHash: this.hashToken(refreshToken),
+      expiresAt,
+      createdAt: new Date(),
+      isRevoked: false as const,
+    };
   }
 
   /**

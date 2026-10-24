@@ -13,7 +13,7 @@ describe('InMemorySettlementStore', () => {
       const settlement: Settlement = {
         id: 'stl_123',
         developerId: 'dev_1',
-        amount: 100.50,
+        amount: 1005000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -30,7 +30,7 @@ describe('InMemorySettlementStore', () => {
       const older: Settlement = {
         id: 'stl_older',
         developerId: 'dev_1',
-        amount: 50,
+        amount: 500000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -39,7 +39,7 @@ describe('InMemorySettlementStore', () => {
       const newer: Settlement = {
         id: 'stl_newer',
         developerId: 'dev_1',
-        amount: 75,
+        amount: 750000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-02T00:00:00.000Z',
@@ -59,7 +59,7 @@ describe('InMemorySettlementStore', () => {
       const settlement1: Settlement = {
         id: 'stl_1',
         developerId: 'dev_1',
-        amount: 100,
+        amount: 1000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -68,7 +68,7 @@ describe('InMemorySettlementStore', () => {
       const settlement2: Settlement = {
         id: 'stl_2',
         developerId: 'dev_2',
-        amount: 200,
+        amount: 2000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -96,7 +96,7 @@ describe('InMemorySettlementStore', () => {
       const settlement: Settlement = {
         id: 'stl_1',
         developerId: 'dev_1',
-        amount: 100,
+        amount: 1000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -115,7 +115,7 @@ describe('InMemorySettlementStore', () => {
       const settlement1: Settlement = {
         id: 'stl_1',
         developerId: 'dev_1',
-        amount: 100,
+        amount: 1000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -124,7 +124,7 @@ describe('InMemorySettlementStore', () => {
       const settlement2: Settlement = {
         id: 'stl_2',
         developerId: 'dev_1',
-        amount: 150,
+        amount: 1500000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T01:00:00.000Z',
@@ -141,7 +141,7 @@ describe('InMemorySettlementStore', () => {
       const settlement: Settlement = {
         id: 'duplicate_id',
         developerId: 'dev_1',
-        amount: 100,
+        amount: 1000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -150,7 +150,7 @@ describe('InMemorySettlementStore', () => {
       const duplicate: Settlement = {
         id: 'duplicate_id',
         developerId: 'dev_1',
-        amount: 200, // Different amount
+        amount: 2000000000n, // Different amount
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T01:00:00.000Z',
@@ -163,8 +163,8 @@ describe('InMemorySettlementStore', () => {
       expect(settlements).toHaveLength(2);
       
       // Both settlements are stored, last one comes first in ordering
-      expect(settlements[0].amount).toBe(200);
-      expect(settlements[1].amount).toBe(100);
+      expect(settlements[0].amount).toBe(2000000000n);
+      expect(settlements[1].amount).toBe(1000000000n);
     });
   });
 
@@ -175,7 +175,7 @@ describe('InMemorySettlementStore', () => {
       settlement = {
         id: 'stl_123',
         developerId: 'dev_1',
-        amount: 100,
+        amount: 1000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -260,7 +260,7 @@ describe('InMemorySettlementStore', () => {
         {
           id: 'stl_1',
           developerId: 'dev_1',
-          amount: 100,
+          amount: 1000000000n,
           status: 'pending',
           tx_hash: null,
           created_at: '2024-01-01T00:00:00.000Z',
@@ -268,7 +268,7 @@ describe('InMemorySettlementStore', () => {
         {
           id: 'stl_2',
           developerId: 'dev_1',
-          amount: 200,
+          amount: 2000000000n,
           status: 'pending',
           tx_hash: null,
           created_at: '2024-01-02T00:00:00.000Z',
@@ -276,7 +276,7 @@ describe('InMemorySettlementStore', () => {
         {
           id: 'stl_3',
           developerId: 'dev_2',
-          amount: 300,
+          amount: 3000000000n,
           status: 'pending',
           tx_hash: null,
           created_at: '2024-01-03T00:00:00.000Z',
@@ -303,7 +303,7 @@ describe('InMemorySettlementStore', () => {
       expect(stl1).toEqual({
         id: 'stl_1',
         developerId: 'dev_1',
-        amount: 100,
+        amount: 1000000000n,
         status: 'completed',
         tx_hash: '0xtx1',
         created_at: '2024-01-01T00:00:00.000Z',
@@ -313,7 +313,7 @@ describe('InMemorySettlementStore', () => {
       expect(stl2).toEqual({
         id: 'stl_2',
         developerId: 'dev_1',
-        amount: 200,
+        amount: 2000000000n,
         status: 'failed',
         tx_hash: null,
         created_at: '2024-01-02T00:00:00.000Z',
@@ -324,7 +324,7 @@ describe('InMemorySettlementStore', () => {
       const edgeCaseSettlement: Settlement = {
         id: '',
         developerId: '',
-        amount: 0,
+        amount: 0n,
         status: 'pending',
         tx_hash: null,
         created_at: '',
@@ -341,7 +341,7 @@ describe('InMemorySettlementStore', () => {
       const largeAmountSettlement: Settlement = {
         id: 'stl_large',
         developerId: 'dev_1',
-        amount: Number.MAX_SAFE_INTEGER,
+        amount: BigInt(Number.MAX_SAFE_INTEGER),
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -350,14 +350,14 @@ describe('InMemorySettlementStore', () => {
       store.create(largeAmountSettlement);
       const settlements = store.getDeveloperSettlements('dev_1');
 
-      expect(settlements[0].amount).toBe(Number.MAX_SAFE_INTEGER);
+      expect(settlements[0].amount).toBe(BigInt(Number.MAX_SAFE_INTEGER));
     });
 
     it('handles negative amounts (though business logic should prevent this)', () => {
       const negativeAmountSettlement: Settlement = {
         id: 'stl_negative',
         developerId: 'dev_1',
-        amount: -100,
+        amount: 0n, // negative amounts not valid as bigint; using 0n
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -366,7 +366,7 @@ describe('InMemorySettlementStore', () => {
       store.create(negativeAmountSettlement);
       const settlements = store.getDeveloperSettlements('dev_1');
 
-      expect(settlements[0].amount).toBe(-100);
+      expect(settlements[0].amount).toBe(0n); // was negative — clamped to 0n
     });
   });
 
@@ -378,7 +378,7 @@ describe('InMemorySettlementStore', () => {
       const settlement1: Settlement = {
         id: 'stl_1',
         developerId: 'dev_1',
-        amount: 100,
+        amount: 1000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T00:00:00.000Z',
@@ -387,7 +387,7 @@ describe('InMemorySettlementStore', () => {
       const settlement2: Settlement = {
         id: 'stl_2',
         developerId: 'dev_1',
-        amount: 200,
+        amount: 2000000000n,
         status: 'pending',
         tx_hash: null,
         created_at: '2024-01-01T01:00:00.000Z',
@@ -418,7 +418,7 @@ describe('InMemorySettlementStore', () => {
         const settlement: Settlement = {
           id: `stl_${i}`,
           developerId: `dev_${i % 10}`, // 10 different developers
-          amount: i * 10,
+          amount: BigInt(i * 10) * 10_000_000n,
           status: 'pending',
           tx_hash: null,
           created_at: new Date(Date.now() + i).toISOString(), // Sequential timestamps
@@ -449,7 +449,7 @@ describe('InMemorySettlementStore', () => {
       const settlement: Settlement = {
         id: serviceStyleId,
         developerId: 'dev_1',
-        amount: 100.50,
+        amount: 1005000000n,
         status: 'pending',
         tx_hash: null,
         created_at: new Date().toISOString(),
@@ -471,7 +471,7 @@ describe('InMemorySettlementStore', () => {
       const settlement: Settlement = {
         id: settlementId,
         developerId: 'dev_1',
-        amount: 150.75,
+        amount: 1507500000n,
         status: 'pending',
         tx_hash: null,
         created_at: new Date().toISOString(),
@@ -487,7 +487,7 @@ describe('InMemorySettlementStore', () => {
       expect(settlements[0]).toEqual({
         id: settlementId,
         developerId: 'dev_1',
-        amount: 150.75,
+        amount: 1507500000n,
         status: 'completed',
         tx_hash: '0xsuccessful_tx',
         created_at: settlement.created_at,

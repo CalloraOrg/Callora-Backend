@@ -28,6 +28,18 @@ export interface IdempotencyConfig {
 export const IDEMPOTENCY_KEY_REUSE_MISMATCH = 'IDEMPOTENCY_KEY_REUSE_MISMATCH' as const;
 export const INVALID_IDEMPOTENCY_KEY = 'INVALID_IDEMPOTENCY_KEY' as const;
 
+export interface IdempotencyLease {
+  renew(): Promise<void>;
+}
+interface CachedResponse {
+  headers: Record<string, string>;
+  bytes: number;
+  sha256: string;
+  body?: string;
+}
+const RESPONSE_PREFIX = 'idempotency-response-v1\n';
+const MAX_REPLAY_BYTES = 256 * 1024;
+
 const DEFAULT_IDEMPOTENCY_METHODS = ['POST', 'PATCH'];
 const DEFAULT_KEY_MAX_LENGTH = 255;
 const DEFAULT_KEY_PATTERN = /^[A-Za-z0-9._:-]+$/;
@@ -182,192 +194,171 @@ export async function idempotencyMiddleware(
   const requestHash = calculateRequestHash(userId, req.body, req.method, req.path, bodyExcludingKeys);
 
   try {
-    const handleExistingRecord = (record: {
-      request_hash: string;
-      status: string;
-      response_status: number;
-      response_body: string;
-      expires_at: string | Date;
-    }): boolean => {
-      const expiresAt = new Date(record.expires_at);
-
-      if (expiresAt > new Date()) {
-        if (record.request_hash !== requestHash) {
-          logger.warn('[idempotency] key reuse with mismatched payload', {
-            requestId,
-            correlationId,
-            idempotencyKey,
-            storedHash: record.request_hash,
-            incomingHash: requestHash,
-            method: req.method,
-            path: req.originalUrl ?? req.path,
-          });
-
-          const incomingKeys = Object.keys(
-            typeof req.body === 'object' && req.body !== null ? req.body : {}
-          ).sort();
-
-          sendIdempotencyError(
-            req,
-            res,
-            409,
-            opts?.conflictErrorCode ?? IDEMPOTENCY_KEY_REUSE_MISMATCH,
-            'Idempotency key has already been used with a different request payload. Use a new idempotency key for a different request.',
-            {
-              idempotencyKey,
-              incomingPayloadFingerprint: requestHash,
-              storedPayloadFingerprint: record.request_hash,
-              incomingFields: incomingKeys,
-            }
-          );
-          return true;
-        }
-
-        if (record.status === 'completed') {
-          logger.info('[idempotency] replaying cached response', {
-            requestId,
-            correlationId,
-            idempotencyKey,
-            method: req.method,
-            path: req.originalUrl ?? req.path,
-          });
-          res.setHeader('Idempotent-Replayed', 'true');
-          res.status(record.response_status).json(JSON.parse(record.response_body));
-          return true;
-        }
-
-        if (record.status === 'started') {
-          logger.warn('[idempotency] request already in progress', {
-            requestId,
-            correlationId,
-            idempotencyKey,
-            method: req.method,
-            path: req.originalUrl ?? req.path,
-          });
-          sendIdempotencyError(
-            req,
-            res,
-            409,
-            opts?.inProgressErrorCode ?? 'IDEMPOTENCY_IN_PROGRESS',
-            'Request already in progress'
-          );
-          return true;
-        }
-      }
-      return false;
-    };
-
-    const result = await db.query(
-      `SELECT request_hash, status, response_status, response_body, expires_at
+    const leaseInterval = `${config.idempotency.leaseSeconds} seconds`;
+    const select = () => db.query(
+      `SELECT request_hash, status, response_status, response_body
        FROM idempotency_store
        WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
       [scope, idempotencyKey]
     );
-
-    if (result.rows.length > 0) {
-      if (handleExistingRecord(result.rows[0])) {
-        return;
-      }
-    }
-
-    const retentionSeconds = opts?.retentionSeconds ?? config.idempotency.retentionWindowSeconds;
-    const expiresAtDate = new Date(Date.now() + retentionSeconds * 1000);
-
-    const insertResult = await db.query(
-      `INSERT INTO idempotency_store (scope, idempotency_key, request_hash, status, expires_at, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW()::timestamp)
-       ON CONFLICT (scope, idempotency_key) DO UPDATE
-       SET request_hash = EXCLUDED.request_hash,
-           status = EXCLUDED.status,
-           response_status = NULL,
-           response_body = NULL,
-           expires_at = EXCLUDED.expires_at,
-           created_at = EXCLUDED.created_at
-       WHERE idempotency_store.expires_at <= NOW()::timestamp`,
-      [scope, idempotencyKey, requestHash, 'started', expiresAtDate.toISOString()]
-    );
-
-    if (insertResult && insertResult.rowCount === 0) {
-      const existing = await db.query(
-        `SELECT request_hash, status, response_status, response_body, expires_at
-         FROM idempotency_store
-         WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
-        [scope, idempotencyKey]
-      );
-      if (existing.rows.length > 0 && handleExistingRecord(existing.rows[0])) {
-        return;
-      }
-    }
-
-    const originalSend = res.send;
-    const originalJson = res.json;
-    let saved = false;
-
-    const saveResponse = async (status: number, body: unknown) => {
-      if (saved) return;
-      saved = true;
-
-      try {
-        if (status >= 500) {
-          await db.query('DELETE FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2', [
-            scope,
+    const handleExistingRecord = (record: {
+      request_hash: string; status: string; response_status: number; response_body: string;
+    }): boolean => {
+      if (record.request_hash !== requestHash) {
+        logger.warn('[idempotency] key reuse with mismatched payload', { requestId, correlationId, idempotencyKey });
+        sendIdempotencyError(req, res, 409, opts?.conflictErrorCode ?? IDEMPOTENCY_KEY_REUSE_MISMATCH,
+          'Idempotency key has already been used with a different request payload. Use a new idempotency key for a different request.', {
             idempotencyKey,
-          ]);
-          return;
-        }
-
-        let bodyStr = '';
-        if (typeof body === 'string') {
-          bodyStr = body;
-        } else {
-          bodyStr = JSON.stringify(body);
-        }
-
-        try {
-          JSON.parse(bodyStr);
-        } catch {
-          bodyStr = JSON.stringify({ message: bodyStr });
-        }
-
-        await db.query(
-          `UPDATE idempotency_store
-           SET status = $1, response_status = $2, response_body = $3
-           WHERE scope = $4 AND idempotency_key = $5`,
-          ['completed', status, bodyStr, scope, idempotencyKey]
-        );
-      } catch (err) {
-        logger.error('[idempotency] failed to save response', {
-          requestId,
-          correlationId,
-          idempotencyKey,
-          err,
-        });
+            incomingPayloadFingerprint: requestHash,
+            storedPayloadFingerprint: record.request_hash,
+            incomingFields: Object.keys(typeof req.body === 'object' && req.body !== null ? req.body : {}).sort(),
+          });
+        return true;
       }
+      if (record.status !== 'completed') return false;
+      res.setHeader('Idempotent-Replayed', 'true');
+      // Old deployments stored JSON directly. The non-JSON prefix cannot collide
+      // with any legacy JSON response, including strings and arbitrary objects.
+      if (!record.response_body.startsWith(RESPONSE_PREFIX)) {
+        res.status(record.response_status).json(JSON.parse(record.response_body));
+        return true;
+      }
+      const cached = JSON.parse(record.response_body.slice(RESPONSE_PREFIX.length)) as CachedResponse;
+      if (cached.body === undefined) {
+        sendIdempotencyError(req, res, 409, 'IDEMPOTENCY_RESPONSE_TOO_LARGE',
+          'The original response exceeded the replay limit. Fetch the resource using its identifier instead of repeating the operation.',
+          { sha256: cached.sha256, bytes: cached.bytes });
+        return true;
+      }
+      for (const [name, value] of Object.entries(cached.headers)) res.setHeader(name, value);
+      res.status(record.response_status).end(Buffer.from(cached.body, 'base64'));
+      return true;
     };
 
-    res.send = function (body) {
-      saveResponse(res.statusCode, body).catch(err => {
-        logger.error('[idempotency] unhandled saveResponse error', {
-          requestId,
-          correlationId,
-          idempotencyKey,
-          err,
-        });
-      });
-      return originalSend.call(this, body);
-    };
+    const existing = await select();
+    if (existing.rows[0] && handleExistingRecord(existing.rows[0])) return;
+    let acquired;
+    if (existing.rows[0]) {
+      acquired = await db.query(
+        `UPDATE idempotency_store SET lease_expires_at = NOW()::timestamp + $4::interval
+         WHERE scope = $1 AND idempotency_key = $2 AND request_hash = $3
+           AND status = 'started' AND lease_expires_at < NOW()::timestamp
+           AND expires_at > NOW()::timestamp
+         RETURNING to_char(lease_expires_at, 'YYYY-MM-DD HH24:MI:SS.US') AS lease_token`,
+        [scope, idempotencyKey, requestHash, leaseInterval]
+      );
+    } else {
+      acquired = await db.query(
+        `INSERT INTO idempotency_store (scope, idempotency_key, request_hash, status, expires_at, created_at, lease_expires_at)
+         VALUES ($1, $2, $3, 'started', NOW()::timestamp + $4::interval, NOW()::timestamp, NOW()::timestamp + $5::interval)
+         ON CONFLICT (scope, idempotency_key) DO UPDATE
+         SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status,
+             response_status = NULL, response_body = NULL, expires_at = EXCLUDED.expires_at,
+             created_at = EXCLUDED.created_at, lease_expires_at = EXCLUDED.lease_expires_at
+         WHERE idempotency_store.expires_at <= NOW()::timestamp
+         RETURNING to_char(lease_expires_at, 'YYYY-MM-DD HH24:MI:SS.US') AS lease_token`,
+        [scope, idempotencyKey, requestHash,
+          `${opts?.retentionSeconds ?? config.idempotency.retentionWindowSeconds} seconds`, leaseInterval]
+      );
+    }
+    if (!acquired.rows[0]) {
+      const raced = await select();
+      if (raced.rows[0] && handleExistingRecord(raced.rows[0])) return;
+      sendIdempotencyError(req, res, 409, opts?.inProgressErrorCode ?? 'IDEMPOTENCY_IN_PROGRESS', 'Request already in progress');
+      return;
+    }
 
-    res.json = function (body) {
-      saveResponse(res.statusCode, body).catch(err => {
-        logger.error('[idempotency] unhandled saveResponse error', {
-          requestId,
-          correlationId,
-          idempotencyKey,
-          err,
-        });
-      });
-      return originalJson.call(this, body);
+    // Keep the database's full timestamp precision: a JS Date truncates PostgreSQL
+    // microseconds and would make the ownership equality check fail.
+    let leaseToken: string = acquired.rows[0].lease_token;
+    let finished = false;
+    let closed = false;
+    let pending: Promise<unknown> = Promise.resolve();
+    const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+      const task = pending.then(operation);
+      pending = task.catch(() => undefined);
+      return task;
     };
+    const release = () => db.query(
+      `DELETE FROM idempotency_store WHERE scope = $1 AND idempotency_key = $2
+       AND status = 'started' AND lease_expires_at = $3::timestamp`,
+      [scope, idempotencyKey, leaseToken]
+    );
+    res.locals.idempotency = {
+      renew: () => serialize(async () => {
+        if (finished || closed) throw new Error('Idempotency response already ended');
+        const renewed = await db.query(
+          `UPDATE idempotency_store SET lease_expires_at = NOW()::timestamp + $4::interval
+           WHERE scope = $1 AND idempotency_key = $2 AND status = 'started'
+             AND lease_expires_at = $3::timestamp AND lease_expires_at > NOW()::timestamp
+           RETURNING to_char(lease_expires_at, 'YYYY-MM-DD HH24:MI:SS.US') AS lease_token`,
+          [scope, idempotencyKey, leaseToken, leaseInterval]
+        );
+        if (!renewed.rows[0]) throw new Error('Idempotency lease ownership lost');
+        leaseToken = renewed.rows[0].lease_token;
+      }),
+    } satisfies IdempotencyLease;
+
+    // One bounded buffer also avoids per-chunk overhead for tiny writes.
+    let captured: Buffer | undefined;
+    let bytes = 0;
+    const hash = createHash('sha256');
+    const capture = (chunk: unknown, encoding?: unknown) => {
+      if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) return;
+      const charset = typeof encoding === 'string' ? encoding as BufferEncoding : 'utf8';
+      const offset = bytes;
+      bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk, charset) : chunk.length;
+      if (typeof chunk === 'string') hash.update(chunk, charset);
+      else hash.update(chunk);
+      if (bytes <= MAX_REPLAY_BYTES) {
+        captured ??= Buffer.allocUnsafe(MAX_REPLAY_BYTES);
+        if (typeof chunk === 'string') captured.write(chunk, offset, charset);
+        else captured.set(chunk, offset);
+      } else captured = undefined;
+    };
+    const originalWrite = res.write;
+    const originalEnd = res.end;
+    res.write = function (this: Response, ...args: Parameters<Response['write']>) {
+      capture(args[0], args[1]);
+      return originalWrite.apply(this, args);
+    } as Response['write'];
+    res.end = function (this: Response, ...args: Parameters<Response['end']>) {
+      capture(args[0], args[1]);
+      return originalEnd.apply(this, args);
+    } as Response['end'];
+    const logFailure = (err: unknown) => logger.error('[idempotency] failed to save response', {
+      requestId, correlationId, idempotencyKey, err,
+    });
+    res.once('finish', () => {
+      finished = true;
+      void serialize(async () => {
+        try {
+          if (res.statusCode >= 500) { await release(); return; }
+          const headers: Record<string, string> = {};
+          for (const name of ['content-type', 'content-encoding']) {
+            const value = res.getHeader(name);
+            if (typeof value === 'string') headers[name] = value;
+          }
+          const cached: CachedResponse = { headers, bytes, sha256: hash.digest('hex') };
+          if (bytes <= MAX_REPLAY_BYTES) cached.body = captured ? captured.toString('base64', 0, bytes) : '';
+          await db.query(
+            `UPDATE idempotency_store SET status = 'completed', response_status = $1, response_body = $2
+             WHERE scope = $3 AND idempotency_key = $4 AND status = 'started'
+               AND lease_expires_at = $5::timestamp`,
+            [res.statusCode, RESPONSE_PREFIX + JSON.stringify(cached), scope, idempotencyKey, leaseToken]
+          );
+        } catch (err) {
+          logFailure(err);
+          // A failed save must not strand the key until retention expires.
+          // If the database is unavailable even for cleanup, the lease bounds it.
+          await release();
+        }
+      }).catch(logFailure);
+    });
+    res.once('close', () => {
+      closed = true;
+      if (!finished) void serialize(release).catch(logFailure);
+    });
 
     next();
   } catch (error) {

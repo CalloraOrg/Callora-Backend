@@ -41,7 +41,7 @@ import { createAuditRouter } from "./audit.js";
 import { createInvoicesRouter } from "./invoices.js";
 import type { AuditService } from "../services/auditService.js";
 import { createLogsRouter } from "./logs.js";
-import { createApiKeyRouter } from "./apiKeyRoutes.js";
+import { createApiKeyRouter, effectiveRateLimitPerMinute } from "./apiKeyRoutes.js";
 import { defaultApiRepository } from "../repositories/apiRepository.js";
 import { defaultDeveloperRepository } from "../repositories/developerRepository.js";
 import { createDeveloperRouter } from "./developerRoutes.js";
@@ -108,7 +108,12 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
             prefix: key.prefix,
             revoked: key.revoked,
             scopes: key.scopes,
+            tier: key.tier,
             rateLimitPerMinute: key.rateLimitPerMinute,
+            effectiveRateLimitPerMinute: effectiveRateLimitPerMinute(
+              key.tier,
+              key.rateLimitPerMinute,
+            ),
             createdAt: key.createdAt.toISOString(),
           }))
         : [];
@@ -250,7 +255,7 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   // Per-user billing rate limiter (100 requests per 60 seconds by default).
   const billingRateLimiter = createBillingRateLimitMiddleware(
-    config.creditsRateLimit.billingRateLimit,
+    config.billingRateLimit,
   );
   billingMiddlewares.push(billingRateLimiter);
   if (billingConcurrency) {
