@@ -220,14 +220,16 @@ const usageEventSelect = `
     ue.api_key_id,
     ue.api_id,
     ue.endpoint_id,
-    rl.developer_id AS user_id,
+    COALESCE(rl.developer_id, a.developer_id::text, ue.user_id::text) AS user_id,
     ue.amount_usdc,
     ue.status_code,
     ue.created_at,
     s.external_id AS settlement_external_id
   FROM usage_events ue
-  INNER JOIN revenue_ledger rl
-    ON rl.usage_event_id = ue.id
+  LEFT JOIN revenue_ledger rl
+    ON rl.usage_event_id = ue.id AND rl.reversed_at IS NULL
+  LEFT JOIN apis a
+    ON a.id = ue.api_id
   LEFT JOIN settlements s
     ON s.id = rl.settlement_id
 `;
@@ -307,33 +309,6 @@ export class PostgresUsageStore implements UsageAdminStore {
         return false;
       }
 
-      await client.query(
-        `
-          INSERT INTO revenue_ledger (
-            api_id,
-            developer_id,
-            amount_usdc,
-            usage_event_id,
-            created_at
-          )
-          SELECT
-            $1,
-            a.developer_id,
-            $2::numeric,
-            $3::bigint,
-            $4::timestamp
-          FROM apis a
-          WHERE a.id = $1
-          ON CONFLICT (usage_event_id) DO NOTHING
-        `,
-        [
-          event.apiId,
-          amountContractUnits,
-          inserted.id,
-          event.timestamp,
-        ],
-      );
-
       await client.query('COMMIT');
       return true;
     } catch (error) {
@@ -376,6 +351,8 @@ export class PostgresUsageStore implements UsageAdminStore {
       `
         ${usageEventSelect}
         WHERE rl.settlement_id IS NULL
+          AND rl.id IS NOT NULL
+          AND rl.reversed_at IS NULL
           AND ue.amount_usdc > 0
         ORDER BY ue.created_at ASC, ue.id ASC
       `,
@@ -403,6 +380,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           INNER JOIN usage_events ue
             ON ue.id = rl.usage_event_id
           WHERE rl.developer_id = $1
+            AND rl.reversed_at IS NULL
         `,
         [developerId],
       ),
@@ -413,6 +391,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           INNER JOIN usage_events ue
             ON ue.id = rl.usage_event_id
           WHERE rl.developer_id = $1
+            AND rl.reversed_at IS NULL
           GROUP BY ue.status_code
           ORDER BY ue.status_code ASC
         `,
