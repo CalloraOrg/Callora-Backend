@@ -15,7 +15,7 @@ export class InMemorySettlementStore implements SettlementStore {
     const s = this.settlements.find((s) => s.id === id);
     if (s) {
       s.status = status;
-      if (txHash !== undefined) {
+      if (txHash !== undefined && txHash !== null) {
         s.tx_hash = txHash;
       }
       s.completed_at = status === 'completed' ? new Date().toISOString() : null;
@@ -139,7 +139,7 @@ export class PostgresSettlementStore implements SettlementStore {
     const setClauses = ['status = $2'];
     const params: unknown[] = [id, status];
 
-    if (txHash !== undefined) {
+    if (txHash !== undefined && txHash !== null) {
       params.push(txHash);
       setClauses.push(`stellar_tx_hash = $${params.length}`);
     }
