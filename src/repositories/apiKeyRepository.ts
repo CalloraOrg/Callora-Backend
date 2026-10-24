@@ -31,6 +31,7 @@ export interface ApiKeyRecord {
   sha256Hash: string;
   scopes: string[];
   rateLimitPerMinute: number | null;
+  tier?: string;
   createdAt: Date;
   revoked: boolean;
   lastUsedAt?: Date | null;
@@ -144,6 +145,7 @@ function redactRecord(record: ApiKeyRecord): ApiKeyRecord {
     sha256Hash: record.sha256Hash,
     scopes: record.scopes,
     rateLimitPerMinute: record.rateLimitPerMinute,
+    tier: record.tier,
     createdAt: record.createdAt,
     revoked: record.revoked,
     lastUsedAt: record.lastUsedAt,
@@ -157,7 +159,8 @@ export const apiKeyRepository = {
      userId: string;
      scopes: string[];
      rateLimitPerMinute: number | null;
-    }): Promise<ApiKeyCreateResult> {
+     tier?: string;
+   }): Promise<ApiKeyCreateResult> {
       const key = generatePlainKey();
       const prefix = key.slice(0, 16);
       const id = randomBytes(8).toString('hex');
@@ -174,6 +177,7 @@ export const apiKeyRepository = {
       sha256Hash,
       scopes: params.scopes,
       rateLimitPerMinute: params.rateLimitPerMinute,
+      tier: params.tier,
       createdAt,
       revoked: false,
       lastUsedAt: null,

@@ -180,7 +180,11 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
   // A separate instance is created per router so tests can construct
   // isolated routers without shared limiter state.  The configured instance
   // reads limits from GATEWAY_RATE_LIMIT_WINDOW_MS / GATEWAY_RATE_LIMIT_MAX_REQUESTS.
-  const gatewayRateLimit = deps.gatewayRateLimitMiddleware ?? createConfiguredGatewayRateLimitMiddleware();
+  // `deps.rateLimiter` is passed as the per-key limiter so each API key's
+  // `rateLimitPerMinute` is enforced as a ceiling within its tier policy.
+  const gatewayRateLimit =
+    deps.gatewayRateLimitMiddleware
+    ?? createConfiguredGatewayRateLimitMiddleware(deps.rateLimiter);
 
   // Enforce body size limits at the router level so the gateway is self-contained
   // regardless of whether a global body parser is present. Oversized bodies surface
