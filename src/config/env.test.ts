@@ -72,6 +72,39 @@ describe("env schema — Soroban billing", () => {
   });
 });
 
+describe('env schema - exports', () => {
+  it('requires all export settings when enabled', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      NODE_ENV: 'production',
+      SOROBAN_BILLING_CONTRACT_ID: 'contract_123',
+      UPSTREAM_HOST_ALLOWLIST: 'upstream.example.com',
+      EXPORTS_ENABLED: 'true',
+      EXPORTS_S3_BUCKET: 'exports',
+      EXPORTS_S3_ENDPOINT: 'https://s3.example.com',
+      EXPORTS_S3_REGION: 'us-east-1',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path[0])).toContain(
+        'EXPORTS_SIGNING_SECRET',
+      );
+    }
+  });
+
+  it('accepts export settings with a sufficiently long signing secret', () => {
+    const result = envSchema.safeParse({
+      ...baseEnv,
+      EXPORTS_ENABLED: 'true',
+      EXPORTS_S3_BUCKET: 'exports',
+      EXPORTS_S3_ENDPOINT: 'https://s3.example.com',
+      EXPORTS_S3_REGION: 'us-east-1',
+      EXPORTS_SIGNING_SECRET: 'a'.repeat(32),
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("env schema - BCRYPT_COST_FACTOR", () => {
   describe("unit tests", () => {
     it("defaults to 12 when BCRYPT_COST_FACTOR is omitted", () => {

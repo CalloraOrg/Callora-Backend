@@ -109,7 +109,7 @@ export async function resetTestDb(pool: any) {
 /**
  * Creates usage_events with the columns the billing write and read paths use:
  * migration 001 base columns, developer_id (0011), and the deduction lifecycle
- * columns (0026_usage_events_deduction_status).
+ * columns (0027_usage_events_deduction_status).
  */
 export async function createUsageEventsTable(pool: Pool) {
   await pool.query(`

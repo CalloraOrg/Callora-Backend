@@ -1,9 +1,12 @@
+-- dialect: postgres
 -- Fee abstraction quotes and payment binding.
 --
 -- Every fee-bump is bound to a single-use quote. The quote records the
 -- inner transaction hash, fee in stroops, app-token amount and a status.
 -- The payment tx id is unique so a single payment can back at most one
 -- fee-bump, enforced by the database not only application logic.
+-- Additive and idempotent: IF NOT EXISTS keeps it a no-op where the
+-- historical quote table was already created.
 
 CREATE TABLE IF NOT EXISTS "fee_abstraction_quotes" (
     "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),

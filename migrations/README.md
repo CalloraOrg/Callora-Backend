@@ -31,17 +31,22 @@ NNNN_lowercase-description.down.sql
 ```
 
 Versions up to `0021` (including the mixed-width prefixes and historical
-duplicates) are legacy. The enforced new sequence begins at `0022`; because
-`0022` through `0027` already exist and the unpublished response-header addition takes `0028`, so the next new migration is `0029`. Do not
+duplicates) are legacy. The enforced new sequence begins at `0022`. Versions `0022` through `0032` are
+the published history on `main`, `0033_idempotency_response_headers` is the
+unpublished response-header addition, and `0034_fee_abstraction_quotes` is an
+additive restoration of the fee quote table, so the next new migration is
+`0035`. Do not
 reuse a prefix: **one forward migration per numeric version**. In particular,
 the three legacy `0014_*` forward migrations are a collision to preserve, not
 a pattern to copy. Add new versions consecutively, without gaps.
 
-The published `0026_*` files currently collide. This is a blocking policy
-violation, not a new legacy exception. Do not rename or replay them without
-checking deployed PostgreSQL history: the usage-status backfill can overwrite
-later reconciliation decisions. See the [deployment-history request](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
-The unpublished response-header addition is `0028_idempotency_response_headers`, the first version free after the published `0022`–`0027` files. Reconcile it with the approved collision repair before deployment.
+Upstream `main` renumbers the earlier colliding `0026_*` files to `0027`–`0031`.
+That renumbering is not proof that a deployed database has the same history: the
+usage-status backfill can overwrite later reconciliation decisions. Verify the
+deployed PostgreSQL `schema_versions` history before relying on it. See the
+[deployment-history request](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
+The unpublished response-header addition is `0033_idempotency_response_headers`.
+Reconcile it with the approved collision repair before deployment.
 
 ## Rollback policy
 

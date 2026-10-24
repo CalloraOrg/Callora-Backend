@@ -20,6 +20,7 @@ describe('BillingService Unit Tests (SQL-level with pg-mem)', () => {
     });
 
 
+
     const pgAdapter = db.adapters.createPg();
     pool = new pgAdapter.Pool() as unknown as Pool;
     await createUsageEventsTable(pool);

@@ -82,8 +82,8 @@ describe("src/db/demo.ts", () => {
       );
 
       for (const file of [
-        "0027_fee_abstraction_quotes.sql",
-        "0028_idempotency_response_headers.sql",
+        "0033_idempotency_response_headers.sql",
+        "0034_fee_abstraction_quotes.sql",
       ]) {
         fs.copyFileSync(path.join(process.cwd(), "migrations", file), path.join(tmpDir, file));
       }

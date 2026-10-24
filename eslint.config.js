@@ -1,6 +1,16 @@
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
 
+// Files where float arithmetic on USDC amounts is prohibited.
+// Any reintroduction of parseFloat/Number(/toFixed( in these files is a bug.
+const FLOAT_GUARD_FILES = [
+  "src/services/revenueSettlementService.ts",
+  "src/services/sorobanSettlement.ts",
+  "src/services/InvoiceService.ts",
+  "src/services/settlementStore.ts",
+  "src/services/usageStore.ts",
+];
+
 /**
  * Custom rule to detect async route handlers that are not wrapped with asyncHandler or try/catch.
  * This prevents unhandled promise rejections in Express 4.
@@ -99,5 +109,43 @@ export default [
   },
   {
     ignores: ["dist/**", "node_modules/**"],
+  },
+  // -------------------------------------------------------------------------
+  // Float-arithmetic guard for USDC-sensitive files (issue #1512).
+  //
+  // These five files must never use parseFloat, Number( (as a cast), or
+  // toFixed( because all USDC arithmetic must stay in bigint contract units.
+  // Boundary conversions belong in src/lib/usdcUnits.ts.
+  // -------------------------------------------------------------------------
+  {
+    files: FLOAT_GUARD_FILES,
+    languageOptions: {
+      parser: tsparser,
+      parserOptions: { ecmaVersion: "latest", sourceType: "module" },
+    },
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          // parseFloat(...)
+          selector: "CallExpression[callee.name='parseFloat']",
+          message:
+            "parseFloat is banned in USDC service files — use parseUsdcToUnits() from src/lib/usdcUnits.ts instead.",
+        },
+        {
+          // Number(...) used as a cast — matches CallExpression where callee is
+          // the identifier 'Number' (not 'new Number()').
+          selector: "CallExpression[callee.name='Number']",
+          message:
+            "Number() casts are banned in USDC service files — use bigint arithmetic and parseUsdcToUnits() from src/lib/usdcUnits.ts instead.",
+        },
+        {
+          // .toFixed(...)
+          selector: "CallExpression[callee.property.name='toFixed']",
+          message:
+            ".toFixed() is banned in USDC service files — use formatUnitsToUsdcFixed() or formatUnitsToUsdc() from src/lib/usdcUnits.ts instead.",
+        },
+      ],
+    },
   },
 ];

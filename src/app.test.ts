@@ -16,6 +16,15 @@ process.env.APIS_CORS_ALLOWED_ORIGINS = 'http://localhost:5173,https://app.callo
 const authBearer = (userId = 'dev-1') => `Bearer ${signTestToken({ userId })}`;
 const TEST_ORIGIN = 'http://localhost:5173';
 
+test('app source does not contain a hard-coded export signing secret', () => {
+  expect(readFileSync('src/app.ts', 'utf8')).not.toContain('contract-' + 'test-secret');
+});
+
+test('exports routes are unavailable when export configuration is disabled', async () => {
+  const response = await request(createApp()).get('/api/exports');
+  expect(response.status).toBe(404);
+});
+
 jest.mock('uuid', () => ({ v4: () => 'mock-uuid-1234' }));
 jest.mock('./services/transactionBuilder.js', () => ({
   TransactionBuilderService: class MockTxBuilder {}

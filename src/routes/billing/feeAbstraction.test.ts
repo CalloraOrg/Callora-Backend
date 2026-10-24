@@ -69,7 +69,7 @@ const PAYMENT_SETTINGS: FeeAbstractionPaymentSettings = {
 const disposableDatabaseUrl = process.env.CALLORA_TEST_DISPOSABLE_DATABASE_URL;
 const PG_HELPER = path.join(process.cwd(), 'tests', 'helpers', 'pgliteServer.mjs');
 const QUOTE_MIGRATION_SQL = fs.readFileSync(
-  path.join(process.cwd(), 'migrations', '0027_fee_abstraction_quotes.sql'),
+  path.join(process.cwd(), 'migrations', '0034_fee_abstraction_quotes.sql'),
   'utf-8',
 );
 

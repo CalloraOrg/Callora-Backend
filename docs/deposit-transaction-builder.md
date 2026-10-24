@@ -4,6 +4,8 @@
 
 The deposit transaction builder endpoint allows users to prepare unsigned Stellar/Soroban transactions for depositing USDC into their vault contracts. The backend builds transaction XDR without ever handling user private keys, maintaining a non-custodial architecture.
 
+The transaction is simulated via Soroban RPC and assembled with `prepareTransaction` so it contains `sorobanData` (footprint, resource fees, auth entries). The caller must sign and submit the returned XDR.
+
 ## Endpoint
 
 ```
@@ -12,7 +14,7 @@ POST /api/vault/deposit/prepare
 
 ### Authentication
 
-Requires authentication via `x-user-id` header.
+Requires authentication via `Authorization: Bearer <JWT>` header.
 
 ### Request Body
 
@@ -42,7 +44,7 @@ Requires authentication via `x-user-id` header.
 
 - `source_account` (optional): Custom source account for the transaction
   - Format: Valid Stellar public key (G... with 56 characters)
-  - Default: Uses authenticated user's public key
+  - Default: Uses authenticated user's Stellar address from their profile
 
 ### Response
 
@@ -50,30 +52,55 @@ Requires authentication via `x-user-id` header.
 
 ```json
 {
-  "xdr": "AAAAAgAAAABx...(base64 XDR)...==",
-  "network": "testnet",
-  "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-  "amount": "100.0000000",
-  "operation": {
-    "type": "invoke_contract",
-    "function": "deposit",
-    "args": [
-      {
-        "type": "address",
-        "value": "GABC..."
-      },
-      {
-        "type": "i128",
-        "value": "1000000000"
-      }
-    ]
+  "success": true,
+  "data": {
+    "xdr": "AAAAAgAAAABx...(base64 XDR with sorobanData)...==",
+    "network": "testnet",
+    "contractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "amount": "100.0000000",
+    "operation": {
+      "type": "invoke_contract",
+      "function": "deposit",
+      "args": [
+        {
+          "type": "address",
+          "value": "GABC..."
+        },
+        {
+          "type": "i128",
+          "value": "1000000000"
+        }
+      ]
+    },
+    "metadata": {
+      "fee": "100",
+      "timeout": 300,
+      "resourceFee": "123456",
+      "minResourceFee": "100000",
+      "latestLedger": 12345678
+    }
   },
-  "metadata": {
-    "fee": "100",
-    "timeout": 300
-  }
+  "requestId": "req-123",
+  "timestamp": "2026-01-01T00:00:00.000Z"
 }
 ```
+
+##### Response Fields
+
+- `xdr`: Base64-encoded unsigned transaction XDR containing `sorobanData` (footprint, resource fees, auth entries)
+- `network`: Stellar network (`testnet` or `mainnet`)
+- `contractId`: Vault contract ID
+- `amount`: Deposit amount in USDC (7 decimal places)
+- `operation`: Details of the contract invocation
+  - `type`: Always `invoke_contract`
+  - `function`: Always `deposit`
+  - `args`: Array of arguments (user address and amount in stroops)
+- `metadata`: Transaction metadata
+  - `fee`: Base fee in stroops
+  - `timeout`: Transaction timeout in seconds
+  - `resourceFee`: Resource fee from Soroban simulation in stroops
+  - `minResourceFee`: Minimum resource fee from Soroban simulation in stroops
+  - `latestLedger`: Latest ledger sequence from Soroban simulation
 
 #### Error Responses
 
@@ -118,7 +145,7 @@ const response = await fetch('/api/vault/deposit/prepare', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
-    'x-user-id': 'GABC...'
+    'Authorization': 'Bearer <JWT>'
   },
   body: JSON.stringify({
     amount_usdc: '100.0000000',
@@ -126,7 +153,8 @@ const response = await fetch('/api/vault/deposit/prepare', {
   })
 });
 
-const { xdr, network } = await response.json();
+const { data } = await response.json();
+const { xdr, network } = data;
 ```
 
 ### 2. Sign with Wallet (Freighter Example)
@@ -144,7 +172,7 @@ const signedXdr = await window.freighterApi.signTransaction(xdr, {
 import { Server, TransactionBuilder } from '@stellar/stellar-sdk';
 
 const server = new Server(
-  network === 'testnet' 
+  network === 'testnet'
     ? 'https://horizon-testnet.stellar.org'
     : 'https://horizon.stellar.org'
 );
@@ -181,6 +209,22 @@ The backend converts the amount to stroops (smallest units) by multiplying by 10
 - Decimal precision prevents rounding exploits
 - Authentication required for all requests
 
+### Stellar Address
+
+The user's Stellar address is read from their profile (`users.stellar_address`). If not set, the endpoint returns `400 STELLAR_ADDRESS_REQUIRED`. Users must configure their Stellar address before preparing deposits.
+
+## Simulation and Assembly
+
+The transaction builder performs the following steps:
+
+1. **Load source account** from Horizon to get current sequence number
+2. **Build transaction** with the deposit contract invocation
+3. **Simulate transaction** via Soroban RPC (`simulateTransaction`) to get footprint, resource fees, and auth entries
+4. **Prepare transaction** via Soroban RPC (`prepareTransaction`) to assemble the final XDR with `sorobanData`
+5. **Return unsigned XDR** with metadata including `resourceFee`, `minResourceFee`, and `latestLedger`
+
+Simulation errors (including vault contract errors like `BelowMinDeposit (8)`, `Paused (4)`) are mapped to `SimulationError` with redacted diagnostics.
+
 ## Testing
 
 Run tests with:
@@ -198,10 +242,12 @@ STELLAR_NETWORK=testnet                      # or 'mainnet' (SOROBAN_NETWORK als
 
 # Testnet endpoints/contracts
 STELLAR_TESTNET_HORIZON_URL=https://horizon-testnet.stellar.org
+SOROBAN_TESTNET_RPC_URL=https://soroban-testnet.stellar.org:443
 STELLAR_TESTNET_VAULT_CONTRACT_ID=CC...TESTNET_VAULT
 
 # Mainnet endpoints/contracts
 STELLAR_MAINNET_HORIZON_URL=https://horizon.stellar.org
+SOROBAN_MAINNET_RPC_URL=https://soroban-mainnet.stellar.org:443
 STELLAR_MAINNET_VAULT_CONTRACT_ID=CC...MAINNET_VAULT
 
 STELLAR_BASE_FEE=100                         # Optional: default 100 stroops
@@ -213,6 +259,7 @@ Required configuration for safe transaction building:
 
 - `STELLAR_NETWORK` (or `SOROBAN_NETWORK`) must select exactly one active network.
 - `STELLAR_<NETWORK>_HORIZON_URL` must point to the matching Horizon instance for that network.
+- `SOROBAN_<NETWORK>_RPC_URL` must point to the matching Soroban RPC instance for that network.
 - `STELLAR_<NETWORK>_VAULT_CONTRACT_ID` should be set so the builder can reject mismatched contract IDs.
 - `STELLAR_BASE_FEE` and `STELLAR_TRANSACTION_TIMEOUT` are optional. If omitted, the builder defaults to `100` stroops and `300` seconds.
 
@@ -223,7 +270,7 @@ Required configuration for safe transaction building:
 - The builder does not attach a memo unless a valid text memo is provided explicitly
 - The endpoint is stateless and supports horizontal scaling
 - Only read operations are performed on the database
-- Network calls to Horizon may add latency (target: < 500ms)
+- Network calls to Horizon and Soroban RPC may add latency (target: < 500ms)
 
 ## Concurrency — Sequence Manager
 
@@ -257,3 +304,6 @@ const sequence = await seqManager.nextSequence(sourceAccountPublicKey);
 - Different source accounts are serialised independently — one account's load
   latency does not block another account.
 
+### Sequence Store Behavior
+
+The sequence store (`PostgresSequenceStore`) is only used for **backend-owned source accounts**. For user-owned accounts (the default when `source_account` is not provided), the sequence store is **not used** — the wallet owns the sequence and submits the transaction directly. This prevents abandoned prepared transactions from burning sequence numbers.

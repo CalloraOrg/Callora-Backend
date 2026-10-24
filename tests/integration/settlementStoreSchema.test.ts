@@ -77,8 +77,8 @@ describe('PostgresSettlementStore schema contract', () => {
       INSERT INTO settlements (external_id, developer_id, amount_usdc, status)
       VALUES ('preexisting', 'dev_1', 12.5, 'pending')
     `);
-    await runSql(pool, readFileSync(migrationPath('0026_settlement_retry_policy.sql'), 'utf8'));
-  });
+    await runSql(pool, readFileSync(migrationPath('0031_settlement_retry_policy.sql'), 'utf8'));
+  }, 120_000);
 
   afterAll(async () => {
     try {
@@ -101,7 +101,7 @@ describe('PostgresSettlementStore schema contract', () => {
     await store.create({
       id: 'pending_retry',
       developerId: 'dev_1',
-      amount: 15,
+      amount: 150_000_000n,
       status: 'pending',
       tx_hash: 'tx-pending',
       created_at: new Date().toISOString(),
@@ -145,7 +145,7 @@ describe('PostgresSettlementStore schema contract', () => {
     await store.create({
       id: 'completed_retry',
       developerId: 'dev_1',
-      amount: 1,
+      amount: 10_000_000n,
       status: 'completed',
       tx_hash: 'tx-completed',
       created_at: new Date().toISOString(),
@@ -161,7 +161,7 @@ describe('PostgresSettlementStore schema contract', () => {
   });
 
   it('rolls back retry columns and restores the original status constraint', async () => {
-    await runSql(pool, readFileSync(migrationPath('0026_settlement_retry_policy.down.sql'), 'utf8'));
+    await runSql(pool, readFileSync(migrationPath('0031_settlement_retry_policy.down.sql'), 'utf8'));
 
     const columns = await pool.query(`
       SELECT column_name FROM information_schema.columns

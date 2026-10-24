@@ -82,8 +82,8 @@ async function createIdempotencyPool(clock: () => Date): Promise<Pool> {
   const db: Pool = new adapter.Pool();
   await db.query(readFileSync('migrations/004_create_idempotency_store.sql', 'utf8'));
   await db.query(readFileSync('migrations/0025_idempotency_store_scope.sql', 'utf8'));
-  await db.query(readFileSync('migrations/0027_idempotency_lease.sql', 'utf8'));
-  await db.query(readFileSync('migrations/0028_idempotency_response_headers.sql', 'utf8'));
+  await db.query(readFileSync('migrations/0028_idempotency_lease.sql', 'utf8'));
+  await db.query(readFileSync('migrations/0033_idempotency_response_headers.sql', 'utf8'));
   return db;
 }
 

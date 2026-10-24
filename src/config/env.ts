@@ -108,6 +108,14 @@ export const envSchema = z
     JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
     ADMIN_API_KEY: z.string().min(1, "ADMIN_API_KEY is required"),
     METRICS_API_KEY: z.string().min(1, "METRICS_API_KEY is required"),
+
+    // Export object storage. Disabled unless explicitly enabled.
+    EXPORTS_ENABLED: z.string().optional().transform((value) => value === "true").default(false),
+    EXPORTS_S3_BUCKET: z.string().trim().min(1).optional(),
+    EXPORTS_S3_ENDPOINT: z.string().url().optional(),
+    EXPORTS_S3_REGION: z.string().trim().min(1).optional(),
+    EXPORTS_SIGNING_SECRET: z.string().min(32).optional(),
+    EXPORTS_S3_ENDPOINT_ALLOWLIST: z.string().optional(),
     TRUST_FORWARDED_USER_ID: z
       .string()
       .optional()
@@ -245,7 +253,6 @@ export const envSchema = z
       .int()
       .positive()
       .default(5_000),
-
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
 
@@ -366,10 +373,6 @@ export const envSchema = z
     STELLAR_MAINNET_VAULT_CONTRACT_ID: contractId.optional(),
     STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID: contractId.optional(),
     STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID: contractId.optional(),
-    STELLAR_TESTNET_REVENUE_POOL_CONTRACT_ID: contractId.optional(),
-    STELLAR_MAINNET_REVENUE_POOL_CONTRACT_ID: contractId.optional(),
-    STELLAR_TESTNET_USDC_CONTRACT_ID: contractId.optional(),
-    STELLAR_MAINNET_USDC_CONTRACT_ID: contractId.optional(),
     VAULT_SNAPSHOT_MAX_AGE_MS: z.coerce.number().int().positive().default(60_000),
 
     STELLAR_BASE_FEE: z.coerce.number().int().positive().default(100),
@@ -501,12 +504,27 @@ export const envSchema = z
       .int()
       .positive()
       .default(86400),
+    IDEMPOTENCY_SWEEPER_ENABLED: z
+      .string()
+      .optional()
+      .transform((v) => v !== "false")
+      .default(true),
     IDEMPOTENCY_SWEEPER_INTERVAL_MS: z.coerce
       .number()
       .int()
       .positive()
       .default(60_000),
     IDEMPOTENCY_MAX_BODY_BYTES: z.coerce.number().int().positive().default(256 * 1024),
+    IDEMPOTENCY_SWEEPER_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5000),
+    IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5000),
 
     // Slow query alerting
     SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),
@@ -654,6 +672,66 @@ export const envSchema = z
       });
     }
 
+    if (data.EXPORTS_ENABLED) {
+      for (const [key, value] of [
+        ["EXPORTS_S3_BUCKET", data.EXPORTS_S3_BUCKET],
+        ["EXPORTS_S3_ENDPOINT", data.EXPORTS_S3_ENDPOINT],
+        ["EXPORTS_S3_REGION", data.EXPORTS_S3_REGION],
+        ["EXPORTS_SIGNING_SECRET", data.EXPORTS_SIGNING_SECRET],
+      ] as const) {
+        if (!value) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when EXPORTS_ENABLED=true`,
+          });
+        }
+      }
+    }
+
+    if (data.NODE_ENV === "production" && data.FORWARDED_IDENTITY_ALLOW_LEGACY) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["FORWARDED_IDENTITY_ALLOW_LEGACY"], message: "Legacy forwarded identities are forbidden in production" });
+    }
+    if (data.NODE_ENV === "production" && !data.SOROBAN_BILLING_CONTRACT_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SOROBAN_BILLING_CONTRACT_ID"],
+        message: "SOROBAN_BILLING_CONTRACT_ID is required in production",
+      });
+    }
+
+    if (data.SOROBAN_RPC_ENABLED && !data.SOROBAN_RPC_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SOROBAN_RPC_URL"],
+        message: "SOROBAN_RPC_URL is required when SOROBAN_RPC_ENABLED=true",
+      });
+    }
+
+    if (data.HORIZON_ENABLED && !data.HORIZON_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["HORIZON_URL"],
+        message: "HORIZON_URL is required when HORIZON_ENABLED=true",
+      });
+    }
+
+    // In production the upstream host allowlist must be explicitly configured.
+    // The default empty allowlist rejects all upstream hosts, so operators
+    // must set UPSTREAM_HOST_ALLOWLIST to a non-empty value to proxy traffic.
+    if (
+      data.NODE_ENV === "production" &&
+      (!data.UPSTREAM_HOST_ALLOWLIST ||
+        data.UPSTREAM_HOST_ALLOWLIST.trim() === "")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["UPSTREAM_HOST_ALLOWLIST"],
+        message:
+          "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
+      });
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Stellar / Soroban network consistency checks.
     //
@@ -775,4 +853,14 @@ export const envSchema = z
 
 export type EnvSchema = z.infer<typeof envSchema>;
 
-export const env = envSchema.parse(process.env);
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error("❌ Invalid environment configuration:");
+  parsed.error.issues.forEach((issue) => {
+    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
+  });
+  process.exit(1);
+}
+
+export const env = parsed.data;

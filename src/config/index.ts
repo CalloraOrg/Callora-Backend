@@ -12,8 +12,6 @@ interface StellarNetworkConfig {
   networkPassphrase: string;
   vaultContractId?: string;
   settlementContractId?: string;
-  revenuePoolContractId?: string;
-  xusdContractId?: string;
 }
 
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
@@ -74,9 +72,7 @@ const testnetConfig: StellarNetworkConfig = {
   networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_TESTNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID,
-  revenuePoolContractId: env.STELLAR_TESTNET_REVENUE_POOL_CONTRACT_ID,
-  xusdContractId: env.STELLAR_TESTNET_USDC_CONTRACT_ID,
-} as StellarNetworkConfig;
+};
 
 const mainnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
@@ -90,9 +86,7 @@ const mainnetConfig: StellarNetworkConfig = {
   networkPassphrase: MAINNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
-  revenuePoolContractId: env.STELLAR_MAINNET_REVENUE_POOL_CONTRACT_ID,
-  xusdContractId: env.STELLAR_MAINNET_USDC_CONTRACT_ID,
-} as StellarNetworkConfig;
+};
 
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
@@ -175,6 +169,18 @@ export const config = {
   },
   metrics: {
     apiKey: env.METRICS_API_KEY,
+  },
+
+  exports: {
+    enabled: env.EXPORTS_ENABLED,
+    bucket: env.EXPORTS_S3_BUCKET,
+    endpoint: env.EXPORTS_S3_ENDPOINT,
+    region: env.EXPORTS_S3_REGION,
+    signingSecret: env.EXPORTS_SIGNING_SECRET,
+    endpointAllowlist: (env.EXPORTS_S3_ENDPOINT_ALLOWLIST ?? "")
+      .split(",")
+      .map((host) => host.trim())
+      .filter(Boolean),
   },
 
   proxy: {
@@ -343,6 +349,13 @@ export const config = {
 
   monthlyInvoiceJob: {
     intervalMs: env.MONTHLY_INVOICE_JOB_INTERVAL_MS,
+  },
+
+  idempotencySweeper: {
+    enabled: env.IDEMPOTENCY_SWEEPER_ENABLED,
+    intervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
+    batchSize: env.IDEMPOTENCY_SWEEPER_BATCH_SIZE,
+    timeBudgetMs: env.IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS,
   },
 
   sloAlert: {

@@ -126,8 +126,8 @@ export interface UsageEventCreatedData {
     endpointId: string;
     /** Developer who owns the API key used for this request. */
     developerId: string;
-    /** Amount in USDC charged for this request. */
-    amountUsdc: number;
+    /** Amount in USDC charged for this request (decimal string, e.g. "0.0000001"). */
+    amountUsdc: string;
     /** HTTP status code returned by the upstream API. */
     statusCode: number;
     /** ISO 8601 timestamp of when the usage event was recorded. */

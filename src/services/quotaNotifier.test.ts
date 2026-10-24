@@ -20,11 +20,13 @@ import {
     periodOf,
     monthBoundaries,
     InMemoryQuotaNotificationStore,
+    PgQuotaNotificationStore,
     QUOTA_THRESHOLDS,
     createQuotaNotifierJob,
     type QuotaNotifierDeps,
     type DeveloperQuota,
     type QuotaNotificationStore,
+    type QuotaNotificationDb,
 } from './quotaNotifier.js';
 import type { UsageEventsRepository, UsageEvent, UsageEventQuery } from '../repositories/usageEventsRepository.js';
 import { WebhookStore } from '../webhooks/webhook.store.js';
@@ -35,6 +37,14 @@ jest.mock('dns/promises', () => {
     const lookup = jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
     return { ...actual, __esModule: true, default: { ...actual, lookup }, lookup };
 });
+
+jest.mock('dns/promises', () => ({
+    __esModule: true,
+    default: {
+        lookup: jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]),
+    },
+    lookup: jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -52,7 +62,7 @@ function makeEvent(developerId: string, occurredAt: Date): UsageEvent {
     };
 }
 
-/** Creates a UsageEventsRepository stub that returns `events` for findByDeveloper. */
+/** Creates a UsageEventsRepository stub that counts matching events. */
 function makeUsageRepo(events: UsageEvent[]): UsageEventsRepository {
     return {
         async findByDeveloper(query: UsageEventQuery) {
@@ -62,6 +72,14 @@ function makeUsageRepo(events: UsageEvent[]): UsageEventsRepository {
                     e.occurredAt >= query.from &&
                     e.occurredAt <= query.to,
             );
+        },
+        async countByDeveloper(query: { developerId: string; from: Date; to: Date }) {
+            return events.filter(
+                (e) =>
+                    e.developerId === query.developerId &&
+                    e.occurredAt >= query.from &&
+                    e.occurredAt < query.to,
+            ).length;
         },
         findByUser: jest.fn(),
         developerOwnsApi: jest.fn(),
@@ -121,22 +139,22 @@ describe('monthBoundaries', () => {
         expect(from.toISOString()).toBe('2026-06-01T00:00:00.000Z');
     });
 
-    it('sets to to the last millisecond of the month (UTC)', () => {
+    it('sets to to the start of the next month (exclusive, UTC)', () => {
         const { to } = monthBoundaries(JUNE_15);
-        expect(to.toISOString()).toBe('2026-06-30T23:59:59.999Z');
+        expect(to.toISOString()).toBe('2026-07-01T00:00:00.000Z');
     });
 
     it('handles December correctly (no month 13)', () => {
         const dec = new Date('2026-12-15T00:00:00Z');
         const { from, to } = monthBoundaries(dec);
         expect(from.toISOString()).toBe('2026-12-01T00:00:00.000Z');
-        expect(to.toISOString()).toBe('2026-12-31T23:59:59.999Z');
+        expect(to.toISOString()).toBe('2027-01-01T00:00:00.000Z');
     });
 
     it('handles February in a leap year', () => {
         const feb = new Date('2024-02-15T00:00:00Z');
         const { to } = monthBoundaries(feb);
-        expect(to.toISOString()).toBe('2024-02-29T23:59:59.999Z');
+        expect(to.toISOString()).toBe('2024-03-01T00:00:00.000Z');
     });
 });
 
@@ -145,38 +163,57 @@ describe('monthBoundaries', () => {
 // ---------------------------------------------------------------------------
 
 describe('InMemoryQuotaNotificationStore', () => {
-    it('returns false before a notification is marked', async () => {
+    it('returns false before a notification key is claimed', async () => {
         const store = new InMemoryQuotaNotificationStore();
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(false);
     });
 
-    it('returns true after markSent', async () => {
+    it('returns true after a successful claim', async () => {
         const store = new InMemoryQuotaNotificationStore();
-        await store.markSent('dev_1', '2026-06', 80);
+        expect(await store.tryClaim('dev_1', '2026-06', 80)).toBe(true);
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(true);
     });
 
     it('is keyed by (developerId, period, threshold) — different keys are independent', async () => {
         const store = new InMemoryQuotaNotificationStore();
-        await store.markSent('dev_1', '2026-06', 80);
+        await store.tryClaim('dev_1', '2026-06', 80);
 
         expect(await store.hasBeenSent('dev_1', '2026-06', 95)).toBe(false);
         expect(await store.hasBeenSent('dev_2', '2026-06', 80)).toBe(false);
         expect(await store.hasBeenSent('dev_1', '2026-07', 80)).toBe(false);
     });
 
-    it('markSent is idempotent', async () => {
+    it('tryClaim returns false after the key has already been claimed', async () => {
         const store = new InMemoryQuotaNotificationStore();
-        await store.markSent('dev_1', '2026-06', 80);
-        await store.markSent('dev_1', '2026-06', 80); // no throw
+        expect(await store.tryClaim('dev_1', '2026-06', 80)).toBe(true);
+        expect(await store.tryClaim('dev_1', '2026-06', 80)).toBe(false);
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(true);
     });
 
     it('clear() resets all state', async () => {
         const store = new InMemoryQuotaNotificationStore();
-        await store.markSent('dev_1', '2026-06', 80);
+        await store.tryClaim('dev_1', '2026-06', 80);
         store.clear();
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(false);
+    });
+});
+
+describe('PgQuotaNotificationStore', () => {
+    it('uses the diagnostic lookup and reports whether an atomic insert claimed the key', async () => {
+        const query = jest.fn()
+            .mockResolvedValueOnce({ rows: [{ exists: true }] })
+            .mockResolvedValueOnce({ rows: [{ '?column?': 1 }] })
+            .mockResolvedValueOnce({ rows: [] })
+            .mockResolvedValueOnce({ rows: [] });
+        const store = new PgQuotaNotificationStore({ query } as unknown as QuotaNotificationDb);
+
+        expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(true);
+        expect(await store.tryClaim('dev_1', '2026-06', 80)).toBe(true);
+        expect(await store.tryClaim('dev_1', '2026-06', 80)).toBe(false);
+        expect(await store.hasBeenSent('dev_1', '2026-06', 95)).toBe(false);
+
+        expect(query.mock.calls[1]?.[0]).toContain('ON CONFLICT (developer_id, period, threshold) DO NOTHING');
+        expect(query.mock.calls[1]?.[0]).toContain('RETURNING 1');
     });
 });
 
@@ -190,64 +227,89 @@ describe('runQuotaCheck — threshold detection', () => {
         resetWebhookDispatcherForTests();
     });
 
-    it('fires no notifications when usage is below 80%', async () => {
+    it('claims no notifications when usage is below 80%', async () => {
         // 79 / 100 = 79%
         const events = Array.from({ length: 79 }, () => makeEvent('dev_1', JUNE_15));
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(0);
+        expect(outcome).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(false);
     });
 
-    it('fires the 80% notification at exactly 80 calls / 100 limit', async () => {
+    it('claims the 80% threshold at exactly 80 calls / 100 limit', async () => {
         const events = Array.from({ length: 80 }, () => makeEvent('dev_1', JUNE_15));
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(1);
+        expect(outcome).toEqual({ claimed: 1, dispatched: 0, noSubscribers: 1 });
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(true);
         expect(await store.hasBeenSent('dev_1', '2026-06', 95)).toBe(false);
     });
 
-    it('fires 80% and 95% when usage is at 95%', async () => {
+    it('counts usage through countByDeveloper without loading events', async () => {
+        const usageRepo = {
+            countByDeveloper: jest.fn().mockResolvedValue(80),
+            findByDeveloper: jest.fn(),
+        } as unknown as UsageEventsRepository;
+        const store = new InMemoryQuotaNotificationStore();
+        const deps: QuotaNotifierDeps = {
+            usageRepo,
+            notificationStore: store,
+            getDeveloperQuotas: async () => [{ developerId: 'dev_1', monthlyLimit: 100 }],
+            now: () => JUNE_15,
+            logger: { error: jest.fn(), info: jest.fn() },
+        };
+
+        const outcome = await runQuotaCheck(deps);
+
+        expect(outcome).toEqual({ claimed: 1, dispatched: 0, noSubscribers: 1 });
+        expect(usageRepo.countByDeveloper).toHaveBeenCalledWith({
+            developerId: 'dev_1',
+            from: new Date('2026-06-01T00:00:00.000Z'),
+            to: new Date('2026-07-01T00:00:00.000Z'),
+        });
+        expect(usageRepo.findByDeveloper).not.toHaveBeenCalled();
+    });
+
+    it('claims 80% and 95% when usage is at 95%', async () => {
         const events = Array.from({ length: 95 }, () => makeEvent('dev_1', JUNE_15));
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(2);
+        expect(outcome).toEqual({ claimed: 2, dispatched: 0, noSubscribers: 2 });
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(true);
         expect(await store.hasBeenSent('dev_1', '2026-06', 95)).toBe(true);
         expect(await store.hasBeenSent('dev_1', '2026-06', 100)).toBe(false);
     });
 
-    it('fires all three thresholds when usage is at 100%', async () => {
+    it('claims all three thresholds when usage is at 100%', async () => {
         const events = Array.from({ length: 100 }, () => makeEvent('dev_1', JUNE_15));
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(3);
+        expect(outcome).toEqual({ claimed: 3, dispatched: 0, noSubscribers: 3 });
         for (const threshold of QUOTA_THRESHOLDS) {
             expect(await store.hasBeenSent('dev_1', '2026-06', threshold)).toBe(true);
         }
     });
 
-    it('fires all three when usage exceeds 100%', async () => {
+    it('claims all three thresholds when usage exceeds 100%', async () => {
         const events = Array.from({ length: 150 }, () => makeEvent('dev_1', JUNE_15));
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(3);
+        expect(outcome).toEqual({ claimed: 3, dispatched: 0, noSubscribers: 3 });
     });
 });
 
@@ -261,19 +323,19 @@ describe('runQuotaCheck — idempotency', () => {
         resetWebhookDispatcherForTests();
     });
 
-    it('does not re-fire a threshold already marked in the store', async () => {
+    it('does not re-claim a threshold already recorded in the store', async () => {
         const events = Array.from({ length: 80 }, () => makeEvent('dev_1', JUNE_15));
         const store = new InMemoryQuotaNotificationStore();
-        await store.markSent('dev_1', '2026-06', 80); // pre-seed
+        await store.tryClaim('dev_1', '2026-06', 80); // pre-seed
 
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(0);
+        expect(outcome).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
     });
 
-    it('fires each threshold exactly once across repeated runs in the same period', async () => {
+    it('claims each threshold exactly once across repeated runs in the same period', async () => {
         const events = Array.from({ length: 100 }, () => makeEvent('dev_1', JUNE_15));
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
@@ -282,9 +344,9 @@ describe('runQuotaCheck — idempotency', () => {
         const second = await runQuotaCheck(deps);
         const third = await runQuotaCheck(deps);
 
-        expect(first).toBe(3);
-        expect(second).toBe(0);
-        expect(third).toBe(0);
+        expect(first).toEqual({ claimed: 3, dispatched: 0, noSubscribers: 3 });
+        expect(second).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
+        expect(third).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
     });
 });
 
@@ -308,13 +370,13 @@ describe('runQuotaCheck — month boundary', () => {
             () => JUNE_15,
         );
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(0);
+        expect(outcome).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
     });
 
-    it('sends June notifications for June and July notifications for July independently', async () => {
-        // 1 event in June → 100% of quota=1 → fires threshold 80/95/100
+    it('claims June and July thresholds independently', async () => {
+        // 1 event in June → 100% of quota=1 → claims thresholds 80/95/100
         const juneEvent = makeEvent('dev_1', JUNE_15);
         const store = new InMemoryQuotaNotificationStore();
         const juneEvents = [juneEvent];
@@ -336,10 +398,10 @@ describe('runQuotaCheck — month boundary', () => {
             store,
             () => JULY_1,
         );
-        const julyFired = await runQuotaCheck(julyDeps);
+        const julyOutcome = await runQuotaCheck(julyDeps);
 
         // Should fire thresholds again because the period is now '2026-07'
-        expect(julyFired).toBe(3);
+        expect(julyOutcome).toEqual({ claimed: 3, dispatched: 0, noSubscribers: 3 });
         expect(await store.hasBeenSent('dev_1', '2026-07', 80)).toBe(true);
     });
 
@@ -362,9 +424,9 @@ describe('runQuotaCheck — month boundary', () => {
 
         // Advance clock to July — even same events array, period should differ
         currentTime = JULY_1;
-        const julyFired = await runQuotaCheck(deps);
+        const julyOutcome = await runQuotaCheck(deps);
         // juneEvent is outside July boundary, so callCount = 0 → no thresholds crossed
-        expect(julyFired).toBe(0);
+        expect(julyOutcome).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
     });
 });
 
@@ -383,8 +445,8 @@ describe('runQuotaCheck — guard conditions', () => {
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 0 }], store, () => JUNE_15);
 
-        const fired = await runQuotaCheck(deps);
-        expect(fired).toBe(0);
+        const outcome = await runQuotaCheck(deps);
+        expect(outcome).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
     });
 
     it('handles multiple developers independently', async () => {
@@ -403,9 +465,9 @@ describe('runQuotaCheck — guard conditions', () => {
             () => JUNE_15,
         );
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(1); // only dev_1 crossed 80%
+        expect(outcome).toEqual({ claimed: 1, dispatched: 0, noSubscribers: 1 }); // only dev_1 crossed 80%
         expect(await store.hasBeenSent('dev_1', '2026-06', 80)).toBe(true);
         expect(await store.hasBeenSent('dev_2', '2026-06', 80)).toBe(false);
     });
@@ -421,9 +483,9 @@ describe('runQuotaCheck — guard conditions', () => {
             logger,
         };
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(0);
+        expect(outcome).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
         expect(logger.error).toHaveBeenCalledWith(
             expect.stringContaining('Failed to load developer quotas'),
             expect.any(Error),
@@ -436,11 +498,11 @@ describe('runQuotaCheck — guard conditions', () => {
 
         // dev_1's usage fetch will throw; dev_2 should still be processed
         const usageRepo: UsageEventsRepository = {
-            async findByDeveloper(query: UsageEventQuery) {
+            async countByDeveloper(query: { developerId: string; from: Date; to: Date }) {
                 if (query.developerId === 'dev_1') throw new Error('usage fetch failed');
-                // dev_2: 80 events
-                return Array.from({ length: 80 }, () => makeEvent('dev_2', JUNE_15));
+                return 80;
             },
+            findByDeveloper: jest.fn(),
             findByUser: jest.fn(),
             developerOwnsApi: jest.fn(),
             aggregateByDeveloper: jest.fn(),
@@ -458,22 +520,23 @@ describe('runQuotaCheck — guard conditions', () => {
             logger,
         };
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(1); // dev_2 fired
+        expect(outcome).toEqual({ claimed: 1, dispatched: 0, noSubscribers: 1 }); // dev_2 claimed
         expect(logger.error).toHaveBeenCalledWith(
             expect.stringContaining('Failed to fetch usage for developer dev_1'),
             expect.any(Error),
         );
     });
 
-    it('continues when notificationStore.hasBeenSent throws', async () => {
+    it('logs a failed atomic claim and skips that threshold', async () => {
         const events = Array.from({ length: 80 }, () => makeEvent('dev_1', JUNE_15));
         const logger = { error: jest.fn(), info: jest.fn() };
+        const hasBeenSent = jest.fn();
 
         const faultyStore: QuotaNotificationStore = {
-            async hasBeenSent() { throw new Error('store unavailable'); },
-            async markSent() { /* no-op */ },
+            hasBeenSent,
+            async tryClaim() { throw new Error('store unavailable'); },
         };
 
         const deps: QuotaNotifierDeps = {
@@ -484,39 +547,14 @@ describe('runQuotaCheck — guard conditions', () => {
             logger,
         };
 
-        const fired = await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
 
-        expect(fired).toBe(0);
+        expect(outcome).toEqual({ claimed: 0, dispatched: 0, noSubscribers: 0 });
         expect(logger.error).toHaveBeenCalledWith(
-            expect.stringContaining('Failed to check notification state'),
+            expect.stringContaining('Failed to claim notification'),
             expect.any(Error),
         );
-    });
-
-    it('continues when notificationStore.markSent throws', async () => {
-        const events = Array.from({ length: 80 }, () => makeEvent('dev_1', JUNE_15));
-        const logger = { error: jest.fn(), info: jest.fn() };
-
-        const faultyStore: QuotaNotificationStore = {
-            async hasBeenSent() { return false; },
-            async markSent() { throw new Error('write failed'); },
-        };
-
-        const deps: QuotaNotifierDeps = {
-            usageRepo: makeUsageRepo(events),
-            notificationStore: faultyStore,
-            getDeveloperQuotas: async () => [{ developerId: 'dev_1', monthlyLimit: 100 }],
-            now: () => JUNE_15,
-            logger,
-        };
-
-        const fired = await runQuotaCheck(deps);
-
-        expect(fired).toBe(0);
-        expect(logger.error).toHaveBeenCalledWith(
-            expect.stringContaining('Failed to persist notification state'),
-            expect.any(Error),
-        );
+        expect(hasBeenSent).not.toHaveBeenCalled();
     });
 });
 
@@ -554,9 +592,10 @@ describe('runQuotaCheck — webhook payload shape', () => {
         const store = new InMemoryQuotaNotificationStore();
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
-        await runQuotaCheck(deps);
+        const outcome = await runQuotaCheck(deps);
         await awaitWebhookDispatcherIdle();
 
+        expect(outcome).toEqual({ claimed: 1, dispatched: 1, noSubscribers: 0 });
         expect(capturedPayloads).toHaveLength(1);
         const payload = capturedPayloads[0] as { event: string; developerId: string; data: Record<string, unknown> };
         expect(payload.event).toBe('quota.threshold.reached');
@@ -616,6 +655,28 @@ describe('createQuotaNotifierJob', () => {
         }
 
         expect(getDeveloperQuotas).toHaveBeenCalledTimes(3);
+    });
+
+    it('skips an interval tick while the previous tick is still running', async () => {
+        let releaseTick: ((quotas: DeveloperQuota[]) => void) | undefined;
+        const getDeveloperQuotas = jest.fn(
+            () => new Promise<DeveloperQuota[]>((resolve) => { releaseTick = resolve; }),
+        );
+        const job = createQuotaNotifierJob(makeUsageRepo([]), new InMemoryQuotaNotificationStore(), {
+            intervalMs: 1000,
+            getDeveloperQuotas,
+        });
+
+        job.start();
+        jest.advanceTimersByTime(2000);
+        await Promise.resolve();
+
+        expect(getDeveloperQuotas).toHaveBeenCalledTimes(1);
+
+        releaseTick?.([]);
+        await Promise.resolve();
+        await Promise.resolve();
+        job.stop();
     });
 
     it('stops firing after stop() is called', async () => {

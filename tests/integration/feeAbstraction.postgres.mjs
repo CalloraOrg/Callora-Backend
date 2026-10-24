@@ -474,7 +474,7 @@ async function setUp() {
 
   await ctx.setup.query(`CREATE SCHEMA ${SCHEMA}`);
   schemaCreated = true;
-  const migration = await readFile(path.join(root, 'migrations/0027_fee_abstraction_quotes.sql'), 'utf8');
+  const migration = await readFile(path.join(root, 'migrations/0034_fee_abstraction_quotes.sql'), 'utf8');
   await ctx.setup.query(migration);
 }
 

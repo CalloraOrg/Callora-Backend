@@ -12,8 +12,10 @@ import {
   SourceAccountNotFoundError,
   TransactionBuildError,
   SimulationError,
+  StellarAddressRequiredError,
 } from '../services/transactionBuilder.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
+import { defaultUserRepository, type UserRepository } from '../repositories/userRepository.js';
 import { config } from '../config/index.js';
 import { redactSimulationDetails } from '../lib/simulationDiagnostics.js';
 import { successEnvelope, errorEnvelope, getRequestId } from '../lib/envelope.js';
@@ -40,6 +42,9 @@ export interface DepositPrepareResponse {
   metadata: {
     fee: string;
     timeout: number;
+    resourceFee: string;
+    minResourceFee: string;
+    latestLedger: number;
   };
 }
 
@@ -53,7 +58,8 @@ export class VaultNotFoundError extends Error {
 export class DepositController {
   constructor(
     private readonly vaultRepository: VaultRepository,
-    private readonly transactionBuilder: TransactionBuilderService
+    private readonly transactionBuilder: TransactionBuilderService,
+    private readonly userRepository: UserRepository = defaultUserRepository
   ) {}
 
   async prepareDeposit(
@@ -166,16 +172,29 @@ export class DepositController {
         return;
       }
 
-      // Step 7: Build unsigned transaction
+      // Step 7: Retrieve user's Stellar address
+      const userRecord = await this.userRepository.findById(user.id);
+      if (!userRecord || !userRecord.stellarAddress) {
+        res.status(400).json(
+          errorEnvelope(
+            'STELLAR_ADDRESS_REQUIRED',
+            'User does not have a Stellar address configured. Please update your profile.',
+            requestId
+          )
+        );
+        return;
+      }
+
+      // Step 8: Build unsigned transaction
       const unsignedTx = await this.transactionBuilder.buildDepositTransaction({
-        userPublicKey: user.id, // Assuming user.id is the Stellar public key
+        userStellarAddress: userRecord.stellarAddress,
         vaultContractId: vault.contractId,
         amountUsdc: validation.normalizedAmount!,
         network,
         sourceAccount: requestBody.source_account,
       });
 
-      // Step 8: Construct and return response
+      // Step 9: Construct and return response
       const response: DepositPrepareResponse = {
         xdr: unsignedTx.xdr,
         network: unsignedTx.network,
@@ -189,6 +208,9 @@ export class DepositController {
         metadata: {
           fee: unsignedTx.fee,
           timeout: unsignedTx.timeout,
+          resourceFee: unsignedTx.resourceFee,
+          minResourceFee: unsignedTx.minResourceFee,
+          latestLedger: unsignedTx.latestLedger,
         },
       };
 
@@ -238,19 +260,33 @@ export class DepositController {
       );
     } else if (error instanceof NetworkError) {
       res.status(503).json({
+        success: false,
         error: 'Unable to connect to Stellar network. Please try again later.',
         code: 'NETWORK_UNAVAILABLE',
         network: error.message,
+        requestId,
+        timestamp: new Date().toISOString(),
       });
     } else if (error instanceof SimulationError) {
       // Log full diagnostics at warning level, but only expose a redacted summary.
       console.warn('Soroban simulation diagnostics:', error.simulationDetails);
       const redacted = redactSimulationDetails(error.simulationDetails);
       res.status(502).json({
+        success: false,
         error: 'Soroban simulation failed. See diagnostics for details.',
         code: 'SIMULATION_FAILED',
         simulationDetails: redacted,
+        requestId,
+        timestamp: new Date().toISOString(),
       });
+    } else if (error instanceof StellarAddressRequiredError) {
+      res.status(400).json(
+        errorEnvelope(
+          'STELLAR_ADDRESS_REQUIRED',
+          'User does not have a Stellar address configured. Please update your profile.',
+          requestId
+        )
+      );
     } else if (error instanceof TransactionBuildError) {
       res.status(502).json(
         errorEnvelope(
@@ -270,5 +306,4 @@ export class DepositController {
       );
     }
   }
-
 }
