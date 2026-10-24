@@ -89,6 +89,94 @@ export class RevenueSettlementService {
   }
 
   private async runBatchOnce(): Promise<{ processed: number; settledAmount: bigint; errors: number }> {
+    return await this.runBatchOnceAtomic();
+  }
+
+  private async runBatchOnceAtomic(): Promise<{ processed: number; settledAmount: bigint; errors: number }> {
+    const rawMinPayout = this.options.minPayoutUsdc ?? 5.0;
+    const minPayout = parseUsdcToUnits(rawMinPayout.toFixed(7));
+    const maxEvents = this.options.maxEventsPerBatch ?? 1000;
+
+    let totalProcessed = 0;
+    let totalSettledAmount = 0n;
+    let errors = 0;
+
+    const devResult = typeof (this.usageStore as any).getUnsettledDeveloperIds === 'function'
+      ? await (this.usageStore as any).getUnsettledDeveloperIds()
+      : [];
+    const devIds: string[] = devResult;
+
+    for (const developerId of devIds) {
+      try {
+        const claimed = await (this.usageStore as any).claimUnsettledEvents(developerId, maxEvents);
+        if (!claimed || claimed.events.length === 0) {
+          continue;
+        }
+
+        if (claimed.totalAmount < minPayout) {
+          await (this.usageStore as any).releaseEvents(claimed.events.map((e: any) => e.id));
+          continue;
+        }
+
+        const settlementId = `stl_${randomUUID()}`;
+        await (this.settlementStore as any).createClaimed({
+          id: settlementId,
+          developerId,
+          amount: claimed.totalAmount,
+          status: 'claimed',
+          tx_hash: null,
+          created_at: new Date().toISOString(),
+        });
+
+        await this.usageStore.markAsSettled(claimed.events.map((e: any) => e.id), settlementId);
+
+        let txHash: string | null = null;
+        try {
+          const result = await this.settlementClient.distribute(developerId, claimed.totalAmount);
+          if (!result.success || !result.txHash) {
+            throw new Error('Distribution failed on chain');
+          }
+          txHash = result.txHash;
+
+          await this.settlementStore.updateStatus(settlementId, 'submitted', txHash);
+          await this.settlementStore.updateStatus(settlementId, 'completed', txHash);
+
+          totalProcessed += claimed.events.length;
+          totalSettledAmount += claimed.totalAmount;
+
+          calloraEvents.emit('settlement_completed', developerId, {
+            settlementId,
+            amount: formatUnitsToUsdcFixed(claimed.totalAmount),
+            asset: 'USDC',
+            txHash,
+            settledAt: new Date().toISOString(),
+          });
+        } catch (distError) {
+          if (txHash) {
+            await this.settlementStore.updateStatus(settlementId, 'completed', txHash);
+            totalProcessed += claimed.events.length;
+            totalSettledAmount += claimed.totalAmount;
+          } else {
+            errors++;
+            if (typeof (this.usageStore as any).releaseEvents === 'function') {
+              await (this.usageStore as any).releaseEvents(claimed.events.map((e: any) => e.id));
+            }
+            await this.settlementStore.updateStatus(settlementId, 'failed', null);
+          }
+        }
+      } catch (err) {
+        errors++;
+      }
+    }
+
+    return { processed: totalProcessed, settledAmount: totalSettledAmount, errors };
+  }
+
+  private async runBatchOnceLegacy(): Promise<{ processed: number; settledAmount: bigint; errors: number }> {
+    if (typeof (this.usageStore as any).claimUnsettledEvents === 'function' && typeof (this.settlementStore as any).createClaimed === 'function') {
+      return await this.runBatchOnceAtomic();
+    }
+
     const unsettled = await this.usageStore.getUnsettledEvents();
     if (unsettled.length === 0) {
       return { processed: 0, settledAmount: 0n, errors: 0 };
@@ -107,7 +195,7 @@ export class RevenueSettlementService {
 
       const apiEntry = this.apiRegistry.resolve(event.apiId);
       if (!apiEntry) {
-        // Orphaned event, can't settle without knowing the developer
+        // Orphaned event, can't resolve developer
         continue;
       }
 
@@ -189,7 +277,7 @@ export class RevenueSettlementService {
             settlementId,
             developerId,
             `Finalization failed after payout: ${this.getErrorMessage(error)}`,
-            true,
+            false,
           );
         }
       } else {
