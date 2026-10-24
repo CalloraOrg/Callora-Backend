@@ -136,6 +136,7 @@ describe('BillingService.deductBulk', () => {
         deductionApplied: true,
         deductionStatus: 'confirmed',
         reconciliationRequired: false,
+        deductionStatus: 'confirmed',
       },
       {
         requestId: 'req_2',
@@ -145,6 +146,7 @@ describe('BillingService.deductBulk', () => {
         deductionApplied: true,
         deductionStatus: 'confirmed',
         reconciliationRequired: false,
+        deductionStatus: 'confirmed',
       },
     ]);
   });

@@ -19,6 +19,21 @@ export interface RateLimiterStoreCheckOptions {
 
 export interface RateLimiterStore {
   check(bucketKey: string, options: RateLimiterStoreCheckOptions): Promise<RateLimitResult>;
+  /**
+   * Like {@link check}, but also reports the bucket's configured `limit` and
+   * the `remaining` tokens after the decision. Used by the per-API-key limiter
+   * so the gateway can emit truthful `RateLimit-Limit` / `RateLimit-Remaining`
+   * headers. Optional so existing custom stores remain assignable.
+   */
+  checkWithUsage?(
+    bucketKey: string,
+    options: RateLimiterStoreCheckOptions,
+  ): Promise<RateLimitDecision>;
+}
+
+export interface RateLimitDecision extends RateLimitResult {
+  limit: number;
+  remaining: number;
 }
 
 export interface PersistentRateLimiterClient {
@@ -34,7 +49,21 @@ export interface PersistentRateLimiterStoreOptions {
   tableName?: string;
 }
 
-export type PlanTier = 'free' | 'pro' | 'enterprise';
+export const PLAN_TIERS = ['free', 'pro', 'enterprise'] as const;
+
+export type PlanTier = (typeof PLAN_TIERS)[number];
+
+/**
+ * Runtime membership test for a plan tier.
+ *
+ * Uses `Object.prototype.hasOwnProperty` semantics via `Array.prototype.includes`
+ * over the frozen `PLAN_TIERS` list rather than the `in` operator, so a tier
+ * string such as `"constructor"` or `"toString"` (which walks the prototype
+ * chain and resolves to a function) is correctly rejected.
+ */
+export function isKnownPlanTier(tier: string): tier is PlanTier {
+  return (PLAN_TIERS as readonly string[]).includes(tier);
+}
 
 export interface TierPolicy {
   maxRequests: number;
@@ -113,12 +142,12 @@ function normalizeTokenBucketValue(
   return parsed;
 }
 
-function computeRateLimitResult(
+function computeBucketDecision(
   bucket: TokenBucket | undefined,
   maxRequests: number,
   windowMs: number,
   now: number,
-): { bucket: TokenBucket; result: RateLimitResult } {
+): { bucket: TokenBucket; result: RateLimitResult; limit: number; remaining: number } {
   const currentBucket = bucket
     ? { ...bucket }
     : { tokens: maxRequests, lastRefill: now };
@@ -139,6 +168,8 @@ function computeRateLimitResult(
     return {
       bucket: currentBucket,
       result: { allowed: false, retryAfterMs },
+      limit: maxRequests,
+      remaining: 0,
     };
   }
 
@@ -147,7 +178,25 @@ function computeRateLimitResult(
   return {
     bucket: currentBucket,
     result: { allowed: true },
+    limit: maxRequests,
+    remaining: currentBucket.tokens,
   };
+}
+
+function computeRateLimitResult(
+  bucket: TokenBucket | undefined,
+  maxRequests: number,
+  windowMs: number,
+  now: number,
+): { bucket: TokenBucket; result: RateLimitResult } {
+  const { bucket: nextBucket, result } = computeBucketDecision(
+    bucket,
+    maxRequests,
+    windowMs,
+    now,
+  );
+
+  return { bucket: nextBucket, result };
 }
 
 function buildLimiterOptions(
@@ -206,6 +255,26 @@ export class InMemoryRateLimiterStore implements RateLimiterStore {
 
     this.buckets.set(bucketKey, bucket);
     return result;
+  }
+
+  async checkWithUsage(
+    bucketKey: string,
+    options: RateLimiterStoreCheckOptions,
+  ): Promise<RateLimitDecision> {
+    const existingBucket = this.buckets.get(bucketKey);
+    if (!existingBucket && this.buckets.size >= this.maxBuckets) {
+      const oldestKey = this.buckets.keys().next().value as string | undefined;
+      if (oldestKey !== undefined) this.buckets.delete(oldestKey);
+    }
+    const { bucket, result, limit, remaining } = computeBucketDecision(
+      existingBucket,
+      options.maxRequests,
+      options.windowMs,
+      options.now,
+    );
+
+    this.buckets.set(bucketKey, bucket);
+    return { ...result, limit, remaining };
   }
 
   exhaust(bucketKey: string): void {
@@ -441,14 +510,59 @@ export class StoreBackedRateLimiter implements RateLimiter {
     });
   }
 
-  private resolvePolicy(tier?: string): TierPolicy {
-    if (!tier || !(tier in this.tierPolicies)) {
+  /**
+   * Check the per-API-key bucket (`key:<apiKeyId>`) where the effective ceiling
+   * is the smaller of the key's own `rateLimitPerMinute` and the tier policy.
+   *
+   * Keys only narrow: an unset (`null`/`undefined`) per-key limit leaves the
+   * tier ceiling untouched, and a per-key limit above the tier is clamped down
+   * to the tier. The bucket key uses the key id, never the raw key.
+   */
+  checkKeyLimit(
+    apiKeyId: string,
+    tier: string | undefined,
+    rateLimitPerMinute: number | null | undefined,
+  ): Promise<RateLimitDecision> {
+    const policy = this.resolvePolicy(tier);
+    const requested =
+      typeof rateLimitPerMinute === 'number' && rateLimitPerMinute > 0
+        ? rateLimitPerMinute
+        : policy.maxRequests;
+    const maxRequests = Math.min(requested, policy.maxRequests);
+
+    const options: RateLimiterStoreCheckOptions = {
+      maxRequests,
+      now: Date.now(),
+      windowMs: policy.windowMs,
+    };
+    const bucketKey = `key:${apiKeyId}`;
+
+    if (this.store.checkWithUsage) {
+      return this.store.checkWithUsage(bucketKey, options);
+    }
+
+    // Fallback for custom stores that do not implement `checkWithUsage`: derive
+    // the decision and report the configured limit as `remaining` exactly as a
+    // full bucket would after the check.
+    return this.store.check(bucketKey, options).then((result) => ({
+      ...result,
+      limit: maxRequests,
+      remaining: result.allowed ? maxRequests - 1 : 0,
+    }));
+  }
+
+  resolvePolicy(tier?: string): TierPolicy {
+    // `hasOwnProperty` (not the `in` operator) is required here: `in` walks the
+    // prototype chain, so a tier such as "constructor" or "toString" would
+    // resolve to an inherited function whose `maxRequests`/`windowMs` are
+    // `undefined` and produce NaN limits that allow every request.
+    if (!tier || !isKnownPlanTier(tier)) {
       if (tier) {
         console.warn(`[rateLimiter] Unknown tier "${tier}", using default`);
       }
       return { maxRequests: this.maxRequests, windowMs: this.windowMs };
     }
-    return this.tierPolicies[tier as PlanTier]!;
+    return this.tierPolicies[tier];
   }
 }
 
