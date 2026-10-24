@@ -501,11 +501,26 @@ export const envSchema = z
       .int()
       .positive()
       .default(86400),
+    IDEMPOTENCY_SWEEPER_ENABLED: z
+      .string()
+      .optional()
+      .transform((v) => v !== "false")
+      .default(true),
     IDEMPOTENCY_SWEEPER_INTERVAL_MS: z.coerce
       .number()
       .int()
       .positive()
       .default(60_000),
+    IDEMPOTENCY_SWEEPER_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5000),
+    IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5000),
 
     // Slow query alerting
     SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),
