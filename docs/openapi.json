@@ -245,6 +245,333 @@
         }
       }
     },
+    "/api/vault/deposit/prepare": {
+      "post": {
+        "summary": "Prepare an unsigned Stellar/Soroban transaction for depositing USDC into a vault",
+        "operationId": "prepareDepositTransaction",
+        "description": "Builds an unsigned transaction XDR for the vault deposit function. The transaction is simulated via Soroban RPC and assembled with prepareTransaction so it contains sorobanData (footprint, resource fees, auth entries). The caller must sign and submit the returned XDR. Requires authentication.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "amount_usdc"
+                ],
+                "properties": {
+                  "amount_usdc": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d{7}$",
+                    "description": "USDC amount with exactly 7 decimal places (e.g., \"100.0000000\")"
+                  },
+                  "network": {
+                    "type": "string",
+                    "enum": [
+                      "testnet",
+                      "mainnet"
+                    ],
+                    "description": "Stellar network. Defaults to the configured active network."
+                  },
+                  "source_account": {
+                    "type": "string",
+                    "pattern": "^G[A-Z0-9]{55}$",
+                    "description": "Optional custom source account for the transaction (Stellar public key). Defaults to the authenticated user's Stellar address."
+                  }
+                }
+              },
+              "examples": {
+                "basic": {
+                  "summary": "Basic deposit preparation",
+                  "value": {
+                    "amount_usdc": "100.0000000",
+                    "network": "testnet"
+                  }
+                },
+                "withSourceAccount": {
+                  "summary": "Deposit with custom source account",
+                  "value": {
+                    "amount_usdc": "50.0000000",
+                    "network": "testnet",
+                    "source_account": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Unsigned transaction prepared successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data",
+                    "requestId",
+                    "timestamp"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "xdr",
+                        "network",
+                        "contractId",
+                        "amount",
+                        "operation",
+                        "metadata"
+                      ],
+                      "properties": {
+                        "xdr": {
+                          "type": "string",
+                          "description": "Base64-encoded unsigned transaction XDR with sorobanData"
+                        },
+                        "network": {
+                          "type": "string",
+                          "enum": [
+                            "testnet",
+                            "mainnet"
+                          ]
+                        },
+                        "contractId": {
+                          "type": "string",
+                          "description": "Vault contract ID"
+                        },
+                        "amount": {
+                          "type": "string",
+                          "pattern": "^\\d+\\.\\d{7}$",
+                          "description": "Deposit amount in USDC"
+                        },
+                        "operation": {
+                          "type": "object",
+                          "required": [
+                            "type",
+                            "function",
+                            "args"
+                          ],
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "invoke_contract"
+                            },
+                            "function": {
+                              "type": "string",
+                              "const": "deposit"
+                            },
+                            "args": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "value"
+                                ],
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "address",
+                                      "i128"
+                                    ]
+                                  },
+                                  "value": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "metadata": {
+                          "type": "object",
+                          "required": [
+                            "fee",
+                            "timeout",
+                            "resourceFee",
+                            "minResourceFee",
+                            "latestLedger"
+                          ],
+                          "properties": {
+                            "fee": {
+                              "type": "string",
+                              "description": "Base fee in stroops"
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "description": "Transaction timeout in seconds"
+                            },
+                            "resourceFee": {
+                              "type": "string",
+                              "description": "Resource fee from Soroban simulation in stroops"
+                            },
+                            "minResourceFee": {
+                              "type": "string",
+                              "description": "Minimum resource fee from Soroban simulation in stroops"
+                            },
+                            "latestLedger": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Latest ledger sequence from Soroban simulation"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "missingAmount": {
+                    "summary": "Missing amount_usdc",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "MISSING_AMOUNT",
+                        "message": "amount_usdc is required"
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  },
+                  "invalidAmountFormat": {
+                    "summary": "Invalid amount format",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_AMOUNT_FORMAT",
+                        "message": "Amount must have exactly 7 decimal places (e.g., \"100.0000000\")",
+                        "details": [
+                          {
+                            "field": "amount_usdc",
+                            "message": "Amount must have exactly 7 decimal places (e.g., \"100.0000000\")",
+                            "code": "custom"
+                          }
+                        ]
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  },
+                  "invalidNetwork": {
+                    "summary": "Invalid network",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_NETWORK",
+                        "message": "network must be either \"testnet\" or \"mainnet\""
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  },
+                  "invalidSourceAccount": {
+                    "summary": "Invalid source account",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "INVALID_SOURCE_ACCOUNT",
+                        "message": "source_account must be a valid Stellar public key (G...)"
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The caller has no vault on the requested network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Soroban simulation or transaction preparation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "simulationFailed": {
+                    "summary": "Soroban simulation failed",
+                    "value": {
+                      "success": false,
+                      "error": {
+                        "code": "SIMULATION_FAILED",
+                        "message": "Soroban simulation failed. See diagnostics for details.",
+                        "simulationDetails": {
+                          "errorCode": 8,
+                          "errorMessage": "BelowMinDeposit",
+                          "eventCount": 0,
+                          "footprintPresent": true
+                        }
+                      },
+                      "requestId": "req-123",
+                      "timestamp": "2026-01-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stellar network or Soroban RPC is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/billing/credits/grant": {
       "post": {
         "summary": "Grant GrantFox FWC26 prepaid credits",
@@ -8465,8 +8792,7 @@
         "type": "object",
         "required": [
           "success",
-          "requestId",
-          "timestamp"
+          "data"
         ],
         "properties": {
           "success": {
@@ -8475,13 +8801,7 @@
               true
             ]
           },
-          "requestId": {
-            "type": "string"
-          },
-          "timestamp": {
-            "type": "string",
-            "format": "date-time"
-          }
+          "data": {}
         }
       },
       "BillingHistoryRow": {

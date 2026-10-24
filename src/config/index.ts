@@ -264,7 +264,7 @@ export const config = {
     intervalMs: env.SETTLEMENT_RECON_INTERVAL_MS,
   },
   revenueLedgerIndexer: {
-    intervalMs: env.REVENUE_LEGDER_INDEXER_INTERVAL_MS,
+    intervalMs: env.REVENUE_LEDGER_INDEXER_INTERVAL_MS,
     batchSize: env.REVENUE_LEDGER_INDEXER_BATCH_SIZE,
   },
 
@@ -298,11 +298,11 @@ export const config = {
 
   billingConcurrency: {
     maxPerDeveloper: env.BILLING_MAX_CONCURRENCY_PER_DEV,
-    semaphoreTmlMs: env.BILLING_SEMAPHORE_TTL_MS,
+    semaphoreTtlMs: env.BILLING_SEMAPHORE_TTL_MS,
   },
   keyConcurrency: {
     maxPerKey: env.KEY_MAX_CONCURRENCY_PER_KEY,
-    semaphoreTmlMs: env.KEY_SEMAPHORE_TTL_MS,
+    semaphoreTtlMs: env.KEY_SEMAPHORE_TTL_MS,
   },
   routeBodyLimits: env.ROUTE_BODY_LIMITS,
   idempotency: {
@@ -322,7 +322,7 @@ export const config = {
     webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
     p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
     pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLOW_QUERY_DEBUP_WINDOW_SECONDS * 1000,
+    dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
   },
 
   memoryAccounting: {
@@ -337,7 +337,7 @@ export const config = {
     windowMs: env.USAGE_ANOMALY_WINDOW_MS,
     baselineWindows: env.USAGE_ANOMALY_BASELINE_WINDOWS,
     dedupWindowMs:
-      env.USAGE_ANOMALY_DETUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
+      env.USAGE_ANOMALY_DEDUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
   },
 
   monthlyInvoiceJob: {
@@ -356,7 +356,7 @@ export const config = {
       Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
     webhookUrl: env.SLO_ALERT_WEBHOOK_URL,
     pollIntervalMs: env.SLO_ALERT_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLO_ALERT_DEUP_WINDOW_MS,
+    dedupWindowMs: env.SLO_ALERT_DEDUP_WINDOW_MS,
     observationWindowMs: env.SLO_ALERT_OBSERVATION_WINDOW_MS,
     configs: env.SLO_ROUTE_CONFIGS as Array<{
       method: string;

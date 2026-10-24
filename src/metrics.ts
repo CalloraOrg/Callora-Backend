@@ -627,7 +627,7 @@ const gatewayApiKeyLookupTotal = new client.Counter({
 
 register.registerMetric(gatewayApiKeyLookupTotal);
 
-export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired';
+export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired' | 'error';
 
 export function recordApiKeyLookup(outcome: ApiKeyLookupOutcome): void {
   gatewayApiKeyLookupTotal.inc({ outcome });
