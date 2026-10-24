@@ -11,6 +11,13 @@ export class InMemorySettlementStore implements SettlementStore {
     });
   }
 
+  createClaimed(settlement: Settlement): void {
+    this.create({
+      ...settlement,
+      status: 'claimed',
+    });
+  }
+
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): void {
     const s = this.settlements.find((s) => s.id === id);
     if (s) {
@@ -133,6 +140,13 @@ export class PostgresSettlementStore implements SettlementStore {
         settlement.status === 'completed' ? settlement.created_at : null,
       ],
     );
+  }
+
+  async createClaimed(settlement: Settlement): Promise<void> {
+    await this.create({
+      ...settlement,
+      status: 'claimed',
+    });
   }
 
   async updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Promise<void> {
