@@ -133,8 +133,10 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   // Runs AFTER authMiddleware so req.apiKeyRecord.userId is guaranteed to be
   // populated. Reads limits from GATEWAY_RATE_LIMIT_* env vars by default;
   // can be overridden via deps for testing.
+  // `deps.rateLimiter` is passed as the per-key limiter so each API key's
+  // `rateLimitPerMinute` is enforced as a ceiling within its tier policy.
   const gatewayRateLimitMiddleware = deps.gatewayRateLimitMiddleware
-    ?? createConfiguredGatewayRateLimitMiddleware();
+    ?? createConfiguredGatewayRateLimitMiddleware(deps.rateLimiter);
 
   // Use a param of 0 to capture the wildcard path (everything after the slug)
   router.all('/:apiSlugOrId/*', authMiddleware, gatewayRateLimitMiddleware, handleProxy);

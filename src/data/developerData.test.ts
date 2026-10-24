@@ -25,7 +25,9 @@ describe('developerData fixtures', () => {
     expect(page.settlements).toHaveLength(2);
     expect(page.settlements.map((settlement) => settlement.id)).toEqual(['stl_002', 'stl_003']);
 
-    // Mutation guard — bigint is immutable so we just verify the returned copy
+    page.settlements[0]!.amount = 999999n;
+    page.settlements[0]!.tx_hash = 'tampered';
+
     const freshPage = getSettlements('dev_001', 2, 1);
     expect(freshPage.settlements[0]).toMatchObject({
       id: 'stl_002',

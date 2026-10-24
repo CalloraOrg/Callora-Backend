@@ -106,10 +106,23 @@ error_codes:
     section: Billing / Soroban
     description: Billing deduction operation failed
 
+  - code: RECONCILIATION_REQUIRED
+    section: Billing / Soroban
+    description: Previous billing deduction attempt is pending reconciliation
+
   # Billing request
   - code: BILLING_REQUEST_NOT_FOUND
     section: Billing request
     description: The requested billing record was not found
+
+  - code: BILLING_REQUEST_ID_CONFLICT
+    section: Billing request
+    description: The requestId was already used for a different deduction (different user, amount, API or endpoint)
+
+  # Billing forecast
+  - code: FORECAST_DATA_UNAVAILABLE
+    section: Billing forecast
+    description: Historical usage data could not be retrieved for forecast calculation
 
   # Developer / API keys
   - code: DEVELOPER_NOT_FOUND
@@ -298,6 +311,10 @@ error_codes:
     section: Idempotency
     description: Idempotency key conflict with different request
 
+  - code: IDEMPOTENCY_RESPONSE_TOO_LARGE
+    section: Idempotency
+    description: The original response exceeded the replay limit; fetch the resource by identifier.
+
   - code: IDEMPOTENCY_IN_PROGRESS
     section: Idempotency
     description: Request with this idempotency key is still in progress
@@ -306,6 +323,7 @@ error_codes:
   - code: SIMULATION_FAILED
     section: Misc / direct middleware responses
     description: Soroban simulation failed
+
 
   # Route-specific / auth overrides
   - code: INVALID_AUTH_HEADER
@@ -409,3 +427,11 @@ error_codes:
   - code: BULK_QUOTA_UPDATE_FAILED
     section: Audit, logs and quotas
     description: A bulk quota update failed and was rolled back
+
+  - code: STALE_FORWARDED_IDENTITY
+    section: Authentication
+    description: Forwarded identity timestamp is missing, malformed, expired, or too far in the future
+
+  - code: REPLAYED_FORWARDED_IDENTITY
+    section: Authentication
+    description: Forwarded identity signature was already used on another request

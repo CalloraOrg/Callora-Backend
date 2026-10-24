@@ -3,6 +3,8 @@ import { DataType, newDb } from 'pg-mem';
 
 import {
   PgUsageEventsRepository,
+  CorruptUsageAmountError,
+  CorruptAmountError,
   type UsageEventsRepositoryQueryable,
 } from './usageEventsRepository.pg.js';
 
@@ -79,6 +81,30 @@ test('create stores a usage event and returns the persisted record', async () =>
     assert.equal(event.requestId, 'req-1');
     assert.equal(event.stellarTxHash, 'stellar-hash-1');
     assert.deepEqual(event.createdAt, createdAt);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('getEventsInRange uses a half-open UTC range, developer filter, and ID cursor pages', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+  try {
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 1n, requestId: 'r1', createdAt: new Date('2026-03-01T00:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 2n, requestId: 'r2', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u2', apiId: 'a2', endpointId: 'e2', apiKeyId: 'k2', developerId: 'dev-2', amount: 3n, requestId: 'r3', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 4n, requestId: 'r4', createdAt: new Date('2026-03-02T00:00:00.000Z') });
+
+    const from = new Date('2026-03-01T00:00:00.000Z');
+    const to = new Date('2026-03-02T00:00:00.000Z');
+    const firstPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', limit: 1 });
+    const secondPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', cursor: firstPage[0]?.id, limit: 1 });
+    assert.equal(firstPage.length, 1);
+    assert.equal(secondPage.length, 1);
+    assert.equal(firstPage[0]?.createdAt.toISOString(), '2026-03-01T00:00:00.000Z');
+    assert.equal(secondPage[0]?.createdAt.toISOString(), '2026-03-01T12:00:00.000Z');
+    assert.equal(firstPage[0]?.developerId, 'dev-1');
+    const unfiltered = await repository.getEventsInRange(from, to, { limit: 10 });
+    assert.equal(unfiltered.length, 3);
   } finally {
     await pool.end();
   }
@@ -472,6 +498,43 @@ test('repository surfaces malformed amount values from the database', async () =
   );
 });
 
+test('Scenario 6: Pg repository reads a value "1.5" (corrupt) and raises typed error naming the row id', async () => {
+  const corruptRowId = 'row-corrupt-999';
+  const corruptRepository = new PgUsageEventsRepository({
+    async query<T = unknown>() {
+      return {
+        rows: [
+          {
+            id: corruptRowId,
+            user_id: 'user-1',
+            api_id: 'api-weather',
+            endpoint_id: 'endpoint-1',
+            api_key_id: 'key-1',
+            developer_id: 'dev-1',
+            amount_usdc: '1.5',
+            request_id: 'req-corrupt',
+            stellar_tx_hash: null,
+            created_at: new Date('2026-02-01T10:00:00.000Z'),
+          },
+        ] as T[],
+      };
+    },
+  });
+
+  let caughtError: unknown;
+  try {
+    await corruptRepository.findByUserId('user-1');
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.ok(caughtError instanceof CorruptUsageAmountError, 'Must be instance of CorruptUsageAmountError');
+  assert.ok(caughtError instanceof CorruptAmountError, 'Must be instance of CorruptAmountError');
+  assert.equal((caughtError as CorruptUsageAmountError).rowId, corruptRowId);
+  assert.match((caughtError as Error).message, new RegExp(corruptRowId));
+  assert.equal((caughtError as Error).name, 'CorruptUsageAmountError');
+});
+
 test('repository accepts bigint values returned directly from the database driver', async () => {
   const repository = new PgUsageEventsRepository({
     async query<T = unknown>() {
@@ -611,3 +674,103 @@ test('indexRevenueLedgerEvent inserts idempotently by usageEventId', async () =>
     await pool.end();
   }
 });
+
+test('sumSpendByConsumer sums confirmed charges within [from, to) and excludes unconfirmed and other users', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+
+  try {
+    const from = new Date('2026-02-01T00:00:00.000Z');
+    const to = new Date('2026-03-01T00:00:00.000Z');
+
+    // Matching confirmed event 1
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 100n,
+      requestId: 'req-c-1',
+      stellarTxHash: 'stellar-tx-1',
+      createdAt: new Date('2026-02-10T12:00:00.000Z'),
+    });
+
+    // Matching confirmed event 2
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-2',
+      endpointId: 'ep-2',
+      apiKeyId: 'key-2',
+      developerId: 'dev-2',
+      amount: 250n,
+      requestId: 'req-c-2',
+      stellarTxHash: 'stellar-tx-2',
+      createdAt: new Date('2026-02-15T12:00:00.000Z'),
+    });
+
+    // Boundary check: created_at == from (INCLUDED)
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 50n,
+      requestId: 'req-c-from',
+      stellarTxHash: 'stellar-tx-from',
+      createdAt: from,
+    });
+
+    // Boundary check: created_at == to (EXCLUDED, since created_at < $3)
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 9999n,
+      requestId: 'req-c-to',
+      stellarTxHash: 'stellar-tx-to',
+      createdAt: to,
+    });
+
+    // Unconfirmed charge: stellarTxHash is null (EXCLUDED)
+    await repository.create({
+      userId: 'consumer-1',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'dev-1',
+      amount: 500n,
+      requestId: 'req-c-unconfirmed',
+      stellarTxHash: null,
+      createdAt: new Date('2026-02-12T12:00:00.000Z'),
+    });
+
+    // Other user event: caller was developer, not consumer (EXCLUDED)
+    await repository.create({
+      userId: 'other-user',
+      apiId: 'api-1',
+      endpointId: 'ep-1',
+      apiKeyId: 'key-1',
+      developerId: 'consumer-1',
+      amount: 800n,
+      requestId: 'req-c-other',
+      stellarTxHash: 'stellar-tx-other',
+      createdAt: new Date('2026-02-12T12:00:00.000Z'),
+    });
+
+    const result = await repository.sumSpendByConsumer({ userId: 'consumer-1', from, to });
+
+    assert.equal(result.calls, 3);
+    assert.equal(result.totalUnits, 400n); // 100n + 250n + 50n
+
+    // Non-existent user returns 0 units and 0 calls
+    const emptyResult = await repository.sumSpendByConsumer({ userId: 'nobody', from, to });
+    assert.equal(emptyResult.calls, 0);
+    assert.equal(emptyResult.totalUnits, 0n);
+  } finally {
+    await pool.end();
+  }
+});
+

@@ -35,7 +35,9 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `SOROBAN_RPC_TIMEOUT` | Billing / Soroban |
 | `SOROBAN_RPC_ERROR` | Billing / Soroban |
 | `BILLING_DEDUCTION_FAILED` | Billing / Soroban |
+| `RECONCILIATION_REQUIRED` | Billing / Soroban |
 | `BILLING_REQUEST_NOT_FOUND` | Billing request |
+| `FORECAST_DATA_UNAVAILABLE` | Billing forecast |
 | `DEVELOPER_NOT_FOUND` | Developer / API keys |
 | `API_ACCESS_FORBIDDEN` | Developer / API keys |
 | `API_KEY_NOT_FOUND` | Developer / API keys |
@@ -81,6 +83,7 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `IP_NOT_ALLOWED` | IP allowlist |
 | `DATABASE_NOT_AVAILABLE` | DB / infrastructure |
 | `IDEMPOTENCY_CONFLICT` | Idempotency |
+| `IDEMPOTENCY_RESPONSE_TOO_LARGE` | Idempotency |
 | `IDEMPOTENCY_IN_PROGRESS` | Idempotency |
 | `SIMULATION_FAILED` | Misc / direct middleware responses |
 | `INVALID_AUTH_HEADER` | Route-specific / auth overrides (documented in docs/error-codes.md) |
@@ -108,6 +111,8 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `AUDIT_DETAILS_INCOMPLETE` | Audit, logs and quotas |
 | `LOG_ENTRY_NOT_FOUND` | Audit, logs and quotas |
 | `BULK_QUOTA_UPDATE_FAILED` | Audit, logs and quotas |
+| `STALE_FORWARDED_IDENTITY` | Authentication |
+| `REPLAYED_FORWARDED_IDENTITY` | Authentication |
 <!-- END GENERATED ERROR CODES -->
 
 ## Scope and important caveats

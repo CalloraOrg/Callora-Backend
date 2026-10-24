@@ -1,5 +1,4 @@
 import { UsageStore, UsageEvent } from '../types/gateway.js';
-import { parseUsdcToUnits, formatUnitsToUsdc } from '../lib/usdcUnits.js';
 
 export interface UsageAggregateSnapshot {
   developerId: string;
@@ -180,9 +179,18 @@ interface StatusCodeCountRow {
   count: string | number;
 }
 
-/** Parse a DB DECIMAL/NUMERIC amount_usdc column value to bigint contract units. */
-const parseAmountUsdc = (value: string | number): bigint =>
-  parseUsdcToUnits(typeof value === 'number' ? value.toFixed(7) : String(value));
+/**
+ * Parse a DB amount_usdc column value to bigint contract units.
+ * usage_events.amount_usdc stores integer contract units (migration 0026),
+ * so the value is read as an integer, never as a decimal USDC amount.
+ */
+const parseAmountUsdc = (value: string | number | bigint): bigint => {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+  const intPart = String(value).trim().split('.')[0] || '0';
+  return BigInt(intPart);
+};
 
 const nullableUnits = (value: string | number | null): bigint =>
   value === null ? 0n : parseAmountUsdc(value);
@@ -237,6 +245,9 @@ export class PostgresUsageStore implements UsageAdminStore {
     try {
       await client.query('BEGIN');
 
+      // usage_events.amount_usdc stores integer contract units (migration 0026).
+      const amountContractUnits = event.amountUsdc.toString();
+
       const insertResult = await client.query<{ id: string | number }>(
         `
           INSERT INTO usage_events (
@@ -262,8 +273,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           event.apiId,
           event.endpointId,
           event.apiKeyId,
-          // Write as minimal decimal string so the DB stores the exact value.
-          formatUnitsToUsdc(event.amountUsdc),
+          amountContractUnits,
           event.requestId,
           event.statusCode,
           event.timestamp,
@@ -297,7 +307,7 @@ export class PostgresUsageStore implements UsageAdminStore {
         `,
         [
           event.apiId,
-          formatUnitsToUsdc(event.amountUsdc),
+          amountContractUnits,
           inserted.id,
           event.timestamp,
         ],

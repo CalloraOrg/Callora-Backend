@@ -11,9 +11,12 @@ function createMockSorobanClient(options?: {
   balance?: string;
   txHash?: string;
   deductFailure?: Error;
+  batch?: boolean;
 }) {
   let balanceCount = 0;
   let deductCount = 0;
+  let batchDeductCount = 0;
+  let lastBatchItems: Array<{ amount: string; requestId: string }> = [];
   let lastDeductAmount: string | undefined;
 
   const client: SorobanClient = {
@@ -21,6 +24,14 @@ function createMockSorobanClient(options?: {
       balanceCount += 1;
       return { balance: options?.balance ?? '10000000' };
     },
+    ...(options?.batch ? {
+      deductBalanceBatch: async (_userId: string, items: Array<{ amount: string; requestId: string }>) => {
+        batchDeductCount += 1;
+        lastBatchItems = items;
+        if (options?.deductFailure) throw options.deductFailure;
+        return { txHash: options?.txHash ?? 'tx_bulk_1' };
+      },
+    } : {}),
     deductBalance: async (_userId, amount) => {
       deductCount += 1;
       lastDeductAmount = amount;
@@ -35,6 +46,8 @@ function createMockSorobanClient(options?: {
     client,
     getBalanceCount: () => balanceCount,
     getDeductCount: () => deductCount,
+    getBatchDeductCount: () => batchDeductCount,
+    getLastBatchItems: () => lastBatchItems,
     getLastDeductAmount: () => lastDeductAmount,
   };
 }
@@ -97,7 +110,7 @@ describe('BillingService.deductBulk', () => {
       },
     } as unknown as Pool;
 
-    const soroban = createMockSorobanClient({ balance: '3000000', txHash: 'tx_bulk_success' });
+    const soroban = createMockSorobanClient({ balance: '3000000', txHash: 'tx_bulk_success', batch: true });
     const svc = new BillingService(pool, soroban.client, { retryDelaysMs: [] });
 
     const result = await svc.deductBulk(baseRequests, 'bulk-key-1');
@@ -108,8 +121,10 @@ describe('BillingService.deductBulk', () => {
     assert.equal(result.totalDeductedAmountUsdc, '0.2');
     assert.equal(result.stellarTxHash, 'tx_bulk_success');
     assert.equal(soroban.getBalanceCount(), 1);
-    assert.equal(soroban.getDeductCount(), 1);
-    assert.equal(soroban.getLastDeductAmount(), '2000000');
+    assert.equal(soroban.getDeductCount(), 0);
+    assert.equal(soroban.getBatchDeductCount(), 1);
+    assert.deepEqual(soroban.getLastBatchItems(), [{ requestId: 'req_2', amount: '2000000' }]);
+    assert.equal(soroban.getLastDeductAmount(), undefined);
     assert.equal(clientQueries.filter((sql) => sql.includes('INSERT INTO usage_events')).length, 1);
     assert.equal(poolQueries.filter((sql) => sql.includes('UPDATE usage_events')).length, 1);
     assert.deepEqual(result.results, [

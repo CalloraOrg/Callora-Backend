@@ -12,7 +12,7 @@ import type { Developer } from '../db/schema.js';
 // Test setup
 const exportStore = new InMemoryExportStore();
 const objectStorageClient = new HmacObjectStorageClient();
-const usageEventsRepository = { getEvents: async () => [] };
+const usageEventsRepository = { getEventsInRange: async () => [] };
 const reportExporterService = new ReportExporterService(
   usageEventsRepository,
   objectStorageClient,

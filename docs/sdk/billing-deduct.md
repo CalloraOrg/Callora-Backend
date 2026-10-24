@@ -1,5 +1,36 @@
 # SDK: POST /api/billing/deduct Idempotency Contract
 
+## Bulk deductions
+
+`POST /api/billing/deduct/bulk` accepts 1–100 `items`, each with a unique
+`requestId`, `apiId`, `endpointId`, `apiKeyId`, and positive `amountUsdc`.
+Duplicate request IDs return `400 DUPLICATE_REQUEST_ID`. The server checks the
+aggregate amount for new items before inserting rows, then charges those items
+with one batch deduction. Existing request IDs are returned as replays and are
+excluded from the charge. A batch `Idempotency-Key` header (or top-level
+`idempotencyKey`) caches and replays the complete response.
+
+| HTTP | Meaning |
+|---|---|
+| 200 | Every entry was deducted or replayed; see per-entry `alreadyProcessed` and the batch counts. |
+| 402 `INSUFFICIENT_BALANCE` | Aggregate balance check failed; nothing new was charged. |
+| 409 `RECONCILIATION_REQUIRED` | Phase 1 rows were committed but the on-chain batch failed; response details contain `reconciliationRequired: true` and entry results. |
+| 409 `IDEMPOTENCY_KEY_REUSE_MISMATCH` | The same batch key was reused with a different body. |
+
+The success body includes `entryCount`, `deductedCount`,
+`totalDeductedAmountUsdc`, `stellarTxHash`, and per-item results. One transaction
+hash is shared by entries charged in the batch; replayed entries retain their
+original hash. Clients should retry with the same batch key and unchanged body.
+
+```json
+{
+  "items": [
+    { "requestId": "req_1", "apiId": "api_1", "endpointId": "ep_1", "apiKeyId": "key_1", "amountUsdc": "0.01" },
+    { "requestId": "req_2", "apiId": "api_1", "endpointId": "ep_2", "apiKeyId": "key_1", "amountUsdc": "0.02" }
+  ]
+}
+```
+
 This page is the definitive reference for SDK authors integrating the billing
 deduction endpoint. It covers the two-layer idempotency model, request/response
 shapes, every error code the endpoint emits, and retry guidance so SDKs can be

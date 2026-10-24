@@ -47,44 +47,46 @@ describe('monthlyInvoiceJob worker', () => {
     ).toThrow('intervalMs must be a positive integer');
   });
 
-  it('runs initial check on start and on each interval tick', async () => {
-    // Set date to NOT first of month
-    jest.setSystemTime(new Date('2024-06-15'));
+  it('runs catch-up on start and on each interval tick', async () => {
+    jest.setSystemTime(new Date('2024-06-15T12:00:00Z'));
 
     const job = createMonthlyInvoiceJob(pool, {
       intervalMs: 60_000,
     });
 
     job.start();
-    await Promise.resolve();
-    expect(mockGenerateMonthlyInvoices).not.toHaveBeenCalled();
+    await job.awaitIdle();
+    expect(mockGenerateMonthlyInvoices).toHaveBeenCalledTimes(1);
 
-    // Advance time, still not first of month
     jest.advanceTimersByTime(60_000);
-    await Promise.resolve();
-    expect(mockGenerateMonthlyInvoices).not.toHaveBeenCalled();
+    await job.awaitIdle();
+    expect(mockGenerateMonthlyInvoices).toHaveBeenCalledTimes(2);
 
     job.stop();
   });
 
   it('generates invoices when it is the first day of the month', async () => {
     // Set date to first of month
-    jest.setSystemTime(new Date('2024-06-01'));
+    jest.setSystemTime(new Date('2024-06-01T01:00:00Z'));
 
     const job = createMonthlyInvoiceJob(pool, {
       intervalMs: 60_000,
     });
 
     job.start();
-    await Promise.resolve();
+    await job.awaitIdle();
     expect(mockGenerateMonthlyInvoices).toHaveBeenCalledTimes(1);
-    expect(mockGenerateMonthlyInvoices).toHaveBeenCalledWith('2024-05');
+    expect(mockGenerateMonthlyInvoices).toHaveBeenCalledWith({
+      periodId: '2024-05',
+      start: new Date('2024-05-01T00:00:00Z'),
+      end: new Date('2024-06-01T00:00:00Z'),
+    });
 
     job.stop();
   });
 
   it('skips overlapping ticks while invoice generation is in flight', async () => {
-    jest.setSystemTime(new Date('2024-06-01'));
+    jest.setSystemTime(new Date('2024-06-01T01:00:00Z'));
     let resolveGeneration: (() => void) | undefined;
     mockGenerateMonthlyInvoices.mockImplementation(
       () =>
@@ -106,7 +108,7 @@ describe('monthlyInvoiceJob worker', () => {
     expect(mockGenerateMonthlyInvoices).toHaveBeenCalledTimes(1);
 
     resolveGeneration?.();
-    await Promise.resolve();
+    await job.awaitIdle();
 
     jest.advanceTimersByTime(1_000);
     await Promise.resolve();
@@ -116,7 +118,7 @@ describe('monthlyInvoiceJob worker', () => {
   });
 
   it('supports graceful shutdown hooks', async () => {
-    jest.setSystemTime(new Date('2024-06-01'));
+    jest.setSystemTime(new Date('2024-06-01T01:00:00Z'));
     let resolveGeneration: (() => void) | undefined;
     mockGenerateMonthlyInvoices.mockImplementation(
       () =>
@@ -144,7 +146,7 @@ describe('monthlyInvoiceJob worker', () => {
   });
 
   it('logs failures without crashing the worker', async () => {
-    jest.setSystemTime(new Date('2024-06-01'));
+    jest.setSystemTime(new Date('2024-06-01T01:00:00Z'));
     const log = { info: jest.fn(), error: jest.fn(), debug: jest.fn() };
     mockGenerateMonthlyInvoices.mockRejectedValueOnce(new Error('invoice generation failed'));
 
@@ -154,7 +156,7 @@ describe('monthlyInvoiceJob worker', () => {
     });
 
     job.start();
-    await Promise.resolve();
+    await job.awaitIdle();
 
     expect(log.error).toHaveBeenCalledWith(
       '[monthlyInvoice] Job failed',

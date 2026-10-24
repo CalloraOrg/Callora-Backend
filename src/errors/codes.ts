@@ -78,8 +78,14 @@ export const ErrorCode = {
   /** Billing deduction operation failed */
   BILLING_DEDUCTION_FAILED: "BILLING_DEDUCTION_FAILED",
 
+  /** Previous billing deduction attempt is pending reconciliation */
+  RECONCILIATION_REQUIRED: "RECONCILIATION_REQUIRED",
+
   /** The requested billing record was not found */
   BILLING_REQUEST_NOT_FOUND: "BILLING_REQUEST_NOT_FOUND",
+
+  /** Historical usage data could not be retrieved for forecast calculation */
+  FORECAST_DATA_UNAVAILABLE: "FORECAST_DATA_UNAVAILABLE",
 
   /** Developer profile not found */
   DEVELOPER_NOT_FOUND: "DEVELOPER_NOT_FOUND",
@@ -216,6 +222,9 @@ export const ErrorCode = {
   /** Idempotency key conflict with different request */
   IDEMPOTENCY_CONFLICT: "IDEMPOTENCY_CONFLICT",
 
+  /** The original response exceeded the replay limit; fetch the resource by identifier. */
+  IDEMPOTENCY_RESPONSE_TOO_LARGE: "IDEMPOTENCY_RESPONSE_TOO_LARGE",
+
   /** Request with this idempotency key is still in progress */
   IDEMPOTENCY_IN_PROGRESS: "IDEMPOTENCY_IN_PROGRESS",
 
@@ -295,7 +304,13 @@ export const ErrorCode = {
   LOG_ENTRY_NOT_FOUND: "LOG_ENTRY_NOT_FOUND",
 
   /** A bulk quota update failed and was rolled back */
-  BULK_QUOTA_UPDATE_FAILED: "BULK_QUOTA_UPDATE_FAILED"
+  BULK_QUOTA_UPDATE_FAILED: "BULK_QUOTA_UPDATE_FAILED",
+
+  /** Forwarded identity timestamp is missing, malformed, expired, or too far in the future */
+  STALE_FORWARDED_IDENTITY: "STALE_FORWARDED_IDENTITY",
+
+  /** Forwarded identity signature was already used on another request */
+  REPLAYED_FORWARDED_IDENTITY: "REPLAYED_FORWARDED_IDENTITY"
 
 } as const;
 

@@ -44,6 +44,8 @@ jobs:
           NODE_ENV: test
       - name: Build Vercel bundle
         run: npm run build:vercel
+      - name: Smoke test Vercel bundle
+        run: node scripts/smoke-vercel-bundle.mjs
 
   openapi-compat:
     if: github.event_name == 'pull_request'
@@ -55,7 +57,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
       - name: Check OpenAPI backward compatibility
         run: |
           git fetch origin ${{ github.base_ref }}
-          npx --yes @useoptic/optic diff docs/openapi.json --base origin/${{ github.base_ref }} --check
+          ./node_modules/.bin/optic diff docs/openapi.json --base FETCH_HEAD --check

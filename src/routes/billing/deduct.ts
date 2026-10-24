@@ -15,7 +15,7 @@ import {
   requireAuth,
   type AuthenticatedLocals,
 } from "../../middleware/requireAuth.js";
-import { idempotencyMiddleware } from "../../middleware/idempotency.js";
+import { idempotencyMiddleware, type IdempotencyLease } from "../../middleware/idempotency.js";
 import { billingDeductHistogramMiddleware } from "../../middleware/metricsHistogram.js";
 import { SorobanRpcError } from "../../services/sorobanBilling.js";
 import { redactSimulationDetails } from "../../lib/simulationDiagnostics.js";
@@ -59,7 +59,7 @@ function requirePositiveAmount(value: unknown): string {
 // function so Express dispatches it as normal middleware.
 const idempotencyHandler = (
   req: Request,
-  res: Response<unknown, AuthenticatedLocals>,
+  res: Response<unknown, AuthenticatedLocals & { idempotency?: IdempotencyLease }>,
   next: NextFunction,
 ) => idempotencyMiddleware(req, res, next);
 
@@ -101,7 +101,7 @@ router.post(
   billingDeductHistogramMiddleware,
   async (
     req: Request,
-    res: Response<unknown, AuthenticatedLocals>,
+    res: Response<unknown, AuthenticatedLocals & { idempotency?: IdempotencyLease }>,
     next: NextFunction,
   ) => {
     try {
@@ -130,6 +130,9 @@ router.post(
         : user.id;
 
       const billingService = getBillingService(req);
+      // Renew around the potentially slow Soroban deduction. Ownership loss
+      // propagates through the existing error handler; stale saves stay fenced.
+      await res.locals.idempotency?.renew();
       const result = await billingService.deduct({
         requestId,
         userId: developerId,
@@ -139,6 +142,8 @@ router.post(
         amountUsdc,
         idempotencyKey,
       });
+
+      await res.locals.idempotency?.renew();
 
       if (!result.success) {
         if (result.simulationDetails) {
@@ -152,11 +157,21 @@ router.post(
         }
 
         if (result.reconciliationRequired) {
+          const reqId =
+            (typeof (req as { id?: string }).id === "string" && (req as { id?: string }).id) ||
+            (req.headers["x-request-id"] as string) ||
+            requestId;
           res.status(409).json({
-            error: "Billing deduction pending reconciliation",
-            code: "RECONCILIATION_REQUIRED",
+            success: false,
+            error: {
+              code: "RECONCILIATION_REQUIRED",
+              message: "Billing deduction pending reconciliation",
+            },
             reconciliationRequired: true,
+            deductionStatus: result.deductionStatus ?? "pending",
             usageEventId: result.usageEventId,
+            requestId: reqId,
+            timestamp: new Date().toISOString(),
           });
           return;
         }
@@ -210,7 +225,7 @@ router.get(
   requireAuth,
   async (
     req: Request,
-    res: Response<unknown, AuthenticatedLocals>,
+    res: Response<unknown, AuthenticatedLocals & { idempotency?: IdempotencyLease }>,
     next: NextFunction,
   ) => {
     try {
@@ -239,6 +254,7 @@ router.get(
         usageEventId: result.usageEventId,
         stellarTxHash: result.stellarTxHash,
         alreadyProcessed: result.alreadyProcessed,
+        deductionStatus: result.deductionStatus,
       });
     } catch (error) {
       next(error);

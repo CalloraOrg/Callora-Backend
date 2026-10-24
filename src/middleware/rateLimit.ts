@@ -1,3 +1,4 @@
+import { asyncHandler } from "../utils/asyncHandler.js";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { getClientIp } from "../lib/clientIp.js";
 import { logger } from "../logger.js";
@@ -78,8 +79,8 @@ export function createTokenBucketRateLimitMiddleware(
   options: TokenBucketOptions,
   limiter = new TokenBucketRateLimiter(options.capacity, options.refillRate),
 ): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const key = getRateLimitKey(req);
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const key = await getRateLimitKey(req);
     const result = limiter.check(key);
 
     if (!result.allowed) {
@@ -109,7 +110,7 @@ export function createTokenBucketRateLimitMiddleware(
     }
 
     next();
-  };
+  });
 }
 
 /**
@@ -126,8 +127,8 @@ export function createBillingRateLimitMiddleware(
   options: RateLimitOptions,
   limiter = new InMemoryRateLimiter(options.windowMs, options.maxRequests),
 ): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const key = getRateLimitKey(req);
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const key = await getRateLimitKey(req);
     const result = limiter.check(key);
 
     if (!result.allowed) {
@@ -147,7 +148,7 @@ export function createBillingRateLimitMiddleware(
     }
 
     next();
-  };
+  });
 }
 export function createCreditsRateLimitMiddleware(
   options?: TokenBucketOptions,
@@ -183,9 +184,9 @@ export function createQuotaRateLimitMiddleware(
   const opts: TokenBucketOptions = options ?? { capacity: 60, refillRate: 1 };
   const bucket = limiter ?? new TokenBucketRateLimiter(opts.capacity, opts.refillRate);
 
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Identify the caller: prefer authenticated user id, fall back to client IP.
-    const key = getRateLimitKey(req);
+    const key = await getRateLimitKey(req);
     const result = bucket.check(key);
 
     if (!result.allowed) {
@@ -209,7 +210,7 @@ export function createQuotaRateLimitMiddleware(
     }
 
     next();
-  };
+  });
 }
 
 /**
@@ -222,14 +223,14 @@ export function createProxyRateLimitMiddleware(
   const opts: TokenBucketOptions = options ?? { capacity: 100, refillRate: 10 };
   const bucket = limiter ?? new TokenBucketRateLimiter(opts.capacity, opts.refillRate);
 
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     let key: string;
     const apiKeyRecord = (req as any).apiKeyRecord;
 
     if (apiKeyRecord && apiKeyRecord.userId) {
       key = `user:${apiKeyRecord.userId}`;
     } else {
-      const { userId } = resolveRequestUserId(req);
+      const { userId } = await resolveRequestUserId(req);
       if (userId) {
         key = `user:${userId}`;
       } else {
@@ -257,7 +258,7 @@ export function createProxyRateLimitMiddleware(
     }
 
     next();
-  };
+  });
 }
 
 // ─── Fixed-Window Rate Limiter ───────────────────────────────────────────────
@@ -344,8 +345,8 @@ export class InMemoryRateLimiter {
   }
 }
 
-export function getRateLimitKey(req: Request): string {
-  const { userId } = resolveRequestUserId(req);
+export async function getRateLimitKey(req: Request): Promise<string> {
+  const { userId } = await resolveRequestUserId(req);
   if (userId) {
     return `user:${userId}`;
   }
@@ -358,8 +359,8 @@ export function createRateLimitMiddleware(
   options: RateLimitOptions,
   limiter = new InMemoryRateLimiter(options.windowMs, options.maxRequests),
 ): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const key = getRateLimitKey(req);
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const key = await getRateLimitKey(req);
     const result = limiter.check(key);
 
     if (!result.allowed) {
@@ -379,5 +380,5 @@ export function createRateLimitMiddleware(
     }
 
     next();
-  };
+  });
 }

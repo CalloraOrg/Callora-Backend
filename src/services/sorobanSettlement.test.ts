@@ -240,6 +240,68 @@ describe('SorobanRpcSettlementClient', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  test('retries on HTTP 429 and succeeds on second attempt', async () => {
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429 })
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ result: { transactionHash: '0xafter429' } }),
+      });
+
+    const client = createSorobanRpcSettlementClient({
+      rpcUrl: 'http://soroban-rpc.internal',
+      contractId: 'contract_abc',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 1,
+      retryBaseDelayMs: 0,
+    });
+
+    const result = await client.distribute('G_DEVELOPER_ACCOUNT', USDC(2));
+
+    assert.equal(result.success, true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not retry HTTP 400 client errors', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 400 });
+
+    const client = createSorobanRpcSettlementClient({
+      rpcUrl: 'http://soroban-rpc.internal',
+      contractId: 'contract_abc',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 3,
+      retryBaseDelayMs: 0,
+    });
+
+    const result = await client.distribute('G_DEVELOPER_ACCOUNT', USDC(2));
+
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /HTTP 400/);
+    // 400 is not in RETRIABLE_HTTP_STATUSES — single attempt only
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not retry on AbortError (self-imposed timeout)', async () => {
+    const fetchImpl = jest.fn().mockRejectedValue(
+      Object.assign(new DOMException('The operation was aborted', 'AbortError'))
+    );
+
+    const client = createSorobanRpcSettlementClient({
+      rpcUrl: 'http://soroban-rpc.internal',
+      contractId: 'contract_abc',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 3,
+      retryBaseDelayMs: 0,
+    });
+
+    const result = await client.distribute('G_DEVELOPER_ACCOUNT', USDC(2));
+
+    assert.equal(result.success, false);
+    // AbortError must never trigger retries
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   test('exhausts retries and returns failure after all 5xx attempts fail', async () => {
     const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 503 });
 

@@ -35,12 +35,13 @@ import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
 import {
-  USDC_UNITS_PER_USDC,
-  parseUsdcToUnits as _parseUsdcToUnits,
-  formatUnitsToUsdc as _formatUnitsToUsdc,
+  parseUsdcToContractUnits,
+  formatContractUnitsToUsdc,
+  USDC_7_DECIMAL_FACTOR,
 } from "../lib/usdcUnits.js";
 
-const USDC_7_DECIMAL_FACTOR = USDC_UNITS_PER_USDC;
+export { parseUsdcToContractUnits, formatContractUnitsToUsdc };
+
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
 
 /**
@@ -65,6 +66,8 @@ export interface BillingDeductRequest {
   idempotencyKey?: string;
 }
 
+export type DeductionStatus = "pending" | "confirmed" | "voided";
+
 export interface BillingDeductResult {
   success: boolean;
   usageEventId: string;
@@ -72,6 +75,7 @@ export interface BillingDeductResult {
   alreadyProcessed: boolean;
   deductionApplied: boolean;
   reconciliationRequired: boolean;
+  deductionStatus?: DeductionStatus;
   error?: string;
   simulationDetails?: SimulationDetails;
 }
@@ -83,6 +87,7 @@ export interface BillingBulkDeductEntryResult {
   alreadyProcessed: boolean;
   deductionApplied: boolean;
   reconciliationRequired: boolean;
+  deductionStatus?: DeductionStatus;
 }
 
 export interface BillingBulkDeductResult {
@@ -111,6 +116,11 @@ export interface SorobanClient {
     amount: string,
     idempotencyKey?: string,
   ): Promise<SorobanDeductResult>;
+  deductBalanceBatch?(
+    userId: string,
+    items: Array<{ amount: string; requestId: string }>,
+    idempotencyKey?: string,
+  ): Promise<SorobanDeductResult>;
 }
 
 export interface BillingServiceOptions {
@@ -131,15 +141,6 @@ export interface BillingServiceOptions {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-export function parseUsdcToContractUnits(amountUsdc: string): bigint {
-  // Delegates to the shared usdcUnits helper then enforces the deduction-
-  // specific invariant: amounts must be strictly positive.
-  const result = _parseUsdcToUnits(amountUsdc);
-  if (result <= 0n) {
-    throw new Error("amountUsdc must be greater than zero");
-  }
-  return result;
-}
 
 /**
  * Classifies an error as transient based on type and category, not substring matching.
@@ -212,9 +213,7 @@ export function isTransientSorobanError(error: unknown): boolean {
   return classifyTransientError(error);
 }
 
-export function formatContractUnitsToUsdc(amount: bigint): string {
-  return _formatUnitsToUsdc(amount);
-}
+
 
 function buildBulkDeductIdempotencyKey(requestIds: string[]): string {
   return createHash("sha256")
@@ -239,6 +238,34 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function getSorobanErrorCategory(error: unknown): string | undefined {
+  if (error && typeof error === "object" && "category" in error) {
+    return String((error as { category?: unknown }).category);
+  }
+  const message = normalizeErrorMessage(error).toLowerCase();
+  if (
+    message.includes("insufficient balance") ||
+    message.includes("insufficient funds")
+  ) {
+    return "INSUFFICIENT_BALANCE";
+  }
+  if (
+    message.includes("contract") ||
+    message.includes("simulation failed") ||
+    message.includes("wasm")
+  ) {
+    return "CONTRACT_ERROR";
+  }
+  if (
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    message.includes("aborted")
+  ) {
+    return "TIMEOUT";
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1: idempotency check + INSERT inside a single DB transaction
 // ---------------------------------------------------------------------------
@@ -248,12 +275,14 @@ interface Phase1Result {
   alreadyExists: boolean;
   usageEventId?: string;
   stellarTxHash?: string;
+  deductionStatus?: DeductionStatus;
 }
 
 interface ExistingUsageEventRow {
   request_id: string;
   id: string;
   stellar_tx_hash: string | null;
+  deduction_status?: string | null;
 }
 
 interface BulkInsertedUsageEvent {
@@ -269,7 +298,7 @@ interface BulkPhase1Result {
 async function runPhase1(
   client: PoolClient,
   request: BillingDeductRequest,
-  _amountInContractUnits: bigint,
+  amountInContractUnits: bigint,
 ): Promise<Phase1Result> {
   await client.query("BEGIN");
 
@@ -278,8 +307,9 @@ async function runPhase1(
   const existingEvent = await client.query<{
     id: string;
     stellar_tx_hash: string | null;
+    deduction_status: string | null;
   }>(
-    `SELECT id, stellar_tx_hash
+    `SELECT id, stellar_tx_hash, deduction_status
        FROM usage_events
       WHERE request_id = $1
         FOR UPDATE`,
@@ -287,39 +317,61 @@ async function runPhase1(
   );
 
   if (existingEvent.rows.length > 0) {
+    const row = existingEvent.rows[0];
+    const status =
+      (row.deduction_status as DeductionStatus) ??
+      (row.stellar_tx_hash ? "confirmed" : "pending");
+
+    if (status === "voided") {
+      // Re-arm the row inside the Phase 1 lock!
+      await client.query(
+        `UPDATE usage_events
+            SET deduction_status = 'pending',
+                stellar_tx_hash = NULL,
+                resolved_at = NULL,
+                resolution_reason = NULL,
+                amount_usdc = $1,
+                created_at = NOW()
+          WHERE id = $2`,
+        [request.amountUsdc, row.id],
+      );
+      await client.query("COMMIT");
+      return {
+        alreadyExists: false,
+        usageEventId: row.id.toString(),
+        deductionStatus: "pending",
+      };
+    }
+
     await client.query("COMMIT");
     return {
       alreadyExists: true,
-      usageEventId: existingEvent.rows[0].id.toString(),
-      stellarTxHash: existingEvent.rows[0].stellar_tx_hash ?? undefined,
+      usageEventId: row.id.toString(),
+      stellarTxHash: row.stellar_tx_hash ?? undefined,
+      deductionStatus: status,
     };
   }
 
   // Balance check — still inside the transaction so the connection is held,
   // but the Soroban call itself is NOT inside the transaction (see Phase 2).
   const balanceResult = await client.query<{ balance: string }>(
-    // We read balance from the DB if available; fall back to Soroban in the
-    // caller.  Here we just proceed — the caller does the Soroban balance
-    // check before calling us, so we trust it.  This comment is intentional:
-    // balance checks against an external ledger cannot be made atomic with a
-    // Postgres transaction.
     `SELECT 1`, // placeholder — real balance check is done by caller
   );
   void balanceResult; // suppress unused-variable lint
 
-  // INSERT the event with stellar_tx_hash = NULL (pending).
+  // INSERT the event with stellar_tx_hash = NULL and deduction_status = 'pending'.
   // Committed immediately so the record survives even if Phase 2 fails.
   const insertResult = await client.query<{ id: string }>(
     `INSERT INTO usage_events
-       (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at, deduction_status)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'pending')
      RETURNING id`,
     [
       request.userId,
       request.apiId,
       request.endpointId,
       request.apiKeyId,
-      request.amountUsdc,
+      amountInContractUnits.toString(),
       request.requestId,
     ],
   );
@@ -329,6 +381,7 @@ async function runPhase1(
   return {
     alreadyExists: false,
     usageEventId: insertResult.rows[0].id.toString(),
+    deductionStatus: "pending",
   };
 }
 
@@ -343,7 +396,10 @@ async function runPhase3(
 ): Promise<void> {
   await pool.query(
     `UPDATE usage_events
-        SET stellar_tx_hash = $1
+        SET stellar_tx_hash = $1,
+            deduction_status = 'confirmed',
+            resolved_at = NOW(),
+            resolution_reason = 'Soroban deduct succeeded'
       WHERE id = $2`,
     [txHash, usageEventId],
   );
@@ -360,7 +416,10 @@ async function runPhase3Bulk(
 
   await pool.query(
     `UPDATE usage_events
-        SET stellar_tx_hash = $1
+        SET stellar_tx_hash = $1,
+            deduction_status = 'confirmed',
+            resolved_at = NOW(),
+            resolution_reason = 'Soroban bulk deduct succeeded'
       WHERE id = ANY($2::bigint[])`,
     [txHash, usageEventIds.map((id) => BigInt(id).toString())],
   );
@@ -375,7 +434,7 @@ async function getUsageEventsByRequestIds(
   }
 
   const result = await pool.query<ExistingUsageEventRow>(
-    `SELECT request_id, id, stellar_tx_hash
+    `SELECT request_id, id, stellar_tx_hash, deduction_status
        FROM usage_events
       WHERE request_id = ANY($1::text[])`,
     [requestIds],
@@ -389,12 +448,13 @@ async function getUsageEventsByRequestIds(
 async function runPhase1Bulk(
   client: PoolClient,
   requests: BillingDeductRequest[],
+  amountByRequestId: Map<string, bigint>,
 ): Promise<BulkPhase1Result> {
   await client.query("BEGIN");
 
   const requestIds = requests.map((request) => request.requestId);
   const existingEvents = await client.query<ExistingUsageEventRow>(
-    `SELECT request_id, id, stellar_tx_hash
+    `SELECT request_id, id, stellar_tx_hash, deduction_status
        FROM usage_events
       WHERE request_id = ANY($1::text[])
         FOR UPDATE`,
@@ -410,21 +470,50 @@ async function runPhase1Bulk(
   const inserted: BulkInsertedUsageEvent[] = [];
 
   for (const request of requests) {
-    if (rowsByRequestId.has(request.requestId)) {
+    const existingRow = rowsByRequestId.get(request.requestId);
+    if (existingRow) {
+      const status =
+        (existingRow.deduction_status as DeductionStatus) ??
+        (existingRow.stellar_tx_hash ? "confirmed" : "pending");
+
+      if (status === "voided") {
+        await client.query(
+          `UPDATE usage_events
+              SET deduction_status = 'pending',
+                  stellar_tx_hash = NULL,
+                  resolved_at = NULL,
+                  resolution_reason = NULL,
+                  amount_usdc = $1,
+                  created_at = NOW()
+            WHERE id = $2`,
+          [request.amountUsdc, existingRow.id],
+        );
+        existingRow.stellar_tx_hash = null;
+        existingRow.deduction_status = "pending";
+        inserted.push({
+          requestId: request.requestId,
+          usageEventId: existingRow.id,
+        });
+      }
       continue;
+    }
+
+    const amountInContractUnits = amountByRequestId.get(request.requestId);
+    if (amountInContractUnits === undefined) {
+      throw new Error(`Missing amount for request ${request.requestId}`);
     }
 
     const insertResult = await client.query<{ id: string }>(
       `INSERT INTO usage_events
-         (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at, deduction_status)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'pending')
        RETURNING id`,
       [
         request.userId,
         request.apiId,
         request.endpointId,
         request.apiKeyId,
-        request.amountUsdc,
+        amountInContractUnits.toString(),
         request.requestId,
       ],
     );
@@ -433,6 +522,7 @@ async function runPhase1Bulk(
       request_id: request.requestId,
       id: insertResult.rows[0].id.toString(),
       stellar_tx_hash: null,
+      deduction_status: "pending",
     };
 
     rowsByRequestId.set(request.requestId, insertedRow);
@@ -530,7 +620,7 @@ export class BillingService {
 
     // --- Idempotency precheck: return early if request has already been processed ---
     const existing = await this.getByRequestId(request.requestId);
-    if (existing) {
+    if (existing && existing.deductionStatus !== "voided") {
       return {
         ...existing,
         alreadyProcessed: true,
@@ -590,18 +680,24 @@ export class BillingService {
         const existing = await this.pool.query<{
           id: string;
           stellar_tx_hash: string | null;
+          deduction_status: string | null;
         }>(
-          `SELECT id, stellar_tx_hash FROM usage_events WHERE request_id = $1`,
+          `SELECT id, stellar_tx_hash, deduction_status FROM usage_events WHERE request_id = $1`,
           [request.requestId],
         );
         if (existing.rows.length > 0) {
+          const status =
+            (existing.rows[0].deduction_status as DeductionStatus) ??
+            (existing.rows[0].stellar_tx_hash ? "confirmed" : "pending");
+          const hasTx = Boolean(existing.rows[0].stellar_tx_hash);
           return {
-            success: true,
+            success: status === "confirmed",
             usageEventId: existing.rows[0].id.toString(),
             stellarTxHash: existing.rows[0].stellar_tx_hash ?? undefined,
             alreadyProcessed: true,
-            deductionApplied: Boolean(existing.rows[0].stellar_tx_hash),
-            reconciliationRequired: existing.rows[0].stellar_tx_hash === null,
+            deductionApplied: hasTx,
+            reconciliationRequired: status === "pending",
+            deductionStatus: status,
           };
         }
       }
@@ -620,27 +716,31 @@ export class BillingService {
 
     // Idempotent early return — event already existed
     if (phase1.alreadyExists) {
+      const status =
+        phase1.deductionStatus ??
+        (phase1.stellarTxHash ? "confirmed" : "pending");
       const hasTx = Boolean(phase1.stellarTxHash);
       return {
-        success: hasTx,
+        success: status === "confirmed",
         usageEventId: phase1.usageEventId!,
         stellarTxHash: phase1.stellarTxHash,
         alreadyProcessed: true,
         deductionApplied: hasTx,
-        reconciliationRequired: !hasTx,
-        error: hasTx
-          ? undefined
-          : "Previous deduction attempt pending reconciliation",
+        reconciliationRequired: status === "pending",
+        deductionStatus: status,
+        error:
+          status === "confirmed"
+            ? undefined
+            : "Previous deduction attempt pending reconciliation",
       };
     }
 
     const usageEventId = phase1.usageEventId!;
 
     // --- Phase 2: Soroban deduction (external, outside DB transaction) ---
-    // The INSERT is already committed.  If this call succeeds but Phase 3
+    // The INSERT is already committed. If this call succeeds but Phase 3
     // fails, the row stays pending (stellar_tx_hash = NULL) and can be
-    // reconciled.  If this call fails, the pending row is left in the DB —
-    // operators can detect and void it via the reconciliation job.
+    // reconciled. If this call fails with a definitive error, we void it immediately.
     let deductResult: SorobanDeductResult;
     try {
       deductResult = await this.executeDeductWithRetry(
@@ -649,14 +749,50 @@ export class BillingService {
         request.idempotencyKey ?? request.requestId,
       );
     } catch (error) {
-      // Soroban failed — the pending row exists but no on-chain deduction
-      // occurred.  Return failure; the pending row will be reconciled.
+      const category = getSorobanErrorCategory(error);
+      if (
+        category === "INSUFFICIENT_BALANCE" ||
+        category === "CONTRACT_ERROR"
+      ) {
+        const reason = `Soroban simulation/contract error: ${category} (${normalizeErrorMessage(error)})`;
+        try {
+          await this.pool.query(
+            `UPDATE usage_events
+                SET deduction_status = 'voided',
+                    resolved_at = NOW(),
+                    resolution_reason = $1
+              WHERE id = $2 AND deduction_status = 'pending'`,
+            [reason, usageEventId],
+          );
+          logger.info(
+            `[BillingService] Voided pending deduction for usageEventId=${usageEventId}: ${reason}`,
+          );
+        } catch (voidErr) {
+          logger.error(
+            `[BillingService] Failed to mark usageEventId=${usageEventId} voided: ${normalizeErrorMessage(voidErr)}`,
+          );
+        }
+
+        return {
+          success: false,
+          usageEventId,
+          alreadyProcessed: false,
+          deductionApplied: false,
+          reconciliationRequired: false,
+          deductionStatus: "voided",
+          error: normalizeErrorMessage(error),
+          simulationDetails: getSimulationDetails(error),
+        };
+      }
+
+      // Unknown outcomes (TIMEOUT, NETWORK_ERROR after submission) stay pending
       return {
         success: false,
         usageEventId,
         alreadyProcessed: false,
         deductionApplied: false,
         reconciliationRequired: true,
+        deductionStatus: "pending",
         error: normalizeErrorMessage(error),
         simulationDetails: getSimulationDetails(error),
       };
@@ -666,9 +802,9 @@ export class BillingService {
     try {
       await runPhase3(this.pool, usageEventId, deductResult.txHash);
     } catch (error) {
-      // The on-chain deduction succeeded.  Failing to persist the tx hash is
+      // The on-chain deduction succeeded. Failing to persist the tx hash is
       // a data-integrity concern but NOT a reason to report failure to the
-      // caller — the charge happened.  Log and return success; the
+      // caller — the charge happened. Log and return success; the
       // reconciliation job will back-fill the hash.
       console.error(
         `[BillingService] Phase 3 UPDATE failed for usageEventId=${usageEventId} ` +
@@ -683,6 +819,7 @@ export class BillingService {
       alreadyProcessed: false,
       deductionApplied: true,
       reconciliationRequired: false,
+      deductionStatus: "confirmed",
     };
   }
 
@@ -760,7 +897,7 @@ export class BillingService {
     const client = await this.pool.connect();
     let phase1: BulkPhase1Result;
     try {
-      phase1 = await runPhase1Bulk(client, requests);
+      phase1 = await runPhase1Bulk(client, requests, amountByRequestId);
     } catch (error) {
       try {
         await client.query("ROLLBACK");
@@ -781,13 +918,17 @@ export class BillingService {
           success: true,
           results: requests.map((request) => {
             const recovered = recoveredRows.get(request.requestId)!;
+            const status =
+              (recovered.deduction_status as DeductionStatus) ??
+              (recovered.stellar_tx_hash ? "confirmed" : "pending");
             return {
               requestId: request.requestId,
               usageEventId: recovered.id.toString(),
               stellarTxHash: recovered.stellar_tx_hash ?? undefined,
               alreadyProcessed: true,
               deductionApplied: Boolean(recovered.stellar_tx_hash),
-              reconciliationRequired: recovered.stellar_tx_hash === null,
+              reconciliationRequired: status === "pending",
+              deductionStatus: status,
             };
           }),
           entryCount: requests.length,
@@ -821,13 +962,17 @@ export class BillingService {
         success: true,
         results: requests.map((request) => {
           const existing = phase1.rowsByRequestId.get(request.requestId)!;
+          const status =
+            (existing.deduction_status as DeductionStatus) ??
+            (existing.stellar_tx_hash ? "confirmed" : "pending");
           return {
             requestId: request.requestId,
             usageEventId: existing.id.toString(),
             stellarTxHash: existing.stellar_tx_hash ?? undefined,
             alreadyProcessed: true,
             deductionApplied: Boolean(existing.stellar_tx_hash),
-            reconciliationRequired: existing.stellar_tx_hash === null,
+            reconciliationRequired: status === "pending",
+            deductionStatus: status,
           };
         }),
         entryCount: requests.length,
@@ -838,25 +983,69 @@ export class BillingService {
 
     let deductResult: SorobanDeductResult;
     try {
-      deductResult = await this.executeDeductWithRetry(
+      const bulkKey = idempotencyKey ??
+        buildBulkDeductIdempotencyKey(Array.from(insertedRequestIds));
+      const insertedRequests = requests.filter((request) =>
+        insertedRequestIds.has(request.requestId),
+      );
+      deductResult = await this.executeBulkDeductWithRetry(
         requests[0].userId,
+        insertedRequests.map((request) => ({
+          requestId: request.requestId,
+          amount: (amountByRequestId.get(request.requestId) ?? 0n).toString(),
+        })),
         totalInsertedAmount.toString(),
-        idempotencyKey ??
-          buildBulkDeductIdempotencyKey(Array.from(insertedRequestIds)),
+        bulkKey,
       );
     } catch (error) {
+      const category = getSorobanErrorCategory(error);
+      const isDefinitive =
+        category === "INSUFFICIENT_BALANCE" || category === "CONTRACT_ERROR";
+
+      if (isDefinitive && phase1.inserted.length > 0) {
+        const reason = `Soroban bulk deduct simulation/contract error: ${category} (${normalizeErrorMessage(error)})`;
+        const insertedIds = phase1.inserted.map((entry) =>
+          BigInt(entry.usageEventId).toString(),
+        );
+        try {
+          await this.pool.query(
+            `UPDATE usage_events
+                SET deduction_status = 'voided',
+                    resolved_at = NOW(),
+                    resolution_reason = $1
+              WHERE id = ANY($2::bigint[]) AND deduction_status = 'pending'`,
+            [reason, insertedIds],
+          );
+          logger.info(
+            `[BillingService] Voided ${insertedIds.length} pending bulk deductions: ${reason}`,
+          );
+        } catch (voidErr) {
+          logger.error(
+            `[BillingService] Failed to void pending bulk deductions: ${normalizeErrorMessage(voidErr)}`,
+          );
+        }
+      }
+
       return {
         success: false,
         results: requests.map((request) => {
           const row = phase1.rowsByRequestId.get(request.requestId)!;
           const wasInserted = insertedRequestIds.has(request.requestId);
+          const status = wasInserted
+            ? isDefinitive
+              ? "voided"
+              : "pending"
+            : ((row.deduction_status as DeductionStatus) ??
+              (row.stellar_tx_hash ? "confirmed" : "pending"));
+
           return {
             requestId: request.requestId,
             usageEventId: row.id.toString(),
             stellarTxHash: row.stellar_tx_hash ?? undefined,
             alreadyProcessed: !wasInserted,
             deductionApplied: !wasInserted && Boolean(row.stellar_tx_hash),
-            reconciliationRequired: wasInserted || row.stellar_tx_hash === null,
+            reconciliationRequired: status === "pending",
+            deductionStatus: status,
           };
         }),
         entryCount: requests.length,
@@ -895,6 +1084,10 @@ export class BillingService {
           alreadyProcessed: !wasInserted,
           deductionApplied: wasInserted || Boolean(row.stellar_tx_hash),
           reconciliationRequired: !wasInserted && row.stellar_tx_hash === null,
+          deductionStatus: wasInserted
+            ? "confirmed"
+            : ((row.deduction_status as DeductionStatus) ??
+              (row.stellar_tx_hash ? "confirmed" : "pending")),
         };
       }),
       entryCount: requests.length,
@@ -908,26 +1101,35 @@ export class BillingService {
     const result = await this.pool.query<{
       id: string;
       stellar_tx_hash: string | null;
+      deduction_status: string | null;
     }>(
-      `SELECT id, stellar_tx_hash
+      `SELECT id, stellar_tx_hash, deduction_status
          FROM usage_events
         WHERE request_id = $1`,
       [requestId],
     );
 
     if (result.rows.length === 0) return null;
-    const hasTx = Boolean(result.rows[0].stellar_tx_hash);
+    const row = result.rows[0];
+    const status: DeductionStatus =
+      (row.deduction_status as DeductionStatus) ??
+      (row.stellar_tx_hash ? "confirmed" : "pending");
+    const hasTx = Boolean(row.stellar_tx_hash);
 
     return {
-      success: hasTx,
-      usageEventId: result.rows[0].id.toString(),
-      stellarTxHash: result.rows[0].stellar_tx_hash ?? undefined,
+      success: status === "confirmed",
+      usageEventId: row.id.toString(),
+      stellarTxHash: row.stellar_tx_hash ?? undefined,
       alreadyProcessed: true,
       deductionApplied: hasTx,
-      reconciliationRequired: !hasTx,
-      error: hasTx
-        ? undefined
-        : "Previous deduction attempt pending reconciliation",
+      reconciliationRequired: status === "pending",
+      deductionStatus: status,
+      error:
+        status === "confirmed"
+          ? undefined
+          : status === "voided"
+          ? "Deduction was voided"
+          : "Previous deduction attempt pending reconciliation",
     };
   }
 
@@ -971,6 +1173,32 @@ export class BillingService {
     throw lastError instanceof Error
       ? lastError
       : new Error(normalizeErrorMessage(lastError));
+  }
+
+  private async executeBulkDeductWithRetry(
+    userId: string,
+    items: Array<{ amount: string; requestId: string }>,
+    aggregateAmount: string,
+    idempotencyKey: string,
+  ): Promise<SorobanDeductResult> {
+    if (!this.sorobanClient.deductBalanceBatch) {
+      return this.executeDeductWithRetry(userId, aggregateAmount, idempotencyKey);
+    }
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt += 1) {
+      try {
+        return await this.sorobanClient.deductBalanceBatch(userId, items, idempotencyKey);
+      } catch (error) {
+        lastError = error;
+        if (!isTransientSorobanError(error) || attempt === this.retryDelaysMs.length) break;
+        const scheduledDelay = this.retryDelaysMs[attempt];
+        await sleep(computeJitteredDelay(scheduledDelay, {
+          strategy: "full", random: this.random, maxDelayMs: scheduledDelay,
+        }));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(normalizeErrorMessage(lastError));
   }
 }
 
