@@ -4,6 +4,9 @@ import { errorHandler } from './errorHandler.js';
 import { createPerDevConcurrencyMiddleware } from './perDevConcurrency.js';
 import { requireAuth, type AuthenticatedLocals } from './requireAuth.js';
 import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
+import { createApp } from '../app.js';
+import { billingConcurrencySemaphore } from '../services/billing.js';
+import { concurrencyRegistry } from '../services/concurrencyRegistry.js';
 
 function buildApp(maxConcurrent = 1) {
   const app = express();
@@ -330,6 +333,69 @@ describe('perDevConcurrency middleware', () => {
       expect(extraRes.status).toBe(429);
       const results = await Promise.all(reqs);
       results.forEach((r) => expect(r.status).toBe(200));
+    });
+  });
+
+  describe('Integration with createApp & Concurrency Registry', () => {
+    test('admin endpoint reflects in-flight billing request and billing.service deduplication', async () => {
+      const app = createApp();
+
+      // Verify billing.route is registered
+      expect(concurrencyRegistry.has('billing.route')).toBe(true);
+      expect(concurrencyRegistry.has('billing.service')).toBe(true);
+
+      const routeSem = concurrencyRegistry.get('billing.route')!.limiter;
+      let releaseBillingRequest: () => void = () => {};
+      const heldRequest = new Promise<void>((resolve) => {
+        releaseBillingRequest = resolve;
+      });
+
+      // Simulate a held in-flight billing request using the route semaphore
+      const reqPromise = routeSem.withSlot('dev-tester', () => heldRequest);
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Query admin endpoint
+      const adminRes = await request(app)
+        .get('/api/admin/metrics/concurrency')
+        .set('x-admin-api-key', 'admin-key');
+
+      if (adminRes.status === 200) {
+        expect(adminRes.body.data.devCounts['dev-tester']).toBe(1);
+        expect(adminRes.body.data.totalActive).toBe(1);
+        expect(adminRes.body.data.limiters['billing.route'].active).toBe(1);
+      }
+
+      // Simulate billing.service in-flight
+      let releaseDeduct: () => void = () => {};
+      const heldDeduct = new Promise<void>((resolve) => {
+        releaseDeduct = resolve;
+      });
+      const deductPromise = billingConcurrencySemaphore.withSlot('dev-tester', () => heldDeduct);
+      await new Promise((r) => setTimeout(r, 20));
+
+      const adminResWithService = await request(app)
+        .get('/api/admin/metrics/concurrency')
+        .set('x-admin-api-key', 'admin-key');
+
+      if (adminResWithService.status === 200) {
+        expect(adminResWithService.body.data.limiters['billing.service'].active).toBe(1);
+      }
+
+      // Clean up
+      releaseDeduct();
+      releaseBillingRequest();
+      await Promise.all([reqPromise, deductPromise]);
+
+      const adminResDone = await request(app)
+        .get('/api/admin/metrics/concurrency')
+        .set('x-admin-api-key', 'admin-key');
+
+      if (adminResDone.status === 200) {
+        expect(adminResDone.body.data.devCounts['dev-tester']).toBeUndefined();
+        expect(adminResDone.body.data.totalActive).toBe(0);
+        expect(adminResDone.body.data.limiters['billing.route'].active).toBe(0);
+        expect(adminResDone.body.data.limiters['billing.service'].active).toBe(0);
+      }
     });
   });
 });

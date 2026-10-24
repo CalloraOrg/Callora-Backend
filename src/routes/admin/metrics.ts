@@ -7,6 +7,7 @@ import { logger } from '../../logger.js';
 import { validate } from '../../middleware/validate.js';
 import { DeveloperSemaphore, sharedDeveloperSemaphore } from '../../utils/developerSemaphore.js';
 import { computeConcurrencyStats } from '../../services/concurrency.js';
+import { concurrencyRegistry } from '../../services/concurrencyRegistry.js';
 
 const TRUST_PROXY = process.env.TRUST_PROXY_HEADERS === 'true';
 const GRANTFOX_FWC26_CAMPAIGN = 'GrantFox FWC26';
@@ -47,7 +48,16 @@ export function createAdminDevMetricsRouter(
   deps: Partial<AdminDevMetricsRouterDeps> = {},
 ): Router {
   const router = Router();
-  const developerSemaphore = deps.developerSemaphore ?? sharedDeveloperSemaphore;
+  const getBillingRouteSemaphore = (): DeveloperSemaphore => {
+    if (deps.developerSemaphore) {
+      return deps.developerSemaphore;
+    }
+    const registered = concurrencyRegistry.get('billing.route');
+    if (registered && registered.limiter instanceof DeveloperSemaphore) {
+      return registered.limiter;
+    }
+    return sharedDeveloperSemaphore;
+  };
 
   /**
    * GET /
@@ -74,6 +84,7 @@ export function createAdminDevMetricsRouter(
    */
   router.get('/', (req, res, next) => {
     try {
+      const developerSemaphore = getBillingRouteSemaphore();
       const stats = computeConcurrencyStats(developerSemaphore);
 
       logger.audit('READ_DEV_CONCURRENCY_STATS', res.locals.adminActor, {
@@ -117,9 +128,39 @@ export function createAdminDevMetricsRouter(
    */
   router.get('/concurrency', (req, res, next) => {
     try {
+      const developerSemaphore = getBillingRouteSemaphore();
       const devCounts = developerSemaphore.getCurrentActiveSlotCounts();
       const totalActive = developerSemaphore.getTotalActiveSlotCount();
       const maxConcurrencyPerDeveloper = developerSemaphore.maxConcurrency;
+
+      const registeredLimiters = concurrencyRegistry.getAll();
+      const limiters: Record<string, {
+        active: number;
+        queued: number;
+        limit: number;
+        type: 'developer' | 'key';
+        counts: Record<string, number>;
+      }> = {};
+
+      for (const item of registeredLimiters) {
+        limiters[item.name] = {
+          active: item.limiter.getTotalActiveSlotCount(),
+          queued: item.limiter.getTotalQueuedCount(),
+          limit: item.limiter.maxConcurrency,
+          type: item.type,
+          counts: item.limiter.getCurrentActiveSlotCounts(),
+        };
+      }
+
+      if (!limiters['billing.route'] && developerSemaphore) {
+        limiters['billing.route'] = {
+          active: developerSemaphore.getTotalActiveSlotCount(),
+          queued: developerSemaphore.getTotalQueuedCount(),
+          limit: developerSemaphore.maxConcurrency,
+          type: 'developer',
+          counts: developerSemaphore.getCurrentActiveSlotCounts(),
+        };
+      }
 
       logger.audit('READ_DEV_CONCURRENCY', res.locals.adminActor, {
         campaign: GRANTFOX_FWC26_CAMPAIGN,
@@ -135,6 +176,7 @@ export function createAdminDevMetricsRouter(
           devCounts,
           totalActive,
           maxConcurrencyPerDeveloper,
+          limiters,
           campaign: GRANTFOX_FWC26_CAMPAIGN,
         },
       });
@@ -177,6 +219,7 @@ export function createAdminDevMetricsRouter(
     validate({ params: developerIdParamsSchema }),
     (req, res, next) => {
       try {
+        const developerSemaphore = getBillingRouteSemaphore();
         const { developerId } = req.params;
         const activeCount = developerSemaphore.getActiveSlotCount(developerId);
         const atLimit = developerSemaphore.isAtLimit(developerId);

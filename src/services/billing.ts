@@ -34,6 +34,7 @@ import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
+import { concurrencyRegistry } from "./concurrencyRegistry.js";
 import { logger } from "../logger.js";
 import {
   parseUsdcToContractUnits,
@@ -56,6 +57,7 @@ const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
  * leaving distinct users fully concurrent.
  */
 export const billingConcurrencySemaphore = new DeveloperSemaphore(1);
+concurrencyRegistry.register('billing.service', billingConcurrencySemaphore, 'developer');
 
 export interface BillingDeductRequest {
   requestId: string;

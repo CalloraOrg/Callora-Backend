@@ -91,7 +91,13 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     restRateLimitOptions,
     restRateLimiter,
   );
+  const billingRouteSemaphore = new DeveloperSemaphore(
+    config.billingConcurrency.maxPerDeveloper,
+    config.billingConcurrency.semaphoreTtlMs,
+  );
+  concurrencyRegistry.register('billing.route', billingRouteSemaphore, 'developer');
   const perDevConcurrency = createPerDevConcurrencyMiddleware({
+    semaphore: billingRouteSemaphore,
     maxConcurrent: config.billingConcurrency.maxPerDeveloper,
     ttlMs: config.billingConcurrency.semaphoreTtlMs,
   });

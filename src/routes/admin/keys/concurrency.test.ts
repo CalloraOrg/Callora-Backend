@@ -4,6 +4,7 @@ import request from 'supertest';
 import { errorHandler } from '../../../middleware/errorHandler.js';
 import { KeySemaphore } from '../../../utils/keySemaphore.js';
 import { createAdminKeyConcurrencyRouter } from './concurrency.js';
+import { concurrencyRegistry } from '../../../services/concurrencyRegistry.js';
 
 const ADMIN_KEY = 'test-admin-key';
 
@@ -209,5 +210,29 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
       .get('/api/admin/keys/concurrency/key_abc')
       .set('x-admin-api-key', ADMIN_KEY);
     expect(detailResponse.body.data.maxConcurrencyPerKey).toBe(9);
+  });
+
+  it('returns registered: false when no key limiter is registered and default router is used', async () => {
+    concurrencyRegistry.unregister('gateway.key');
+    const defaultApp = express();
+    defaultApp.use((req, res, next) => {
+      res.locals.adminActor = 'admin-api-key';
+      next();
+    });
+    defaultApp.use('/api/admin/keys', createAdminKeyConcurrencyRouter());
+
+    const listRes = await request(defaultApp).get('/api/admin/keys/concurrency');
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.data).toEqual({
+      registered: false,
+      campaign: 'GrantFox FWC26',
+    });
+
+    const detailRes = await request(defaultApp).get('/api/admin/keys/concurrency/key_123');
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.data).toEqual({
+      registered: false,
+      campaign: 'GrantFox FWC26',
+    });
   });
 });

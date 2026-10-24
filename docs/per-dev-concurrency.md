@@ -41,7 +41,7 @@ Both routes live under `/api/admin` and require admin credentials — an `x-admi
 
 ### `GET /api/admin/metrics/concurrency`
 
-Snapshot of every developer with at least one billing request currently in flight.  Developers with zero active requests are omitted to keep the payload small.
+Snapshot of every developer with at least one billing request currently in flight. Developers with zero active requests are omitted to keep the payload small. In addition, registered limiters across the application (e.g. `billing.route`, `billing.service`) report their active slots, queue lengths, limits, and per-developer counts.
 
 ```json
 {
@@ -49,10 +49,34 @@ Snapshot of every developer with at least one billing request currently in fligh
     "devCounts": { "dev_abc": 2, "dev_def": 1 },
     "totalActive": 3,
     "maxConcurrencyPerDeveloper": 1,
+    "limiters": {
+      "billing.route": {
+        "active": 3,
+        "queued": 0,
+        "limit": 1,
+        "type": "developer",
+        "counts": { "dev_abc": 2, "dev_def": 1 }
+      },
+      "billing.service": {
+        "active": 1,
+        "queued": 0,
+        "limit": 1,
+        "type": "developer",
+        "counts": { "dev_abc": 1 }
+      }
+    },
     "campaign": "GrantFox FWC26"
   }
 }
 ```
+
+### Prometheus Metrics
+
+Limiter-level active and queued counts are also exposed in Prometheus format on `/api/metrics` with bounded cardinality (no per-developer labels):
+- `concurrency_active_slots{limiter="billing.route"}`
+- `concurrency_queued{limiter="billing.route"}`
+- `concurrency_active_slots{limiter="billing.service"}`
+- `concurrency_queued{limiter="billing.service"}`
 
 An idle billing layer returns an empty `devCounts` object and a `totalActive` of `0`.
 
