@@ -98,6 +98,9 @@ export interface UsageStore {
   hasEvent(requestId: string): Awaitable<boolean>;
   getEvents(apiKey?: string): Awaitable<UsageEvent[]>;
   getUnsettledEvents(): Awaitable<UsageEvent[]>;
+  getUnsettledDeveloperIds(): Awaitable<string[]>;
+  claimUnsettledEvents(developerId: string, limit: number): Awaitable<{ events: UsageEvent[]; totalAmount: bigint }>;
+  releaseEvents(eventIds: string[]): Awaitable<void>;
   markAsSettled(eventIds: string[], settlementId: string): Awaitable<void>;
 }
 
