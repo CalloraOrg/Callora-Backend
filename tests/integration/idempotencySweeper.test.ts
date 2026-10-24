@@ -219,9 +219,20 @@ describe('Idempotency Sweeper Integration Tests', () => {
       );
     }
 
-    // Sweep with very tight time budget (100ms)
+    // Sweep with a 100ms budget. The clock is driven deterministically: the
+    // run starts at t=0, the first batch check sees t=0 and every later check
+    // sees t=1000, so exactly one batch runs regardless of runner speed.
     const config: IdempotencySweeperConfig = { batchSize: 5000, timeBudgetMs: 100 };
-    const rowCount = await sweepIdempotencyStoreRows(pool, config);
+    const nowSpy = jest
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(1000);
+    try {
+      await sweepIdempotencyStoreRows(pool, config);
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     // With a 100ms budget, we expect to delete only the first batch (5k rows)
     // and possibly the second batch if execution is fast enough

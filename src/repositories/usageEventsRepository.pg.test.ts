@@ -605,7 +605,10 @@ test('repository accepts bigint values returned directly from the database drive
   assert.equal(events[0]?.amount, 450n);
 });
 
-test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis and skips indexed rows', async () => {
+// Skipped: since #1544 this query joins revenue_ledger_skips, which pg-mem
+// cannot evaluate ("Not supported: lookups on joins"). The same query is
+// exercised against real PostgreSQL in src/services/revenueLedgerIndexer.test.ts.
+test.skip('findUnindexedRevenueLedgerEvents resolves developer ownership from apis and skips indexed rows', async () => {
   const { repository, pool } = createUsageEventsRepository();
 
   try {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { DataType, newDb } from 'pg-mem';
+import pg from 'pg';
+import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 
 import {
   PgUsageEventsRepository,
@@ -10,16 +11,40 @@ import {
   createRevenueLedgerIndexerJob,
 } from './revenueLedgerIndexer.js';
 
-function createIndexerHarness() {
-  const db = newDb();
+// The indexer relies on PostgreSQL features pg-mem does not emulate
+// (multi-join lookups, GREATEST on timestamps, ON CONFLICT ... WHERE and
+// advisory locks), so the database-backed tests run against a real
+// PostgreSQL container. Each harness gets its own database.
+let container: StartedTestContainer | undefined;
+let adminPool: InstanceType<typeof pg.Pool> | undefined;
+let databaseCounter = 0;
 
-  db.public.registerFunction({
-    name: 'now',
-    returns: DataType.timestamp,
-    implementation: () => new Date('2026-03-01T00:00:00.000Z'),
-  });
+function databaseUrl(name: string): string {
+  if (!container) throw new Error('PostgreSQL container is not running');
+  return `postgresql://postgres:postgres@${container.getHost()}:${container.getMappedPort(5432)}/${name}`;
+}
 
-  db.public.none(`
+beforeAll(async () => {
+  container = await new GenericContainer('postgres:16-alpine')
+    .withEnvironment({ POSTGRES_USER: 'postgres', POSTGRES_PASSWORD: 'postgres', POSTGRES_DB: 'postgres' })
+    .withExposedPorts(5432)
+    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
+    .start();
+  adminPool = new pg.Pool({ connectionString: databaseUrl('postgres') });
+}, 120_000);
+
+afterAll(async () => {
+  await adminPool?.end();
+  await container?.stop();
+});
+
+async function createIndexerHarness() {
+  databaseCounter += 1;
+  const name = `revenue_indexer_${databaseCounter}`;
+  await adminPool!.query(`CREATE DATABASE ${name}`);
+  const pool = new pg.Pool({ connectionString: databaseUrl(name) });
+
+  await pool.query(`
     CREATE TABLE usage_events (
       id BIGSERIAL PRIMARY KEY,
       user_id VARCHAR(255) NOT NULL,
@@ -51,19 +76,17 @@ function createIndexerHarness() {
       reversal_of_usage_event_id BIGINT UNIQUE
     );
 
-    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMPTZ);
-    CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
+    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMP);
+    CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMP NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
   `);
 
-  const { Pool } = db.adapters.createPg();
-  const pool = new Pool();
-  const repository = new PgUsageEventsRepository(pool as UsageEventsRepositoryQueryable);
+  const repository = new PgUsageEventsRepository(pool as unknown as UsageEventsRepositoryQueryable);
 
   return { pool, repository };
 }
 
 test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered batches', async () => {
-  const { pool, repository } = createIndexerHarness();
+  const { pool, repository } = await createIndexerHarness();
 
   try {
     await pool.query(
@@ -132,7 +155,7 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
 });
 
 test('only confirmed on-chain charges are accrued, and a pending charge is picked up after confirmation', async () => {
-  const { pool, repository } = createIndexerHarness();
+  const { pool, repository } = await createIndexerHarness();
   try {
     await pool.query("ALTER TABLE usage_events ADD COLUMN deduction_status VARCHAR(16) NOT NULL DEFAULT 'pending'");
     await pool.query('INSERT INTO apis (id, developer_id) VALUES ($1, $2)', ['api-1', 'dev-1']);
@@ -164,7 +187,7 @@ test('only confirmed on-chain charges are accrued, and a pending charge is picke
 });
 
 test('unknown APIs are persisted with retry backoff and do not block later events', async () => {
-  const { pool, repository } = createIndexerHarness();
+  const { pool, repository } = await createIndexerHarness();
   try {
     await pool.query("INSERT INTO apis (id, developer_id) VALUES ('api-known', 'dev-1')");
     await repository.create({ userId: 'c1', apiId: 'api-missing', endpointId: 'e1', apiKeyId: 'k1', amount: 10n, requestId: 'poison', stellarTxHash: 'tx-poison' });
@@ -189,12 +212,13 @@ test('unknown APIs are persisted with retry backoff and do not block later event
 });
 
 test('database lease prevents concurrent indexer instances from scanning together', async () => {
-  const { pool, repository } = createIndexerHarness();
+  const { pool, repository } = await createIndexerHarness();
   try {
     assert.equal(await repository.acquireRevenueLedgerIndexerLock(), true);
     assert.equal(await repository.acquireRevenueLedgerIndexerLock(), false);
     await repository.releaseRevenueLedgerIndexerLock();
     assert.equal(await repository.acquireRevenueLedgerIndexerLock(), true);
+    await repository.releaseRevenueLedgerIndexerLock();
   } finally {
     await pool.end();
   }
