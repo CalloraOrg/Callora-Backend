@@ -101,34 +101,49 @@ export class RevenueSettlementService {
     let totalSettledAmount = 0n;
     let errors = 0;
 
-    const devResult = typeof (this.usageStore as any).getUnsettledDeveloperIds === 'function'
-      ? await (this.usageStore as any).getUnsettledDeveloperIds()
+    const devIds: string[] = typeof this.usageStore.getUnsettledDeveloperIds === 'function'
+      ? await this.usageStore.getUnsettledDeveloperIds()
       : [];
-    const devIds: string[] = devResult;
 
     for (const developerId of devIds) {
       try {
-        const claimed = await (this.usageStore as any).claimUnsettledEvents(developerId, maxEvents);
+        const claimed = typeof this.usageStore.claimUnsettledEvents === 'function'
+          ? await this.usageStore.claimUnsettledEvents(developerId, maxEvents)
+          : { events: [], totalAmount: 0n };
+
         if (!claimed || claimed.events.length === 0) {
           continue;
         }
 
         if (claimed.totalAmount < minPayout) {
-          await (this.usageStore as any).releaseEvents(claimed.events.map((e: any) => e.id));
+          if (typeof this.usageStore.releaseEvents === 'function') {
+            await this.usageStore.releaseEvents(claimed.events.map((e) => e.id));
+          }
           continue;
         }
 
         const settlementId = `stl_${randomUUID()}`;
-        await (this.settlementStore as any).createClaimed({
-          id: settlementId,
-          developerId,
-          amount: claimed.totalAmount,
-          status: 'claimed',
-          tx_hash: null,
-          created_at: new Date().toISOString(),
-        });
+        if (typeof this.settlementStore.createClaimed === 'function') {
+          await this.settlementStore.createClaimed({
+            id: settlementId,
+            developerId,
+            amount: claimed.totalAmount,
+            status: 'claimed',
+            tx_hash: null,
+            created_at: new Date().toISOString(),
+          });
+        } else {
+          await this.settlementStore.create({
+            id: settlementId,
+            developerId,
+            amount: claimed.totalAmount,
+            status: 'pending',
+            tx_hash: null,
+            created_at: new Date().toISOString(),
+          });
+        }
 
-        await this.usageStore.markAsSettled(claimed.events.map((e: any) => e.id), settlementId);
+        await this.usageStore.markAsSettled(claimed.events.map((e) => e.id), settlementId);
 
         let txHash: string | null = null;
         try {
@@ -158,8 +173,8 @@ export class RevenueSettlementService {
             totalSettledAmount += claimed.totalAmount;
           } else {
             errors++;
-            if (typeof (this.usageStore as any).releaseEvents === 'function') {
-              await (this.usageStore as any).releaseEvents(claimed.events.map((e: any) => e.id));
+            if (typeof this.usageStore.releaseEvents === 'function') {
+              await this.usageStore.releaseEvents(claimed.events.map((e) => e.id));
             }
             await this.settlementStore.updateStatus(settlementId, 'failed', null);
           }
