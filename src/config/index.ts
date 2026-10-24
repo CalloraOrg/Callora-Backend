@@ -12,9 +12,11 @@ interface StellarNetworkConfig {
   networkPassphrase: string;
   vaultContractId?: string;
   settlementContractId?: string;
+  revenuePoolContractId?: string;
+  xusdContractId?: string;
 }
 
-const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const TESTNET_NETWORK_PASPPRASE = "Test DF Network ; September 2015";
 const MAINNET_NETWORK_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
 
@@ -69,10 +71,12 @@ const testnetConfig: StellarNetworkConfig = {
     "SOROBAN_TESTNET_RPC_URL",
     env.SOROBAN_TESTNET_RPC_URL,
   ),
-  networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
+  networkPassphrase: TESTNET_NETWORK_PASPPRASE,
   vaultContractId: env.STELLAR_TESTNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID,
-};
+  revenuePoolContractId: env.STELLAR_TESTNET_REVENUE_POOL_CONTRACT_ID,
+  xusdContractId: env.STELLAR_TESTNET_USDC_CONTRACT_ID,
+} as StellarNetworkConfig;
 
 const mainnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
@@ -86,10 +90,38 @@ const mainnetConfig: StellarNetworkConfig = {
   networkPassphrase: MAINNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
-};
+  revenuePoolContractId: env.STELLAR_MAINNET_REVENUE_POOL_CONTRACT_ID,
+  xusdContractId: env.STELLAR_MAINNET_USDC_CONTRACT_ID,
+} as StellarNetworkConfig;
 
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
+
+// Derive billing network settings from the active network unless explicitly overridden.
+// The override must match the active network passphrase (enforced in env superRefine).
+const billingNetworkPassphrase =
+  env.SOROBAN_BILLING_NETWORK_PASSPHRASE ?? activeConfig.networkPassphrase;
+
+const billingRpcUrl =
+  env.SOROBAN_BILLING_RPC_URL ??
+  env.SOROBAN_RPC_URL ??
+  activeConfig.sorobanRpcUrl;
+
+const billingContractId =
+  env.SOROBAN_BILLING_CONTRACT_ID ?? activeConfig.vaultContractId;
+
+// Log once at startup when the billing contract id is an explicit override
+// of the active network's vault contract id.
+const billingContractIsOverride =
+  Boolean(env.SOROBAN_BILLING_CONTRACT_ID) &&
+  Boolean(activeConfig.vaultContractId) === true &&
+  env.SOROBAN_BILLING_CONTRACT_ID !== activeConfig.vaultContractId;
+
+if (billingContractIsOverride) {
+  console.warn(
+    "SOROBAN_BILLING_CONTRACT_ID differs from the active network's vault contract id; treating it as an explicit override.",
+  );
+}
 
 const upstreamHostAllowlist = parseUpstreamHostAllowlist(
   env.UPSTREAM_HOST_ALLOWLIST,
@@ -181,11 +213,11 @@ export const config = {
   creditsRateLimit: {
     capacity: env.CREDITS_RATE_LIMIT_CAPACITY,
     refillRate: env.CREDITS_RATE_LIMIT_REFILL_RATE,
+  },
 
-    billingRateLimit: {
-      windowMs: env.BILLING_RATE_LIMIT_WINDOW_MS,
-      maxRequests: env.BILLING_RATE_LIMIT_MAX_REQUESTS,
-    },
+  billingRateLimit: {
+    windowMs: env.BILLING_RATE_LIMIT_WINDOW_MS,
+    maxRequests: env.BILLING_RATE_LIMIT_MAX_REQUESTS,
   },
 
   quotaRateLimit: {
@@ -226,12 +258,13 @@ export const config = {
   settlementSync: {
     intervalMs: env.SETTLEMENT_STATUS_SYNC_INTERVAL_MS,
     timeoutMs: env.SETTLEMENT_STATUS_SYNC_TIMEOUT_MS,
+    maxRetries: env.SETTLEMENT_MAX_RETRIES,
   },
   settlementRecon: {
     intervalMs: env.SETTLEMENT_RECON_INTERVAL_MS,
   },
   revenueLedgerIndexer: {
-    intervalMs: env.REVENUE_LEDGER_INDEXER_INTERVAL_MS,
+    intervalMs: env.REVENUE_LEGDER_INDEXER_INTERVAL_MS,
     batchSize: env.REVENUE_LEDGER_INDEXER_BATCH_SIZE,
   },
 
@@ -250,6 +283,11 @@ export const config = {
       mainnet: mainnetConfig,
     },
   },
+  billing: {
+    networkPassphrase: billingNetworkPassphrase,
+    rpcUrl: billingRpcUrl,
+    contractId: billingContractId,
+  },
   vaultSnapshotMaxAgeMs: env.VAULT_SNAPSHOT_MAX_AGE_MS,
 
   bcrypt: {
@@ -260,14 +298,15 @@ export const config = {
 
   billingConcurrency: {
     maxPerDeveloper: env.BILLING_MAX_CONCURRENCY_PER_DEV,
-    semaphoreTtlMs: env.BILLING_SEMAPHORE_TTL_MS,
+    semaphoreTmlMs: env.BILLING_SEMAPHORE_TTL_MS,
   },
   keyConcurrency: {
     maxPerKey: env.KEY_MAX_CONCURRENCY_PER_KEY,
-    semaphoreTtlMs: env.KEY_SEMAPHORE_TTL_MS,
+    semaphoreTmlMs: env.KEY_SEMAPHORE_TTL_MS,
   },
   routeBodyLimits: env.ROUTE_BODY_LIMITS,
   idempotency: {
+    leaseSeconds: env.IDEMPOTENCY_LEASE_SECONDS,
     retentionWindowSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
     sweeperIntervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
   },
@@ -283,7 +322,7 @@ export const config = {
     webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
     p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
     pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
+    dedupWindowMs: env.SLOW_QUERY_DEBUP_WINDOW_SECONDS * 1000,
   },
 
   memoryAccounting: {
@@ -298,7 +337,7 @@ export const config = {
     windowMs: env.USAGE_ANOMALY_WINDOW_MS,
     baselineWindows: env.USAGE_ANOMALY_BASELINE_WINDOWS,
     dedupWindowMs:
-      env.USAGE_ANOMALY_DEDUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
+      env.USAGE_ANOMALY_DETUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
   },
 
   monthlyInvoiceJob: {
@@ -310,7 +349,7 @@ export const config = {
       Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
     webhookUrl: env.SLO_ALERT_WEBHOOK_URL,
     pollIntervalMs: env.SLO_ALERT_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLO_ALERT_DEDUP_WINDOW_MS,
+    dedupWindowMs: env.SLO_ALERT_DEUP_WINDOW_MS,
     observationWindowMs: env.SLO_ALERT_OBSERVATION_WINDOW_MS,
     configs: env.SLO_ROUTE_CONFIGS as Array<{
       method: string;

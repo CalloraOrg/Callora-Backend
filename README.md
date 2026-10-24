@@ -131,24 +131,34 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the route map and design notes.
 
 ## Demo mode
 
-`DEMO_MODE=true` is what the public deployment uses. On startup it applies every SQLite-compatible migration to an ephemeral SQLite database and seeds a developer plus three sample APIs. Consequences:
+`DEMO_MODE=true` is what the public deployment uses. On startup it classifies migrations (via `-- dialect: sqlite|postgres|both` header comments or the built-in manifest) and applies every SQLite-compatible migration to an ephemeral SQLite database, logging applied/skipped/failed counts. Any genuine failure in a SQLite-applicable migration fails fast naming the broken file.
+
+It then executes an idempotent seed that creates a demo developer and 3 sample APIs, referencing the developer's dynamic ID (`lastInsertRowid`) rather than assuming ID 1. Consequences:
 
 - Catalog/marketplace/health/docs endpoints return real data; state is **not persistent** (serverless instances are ephemeral).
-- Features needing PostgreSQL (metering, billing, invoices, audit persistence, usage exports) respond with errors in demo mode.
+- Features needing PostgreSQL (metering, billing, invoices, audit persistence, usage exports) respond with standard 503 error envelopes (`SERVICE_UNAVAILABLE`) in demo mode, avoiding module-resolution crashes on missing Prisma clients.
 - OpenAPI *response* validation is switched off in demo mode (some responses omit optional contract fields); request validation stays on.
 - Stellar/Soroban calls are not made.
 
 ## Deploying to Vercel
 
-The app is bundled into one serverless function (`scripts/build-vercel.mjs` embeds `docs/openapi.json` and the migrations, so the upload is three files):
+The app is bundled into one serverless function (`scripts/build-vercel.mjs` embeds `docs/openapi.json` and migrations, producing a minimal 3-file deployment in `deploy/` with version parity for Node engines and dependencies like `better-sqlite3`):
 
 ```bash
 npm run build:vercel
+node scripts/smoke-vercel-bundle.mjs
 cd deploy
 vercel link --yes --project callora-api
-# set env vars (once): DEMO_MODE=true CORS_ALLOW_MISSING_ORIGIN=true SQLITE_PATH=/tmp/callora.db DATABASE_URL=... JWT_SECRET=... ADMIN_API_KEY=... METRICS_API_KEY=... SOROBAN_BILLING_CONTRACT_ID=... UPSTREAM_URL=... UPSTREAM_HOST_ALLOWLIST=...
+# set env vars (once): DEMO_MODE=true CORS_ALLOW_MISSING_ORIGIN=true SQLITE_PATH=/tmp/callora.db JWT_SECRET=... ADMIN_API_KEY=... METRICS_API_KEY=...
 vercel deploy --prod
 ```
+
+### Self-Healing Handler & CI Smoke Test
+
+The Vercel entrypoint (`scripts/vercel-entry.ts`) provides resilient cold-start handling:
+- **Self-healing readiness (`ensureReady`)**: Warm instances memoise database bootstrap success. If initialization fails, the memo is cleared and subsequent requests back off (at most one attempt per 5 seconds) returning `503 SERVICE_INITIALIZING` in the standard response envelope, preventing permanent instance poisoning.
+- **Synchronous error safety**: Synchronous errors thrown by the Express application are caught and returned as structured 500 error envelopes rather than crashing the serverless worker.
+- **CI smoke test (`scripts/smoke-vercel-bundle.mjs`)**: Runs in CI right after `npm run build:vercel` to ensure the built ESM bundle boots cleanly, verifies `GET /api/health` returns 200, asserts `GET /api/apis` returns the 3 seeded APIs, and verifies Prisma-backed routes return demo 503 envelopes.
 
 For a real deployment use the Docker image with PostgreSQL instead.
 

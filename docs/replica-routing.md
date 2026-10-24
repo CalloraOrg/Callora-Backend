@@ -198,12 +198,25 @@ the replica router.
 
 ### Repositories already integrated
 
-| Repository | Reads via `readQuery` | Writes via `writeQuery` |
-|---|---|---|
-| `userRepository` | ✅ | ✅ |
-| `usageEventsRepository.pg` | ✅ | ✅ |
-| `refreshTokenRepository` | ✅ | ✅ |
-| `auditLogRepository` | ✅ | — (read-only repository) |
+| Repository | Reads via `readQuery` | Writes via `writeQuery` | Notes |
+|---|---|---|---|
+| `userRepository` | ✅ | ✅ | |
+| `usageEventsRepository.pg` | ✅ | ✅ | |
+| `refreshTokenRepository` | ✅ (list/count only) | ✅ | See below |
+| `auditLogRepository` | ✅ | — (read-only repository) | |
+
+#### Refresh token security reads — primary only
+
+`listRefreshTokens` and `countActiveTokens` use `readQuery` (replica-eligible) because they are not used for authorization decisions.
+
+`consumeRefreshToken` **never uses a replica**. It acquires a dedicated client from the primary pool (`pool.connect()`) and runs both the conditional UPDATE (the compare-and-set) and the INSERT in a single `BEGIN … COMMIT` transaction. The re-read used to classify failure modes is also executed against the same primary client.
+
+This means:
+- `REPLICA_URLS` does not affect the refresh-token rotation path.
+- A stale replica cannot cause a consumed token to appear unconsumed.
+- Exactly one concurrent request can win the CAS; all others observe `is_revoked = true` on the primary re-read and receive `REVOKED_TOKEN`.
+
+See [`docs/auth-refresh-strategy.md`](auth-refresh-strategy.md) for the full design rationale.
 
 Repositories that use Drizzle ORM or the SQLite adapter (`creditsRepository`,
 `apiRepository`, etc.) are unaffected — they do not go through the `pg` pool

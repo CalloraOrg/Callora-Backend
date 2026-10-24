@@ -3,12 +3,16 @@ import assert from 'node:assert/strict';
 import {
   createConfiguredRateLimiter,
   createRateLimiter,
+  DEFAULT_TIER_POLICIES,
   InMemoryRateLimiter,
   InMemoryRateLimiterStore,
+  isKnownPlanTier,
   isPersistentRateLimiterStore,
+  PLAN_TIERS,
   type PersistentRateLimiterPool,
   PostgresRateLimiterStore,
   resolveRateLimiterConfig,
+  StoreBackedRateLimiter,
 } from './rateLimiter.js';
 
 type StoredBucket = {
@@ -664,5 +668,88 @@ describe('resolveRateLimiterConfig', () => {
         ),
       /PostgreSQL pool is required/,
     );
+  });
+});
+
+describe('plan tier resolution hardening (#1505)', () => {
+  it('exposes the known plan tiers and validates membership without the `in` operator', () => {
+    assert.deepEqual([...PLAN_TIERS], ['free', 'pro', 'enterprise']);
+    assert.equal(isKnownPlanTier('free'), true);
+    assert.equal(isKnownPlanTier('pro'), true);
+    assert.equal(isKnownPlanTier('enterprise'), true);
+    // Prototype-chain members must never be treated as tiers.
+    assert.equal(isKnownPlanTier('constructor'), false);
+    assert.equal(isKnownPlanTier('toString'), false);
+    assert.equal(isKnownPlanTier('hasOwnProperty'), false);
+    assert.equal(isKnownPlanTier('__proto__'), false);
+  });
+
+  for (const prototypeKey of ['constructor', 'toString', '__proto__', 'valueOf']) {
+    it(`resolvePolicy("${prototypeKey}") falls back to finite defaults, not NaN`, () => {
+      const limiter = createRateLimiter(7, 60_000);
+      const policy = limiter.resolvePolicy(prototypeKey);
+      assert.equal(policy.maxRequests, 7);
+      assert.equal(policy.windowMs, 60_000);
+      assert.equal(Number.isFinite(policy.maxRequests), true);
+      assert.equal(Number.isFinite(policy.windowMs), true);
+    });
+  }
+
+  it('resolvePolicy("pro") returns the pro tier policy', () => {
+    const limiter = createRateLimiter(7, 60_000);
+    assert.deepEqual(limiter.resolvePolicy('pro'), DEFAULT_TIER_POLICIES.pro);
+  });
+});
+
+describe('checkKeyLimit (#1505)', () => {
+  it('enforces the per-key limit bucket at key:<id>', async () => {
+    const limiter = createRateLimiter(100, 60_000);
+    // key limit 2/min, tier free ceiling 100/min -> effective 2
+    assert.equal((await limiter.checkKeyLimit('key-a', 'free', 2)).allowed, true);
+    assert.equal((await limiter.checkKeyLimit('key-a', 'free', 2)).allowed, true);
+    const third = await limiter.checkKeyLimit('key-a', 'free', 2);
+    assert.equal(third.allowed, false);
+    assert.equal(third.limit, 2);
+    assert.equal(third.remaining, 0);
+    assert.ok((third.retryAfterMs ?? 0) > 0);
+  });
+
+  it('isolates per-key buckets between different key ids', async () => {
+    const limiter = createRateLimiter(100, 60_000);
+    await limiter.checkKeyLimit('key-a', 'free', 2);
+    await limiter.checkKeyLimit('key-a', 'free', 2);
+    assert.equal((await limiter.checkKeyLimit('key-a', 'free', 2)).allowed, false);
+    // key-b has its own bucket, unaffected by key-a
+    assert.equal((await limiter.checkKeyLimit('key-b', 'free', 2)).allowed, true);
+  });
+
+  it('clamps a per-key limit above the tier ceiling down to the tier', async () => {
+    const limiter = createRateLimiter(100, 60_000);
+    // pro ceiling is 500; a key asking for 10_000 is clamped to 500.
+    const first = await limiter.checkKeyLimit('key-pro', 'pro', 10_000);
+    assert.equal(first.allowed, true);
+    assert.equal(first.limit, 500);
+  });
+
+  it('leaves tier limits untouched when the per-key limit is null', async () => {
+    const limiter = createRateLimiter(100, 60_000);
+    const first = await limiter.checkKeyLimit('key-null', 'free', null);
+    assert.equal(first.allowed, true);
+    assert.equal(first.limit, DEFAULT_TIER_POLICIES.free.maxRequests);
+  });
+
+  it('shares the same per-key bucket across limiter instances backed by one store', async () => {
+    // Two StoreBackedRateLimiter instances sharing a single store model two
+    // gateway instances in multi-instance mode: the per-key bucket must be
+    // global, so exhausting it on one instance throttles the other.
+    const sharedStore = new InMemoryRateLimiterStore();
+    const instanceA = new StoreBackedRateLimiter(100, 60_000, sharedStore);
+    const instanceB = new StoreBackedRateLimiter(100, 60_000, sharedStore);
+
+    assert.equal((await instanceA.checkKeyLimit('shared-key', 'free', 1)).allowed, true);
+    // instanceB sees instanceA's consumption of the shared `key:shared-key` bucket.
+    const onB = await instanceB.checkKeyLimit('shared-key', 'free', 1);
+    assert.equal(onB.allowed, false);
+    assert.equal(onB.limit, 1);
   });
 });

@@ -4,11 +4,13 @@ import { SorobanSettlementClient } from './sorobanSettlement.js';
 import { randomUUID } from 'node:crypto';
 import { calloraEvents } from '../events/event.emitter.js';
 import {
+  computeJitteredDelay,
   RETRIABLE_HTTP_STATUSES,
   TransientError,
   isTransientNetworkError,
   withRetry,
 } from '../lib/retry.js';
+import { env } from '../config/env.js';
 
 const TX_FAILED_TOO_EARLY = 'tx_failed_too_early';
 
@@ -271,32 +273,31 @@ export class RevenueSettlementService {
           }
         } else if (horizonResponse?.successful === false) {
           if (transactionCode === TX_FAILED_TOO_EARLY) {
-            const maxRetries = this.options.maxTooEarlyRetries ?? 5;
-            if ((settlement.retry_count ?? 0) >= maxRetries) {
-              // Max retries exhausted — permanently fail
-              try {
-                await this.settlementStore.updateStatus(settlement.id, 'failed');
-                failed++;
-              } catch (updateError) {
-                errors++;
-                console.warn(
-                  { settlementId: settlement.id, error: updateError },
-                  'Failed to update settlement to failed — skipping',
-                );
+            const maxRetries = this.options.maxTooEarlyRetries ?? env.SETTLEMENT_MAX_RETRIES;
+            const retryCount = settlement.retry_count ?? 0;
+            const baseDelayMs = this.options.tooEarlyBackoffMs ?? 30_000;
+            const backoffMs = computeJitteredDelay(baseDelayMs * 2 ** retryCount, {
+              strategy: 'equal',
+              maxDelayMs: 30 * 60_000,
+            });
+            const retryAfter = new Date(Date.now() + backoffMs).toISOString();
+            try {
+              const changed = await this.settlementStore.scheduleRetry(
+                settlement.id,
+                retryAfter,
+                maxRetries,
+                'Horizon returned tx_failed_too_early after the retry limit was reached',
+              );
+              if (changed) {
+                if (retryCount >= maxRetries) failed++;
+                else retried++;
               }
-            } else {
-              const backoffMs = this.options.tooEarlyBackoffMs ?? 30_000;
-              const retryAfter = new Date(Date.now() + backoffMs).toISOString();
-              try {
-                await this.settlementStore.scheduleRetry(settlement.id, retryAfter);
-                retried++;
-              } catch (updateError) {
-                errors++;
-                console.warn(
-                  { settlementId: settlement.id, error: updateError },
-                  'Failed to schedule retry for settlement — skipping',
-                );
-              }
+            } catch (updateError) {
+              errors++;
+              console.warn(
+                { settlementId: settlement.id, error: updateError },
+                'Failed to schedule retry for settlement — skipping',
+              );
             }
           } else {
             // Other explicit failure

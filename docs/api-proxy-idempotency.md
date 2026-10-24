@@ -277,3 +277,34 @@ Keys are automatically expunged after 24 hours.
 - [Stripe Idempotent Requests](https://stripe.com/docs/api/idempotent_requests)
 - [Idempotency Keys RFC Draft](https://datatracker.ietf.org/doc/draft-idempotency-header-sent-upstream/)
 - [PostgreSQL Unique Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS)
+
+## In-flight lease and bounded replay
+
+The 24-hour retention window applies to completed results. Unfinished requests
+instead have an `IDEMPOTENCY_LEASE_SECONDS` lease (default 60 seconds). Configure
+it above the longest route timeout. A matching retry can atomically take over
+an expired lease; inside the lease it receives `409 IDEMPOTENCY_IN_PROGRESS`.
+A different payload still receives `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`, including
+after lease expiry. Long-running handlers must await
+`res.locals.idempotency.renew()` before expiry; ownership loss rejects renewal.
+
+The database supplies the lease clock. All completion, renewal and cleanup
+writes match the owning lease timestamp, so late responses cannot overwrite a
+new owner's result. Disconnects before `finish` release the lease immediately.
+A crash leaves only the short lease to expire. External upstream side effects
+cannot be undone by this mechanism; upstream operations still need their own
+idempotency when retried after a crash or disconnect.
+
+Responses complete on `finish`, including empty 204s, `sendStatus`, `end(chunk)`
+and streams. Non-5xx status caching is unchanged. Replays preserve status, body
+bytes, content type and content encoding; other upstream headers are not stored.
+5xx and failed saves release the lease (with logged errors on persistence
+failure); an unavailable database may delay recovery until lease expiry.
+
+Only responses up to **256 KiB** are buffered for replay. Larger responses store
+a SHA-256 hash and byte count. Retrying returns **409
+`IDEMPOTENCY_RESPONSE_TOO_LARGE`** with those details and an instruction to fetch
+the resource by identifier, rather than execute the operation again. This
+response includes `Idempotent-Replayed: true`. See
+[billing idempotency](billing-idempotency.md#http-idempotency-leases-and-response-replay)
+for migration and deployment requirements.

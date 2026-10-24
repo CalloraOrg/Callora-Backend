@@ -1,4 +1,8 @@
 import { UsageStore, UsageEvent } from '../types/gateway.js';
+import {
+  parseUsdcToContractUnits,
+  formatContractUnitsToUsdc,
+} from '../lib/usdcUnits.js';
 
 export interface UsageAggregateSnapshot {
   developerId: string;
@@ -185,22 +189,51 @@ interface StatusCodeCountRow {
 const toNumber = (value: string | number): number =>
   typeof value === 'number' ? value : Number(value);
 
-const nullableNumber = (value: string | number | null): number =>
-  value === null ? 0 : toNumber(value);
+const contractUnitsToNumber = (value: string | number | null): number => {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  const str = String(value).trim();
+  const intPart = str.split('.')[0];
+  if (!intPart || intPart === '0') {
+    return 0;
+  }
+  return Number(formatContractUnitsToUsdc(BigInt(intPart)));
+};
 
-const mapUsageEventRow = (row: UsageEventRow): UsageEvent => ({
-  id: String(row.id),
-  requestId: row.request_id,
-  apiKey: row.api_key ?? row.api_key_id,
-  apiKeyId: row.api_key_id,
-  apiId: row.api_id,
-  endpointId: row.endpoint_id,
-  userId: row.user_id,
-  amountUsdc: toNumber(row.amount_usdc),
-  statusCode: row.status_code,
-  timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
-  settlementId: row.settlement_external_id ?? undefined,
-});
+const toContractUnits = (val: number | string | bigint): bigint => {
+  if (typeof val === 'bigint') {
+    return val;
+  }
+  if (typeof val === 'string') {
+    return parseUsdcToContractUnits(val);
+  }
+  if (typeof val === 'number') {
+    const str = val.toFixed(7).replace(/\.?0+$/, '');
+    return parseUsdcToContractUnits(str || '0');
+  }
+  throw new Error(`Invalid amountUsdc: ${String(val)}`);
+};
+
+const mapUsageEventRow = (row: UsageEventRow): UsageEvent => {
+  const rowAmountStr = String(row.amount_usdc).trim();
+  const intPart = rowAmountStr.split('.')[0] || '0';
+  const amountUsdcNumber = Number(formatContractUnitsToUsdc(BigInt(intPart)));
+
+  return {
+    id: String(row.id),
+    requestId: row.request_id,
+    apiKey: row.api_key ?? row.api_key_id,
+    apiKeyId: row.api_key_id,
+    apiId: row.api_id,
+    endpointId: row.endpoint_id,
+    userId: row.user_id,
+    amountUsdc: amountUsdcNumber,
+    statusCode: row.status_code,
+    timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
+    settlementId: row.settlement_external_id ?? undefined,
+  };
+};
 
 const usageEventSelect = `
   SELECT
@@ -235,6 +268,8 @@ export class PostgresUsageStore implements UsageAdminStore {
     try {
       await client.query('BEGIN');
 
+      const amountContractUnits = toContractUnits(event.amountUsdc).toString();
+
       const insertResult = await client.query<{ id: string | number }>(
         `
           INSERT INTO usage_events (
@@ -260,7 +295,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           event.apiId,
           event.endpointId,
           event.apiKeyId,
-          event.amountUsdc,
+          amountContractUnits,
           event.requestId,
           event.statusCode,
           event.timestamp,
@@ -294,7 +329,7 @@ export class PostgresUsageStore implements UsageAdminStore {
         `,
         [
           event.apiId,
-          event.amountUsdc,
+          amountContractUnits,
           inserted.id,
           event.timestamp,
         ],
@@ -401,9 +436,9 @@ export class PostgresUsageStore implements UsageAdminStore {
       totalEvents: toNumber(aggregate.total_events),
       settledEvents: toNumber(aggregate.settled_events),
       unsettledEvents: toNumber(aggregate.unsettled_events),
-      totalAmountUsdc: nullableNumber(aggregate.total_amount_usdc),
-      settledAmountUsdc: nullableNumber(aggregate.settled_amount_usdc),
-      unsettledAmountUsdc: nullableNumber(aggregate.unsettled_amount_usdc),
+      totalAmountUsdc: contractUnitsToNumber(aggregate.total_amount_usdc),
+      settledAmountUsdc: contractUnitsToNumber(aggregate.settled_amount_usdc),
+      unsettledAmountUsdc: contractUnitsToNumber(aggregate.unsettled_amount_usdc),
       apiCount: toNumber(aggregate.api_count),
       endpointCount: toNumber(aggregate.endpoint_count),
       firstEventAt: toIsorNull(aggregate.first_event_at),
