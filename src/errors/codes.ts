@@ -222,6 +222,9 @@ export const ErrorCode = {
   /** Idempotency key conflict with different request */
   IDEMPOTENCY_CONFLICT: "IDEMPOTENCY_CONFLICT",
 
+  /** The original response exceeded the replay limit; fetch the resource by identifier. */
+  IDEMPOTENCY_RESPONSE_TOO_LARGE: "IDEMPOTENCY_RESPONSE_TOO_LARGE",
+
   /** Request with this idempotency key is still in progress */
   IDEMPOTENCY_IN_PROGRESS: "IDEMPOTENCY_IN_PROGRESS",
 

@@ -32,6 +32,7 @@ import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
 import { defaultUsageSseBroadcaster } from './usage/sse.js';
 import { logger } from '../logger.js';
+import { parseUsdcToUnits, formatUnitsToUsdc } from '../lib/usdcUnits.js';
 
 /**
  * Headers that must never be forwarded to the upstream server.
@@ -132,8 +133,10 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   // Runs AFTER authMiddleware so req.apiKeyRecord.userId is guaranteed to be
   // populated. Reads limits from GATEWAY_RATE_LIMIT_* env vars by default;
   // can be overridden via deps for testing.
+  // `deps.rateLimiter` is passed as the per-key limiter so each API key's
+  // `rateLimitPerMinute` is enforced as a ceiling within its tier policy.
   const gatewayRateLimitMiddleware = deps.gatewayRateLimitMiddleware
-    ?? createConfiguredGatewayRateLimitMiddleware();
+    ?? createConfiguredGatewayRateLimitMiddleware(deps.rateLimiter);
 
   // Use a param of 0 to capture the wildcard path (everything after the slug)
   router.all('/:apiSlugOrId/*', authMiddleware, gatewayRateLimitMiddleware, handleProxy);
@@ -389,6 +392,10 @@ export function createProxyRouter(deps: ProxyDeps): Router {
           setImmediate(() => {
             void (async () => {
               try {
+                // Convert priceUsdc (float) to bigint contract units at the
+                // ingest boundary. priceUsdc.toFixed(7) avoids float-to-string
+                // scientific-notation issues for very small prices.
+                const amountUsdcUnits = parseUsdcToUnits(endpoint.priceUsdc.toFixed(7));
                 const recorded = await usageStore.record({
                   id: randomUUID(), // ID of the usage event itself
                   requestId,        // Idempotency key — prevents double-counts
@@ -396,7 +403,7 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                   apiId: String(apiEntry.id),
                   endpointId: endpoint.endpointId,
                   userId: keyRecord.userId,
-                  amountUsdc: endpoint.priceUsdc,
+                  amountUsdc: amountUsdcUnits,
                   statusCode: upstreamStatus,
                   timestamp: new Date().toISOString(),
                 });
@@ -410,7 +417,8 @@ export function createProxyRouter(deps: ProxyDeps): Router {
                     apiId: String(apiEntry.id),
                     endpointId: endpoint.endpointId,
                     userId: keyRecord.userId,
-                    amountUsdc: endpoint.priceUsdc,
+                    // SSE consumer expects a decimal string for display
+                    amountUsdc: formatUnitsToUsdc(amountUsdcUnits),
                     statusCode: upstreamStatus,
                     timestamp: new Date().toISOString(),
                   });

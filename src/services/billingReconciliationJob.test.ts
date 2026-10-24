@@ -283,3 +283,60 @@ test('beginShutdown prevents new ticks from starting', async () => {
     jest.useRealTimers();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Unit & Integration Tests: Scenarios 4 and 5
+// ---------------------------------------------------------------------------
+
+test('Scenario 4: Reconciliation with fractional ledger rows completes with delta 0n when tables agree', async () => {
+  // Developer with fractional charges: 1.5 USDC (15000000 stroops) + 0.0012345 USDC (12345 stroops)
+  // Total = 15012345 stroops in both usage_events and revenue_ledger
+  const totalUnits = '15012345';
+  const db = makeDb(
+    [{ developer_id: 'dev-fractional', total: totalUnits }],
+    [{ developer_id: 'dev-fractional', total: totalUnits }],
+  );
+  const { store, runs } = makeStore();
+
+  const job = new BillingReconciliationJob(db, store);
+  const summary = await job.runOnce();
+
+  assert.equal(summary.discrepancies, 0);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]!.usage_total_usdc, 15012345n);
+  assert.equal(runs[0]!.ledger_total_usdc, 15012345n);
+  assert.equal(runs[0]!.delta_usdc, 0n);
+  assert.equal(runs[0]!.status, 'ok');
+});
+
+test('Scenario 5: Reconciliation where a ledger row is 1 unit short reports discrepancy of exactly 1n', async () => {
+  const db = makeDb(
+    [{ developer_id: 'dev-1-unit-short', total: '15000000' }], // 1.5 USDC
+    [{ developer_id: 'dev-1-unit-short', total: '14999999' }], // 1 unit short (1.4999999 USDC)
+  );
+  const { store, runs } = makeStore();
+
+  const job = new BillingReconciliationJob(db, store);
+  const summary = await job.runOnce();
+
+  assert.equal(summary.discrepancies, 1);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]!.usage_total_usdc, 15000000n);
+  assert.equal(runs[0]!.ledger_total_usdc, 14999999n);
+  assert.equal(runs[0]!.delta_usdc, 1n);
+  assert.equal(runs[0]!.status, 'discrepancy');
+  assert.equal(runs[0]!.discrepancy_count, 1);
+});
+
+test('Reconciliation raises typed ReconciliationDataError naming developer when non-integer data is read', async () => {
+  // If an unmigrated table or corrupt row produces decimal text like "12.5000000"
+  const corruptDb = makeDb(
+    [{ developer_id: 'dev-corrupt', total: '12.5000000' }],
+    [{ developer_id: 'dev-corrupt', total: '12500000' }],
+  );
+  const { store } = makeStore();
+
+  const job = new BillingReconciliationJob(corruptDb, store);
+  await expect(job.runOnce()).rejects.toThrow('Invalid non-integer usage_events total "12.5000000" for developer dev-corrupt');
+});
+

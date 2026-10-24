@@ -2,6 +2,8 @@ import {
   type UsageEvent,
   type UsageEventQuery,
   type UserUsageEventQuery,
+  type ConsumerChargeRow,
+  type ListChargesResult,
 } from './usageEventsRepository.js';
 import { encodeCursor, type CursorPayload } from '../lib/cursorPagination.js';
 import { generateCursor, decodeCursor } from '../lib/pagination.js';
@@ -18,7 +20,7 @@ export interface CreateUsageEventInput {
    * Defaults to '' for backward compatibility but callers should supply this.
    */
   developerId?: string;
-  amount: bigint;
+  amount: bigint | string | number;
   requestId: string;
   stellarTxHash?: string | null;
   createdAt?: Date;
@@ -45,6 +47,7 @@ export interface RevenueLedgerUsageEvent {
 }
 
 export interface UsageEventsPgRepository {
+  getEventsInRange(from: Date, to: Date, options: UsageEventsRangeOptions): Promise<BillingUsageEvent[]>;
   create(event: CreateUsageEventInput): Promise<BillingUsageEvent>;
   countByDeveloper(query: { developerId: string; from: Date; to: Date }): Promise<number>;
   findByUserId(userId: string, from?: Date, to?: Date, limit?: number, offset?: number): Promise<BillingUsageEvent[]>;
@@ -70,6 +73,25 @@ export interface UsageEventsPgRepository {
     from: Date;
     to: Date;
   }): Promise<{ totalUnits: bigint; calls: number }>;
+  /**
+   * Returns paginated billing-history rows for the consumer identified by
+   * `userId`, ordered by (created_at DESC, id DESC) for stable keyset
+   * pagination.  Fetches `limit + 1` rows to detect next-page existence.
+   *
+   * Uses idx_usage_events_user_created for the scan; the (id DESC) tiebreak
+   * within the same timestamp keeps ordering deterministic.
+   */
+  listChargesByConsumer(params: {
+    userId: string;
+    limit: number;
+    cursor?: CursorPayload;
+  }): Promise<ListChargesResult>;
+}
+
+export interface UsageEventsRangeOptions {
+  developerId?: string;
+  cursor?: string;
+  limit: number;
 }
 
 export interface UsageEventsRepositoryQueryable {
@@ -157,7 +179,32 @@ const normalizeCursor = (cursor?: string): string | undefined => {
   return trimmed;
 };
 
-const toBigInt = (value: string | number | bigint | null, fieldName: string): bigint => {
+export class CorruptUsageAmountError extends Error {
+  public readonly rowId?: string;
+  public readonly fieldName: string;
+  public readonly rawValue: unknown;
+
+  constructor(
+    message: string,
+    options?: { rowId?: string; fieldName?: string; rawValue?: unknown },
+  ) {
+    super(message);
+    this.name = 'CorruptUsageAmountError';
+    this.rowId = options?.rowId;
+    this.fieldName = options?.fieldName ?? 'amount_usdc';
+    this.rawValue = options?.rawValue;
+    Object.setPrototypeOf(this, CorruptUsageAmountError.prototype);
+  }
+}
+
+export const CorruptAmountError = CorruptUsageAmountError;
+export type CorruptAmountError = CorruptUsageAmountError;
+
+export const toBigInt = (
+  value: string | number | bigint | null,
+  fieldName: string,
+  rowId?: string,
+): bigint => {
   if (value === null || value === undefined) {
     return 0n;
   }
@@ -166,27 +213,35 @@ const toBigInt = (value: string | number | bigint | null, fieldName: string): bi
     return value;
   }
 
+  const rowContext = rowId ? ` (row: ${rowId})` : '';
+
   if (typeof value === 'number') {
     if (!Number.isInteger(value)) {
-      throw new Error(`${fieldName} must be an integer value.`);
+      throw new CorruptUsageAmountError(
+        `${fieldName} must be an integer value.${rowContext}`,
+        { rowId, fieldName, rawValue: value },
+      );
     }
 
     return BigInt(value);
   }
 
-  const trimmed = value.trim();
-  // Handle potential DECIMAL(20, 7) string format from PG (e.g. "100.0000000")
-  const [integerPart, fractionalPart] = trimmed.split('.');
-  
-  if (fractionalPart && !/^[0]+$/.test(fractionalPart)) {
-    throw new Error(`${fieldName} must be stored as an integer string in smallest units. Got: ${value}`);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!/^-?\d+$/.test(trimmed)) {
+      throw new CorruptUsageAmountError(
+        `${fieldName} must be stored as an integer string in smallest units. Got: ${value}${rowContext}`,
+        { rowId, fieldName, rawValue: value },
+      );
+    }
+
+    return BigInt(trimmed);
   }
 
-  if (!integerPart || !/^-?\d+$/.test(integerPart)) {
-    throw new Error(`${fieldName} must be stored as an integer string in smallest units. Got: ${value}`);
-  }
-
-  return BigInt(integerPart);
+  throw new CorruptUsageAmountError(
+    `${fieldName} must be stored as an integer string in smallest units. Got: ${String(value)}${rowContext}`,
+    { rowId, fieldName, rawValue: value },
+  );
 };
 
 const mapUsageEventRow = (row: UsageEventRow): BillingUsageEvent => ({
@@ -196,7 +251,7 @@ const mapUsageEventRow = (row: UsageEventRow): BillingUsageEvent => ({
   endpointId: row.endpoint_id,
   apiKeyId: row.api_key_id,
   developerId: row.developer_id,
-  amount: toBigInt(row.amount_usdc, 'amount_usdc'),
+  amount: toBigInt(row.amount_usdc, 'amount_usdc', String(row.id)),
   requestId: row.request_id,
   stellarTxHash: row.stellar_tx_hash,
   createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
@@ -207,7 +262,7 @@ const mapRevenueLedgerUsageEventRow = (
 ): RevenueLedgerUsageEvent => ({
   usageEventId: String(row.usage_event_id),
   apiId: row.api_id,
-  amount: toBigInt(row.amount_usdc, 'amount_usdc'),
+  amount: toBigInt(row.amount_usdc, 'amount_usdc', String(row.usage_event_id)),
   createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
 });
 
@@ -245,6 +300,40 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     }
   }
 
+  /** Read a bounded page of events from a half-open time range. */
+  async getEventsInRange(
+    from: Date,
+    to: Date,
+    options: UsageEventsRangeOptions,
+  ): Promise<BillingUsageEvent[]> {
+    assertValidRange(from, to);
+    const limit = normalizeLimit(options.limit);
+    if (limit === undefined || limit === 0) return [];
+
+    const params: unknown[] = [from, to];
+    const clauses = ['created_at >= $1', 'created_at < $2'];
+    if (options.developerId !== undefined) {
+      params.push(assertNonEmpty(options.developerId, 'developerId'));
+      clauses.push(`developer_id = $${params.length}`);
+    }
+    if (options.cursor !== undefined) {
+      const cursor = normalizeCursor(options.cursor);
+      params.push(BigInt(cursor ?? '0'));
+      clauses.push(`id > $${params.length}`);
+    }
+    params.push(limit);
+    const result = await this.readDb.query<UsageEventRow>(
+      `SELECT id, user_id, api_id, endpoint_id, api_key_id, developer_id,
+              amount_usdc, request_id, stellar_tx_hash, created_at
+       FROM usage_events
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY id ASC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map(mapUsageEventRow);
+  }
+
   async create(event: CreateUsageEventInput): Promise<BillingUsageEvent> {
     const userId = assertNonEmpty(event.userId, 'userId');
     const apiId = assertNonEmpty(event.apiId, 'apiId');
@@ -252,7 +341,10 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const apiKeyId = assertNonEmpty(event.apiKeyId, 'apiKeyId');
     const developerId = (event.developerId ?? '').trim();
     const requestId = assertNonEmpty(event.requestId, 'requestId');
-    const amount = assertAmount(event.amount).toString();
+    const amountVal = typeof event.amount === 'bigint'
+      ? assertAmount(event.amount)
+      : assertAmount(toBigInt(event.amount, 'amount'));
+    const amount = amountVal.toString();
 
     const result = await this.writeDb.query<UsageEventRow>(
       `
@@ -418,7 +510,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
       endpoint: event.endpoint_id,
       userId: event.user_id,
       occurredAt: event.created_at instanceof Date ? event.created_at : new Date(event.created_at),
-      revenue: toBigInt(event.amount_usdc, 'amount_usdc'),
+      revenue: toBigInt(event.amount_usdc, 'amount_usdc', String(event.id)),
       // Attach cursor info for response
       _cursor: nextCursor,
     }));
@@ -871,5 +963,131 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const calls = Number(row?.calls ?? 0);
 
     return { totalUnits, calls };
+  }
+
+  /**
+   * Returns paginated billing-history rows for the consumer identified by
+   * `userId`, ordered by (created_at DESC, id DESC).
+   *
+   * Index hit: idx_usage_events_user_created (user_id, created_at).
+   * The `id DESC` tiebreak within the same timestamp uses the PK index.
+   *
+   * Amount formatting: amount_usdc is stored as an integer in the
+   * smallest unit (1 unit = 0.0000001 USDC).  We format it as a 7-decimal
+   * string in PostgreSQL to avoid BigInt division in JS.
+   *
+   * Status derivation:
+   *   - stellar_tx_hash IS NOT NULL → "confirmed"
+   *   - NULL                        → "pending"
+   */
+  async listChargesByConsumer(params: {
+    userId: string;
+    limit: number;
+    cursor?: CursorPayload;
+  }): Promise<ListChargesResult> {
+    const { userId, limit, cursor } = params;
+    const fetchLimit = limit + 1;
+
+    // $1 = userId, $2 = fetchLimit (no cursor branch)
+    // $1 = userId, $2 = ts, $3 = id, $4 = fetchLimit (cursor branch)
+    let sql: string;
+    let sqlParams: unknown[];
+
+    if (cursor) {
+      sql = `
+        SELECT
+          id::text                            AS id,
+          user_id,
+          api_id,
+          endpoint_id,
+          api_key_id,
+          request_id,
+          TO_CHAR(
+            (amount_usdc / 10000000)::numeric(28, 7),
+            'FM999999999999990.0000000'
+          )                                   AS amount_usdc,
+          stellar_tx_hash,
+          CASE WHEN stellar_tx_hash IS NOT NULL THEN 'confirmed' ELSE 'pending' END AS status,
+          created_at
+        FROM usage_events
+        WHERE user_id = $1
+          AND (created_at < $2 OR (created_at = $2 AND id < $3))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $4
+      `;
+      sqlParams = [
+        assertNonEmpty(userId, 'userId'),
+        cursor.timestamp,
+        BigInt(cursor.id),
+        fetchLimit,
+      ];
+    } else {
+      sql = `
+        SELECT
+          id::text                            AS id,
+          user_id,
+          api_id,
+          endpoint_id,
+          api_key_id,
+          request_id,
+          TO_CHAR(
+            (amount_usdc / 10000000)::numeric(28, 7),
+            'FM999999999999990.0000000'
+          )                                   AS amount_usdc,
+          stellar_tx_hash,
+          CASE WHEN stellar_tx_hash IS NOT NULL THEN 'confirmed' ELSE 'pending' END AS status,
+          created_at
+        FROM usage_events
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+      `;
+      sqlParams = [assertNonEmpty(userId, 'userId'), fetchLimit];
+    }
+
+    interface ChargeRow {
+      id: string;
+      user_id: string;
+      api_id: string;
+      endpoint_id: string;
+      api_key_id: string;
+      request_id: string;
+      amount_usdc: string;
+      stellar_tx_hash: string | null;
+      status: 'confirmed' | 'pending';
+      created_at: Date | string;
+    }
+
+    const result = await this.readDb.query<ChargeRow>(sql, sqlParams);
+    const rows = result.rows;
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    const charges: ConsumerChargeRow[] = page.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      apiId: row.api_id,
+      endpointId: row.endpoint_id,
+      apiKeyId: row.api_key_id,
+      requestId: row.request_id,
+      amountUsdc: row.amount_usdc,
+      stellarTxHash: row.stellar_tx_hash,
+      status: row.status,
+      createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+    }));
+
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor(
+            lastRow.created_at instanceof Date
+              ? lastRow.created_at
+              : new Date(lastRow.created_at),
+            lastRow.id,
+          )
+        : null;
+
+    return { charges, nextCursor, hasMore };
   }
 }

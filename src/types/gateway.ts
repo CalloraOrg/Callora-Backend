@@ -19,7 +19,7 @@ export interface UsageEvent {
   apiId: string;
   endpointId: string;
   userId: string;         // developerId of the caller
-  amountUsdc: number;     // endpoint price charged
+  amountUsdc: bigint;     // endpoint price in contract units (1 USDC = 10,000,000)
   statusCode: number;
   timestamp: string;      // ISO-8601
   settlementId?: string;  // ID of the settlement batch if paid out
@@ -50,6 +50,10 @@ export interface UsageChargeResult extends BillingResult {
 export interface RateLimitResult {
   allowed: boolean;
   retryAfterMs?: number;
+  /** The effective ceiling for the checked bucket (requests per window). */
+  limit?: number;
+  /** Requests remaining in the current window for the checked bucket. */
+  remaining?: number;
 }
 
 /** Pricing for a single endpoint within an API. */
@@ -72,6 +76,19 @@ export interface BillingService {
 /** Interface for rate limiting. */
 export interface RateLimiter {
   check(apiKey: string, tier?: string): Promise<RateLimitResult>;
+  /**
+   * Check a per-API-key bucket (`key:<apiKeyId>`) whose limit is the smaller of
+   * the key's own `rateLimitPerMinute` and the tier policy ceiling. Keys only
+   * narrow: a per-key limit can never raise the effective limit above the tier.
+   *
+   * Optional so existing `RateLimiter` implementations (e.g. test doubles) keep
+   * compiling; callers that enforce per-key limits must feature-detect it.
+   */
+  checkKeyLimit?(
+    apiKeyId: string,
+    tier: string | undefined,
+    rateLimitPerMinute: number | null | undefined,
+  ): Promise<RateLimitResult>;
 }
 
 /** Interface for recording and querying usage events. */

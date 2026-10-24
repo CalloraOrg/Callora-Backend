@@ -5,9 +5,9 @@ export interface UsageAggregateSnapshot {
   totalEvents: number;
   settledEvents: number;
   unsettledEvents: number;
-  totalAmountUsdc: number;
-  settledAmountUsdc: number;
-  unsettledAmountUsdc: number;
+  totalAmountUsdc: bigint;
+  settledAmountUsdc: bigint;
+  unsettledAmountUsdc: bigint;
   apiCount: number;
   endpointCount: number;
   firstEventAt: string | null;
@@ -22,8 +22,8 @@ export interface UsageAdminStore extends UsageStore {
 
 const emptyStatusCounts = (): Record<string, number> => ({});
 
-const sumAmounts = (events: UsageEvent[]): number =>
-  events.reduce((total, event) => total + event.amountUsdc, 0);
+const sumAmounts = (events: UsageEvent[]): bigint =>
+  events.reduce((total, event) => total + event.amountUsdc, 0n);
 
 const toIsoOrNull = (value: Date | string | null | undefined): string | null => {
   if (!value) {
@@ -113,7 +113,7 @@ export class InMemoryUsageStore implements UsageAdminStore {
 
   /** Retrieve all usage events that haven't been settled yet and have a non-zero price. */
   getUnsettledEvents(): UsageEvent[] {
-    return this.events.filter((e) => !e.settlementId && e.amountUsdc > 0);
+    return this.events.filter((e) => !e.settlementId && e.amountUsdc > 0n);
   }
 
   /** Mark a specific set of events as settled. */
@@ -179,11 +179,24 @@ interface StatusCodeCountRow {
   count: string | number;
 }
 
-const toNumber = (value: string | number): number =>
-  typeof value === 'number' ? value : Number(value);
+/**
+ * Parse a DB amount_usdc column value to bigint contract units.
+ * usage_events.amount_usdc stores integer contract units (migration 0026),
+ * so the value is read as an integer, never as a decimal USDC amount.
+ */
+const parseAmountUsdc = (value: string | number | bigint): bigint => {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+  const intPart = String(value).trim().split('.')[0] || '0';
+  return BigInt(intPart);
+};
 
-const nullableNumber = (value: string | number | null): number =>
-  value === null ? 0 : toNumber(value);
+const nullableUnits = (value: string | number | null): bigint =>
+  value === null ? 0n : parseAmountUsdc(value);
+
+const toCount = (value: string | number): number =>
+  typeof value === 'number' ? value : Number(value);
 
 const mapUsageEventRow = (row: UsageEventRow): UsageEvent => ({
   id: String(row.id),
@@ -193,7 +206,7 @@ const mapUsageEventRow = (row: UsageEventRow): UsageEvent => ({
   apiId: row.api_id,
   endpointId: row.endpoint_id,
   userId: row.user_id,
-  amountUsdc: toNumber(row.amount_usdc),
+  amountUsdc: parseAmountUsdc(row.amount_usdc),
   statusCode: row.status_code,
   timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
   settlementId: row.settlement_external_id ?? undefined,
@@ -232,6 +245,9 @@ export class PostgresUsageStore implements UsageAdminStore {
     try {
       await client.query('BEGIN');
 
+      // usage_events.amount_usdc stores integer contract units (migration 0026).
+      const amountContractUnits = event.amountUsdc.toString();
+
       const insertResult = await client.query<{ id: string | number }>(
         `
           INSERT INTO usage_events (
@@ -257,7 +273,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           event.apiId,
           event.endpointId,
           event.apiKeyId,
-          event.amountUsdc,
+          amountContractUnits,
           event.requestId,
           event.statusCode,
           event.timestamp,
@@ -291,7 +307,7 @@ export class PostgresUsageStore implements UsageAdminStore {
         `,
         [
           event.apiId,
-          event.amountUsdc,
+          amountContractUnits,
           inserted.id,
           event.timestamp,
         ],
@@ -384,25 +400,25 @@ export class PostgresUsageStore implements UsageAdminStore {
     ]);
 
     const aggregate = aggregateResult.rows[0];
-    if (!aggregate || toNumber(aggregate.total_events) === 0) {
+    if (!aggregate || toCount(aggregate.total_events) === 0) {
       return undefined;
     }
 
     const statusCodes = emptyStatusCounts();
     for (const row of statusResult.rows) {
-      statusCodes[String(row.status_code)] = toNumber(row.count);
+      statusCodes[String(row.status_code)] = toCount(row.count);
     }
 
     return {
       developerId,
-      totalEvents: toNumber(aggregate.total_events),
-      settledEvents: toNumber(aggregate.settled_events),
-      unsettledEvents: toNumber(aggregate.unsettled_events),
-      totalAmountUsdc: nullableNumber(aggregate.total_amount_usdc),
-      settledAmountUsdc: nullableNumber(aggregate.settled_amount_usdc),
-      unsettledAmountUsdc: nullableNumber(aggregate.unsettled_amount_usdc),
-      apiCount: toNumber(aggregate.api_count),
-      endpointCount: toNumber(aggregate.endpoint_count),
+      totalEvents: toCount(aggregate.total_events),
+      settledEvents: toCount(aggregate.settled_events),
+      unsettledEvents: toCount(aggregate.unsettled_events),
+      totalAmountUsdc: nullableUnits(aggregate.total_amount_usdc),
+      settledAmountUsdc: nullableUnits(aggregate.settled_amount_usdc),
+      unsettledAmountUsdc: nullableUnits(aggregate.unsettled_amount_usdc),
+      apiCount: toCount(aggregate.api_count),
+      endpointCount: toCount(aggregate.endpoint_count),
       firstEventAt: toIsoOrNull(aggregate.first_event_at),
       lastEventAt: toIsoOrNull(aggregate.last_event_at),
       statusCodes,
