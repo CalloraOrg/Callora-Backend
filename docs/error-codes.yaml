@@ -14,6 +14,10 @@
 # The 'code' field becomes both the TypeScript enum key and value.
 
 error_codes:
+  - code: DEMO_MODE_UNSUPPORTED
+    section: HTTP status derived / base app codes
+    description: The feature requires PostgreSQL or Stellar integrations unavailable in demo mode (HTTP 503)
+
   # HTTP status derived / base app codes
   - code: BAD_REQUEST
     section: HTTP status derived / base app codes

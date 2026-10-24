@@ -691,7 +691,8 @@
                       "success": true,
                       "data": {
                         "status": "ok",
-                        "service": "callora-backend"
+                        "service": "callora-backend",
+                        "mode": "standard"
                       },
                       "requestId": "req-mock-uuid",
                       "timestamp": "2026-07-25T10:00:00.000Z"
@@ -8278,6 +8279,7 @@
       "ErrorCode": {
         "type": "string",
         "enum": [
+          "DEMO_MODE_UNSUPPORTED",
           "BAD_REQUEST",
           "UNAUTHORIZED",
           "FORBIDDEN",
@@ -8514,6 +8516,14 @@
               },
               "checks": {
                 "$ref": "#/components/schemas/HealthChecks"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "demo",
+                  "standard"
+                ],
+                "description": "Runtime capabilities: demo uses seeded SQLite without PostgreSQL or Stellar integrations."
               }
             }
           },

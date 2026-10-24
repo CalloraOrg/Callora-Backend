@@ -12,6 +12,9 @@
  */
 
 export const ErrorCode = {
+  /** The feature requires PostgreSQL or Stellar integrations unavailable in demo mode (HTTP 503) */
+  DEMO_MODE_UNSUPPORTED: "DEMO_MODE_UNSUPPORTED",
+
   /** The request is malformed, missing required input, or otherwise invalid */
   BAD_REQUEST: "BAD_REQUEST",
 

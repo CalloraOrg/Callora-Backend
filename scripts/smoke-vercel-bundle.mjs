@@ -74,8 +74,8 @@ try {
   );
   assert.equal(
     prismaJson.error?.code,
-    "SERVICE_UNAVAILABLE",
-    `Expected SERVICE_UNAVAILABLE error code, got ${prismaJson.error?.code}`,
+    "DEMO_MODE_UNSUPPORTED",
+    `Expected DEMO_MODE_UNSUPPORTED error code, got ${prismaJson.error?.code}`,
   );
   console.log("[smoke] ✅ GET /api/invoices returned demo 503 envelope (not module resolution crash)");
 
