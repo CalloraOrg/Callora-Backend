@@ -116,6 +116,33 @@ export class InMemoryUsageStore implements UsageAdminStore {
     return this.events.filter((e) => !e.settlementId && e.amountUsdc > 0n);
   }
 
+  getUnsettledDeveloperIds(): string[] {
+    const devIds = new Set<string>();
+    for (const e of this.events) {
+      if (!e.settlementId && e.amountUsdc > 0n) {
+        devIds.add(e.userId);
+      }
+    }
+    return Array.from(devIds);
+  }
+
+  claimUnsettledEvents(developerId: string, limit: number): { events: UsageEvent[]; totalAmount: bigint } {
+    const events = this.events
+      .filter((e) => e.userId === developerId && !e.settlementId && e.amountUsdc > 0n)
+      .slice(0, limit);
+    const totalAmount = events.reduce((sum, e) => sum + e.amountUsdc, 0n);
+    return { events, totalAmount };
+  }
+
+  releaseEvents(eventIds: string[]): void {
+    const ids = new Set(eventIds);
+    for (const event of this.events) {
+      if (ids.has(event.id)) {
+        event.settlementId = undefined;
+      }
+    }
+  }
+
   /** Mark a specific set of events as settled. */
   markAsSettled(eventIds: string[], settlementId: string): void {
     const ids = new Set(eventIds);
