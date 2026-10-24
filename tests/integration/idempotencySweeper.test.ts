@@ -49,7 +49,7 @@ beforeAll(async () => {
       POSTGRES_USER: 'test_user',
       POSTGRES_PASSWORD: 'test_password',
     })
-    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/))
+    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
     .withExposedPorts(5432)
     .start();
 

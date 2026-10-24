@@ -29,7 +29,10 @@ describe('BillingService Unit Tests (SQL-level with pg-mem)', () => {
         amount_usdc NUMERIC(30, 0) NOT NULL CHECK (amount_usdc > 0),
         request_id VARCHAR(255) NOT NULL UNIQUE,
         stellar_tx_hash VARCHAR(64),
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        deduction_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        resolved_at TIMESTAMP,
+        resolution_reason TEXT
       );
     `);
 

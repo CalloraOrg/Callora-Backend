@@ -749,14 +749,21 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
         client.release();
       }
     }
-    const result = await this.writeDb.query<{ name: string }>(
-      `INSERT INTO indexer_checkpoints (name, last_usage_event_id, updated_at, locked_until)
-       VALUES ('revenue_ledger', 0, NOW(), NOW() + INTERVAL '15 minutes')
-       ON CONFLICT (name) DO UPDATE SET locked_until = NOW() + INTERVAL '15 minutes'
-       WHERE indexer_checkpoints.locked_until IS NULL OR indexer_checkpoints.locked_until < NOW()
+    // Lease fallback: take an expired/free lease atomically, otherwise create
+    // the checkpoint row. Exactly one concurrent caller wins either statement.
+    const taken = await this.writeDb.query<{ name: string }>(
+      `UPDATE indexer_checkpoints SET locked_until = NOW() + INTERVAL '15 minutes'
+       WHERE name = 'revenue_ledger' AND (locked_until IS NULL OR locked_until < NOW())
        RETURNING name`,
     );
-    return result.rows.length > 0;
+    if (taken.rows.length > 0) return true;
+    const created = await this.writeDb.query<{ name: string }>(
+      `INSERT INTO indexer_checkpoints (name, last_usage_event_id, updated_at, locked_until)
+       VALUES ('revenue_ledger', 0, NOW(), NOW() + INTERVAL '15 minutes')
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+    );
+    return created.rows.length > 0;
   }
 
   async releaseRevenueLedgerIndexerLock(): Promise<void> {
@@ -787,13 +794,15 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
           usage_event_id,
           created_at
         )
-        SELECT $1, $2, $3::numeric, ue.id, $5::timestamp
-        FROM usage_events ue
-        WHERE ue.id = $4::bigint
-          AND ue.stellar_tx_hash IS NOT NULL
-          ${confirmationPredicate}
+        SELECT $1, $2, $3::numeric, $4::bigint, $5::timestamp
+        WHERE EXISTS (
+            SELECT 1 FROM usage_events ue
+            WHERE ue.id = $4::bigint
+              AND ue.stellar_tx_hash IS NOT NULL
+              ${confirmationPredicate}
+          )
           AND NOT EXISTS (
-            SELECT 1 FROM revenue_ledger existing WHERE existing.usage_event_id = ue.id
+            SELECT 1 FROM revenue_ledger existing WHERE existing.usage_event_id = $4::bigint
           )
         ON CONFLICT (usage_event_id) DO NOTHING
         RETURNING 1 AS inserted
