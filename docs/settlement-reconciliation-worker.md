@@ -58,6 +58,14 @@ The worker detects and reports the following discrepancy types:
 | `FALSE_FAILURE` | `failed` | successful | Settlement marked failed in DB but transaction is successful on-chain |
 | `UNEXPECTED_STATUS` | other | not found | Settlement in unexpected state when transaction not found |
 
+## State Machine
+
+```
+[claimed] ──(distribute / hash returned)──> [submitted] ──> [completed]
+    │                                              │
+    └──(failure before submit / on-chain fail)─────┴──> [failed] (events released to NULL)
+```
+
 ## Lifecycle
 
 ### Startup

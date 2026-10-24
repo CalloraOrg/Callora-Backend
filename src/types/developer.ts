@@ -24,8 +24,8 @@ export interface Settlement {
   id: string;
   developerId: string; // the dev receiving the payout
   amount: bigint;      // payout in contract units (1 USDC = 10,000,000)
-  /** pending → retryable (tx_failed_too_early) → completed | failed */
-  status: 'pending' | 'retryable' | 'completed' | 'failed';
+  /** claimed → submitted → retryable (tx_failed_too_early) → completed | failed */
+  status: 'claimed' | 'submitted' | 'completed' | 'failed' | 'retryable' | 'pending';
   tx_hash: string | null;
   created_at: string; // ISO-8601
   completed_at?: string | null;
@@ -60,6 +60,7 @@ export interface UpdateDeveloperProfileInput {
 
 export interface SettlementStore {
   create(settlement: Settlement): Awaitable<void>;
+  createClaimed?(settlement: Settlement): Awaitable<void>;
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Awaitable<void>;
   scheduleRetry(
     id: string,

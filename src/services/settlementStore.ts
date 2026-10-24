@@ -11,11 +11,18 @@ export class InMemorySettlementStore implements SettlementStore {
     });
   }
 
+  createClaimed(settlement: Settlement): void {
+    this.create({
+      ...settlement,
+      status: 'claimed',
+    });
+  }
+
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): void {
     const s = this.settlements.find((s) => s.id === id);
     if (s) {
       s.status = status;
-      if (txHash !== undefined) {
+      if (txHash !== undefined && txHash !== null) {
         s.tx_hash = txHash;
       }
       s.completed_at = status === 'completed' ? new Date().toISOString() : null;
@@ -135,11 +142,18 @@ export class PostgresSettlementStore implements SettlementStore {
     );
   }
 
+  async createClaimed(settlement: Settlement): Promise<void> {
+    await this.create({
+      ...settlement,
+      status: 'claimed',
+    });
+  }
+
   async updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Promise<void> {
     const setClauses = ['status = $2'];
     const params: unknown[] = [id, status];
 
-    if (txHash !== undefined) {
+    if (txHash !== undefined && txHash !== null) {
       params.push(txHash);
       setClauses.push(`stellar_tx_hash = $${params.length}`);
     }
