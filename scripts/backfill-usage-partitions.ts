@@ -51,7 +51,7 @@ async function main(): Promise<void> {
       SELECT to_regclass('usage_event_request_ids') IS NOT NULL AS exists
     `);
     if (!registryCheck[0]?.exists) {
-      logger.error('usage_event_request_ids not found. Run migrations/0028_usage_event_request_ids.sql first.');
+      logger.error('usage_event_request_ids not found. Run migrations/0032_usage_event_request_ids.sql first.');
       process.exit(1);
     }
 

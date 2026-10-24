@@ -48,9 +48,9 @@ export const envSchema = z
       ),
 
     // Database pool
-    DB2_POOL_MAX: z.coerce.number().default(10),
-    DB_IDlE_TIMEOUT_MS: z.coerce.number().default(30_000),
-    DB2_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
+    DB_POOL_MAX: z.coerce.number().default(10),
+    DB_IDLE_TIMEOUT_MS: z.coerce.number().default(30_000),
+    DB_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
 
     /**
      * REPLICA_URLS — optional comma-separated list of PostgreSQL read-replica
@@ -100,7 +100,7 @@ export const envSchema = z
     // Database (individual fields for health checks)
     DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().default(5432),
-    DB2_USER: z.string().default("postgres"),
+    DB_USER: z.string().default("postgres"),
     DB_PASSWORD: z.string().default("postgres"),
     DB_NAME: z.string().default("callora"),
 
@@ -205,55 +205,6 @@ export const envSchema = z
       .positive()
       .default(100),
 
-    // Fee abstraction (POST /api/billing/fee-abstraction)
-    //
-    // The fee-bump endpoint signs transactions with the platform fee account,
-    // so every fee-bump must be backed by a verified, single-use quote and an
-    // on-chain app-token payment. These settings control quote pricing,
-    // payment verification and the inner-transaction allowlist.
-    //
-    // FEE_ABSTRACTION_RATE_* — integer-scaled conversion from stroops to
-    // app-token units. The quoted amount is computed as
-    //   ceil(feeStroops * FEE_ABSTRACTION_RATE_NUMERATOR / FEE_ABSTRACTION_RATE_DENOMINATOR)
-    // using bigint math only (no floats). Defaults to 1 app-token unit per
-    // 10 stroops (i.e. 0.10 XLM against the historical rate).
-    // Both values must be positive integers; the superRefine below rejects
-    // zero so the bigint division in the quote service can never divide by
-    // zero at runtime.
-    FEE_ABSTRACTION_RATE_NUMERATOR: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(1),
-    FEE_ABSTRACTION_RATE_DENOMINATOR: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(10),
-    // Lifetime of a signed quote. After this window the quote is expired and
-    // execution returns 410.
-    FEE_ABSTRACTION_QUOTE_TTL_SECONDS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(300),
-    // Treasury Stellar address that must receive the app-token payment.
-    FEE_ABSTRACTION_TREASURY_ADDRESS: z.string().min(1).optional(),
-    // App-token issuer/asset used for payment verification.
-    FEE_ABSTRACTION_APP_TOKEN_ASSET_CODE: z.string().min(1).default("APP"),
-    FEE_ABSTRACTION_APP_TOKEN_ISSUER: z.string().min(1).optional(),
-    // Vault contract ids allowed as the target of an inner invokeHostFunction.
-    // Comma-separated; when unset the network-specific vault contract id is
-    // used (STELLAR_*_VAULT_CONTRACT_ID).
-    FEE_ABSTRACTION_VAULT_CONTRACT_IDS: z.string().optional(),
-    // Upper bound on the time spent verifying the payment on-chain. Must be
-    // less than the route timeout so verification fails closed.
-    FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(5_000),
-
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
 
@@ -310,10 +261,6 @@ export const envSchema = z
     SOROBAN_BILLING_NETWORK: stellarNetworkSchema.default("testnet"),
 
     // Stellar accounts / contracts
-    STELLAR_TESTNET_HORIZON_URL: z.string().url().optional(),
-    STELLAR_MAINNET_HORIZON_URL: z.string().url().optional(),
-    STELLAR_TESTNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_FEE_ACCOUNT_SECRET_KEY: z.string().min(1).optional(),
     STELLAR_FEE_ACCOUNT_PUBLIC_KEY: z.string().min(1).optional(),
     SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
@@ -728,14 +675,6 @@ export const envSchema = z
       });
     }
 
-    if (data.FEE_ABSTRACTION_RATE_DENOMINATOR === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["FEE_ABSTRACTION_RATE_DENOMINATOR"],
-        message: "FEE_ABSTRACTION_RATE_DENOMINATOR must be greater than zero",
-      });
-    }
-
     // ──────────────────────────────────────────────────────────────────────
     // Stellar / Soroban network consistency checks.
     //
@@ -857,4 +796,14 @@ export const envSchema = z
 
 export type EnvSchema = z.infer<typeof envSchema>;
 
-export const env = envSchema.parse(process.env);
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error("❌ Invalid environment configuration:");
+  parsed.error.issues.forEach((issue) => {
+    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
+  });
+  process.exit(1);
+}
+
+export const env = parsed.data;

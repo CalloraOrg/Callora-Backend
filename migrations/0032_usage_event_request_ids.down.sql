@@ -1,5 +1,5 @@
 -- dialect: postgres
--- Rollback: 0028_usage_event_request_ids
+-- Rollback: 0032_usage_event_request_ids
 BEGIN;
 ALTER TABLE revenue_ledger DROP CONSTRAINT IF EXISTS revenue_ledger_usage_event_id_fkey;
 DO $$

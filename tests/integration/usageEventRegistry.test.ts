@@ -72,7 +72,7 @@ describe('partitioned usage event global request ID registry', () => {
       CREATE TABLE settlements (id BIGSERIAL PRIMARY KEY, external_id VARCHAR(255));
     `);
 
-    const migration = await readFile(join(process.cwd(), 'migrations/0028_usage_event_request_ids.sql'), 'utf8');
+    const migration = await readFile(join(process.cwd(), 'migrations/0032_usage_event_request_ids.sql'), 'utf8');
     await pool.query(migration);
     await pool.query(migration);
     repository = new PgUsageEventsRepository(pool);

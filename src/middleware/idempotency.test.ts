@@ -462,7 +462,7 @@ describe('idempotency leases and response lifecycle (PostgreSQL semantics)', () 
     db = new adapter.Pool();
     await db.query(readFileSync('migrations/004_create_idempotency_store.sql', 'utf8'));
     await db.query(readFileSync('migrations/0025_idempotency_store_scope.sql', 'utf8'));
-    await db.query(readFileSync('migrations/0027_idempotency_lease.sql', 'utf8'));
+    await db.query(readFileSync('migrations/0028_idempotency_lease.sql', 'utf8'));
   });
   afterEach(async () => { jest.restoreAllMocks(); await db.end(); });
 

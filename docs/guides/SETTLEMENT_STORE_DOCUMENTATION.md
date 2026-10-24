@@ -60,7 +60,7 @@ Any reintroduction of float arithmetic in these files is a build-time error.
 - **Bounded Attempts**: `SETTLEMENT_MAX_RETRIES` defaults to 5; after the cap the row becomes `failed` and records the failure reason.
 - **Backoff**: Retry delays use equal jitter over exponential intervals starting at 30 seconds, capped at 30 minutes.
 - **Pending Query Index**: `idx_settlements_retry_after` is partial on rows with `status = 'retryable'`.
-- **Migration**: `migrations/0026_settlement_retry_policy.sql` adds the retry state; its `.down.sql` rollback restores the original status constraint.
+- **Migration**: `migrations/0031_settlement_retry_policy.sql` adds the retry state; its `.down.sql` rollback restores the original status constraint.
 
 ### 1. Data Persistence Invariants
 - **Settlement Immutability**: Once created, settlement core fields (`id`, `developerId`, `amount`, `created_at`) never change
