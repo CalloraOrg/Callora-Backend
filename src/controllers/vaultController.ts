@@ -110,7 +110,7 @@ export class VaultController {
     const requestId = getRequestId(req);
     const user = res.locals.authenticatedUser;
     const demoPublicRead =
-      process.env.DEMO_MODE === 'true' &&
+      config.demoMode &&
       !req.headers.authorization &&
       !user;
     let contractId: string | undefined;

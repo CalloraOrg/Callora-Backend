@@ -1,10 +1,10 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from './schema.js';
-import { readFileSync } from 'fs';
 import { join } from 'path';
+import { config } from '../config/index.js';
 import { applyMigrations, validateSchemaState } from '../migrate.js';
 import { bootstrapDemoDb } from './demo.js';
+import * as schema from './schema.js';
 
 const logger = console;
 let sqliteClosed = false;
@@ -23,16 +23,16 @@ export const db = drizzle(sqlite, { schema });
 export async function initializeDb() {
   try {
     const migrationDir = join(process.cwd(), 'migrations');
-    
+
     // In production, we just want to validate the schema is up-to-date.
     // In dev/test environments, we automatically apply pending migrations.
     const isProd = process.env.NODE_ENV === 'production';
 
-    if (process.env.DEMO_MODE === 'true') {
+    if (config.demoMode) {
       bootstrapDemoDb(sqlite, migrationDir);
       return;
     }
-    
+
     if (isProd) {
       logger.info('Validating schema state...');
       validateSchemaState(sqlite, migrationDir);
