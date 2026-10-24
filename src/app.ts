@@ -228,7 +228,21 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     : undefined;
   const reportExporterService = exportsConfigured
     ? new ReportExporterService(
-        { getEvents: getExportEvents },
+        {
+          // Adapt the in-process repository to the paged range interface:
+          // [from, to) by createdAt, optional developer filter, id keyset cursor.
+          getEventsInRange: async (from, to, options) => {
+            const events = (await getExportEvents())
+              .filter((event) => event.createdAt >= from && event.createdAt < to)
+              .filter((event) => options.developerId === undefined || event.developerId === options.developerId)
+              .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+            const start = options.cursor === undefined
+              ? 0
+              : events.findIndex((event) => event.id > options.cursor!);
+            if (start === -1) return [];
+            return events.slice(start, start + options.limit);
+          },
+        },
         objectStorageClient,
         new InMemoryExportStore(),
         {

@@ -33,7 +33,7 @@ export interface ObjectStorageClient {
   uploadObject(input: {
     bucket: string;
     key: string;
-    body: string;
+    body: string | AsyncIterable<string>;
     contentType: string;
     accessKeyId: string;
     secretAccessKey: string;
@@ -226,7 +226,7 @@ export class HmacObjectStorageClient implements ObjectStorageClient {
   async uploadObject(input: {
     bucket: string;
     key: string;
-    body: string;
+    body: string | AsyncIterable<string>;
     contentType: string;
     accessKeyId: string;
     secretAccessKey: string;
@@ -241,7 +241,13 @@ export class HmacObjectStorageClient implements ObjectStorageClient {
     void input.secretAccessKey;
     void input.region;
     void input.endpoint;
-    this.uploads.push({ bucket: input.bucket, key: input.key, body: input.body, contentType: input.contentType });
+    let body = input.body;
+    if (typeof body !== 'string') {
+      const chunks: string[] = [];
+      for await (const chunk of body) chunks.push(chunk);
+      body = chunks.join('');
+    }
+    this.uploads.push({ bucket: input.bucket, key: input.key, body, contentType: input.contentType });
   }
 
   createSignedDownloadUrl(input: {

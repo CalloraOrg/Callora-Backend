@@ -627,7 +627,7 @@ const gatewayApiKeyLookupTotal = new client.Counter({
 
 register.registerMetric(gatewayApiKeyLookupTotal);
 
-export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired';
+export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired' | 'error';
 
 export function recordApiKeyLookup(outcome: ApiKeyLookupOutcome): void {
   gatewayApiKeyLookupTotal.inc({ outcome });
@@ -681,7 +681,7 @@ const proxyPrematureAbortsTotal = new client.Counter({
 
 const idempotencyStoreRows = new client.Gauge({
   name: 'idempotency_store_rows',
-  help: 'Current number of rows in the idempotency_store table',
+  help: 'Estimated number of rows in the idempotency_store table (from pg_class.reltuples; may lag behind true count until next ANALYZE). Updated by the idempotency sweeper on each run.',
 });
 
 const endpointThroughputSaturationRatio = new client.Gauge({
@@ -1006,4 +1006,15 @@ export function recordBillingPendingResolved(outcome: BillingPendingResolutionOu
 export function resetBillingPendingMetrics(): void {
   billingPendingDeductions.reset();
   billingPendingResolvedTotal.reset();
+}
+
+const revenueLedgerSkippedTotal = new client.Counter({
+  name: 'revenue_ledger_skipped_total',
+  help: 'Usage events skipped while indexing developer revenue',
+  labelNames: ['reason'] as const,
+});
+register.registerMetric(revenueLedgerSkippedTotal);
+
+export function recordRevenueLedgerSkipped(reason: 'unknown_api' | 'pending' | 'voided'): void {
+  revenueLedgerSkippedTotal.inc({ reason });
 }

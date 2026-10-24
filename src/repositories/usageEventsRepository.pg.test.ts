@@ -3,6 +3,8 @@ import { DataType, newDb } from 'pg-mem';
 
 import {
   PgUsageEventsRepository,
+  CorruptUsageAmountError,
+  CorruptAmountError,
   type UsageEventsRepositoryQueryable,
 } from './usageEventsRepository.pg.js';
 
@@ -36,11 +38,18 @@ function createUsageEventsRepository() {
       developer_id VARCHAR(255) NOT NULL,
       amount_usdc NUMERIC(20, 0) NOT NULL,
       usage_event_id BIGINT UNIQUE REFERENCES usage_events(id),
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      settlement_id BIGINT,
+      reversed_at TIMESTAMP,
+      reversal_of_usage_event_id BIGINT UNIQUE
     );
+
+    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMP);
+    CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMP NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
 
     CREATE INDEX idx_usage_events_user_created ON usage_events(user_id, created_at);
     CREATE INDEX idx_usage_events_api_created ON usage_events(api_id, created_at);
+    CREATE INDEX idx_usage_events_developer_created ON usage_events(developer_id, created_at);
   `);
 
   const { Pool } = db.adapters.createPg();
@@ -79,6 +88,30 @@ test('create stores a usage event and returns the persisted record', async () =>
     assert.equal(event.requestId, 'req-1');
     assert.equal(event.stellarTxHash, 'stellar-hash-1');
     assert.deepEqual(event.createdAt, createdAt);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('getEventsInRange uses a half-open UTC range, developer filter, and ID cursor pages', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+  try {
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 1n, requestId: 'r1', createdAt: new Date('2026-03-01T00:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 2n, requestId: 'r2', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u2', apiId: 'a2', endpointId: 'e2', apiKeyId: 'k2', developerId: 'dev-2', amount: 3n, requestId: 'r3', createdAt: new Date('2026-03-01T12:00:00.000Z') });
+    await repository.create({ userId: 'u1', apiId: 'a1', endpointId: 'e1', apiKeyId: 'k1', developerId: 'dev-1', amount: 4n, requestId: 'r4', createdAt: new Date('2026-03-02T00:00:00.000Z') });
+
+    const from = new Date('2026-03-01T00:00:00.000Z');
+    const to = new Date('2026-03-02T00:00:00.000Z');
+    const firstPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', limit: 1 });
+    const secondPage = await repository.getEventsInRange(from, to, { developerId: 'dev-1', cursor: firstPage[0]?.id, limit: 1 });
+    assert.equal(firstPage.length, 1);
+    assert.equal(secondPage.length, 1);
+    assert.equal(firstPage[0]?.createdAt.toISOString(), '2026-03-01T00:00:00.000Z');
+    assert.equal(secondPage[0]?.createdAt.toISOString(), '2026-03-01T12:00:00.000Z');
+    assert.equal(firstPage[0]?.developerId, 'dev-1');
+    const unfiltered = await repository.getEventsInRange(from, to, { limit: 10 });
+    assert.equal(unfiltered.length, 3);
   } finally {
     await pool.end();
   }
@@ -141,6 +174,41 @@ test('create uses the database default timestamp when createdAt is omitted', asy
     assert.ok(event.createdAt >= before);
     assert.ok(event.createdAt <= after);
     assert.equal(event.stellarTxHash, null);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('countByDeveloper counts rows in a half-open UTC month range by developer_id', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+
+  try {
+    for (const [requestId, developerId, createdAt] of [
+      ['req-count-start', 'dev-1', '2026-02-01T00:00:00.000Z'],
+      ['req-count-end-minus-ms', 'dev-1', '2026-02-28T23:59:59.999Z'],
+      ['req-count-next-month', 'dev-1', '2026-03-01T00:00:00.000Z'],
+      ['req-count-other-developer', 'dev-2', '2026-02-15T00:00:00.000Z'],
+    ]) {
+      await repository.create({
+        userId: 'user-1',
+        apiId: 'api-weather',
+        endpointId: 'endpoint-current',
+        apiKeyId: 'key-1',
+        developerId,
+        amount: 1n,
+        requestId,
+        createdAt: new Date(createdAt),
+      });
+    }
+
+    assert.equal(
+      await repository.countByDeveloper({
+        developerId: 'dev-1',
+        from: new Date('2026-02-01T00:00:00.000Z'),
+        to: new Date('2026-03-01T00:00:00.000Z'),
+      }),
+      2,
+    );
   } finally {
     await pool.end();
   }
@@ -472,6 +540,43 @@ test('repository surfaces malformed amount values from the database', async () =
   );
 });
 
+test('Scenario 6: Pg repository reads a value "1.5" (corrupt) and raises typed error naming the row id', async () => {
+  const corruptRowId = 'row-corrupt-999';
+  const corruptRepository = new PgUsageEventsRepository({
+    async query<T = unknown>() {
+      return {
+        rows: [
+          {
+            id: corruptRowId,
+            user_id: 'user-1',
+            api_id: 'api-weather',
+            endpoint_id: 'endpoint-1',
+            api_key_id: 'key-1',
+            developer_id: 'dev-1',
+            amount_usdc: '1.5',
+            request_id: 'req-corrupt',
+            stellar_tx_hash: null,
+            created_at: new Date('2026-02-01T10:00:00.000Z'),
+          },
+        ] as T[],
+      };
+    },
+  });
+
+  let caughtError: unknown;
+  try {
+    await corruptRepository.findByUserId('user-1');
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.ok(caughtError instanceof CorruptUsageAmountError, 'Must be instance of CorruptUsageAmountError');
+  assert.ok(caughtError instanceof CorruptAmountError, 'Must be instance of CorruptAmountError');
+  assert.equal((caughtError as CorruptUsageAmountError).rowId, corruptRowId);
+  assert.match((caughtError as Error).message, new RegExp(corruptRowId));
+  assert.equal((caughtError as Error).name, 'CorruptUsageAmountError');
+});
+
 test('repository accepts bigint values returned directly from the database driver', async () => {
   const repository = new PgUsageEventsRepository({
     async query<T = unknown>() {
@@ -514,6 +619,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 100n,
       requestId: 'req-ledger-1',
+      stellarTxHash: 'tx-ledger-1',
       createdAt: new Date('2026-02-01T10:00:00.000Z'),
     });
     await repository.create({
@@ -524,6 +630,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 250n,
       requestId: 'req-ledger-2',
+      stellarTxHash: 'tx-ledger-2',
       createdAt: new Date('2026-02-02T10:00:00.000Z'),
     });
     await repository.create({
@@ -534,6 +641,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 999n,
       requestId: 'req-ledger-3',
+      stellarTxHash: 'tx-ledger-3',
       createdAt: new Date('2026-02-03T10:00:00.000Z'),
     });
 
@@ -584,6 +692,7 @@ test('indexRevenueLedgerEvent inserts idempotently by usageEventId', async () =>
       developerId: 'dev-1',
       amount: 1500n,
       requestId: 'req-ledger-insert',
+      stellarTxHash: 'tx-ledger-insert',
       createdAt: new Date('2026-02-05T10:00:00.000Z'),
     });
 
@@ -710,4 +819,3 @@ test('sumSpendByConsumer sums confirmed charges within [from, to) and excludes u
     await pool.end();
   }
 });
-

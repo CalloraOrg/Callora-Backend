@@ -106,12 +106,15 @@ The `ReportExporterService` materialises one CSV and one JSON export per develop
 
 ### How it works
 
-1. `runDailyExports(date)` computes the 24-hour UTC window `[date − 1 day, date)`.
-2. All usage events in that window are grouped by `developer_id`.
+1. `runDailyExports(day)` accepts a `YYYY-MM-DD` UTC calendar day and reads the half-open window `[day 00:00Z, next day 00:00Z)`. An event exactly at midnight belongs to the new day.
+2. The repository reads the window in bounded pages. It first discovers developers with events, then pages each developer's rows independently while generating the artifacts.
 3. For each developer with ≥1 event, two files are uploaded to object storage:
-   - `daily-exports/{developerId}/{YYYY-MM-DD}.csv`
-   - `daily-exports/{developerId}/{YYYY-MM-DD}.json`
-4. A `DeveloperExportRecord` is written to the store for each file, with `expires_at = date + 7 days`.
+   - `daily-exports/{developerId}/{day}.csv`
+   - `daily-exports/{developerId}/{day}.json`
+4. The export store atomically claims `(developerId, day)` before upload. Concurrent runs sharing the store skip a claimed day, and completed days are no-ops unless `runDailyExports(day, { force: true })` is used. A failed run releases its claim for retry.
+5. One `DeveloperExportRecord` is written per format. Both records use the same `exported_at`, and `expires_at` is seven days after that export time.
+
+The worker processes completed UTC days only, starting with yesterday. It catches up the latest seven days by default and can be bounded with `maxCatchUpDays`; shared store claims let multiple worker instances avoid duplicate uploads.
 
 ### Configuring the interval
 
@@ -119,7 +122,7 @@ The `ReportExporterService` materialises one CSV and one JSON export per develop
 REPORT_EXPORTER_INTERVAL_MS=86400000   # default: 1 day in ms
 ```
 
-Use `createReportExporterWorker(service, { intervalMs })` to start the background worker. It runs the first tick immediately on `start()`, then repeats on the interval.
+Use `createReportExporterWorker(service, { intervalMs, maxCatchUpDays })` to start the background worker. It runs the first tick immediately on `start()`, then repeats on the interval. The service accepts an async iterable as an upload body so storage adapters can forward rows without buffering the whole day.
 
 ---
 
