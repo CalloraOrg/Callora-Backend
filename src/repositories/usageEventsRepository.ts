@@ -75,6 +75,7 @@ export interface UsageHourBucket {
 }
 
 export interface UsageEventsRepository {
+  getEvents?(): Promise<UsageEvent[]>;
   findByDeveloper(query: UsageEventQuery): Promise<UsageEvent[]>;
   countByDeveloper(query: { developerId: string; from: Date; to: Date }): Promise<number>;
   findByUser(query: UserUsageEventQuery): Promise<UsageEvent[]>;
@@ -130,6 +131,10 @@ export interface UsageEventsRepository {
 
 export class InMemoryUsageEventsRepository implements UsageEventsRepository {
   constructor(private readonly events: UsageEvent[] = []) {}
+
+  async getEvents(): Promise<UsageEvent[]> {
+    return [...this.events];
+  }
 
   async findByDeveloper(query: UsageEventQuery): Promise<UsageEvent[]> {
     return this.events.filter((event) => {
