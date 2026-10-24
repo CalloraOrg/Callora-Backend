@@ -3,10 +3,10 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node init && tsc -p tsconfig.build.json",
     "prebuild": "npm run error-codes:check && npm run validate:openapi",
-    "start": "node dist/src/index.js",
-    "dev": "tsx watch src/index.ts",
+    "start": "node init && node dist/src/index.js",
+    "dev": "node init && tsx watch src/index.ts",
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate:sqlite",
     "db:migrate": "drizzle-kit migrate",
@@ -24,7 +24,7 @@
     "test:unit": "jest --runInBand --forceExit --testPathIgnorePatterns tests/integration",
     "test:integration": "jest --runInBand --forceExit tests/integration",
     "test:coverage": "jest --runInBand --coverage --forceExit --testPathIgnorePatterns tests/integration",
-    "build:vercel": "node scripts/build-vercel.mjs"
+    "build:vercel": "node init && node scripts/build-vercel.mjs"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

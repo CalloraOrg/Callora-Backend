@@ -4,7 +4,6 @@ import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth
 import { validate } from '../middleware/validate.js';
 import {
   developerCategoryEnum,
-  DeveloperRevenueResponse,
   SettlementStore,
 } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
@@ -178,28 +177,39 @@ export function createDeveloperRouter(deps: DeveloperRoutesDeps): Router {
 
       // Calculate aggregated revenue — only positive amounts count
       const completedTotal = allSettlements
-        .filter((s) => s.status === 'completed' && s.amount > 0)
-        .reduce((sum, s) => sum + s.amount, 0);
+        .filter((s) => s.status === 'completed' && s.amount > 0n)
+        .reduce((sum, s) => sum + s.amount, 0n);
 
       const pendingTotal = allSettlements
-        .filter((s) => s.status === 'pending' && s.amount > 0)
-        .reduce((sum, s) => sum + s.amount, 0);
+        .filter((s) => s.status === 'pending' && s.amount > 0n)
+        .reduce((sum, s) => sum + s.amount, 0n);
 
       // Unsettled usage events scoped to the verified developer
       const unsettledEvents = (await usageStore.getUnsettledEvents()).filter(
-        (e) => e.userId === developerId && e.amountUsdc > 0,
+        (e) => e.userId === developerId && e.amountUsdc > 0n,
       );
-      const unsettledRevenue = unsettledEvents.reduce((sum, e) => sum + e.amountUsdc, 0);
+      const unsettledRevenue = unsettledEvents.reduce((sum, e) => sum + e.amountUsdc, 0n);
 
       const totalEarned = completedTotal + unsettledRevenue + pendingTotal;
 
-      const body: DeveloperRevenueResponse = {
+      // Convert bigint units to JS numbers for the JSON response (OpenAPI
+      // declares these fields as type: number). 1 unit = 0.0000001 USDC so
+      // values stay well within Number.MAX_SAFE_INTEGER for realistic amounts.
+      const unitsToUsdc = (units: bigint): number =>
+        Number(units) / 10_000_000;
+
+      const body = {
         summary: {
-          total_earned: totalEarned,
-          pending: pendingTotal,
-          available_to_withdraw: unsettledRevenue,
+          total_earned: unitsToUsdc(totalEarned),
+          pending: unitsToUsdc(pendingTotal),
+          available_to_withdraw: unitsToUsdc(unsettledRevenue),
         },
-        settlements,
+        // Serialize Settlement.amount (bigint) back to number for the API.
+        // OpenAPI declares amount/summary fields as type: number.
+        settlements: settlements.map((s) => ({
+          ...s,
+          amount: unitsToUsdc(s.amount),
+        })),
         pagination: { limit, offset, total },
       };
 

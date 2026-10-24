@@ -1,11 +1,15 @@
 import { Settlement, RevenueSummary } from '../types/developer.js';
+import { parseUsdcToUnits } from '../lib/usdcUnits.js';
+
+/** Helper so fixture amounts stay readable as decimal strings. */
+const u = (usdc: string): bigint => parseUsdcToUnits(usdc);
 
 const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
   dev_001: [
     {
       id: 'stl_001',
       developerId: 'dev_001',
-      amount: 250.0,
+      amount: u('250'),
       status: 'completed',
       tx_hash: '0xabc123def456',
       created_at: '2026-01-15T10:30:00Z',
@@ -13,7 +17,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     {
       id: 'stl_002',
       developerId: 'dev_001',
-      amount: 175.5,
+      amount: u('175.5'),
       status: 'completed',
       tx_hash: '0xdef789abc012',
       created_at: '2026-01-22T14:00:00Z',
@@ -21,7 +25,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     {
       id: 'stl_003',
       developerId: 'dev_001',
-      amount: 320.0,
+      amount: u('320'),
       status: 'pending',
       tx_hash: null,
       created_at: '2026-02-01T09:15:00Z',
@@ -29,7 +33,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     {
       id: 'stl_004',
       developerId: 'dev_001',
-      amount: 90.0,
+      amount: u('90'),
       status: 'failed',
       tx_hash: '0xfailed00001',
       created_at: '2026-02-10T16:45:00Z',
@@ -37,7 +41,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     {
       id: 'stl_005',
       developerId: 'dev_001',
-      amount: 410.25,
+      amount: u('410.25'),
       status: 'pending',
       tx_hash: null,
       created_at: '2026-02-20T11:00:00Z',
@@ -47,7 +51,7 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
     {
       id: 'stl_010',
       developerId: 'dev_002',
-      amount: 500.0,
+      amount: u('500'),
       status: 'completed',
       tx_hash: '0x111222333aaa',
       created_at: '2026-02-05T08:00:00Z',
@@ -58,10 +62,11 @@ const MOCK_SETTLEMENTS: Record<string, Settlement[]> = {
 /**
  * Additional usage-based revenue not yet converted into a settlement.
  * In production this would be an aggregate query on the usage table.
+ * Stored as bigint contract units.
  */
-const MOCK_USAGE_REVENUE: Record<string, number> = {
-  dev_001: 120.0,
-  dev_002: 45.0,
+const MOCK_USAGE_REVENUE: Record<string, bigint> = {
+  dev_001: u('120'),
+  dev_002: u('45'),
 };
 
 const DEV_FIXTURE_REFRESH_STEPS = [
@@ -92,8 +97,8 @@ export function assertDeveloperDataIntegrity(): void {
       }
       settlementIds.add(settlement.id);
 
-      if (!Number.isFinite(settlement.amount) || settlement.amount < 0) {
-        throw new Error(`Settlement ${settlement.id} has invalid amount ${settlement.amount}.`);
+      if (typeof settlement.amount !== 'bigint' || settlement.amount < 0n) {
+        throw new Error(`Settlement ${settlement.id} has invalid amount ${String(settlement.amount)}.`);
       }
 
       if (Number.isNaN(Date.parse(settlement.created_at))) {
@@ -126,8 +131,8 @@ export function assertDeveloperDataIntegrity(): void {
   }
 
   for (const [developerId, revenue] of Object.entries(MOCK_USAGE_REVENUE)) {
-    if (!Number.isFinite(revenue) || revenue < 0) {
-      throw new Error(`Usage revenue fixture for ${developerId} must be a non-negative finite number.`);
+    if (typeof revenue !== 'bigint' || revenue < 0n) {
+      throw new Error(`Usage revenue fixture for ${developerId} must be a non-negative bigint.`);
     }
   }
 }
@@ -148,15 +153,15 @@ export function getSettlements(
 
 export function getRevenueSummary(developerId: string): RevenueSummary {
   const settlements = MOCK_SETTLEMENTS[developerId] ?? [];
-  const usageRevenue = MOCK_USAGE_REVENUE[developerId] ?? 0;
+  const usageRevenue = MOCK_USAGE_REVENUE[developerId] ?? 0n;
 
   const completedTotal = settlements
     .filter((s) => s.status === 'completed')
-    .reduce((sum, s) => sum + s.amount, 0);
+    .reduce((sum, s) => sum + s.amount, 0n);
 
   const pendingTotal = settlements
     .filter((s) => s.status === 'pending')
-    .reduce((sum, s) => sum + s.amount, 0);
+    .reduce((sum, s) => sum + s.amount, 0n);
 
   return {
     total_earned: completedTotal + pendingTotal + usageRevenue,

@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { DepositController } from './depositController.js';
-import { TransactionBuilderService, InvalidContractIdError, NetworkError } from '../services/transactionBuilder.js';
+import { TransactionBuilderService, InvalidContractIdError, NetworkError, SimulationError } from '../services/transactionBuilder.js';
 import { AmountValidator } from '../validators/amountValidator.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
+import type { UserRepository } from '../repositories/userRepository.js';
 
 // Mock the AmountValidator (fully auto-mocked — it only has static methods, no error classes)
 jest.mock('../validators/amountValidator.js');
@@ -31,6 +32,7 @@ describe('DepositController', () => {
   let depositController: DepositController;
   let mockVaultRepository: jest.Mocked<VaultRepository>;
   let mockTransactionBuilder: jest.Mocked<TransactionBuilderService>;
+  let mockUserRepository: jest.Mocked<UserRepository>;
   let mockReq: Partial<Request>;
   let mockRes: Partial<Response>;
   let mockLocals: { authenticatedUser: { id: string; email: string } };
@@ -48,8 +50,12 @@ describe('DepositController', () => {
       buildDepositTransaction: jest.fn(),
     } as unknown as jest.Mocked<TransactionBuilderService>;
 
-    // Create controller instance
-    depositController = new DepositController(mockVaultRepository, mockTransactionBuilder);
+    mockUserRepository = {
+      findById: jest.fn(),
+    } as unknown as jest.Mocked<UserRepository>;
+
+    // Create controller instance with mocked userRepository
+    depositController = new DepositController(mockVaultRepository, mockTransactionBuilder, mockUserRepository);
 
     // Create mock request/response objects
     mockReq = {
@@ -90,6 +96,16 @@ describe('DepositController', () => {
       },
       fee: '100',
       timeout: 300,
+      resourceFee: '123456',
+      minResourceFee: '100000',
+      latestLedger: 12345678,
+    });
+
+    // Setup default UserRepository mock
+    mockUserRepository.findById.mockResolvedValue({
+      id: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      stellarAddress: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      createdAt: new Date(),
     });
   });
 
@@ -123,22 +139,41 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(200);
       expect(mockRes.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          xdr: expect.any(String),
+          success: true,
+          data: expect.objectContaining({
+            xdr: expect.any(String),
+            network: 'testnet',
+            contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+            amount: '10.0000000',
+            operation: {
+              type: 'invoke_contract',
+              function: 'deposit',
+              args: expect.arrayContaining([
+                expect.objectContaining({ type: 'address' }),
+                expect.objectContaining({ type: 'i128' }),
+              ]),
+            },
+            metadata: {
+              fee: '100',
+              timeout: 300,
+              resourceFee: '123456',
+              minResourceFee: '100000',
+              latestLedger: 12345678,
+            },
+          }),
+          requestId: expect.any(String),
+          timestamp: expect.any(String),
+        })
+      );
+      
+      // Verify TransactionBuilder was called with userStellarAddress from userRepository
+      expect(mockTransactionBuilder.buildDepositTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userStellarAddress: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          vaultContractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          amountUsdc: '10.0000000',
           network: 'testnet',
-          contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-          amount: '10.0000000',
-          operation: {
-            type: 'invoke_contract',
-            function: 'deposit',
-            args: expect.arrayContaining([
-              expect.objectContaining({ type: 'address' }),
-              expect.objectContaining({ type: 'i128' }),
-            ]),
-          },
-          metadata: {
-            fee: '100',
-            timeout: 300,
-          },
+          sourceAccount: 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
         })
       );
     });
@@ -154,8 +189,11 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(401);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'Authentication required',
         code: 'UNAUTHORIZED',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -170,8 +208,11 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'amount_usdc is required',
         code: 'MISSING_AMOUNT',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -186,8 +227,11 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'amount_usdc must be a string',
         code: 'INVALID_AMOUNT_TYPE',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -207,9 +251,12 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'Amount must be positive and have at most 7 decimal places',
         code: 'INVALID_AMOUNT_FORMAT',
         provided: '10.00',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -224,9 +271,12 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'network must be either "testnet" or "mainnet"',
         code: 'INVALID_NETWORK',
         provided: 'invalid',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -267,9 +317,12 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'source_account must be a valid Stellar public key (G...)',
         code: 'INVALID_SOURCE_ACCOUNT',
         provided: 'invalid-key',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -286,8 +339,48 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(404);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: "Vault not found for user on network 'testnet'. Please create a vault first.",
         code: 'VAULT_NOT_FOUND',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
+      });
+    });
+
+    it('should return 400 when user does not have a Stellar address configured', async () => {
+      // Arrange
+      mockReq.body = validRequest;
+      mockRes.locals = mockLocals;
+      
+      mockVaultRepository.findByUserId.mockResolvedValue({
+        id: 'vault-123',
+        userId: mockLocals.authenticatedUser.id,
+        network: 'testnet',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      
+      // User without stellar address
+      mockUserRepository.findById.mockResolvedValue({
+        id: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        stellarAddress: '',
+        createdAt: new Date(),
+      });
+
+      // Act
+      await depositController.prepareDeposit(mockReq as Request, mockRes as Response);
+
+      // Assert
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'User does not have a Stellar address configured. Please update your profile.',
+        code: 'STELLAR_ADDRESS_REQUIRED',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -317,8 +410,11 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(500);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'Invalid vault contract configuration. Please contact support.',
         code: 'INVALID_CONTRACT_ID',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -348,10 +444,58 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(503);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'Unable to connect to Stellar network. Please try again later.',
         code: 'NETWORK_UNAVAILABLE',
         network: 'Failed to connect to Stellar network',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
+    });
+
+    it('should handle SimulationError from TransactionBuilder', async () => {
+      // Arrange
+      mockReq.body = validRequest;
+      mockRes.locals = mockLocals;
+      
+      mockVaultRepository.findByUserId.mockResolvedValue({
+        id: 'vault-123',
+        userId: mockLocals.authenticatedUser.id,
+        network: 'testnet',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      mockTransactionBuilder.buildDepositTransaction.mockRejectedValue(
+        new SimulationError('Soroban simulation failed', {
+          errorCode: 8,
+          errorMessage: 'BelowMinDeposit',
+          events: [],
+          footprint: { readOnly: [], readWrite: [] },
+        })
+      );
+
+      // Act
+      await depositController.prepareDeposit(mockReq as Request, mockRes as Response);
+
+      // Assert
+      expect(mockRes.status).toHaveBeenCalledWith(502);
+      expect(mockRes.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.objectContaining({
+            code: 'SIMULATION_FAILED',
+            message: 'Soroban simulation failed. See diagnostics for details.',
+            simulationDetails: expect.objectContaining({
+              errorCode: 8,
+              errorMessage: 'BelowMinDeposit',
+            }),
+          }),
+        })
+      );
     });
 
     it('should handle generic errors gracefully', async () => {
@@ -380,8 +524,11 @@ describe('DepositController', () => {
       // Assert
       expect(mockRes.status).toHaveBeenCalledWith(500);
       expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
         error: 'Failed to prepare deposit transaction',
         code: 'INTERNAL_ERROR',
+        requestId: expect.any(String),
+        timestamp: expect.any(String),
       });
     });
 
@@ -418,6 +565,9 @@ describe('DepositController', () => {
         },
         fee: '100',
         timeout: 300,
+        resourceFee: '123456',
+        minResourceFee: '100000',
+        latestLedger: 12345678,
       });
 
       // Act
@@ -430,7 +580,9 @@ describe('DepositController', () => {
       );
       expect(mockRes.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          network: 'mainnet',
+          data: expect.objectContaining({
+            network: 'mainnet',
+          }),
         })
       );
 
@@ -438,7 +590,7 @@ describe('DepositController', () => {
       configMock.config.stellar.network = 'testnet';
     });
 
-    it('should work without source_account (uses user public key)', async () => {
+    it('should work without source_account (uses user stellar address from profile)', async () => {
       // Arrange
       mockReq.body = { ...validRequest, source_account: undefined };
       mockRes.locals = mockLocals;
@@ -460,7 +612,7 @@ describe('DepositController', () => {
       // Assert
       expect(mockTransactionBuilder.buildDepositTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
-          userPublicKey: mockLocals.authenticatedUser.id,
+          userStellarAddress: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           vaultContractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           amountUsdc: '10.0000000',
           network: 'testnet',

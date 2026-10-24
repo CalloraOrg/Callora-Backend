@@ -6,6 +6,8 @@ import { idempotencyMiddleware, type IdempotencyConfig } from '../../middleware/
 import { BadRequestError, NotFoundError, UnauthorizedError } from '../../errors/index.js';
 import type { ScheduledExportsService } from '../../services/scheduledExports.js';
 import { exportsAccessLogMiddleware } from '../../middleware/exportsAccessLog.js';
+import { config } from '../../config/index.js';
+import { validateStorageEndpoint } from '../../lib/storageEndpoint.js';
 
 const EXPORT_IDEMPOTENCY_CONFIG: IdempotencyConfig = {
   keyFromHeader: 'idempotency-key',
@@ -22,7 +24,16 @@ const scheduleBodySchema = z.object({
   cron: z.string().trim().min(1).max(100),
   s3Bucket: z.string().trim().min(1).max(255),
   s3Region: z.string().trim().min(1).max(120),
-  s3Endpoint: z.string().trim().url(),
+  s3Endpoint: z.string().trim().url().superRefine((value, context) => {
+    try {
+      validateStorageEndpoint(value, {
+        production: config.nodeEnv === 'production',
+        allowedHosts: config.exports.endpointAllowlist,
+      });
+    } catch (error) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: (error as Error).message });
+    }
+  }),
   s3AccessKeyId: z.string().trim().min(1).max(255),
   s3SecretAccessKey: z.string().trim().min(1).max(255),
   s3PathPrefix: z.string().trim().max(255).optional(),

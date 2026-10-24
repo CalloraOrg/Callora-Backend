@@ -5,12 +5,12 @@
  * `quota.threshold.reached` webhook events at 80%, 95%, and 100% of the
  * configured monthly call quota.
  *
- * Idempotency guarantee: each (developerId, period, threshold) triple is
- * recorded in `quota_notifications_sent` before the webhook fires, so repeated
- * ticks and process restarts never re-send the same alert.
+ * At-most-once delivery: each (developerId, period, threshold) triple is
+ * atomically claimed in `quota_notifications_sent` before dispatch. A crash
+ * after the claim but before delivery intentionally does not retry the alert.
  */
 
-import type { UsageEventsRepository, UsageEventQuery } from '../repositories/usageEventsRepository.js';
+import type { UsageEventsRepository } from '../repositories/usageEventsRepository.js';
 import { dispatchToAll } from '../webhooks/webhook.dispatcher.js';
 import { WebhookStore } from '../webhooks/webhook.store.js';
 import type { WebhookPayload, QuotaThresholdReachedData } from '../webhooks/webhook.types.js';
@@ -36,10 +36,10 @@ export interface DeveloperQuota {
  * in-memory stub.
  */
 export interface QuotaNotificationStore {
-    /** Returns true if a notification has already been sent for this key. */
+    /** Diagnostic lookup for whether a notification key has already been claimed. */
     hasBeenSent(developerId: string, period: string, threshold: QuotaThreshold): Promise<boolean>;
-    /** Persists the fact that a notification was sent. Must be idempotent. */
-    markSent(developerId: string, period: string, threshold: QuotaThreshold): Promise<void>;
+    /** Atomically claims a notification key; returns false if another run claimed it. */
+    tryClaim(developerId: string, period: string, threshold: QuotaThreshold): Promise<boolean>;
 }
 
 export interface QuotaNotifierOptions {
@@ -67,12 +67,12 @@ export function periodOf(date: Date): string {
     return `${y}-${m}`;
 }
 
-/** Returns the UTC start/end boundaries of the month that contains `date`. */
+/** Returns the UTC start and exclusive end boundaries of the month containing `date`. */
 export function monthBoundaries(date: Date): { from: Date; to: Date } {
     const y = date.getUTCFullYear();
     const m = date.getUTCMonth();
     const from = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0));
-    const to = new Date(Date.UTC(y, m + 1, 1, 0, 0, 0, 0) - 1); // last ms of last day
+    const to = new Date(Date.UTC(y, m + 1, 1, 0, 0, 0, 0));
     return { from, to };
 }
 
@@ -81,7 +81,7 @@ export function monthBoundaries(date: Date): { from: Date; to: Date } {
 // ---------------------------------------------------------------------------
 
 export interface QuotaNotifierDeps {
-    usageRepo: UsageEventsRepository;
+    usageRepo: Pick<UsageEventsRepository, 'countByDeveloper'>;
     notificationStore: QuotaNotificationStore;
     getDeveloperQuotas: () => Promise<DeveloperQuota[]>;
     now: () => Date;
@@ -90,23 +90,25 @@ export interface QuotaNotifierDeps {
 
 /**
  * Runs a single quota-check pass over all registered developer quotas.
- * Returns the number of notifications fired.
+ * Returns counts of successful claims, attempted dispatches, and claims with no subscribers.
  */
-export async function runQuotaCheck(deps: QuotaNotifierDeps): Promise<number> {
+export async function runQuotaCheck(
+    deps: QuotaNotifierDeps,
+): Promise<{ claimed: number; dispatched: number; noSubscribers: number }> {
     const { usageRepo, notificationStore, getDeveloperQuotas, now, logger } = deps;
 
     const today = now();
     const period = periodOf(today);
     const { from, to } = monthBoundaries(today);
 
-    let fired = 0;
+    const outcome = { claimed: 0, dispatched: 0, noSubscribers: 0 };
 
     let quotas: DeveloperQuota[];
     try {
         quotas = await getDeveloperQuotas();
     } catch (err) {
         logger.error('[quotaNotifier] Failed to load developer quotas:', err);
-        return 0;
+        return outcome;
     }
 
     for (const { developerId, monthlyLimit } of quotas) {
@@ -114,9 +116,7 @@ export async function runQuotaCheck(deps: QuotaNotifierDeps): Promise<number> {
 
         let callCount: number;
         try {
-            const query: UsageEventQuery = { developerId, from, to };
-            const events = await usageRepo.findByDeveloper(query);
-            callCount = events.length;
+            callCount = await usageRepo.countByDeveloper({ developerId, from, to });
         } catch (err) {
             logger.error(`[quotaNotifier] Failed to fetch usage for developer ${developerId}:`, err);
             continue;
@@ -127,30 +127,19 @@ export async function runQuotaCheck(deps: QuotaNotifierDeps): Promise<number> {
         for (const threshold of QUOTA_THRESHOLDS) {
             if (usagePercent < threshold) continue;
 
-            let alreadySent: boolean;
+            let claimed: boolean;
             try {
-                alreadySent = await notificationStore.hasBeenSent(developerId, period, threshold);
+                claimed = await notificationStore.tryClaim(developerId, period, threshold);
             } catch (err) {
                 logger.error(
-                    `[quotaNotifier] Failed to check notification state for dev=${developerId} threshold=${threshold}:`,
+                    `[quotaNotifier] Failed to claim notification for dev=${developerId} threshold=${threshold}:`,
                     err,
                 );
                 continue;
             }
 
-            if (alreadySent) continue;
-
-            // Mark as sent BEFORE dispatching so that a dispatcher crash does not
-            // cause a duplicate on the next tick (at-most-once delivery).
-            try {
-                await notificationStore.markSent(developerId, period, threshold);
-            } catch (err) {
-                logger.error(
-                    `[quotaNotifier] Failed to persist notification state for dev=${developerId} threshold=${threshold}:`,
-                    err,
-                );
-                continue;
-            }
+            if (!claimed) continue;
+            outcome.claimed += 1;
 
             const data: QuotaThresholdReachedData = {
                 period,
@@ -170,12 +159,17 @@ export async function runQuotaCheck(deps: QuotaNotifierDeps): Promise<number> {
             const configs = WebhookStore.getByEvent('quota.threshold.reached');
             const developerConfigs = configs.filter((c) => c.developerId === developerId);
 
+            if (developerConfigs.length === 0) {
+                outcome.noSubscribers += 1;
+                continue;
+            }
+
+            outcome.dispatched += 1;
             try {
                 await dispatchToAll(developerConfigs, payload);
                 logger.info(
                     `[quotaNotifier] Fired quota.threshold.reached for dev=${developerId} period=${period} threshold=${threshold}% (usage=${callCount}/${monthlyLimit})`,
                 );
-                fired += 1;
             } catch (err) {
                 logger.error(
                     `[quotaNotifier] Webhook dispatch failed for dev=${developerId} threshold=${threshold}:`,
@@ -185,7 +179,7 @@ export async function runQuotaCheck(deps: QuotaNotifierDeps): Promise<number> {
         }
     }
 
-    return fired;
+    return outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +201,7 @@ export async function runQuotaCheck(deps: QuotaNotifierDeps): Promise<number> {
  * ```
  */
 export function createQuotaNotifierJob(
-    usageRepo: UsageEventsRepository,
+    usageRepo: Pick<UsageEventsRepository, 'countByDeveloper'>,
     notificationStore: QuotaNotificationStore,
     options: QuotaNotifierOptions,
 ): QuotaNotifierJob {
@@ -265,8 +259,11 @@ export class InMemoryQuotaNotificationStore implements QuotaNotificationStore {
         return this.sent.has(this.key(developerId, period, threshold));
     }
 
-    async markSent(developerId: string, period: string, threshold: QuotaThreshold): Promise<void> {
-        this.sent.add(this.key(developerId, period, threshold));
+    async tryClaim(developerId: string, period: string, threshold: QuotaThreshold): Promise<boolean> {
+        const key = this.key(developerId, period, threshold);
+        if (this.sent.has(key)) return false;
+        this.sent.add(key);
+        return true;
     }
 
     /** Resets all state — for use in tests only. */
@@ -297,12 +294,14 @@ export class PgQuotaNotificationStore implements QuotaNotificationStore {
         return result.rows[0]?.exists ?? false;
     }
 
-    async markSent(developerId: string, period: string, threshold: QuotaThreshold): Promise<void> {
-        await this.db.query(
+    async tryClaim(developerId: string, period: string, threshold: QuotaThreshold): Promise<boolean> {
+        const result = await this.db.query(
             `INSERT INTO quota_notifications_sent (developer_id, period, threshold)
              VALUES ($1, $2, $3)
-             ON CONFLICT (developer_id, period, threshold) DO NOTHING`,
+             ON CONFLICT (developer_id, period, threshold) DO NOTHING
+             RETURNING 1`,
             [developerId, period, threshold],
         );
+        return result.rows.length > 0;
     }
 }

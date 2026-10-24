@@ -16,7 +16,7 @@ export interface UsageSseEventPayload {
   apiId: string;
   endpointId: string;
   userId: string;
-  amountUsdc: number;
+  amountUsdc: string | number;
   statusCode: number;
   timestamp: string;
 }

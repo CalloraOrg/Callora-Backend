@@ -5,7 +5,10 @@ import {
   Address,
   Memo,
   nativeToScVal,
+  rpc,
+  Transaction,
 } from '@stellar/stellar-sdk';
+import { assembleTransaction } from '@stellar/stellar-sdk/rpc';
 import { config } from '../config/index.js';
 import { withRetry } from '../lib/retry.js';
 import {
@@ -18,7 +21,7 @@ import { SequenceAllocationError, type SequenceStore } from './sequenceManager.j
 export type StellarNetwork = 'testnet' | 'mainnet';
 
 export interface BuildDepositParams {
-  userPublicKey: string;
+  userStellarAddress: string;
   vaultContractId: string;
   amountUsdc: string;
   network?: StellarNetwork;
@@ -49,6 +52,9 @@ export interface UnsignedTransaction {
   operation: TransactionOperation;
   fee: string;
   timeout: number;
+  resourceFee: string;
+  minResourceFee: string;
+  latestLedger: number;
   memo?: TransactionMemo;
 }
 
@@ -98,9 +104,6 @@ export class NetworkError extends Error {
   }
 }
 
-/**
- * Base class for all transaction‑building failures.
- */
 export class TransactionBuildError extends Error {
   constructor(message: string) {
     super(message);
@@ -108,19 +111,20 @@ export class TransactionBuildError extends Error {
   }
 }
 
-/**
- * Thrown when a Soroban simulation (e.g. during contract invocation) fails.
- * Carries the raw simulation diagnostics so callers can surface them without
- * exposing secrets.
- */
 export class SimulationError extends TransactionBuildError {
-  /** Structured diagnostics returned by the Soroban RPC simulation endpoint. */
   public readonly simulationDetails: SimulationDetails;
 
   constructor(message: string, simulationDetails: unknown) {
     super(message);
     this.name = 'SimulationError';
     this.simulationDetails = extractSimulationDetails(simulationDetails);
+  }
+}
+
+export class StellarAddressRequiredError extends Error {
+  constructor() {
+    super('User does not have a Stellar address configured');
+    this.name = 'StellarAddressRequiredError';
   }
 }
 
@@ -139,27 +143,38 @@ interface NormalizedMemo {
 
 export interface TransactionBuilderServiceOptions {
   createServer?: (horizonUrl: string) => HorizonAccountLoader;
+  createRpcServer?: (rpcUrl: string) => rpc.Server;
   sequenceStore?: SequenceStore | false;
   sequenceAllocationTimeoutMs?: number;
   baseFee?: string | number;
   timeoutSeconds?: number;
-  /** Maximum number of retries for transient Horizon errors. Default: 3. */
   maxRetries?: number;
-  /** Base delay in ms for exponential backoff. Default: 500. */
   retryBaseDelayMs?: number;
+  isBackendOwnedAccount?: (accountId: string) => boolean;
 }
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 
-/**
- * Returns true for errors that represent a transient Horizon failure worth retrying.
- * 404 / account-not-found is a permanent state — retrying won't help.
- */
 function isHorizonTransientError(error: unknown): boolean {
   if (error instanceof DOMException && error.name === 'AbortError') return false;
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return !msg.includes('404') && !msg.includes('not found') && !msg.includes('resource missing');
+}
+
+function isRpcTransientError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return false;
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    msg.includes('timeout') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('econnrefused') ||
+    msg.includes('network') ||
+    msg.includes('503') ||
+    msg.includes('502') ||
+    msg.includes('504')
+  );
 }
 
 export class TransactionBuilderService {
@@ -191,15 +206,16 @@ export class TransactionBuilderService {
       );
     }
 
-    const { networkPassphrase, horizonUrl } = this.getNetworkConfig(selectedNetwork);
+    const { networkPassphrase, horizonUrl, sorobanRpcUrl } = this.getNetworkConfig(selectedNetwork);
     const fee = this.resolveFee();
     const timeout = this.resolveTimeout();
     const server = this.createServer(horizonUrl);
+    const rpcServer = this.createRpcServer(sorobanRpcUrl);
 
-    const sourceKey = params.sourceAccount ?? params.userPublicKey;
+    const sourceKey = params.sourceAccount ?? params.userStellarAddress;
     const amountStroops = this.convertUsdcToStroops(params.amountUsdc);
     const contractAddress = this.parseContractAddress(params.vaultContractId);
-    const userAddress = this.parseStellarAddress(params.userPublicKey, 'user public key');
+    const userAddress = this.parseStellarAddress(params.userStellarAddress, 'user stellar address');
     this.parseStellarAddress(sourceKey, 'source account');
     const memo = this.createMemo(params.memoText);
 
@@ -214,6 +230,8 @@ export class TransactionBuilderService {
           shouldRetry: isHorizonTransientError,
         }
       );
+
+      const isBackendAccount = this.options.isBackendOwnedAccount?.(sourceKey) ?? false;
       const sequenceStore =
         this.options.sequenceStore === undefined
           ? process.env.NODE_ENV === 'test'
@@ -221,7 +239,7 @@ export class TransactionBuilderService {
             : new PostgresSequenceStore()
           : this.options.sequenceStore || undefined;
 
-      if (sequenceStore) {
+      if (sequenceStore && isBackendAccount) {
         const accountSequence = (sourceAccount as { sequence?: unknown }).sequence;
         const ledgerNextSequence = BigInt(String(accountSequence)) + 1n;
         const reservedSequence = await this.withSequenceAllocationTimeout(
@@ -244,8 +262,6 @@ export class TransactionBuilderService {
         ],
       });
     } catch (error) {
-      // If the SDK throws a simulation‑related error we capture its diagnostics.
-      // The SDK currently throws a generic Error with a `details` property.
       const details = (error as { details?: unknown }).details;
       if (details) {
         throw new SimulationError(
@@ -258,6 +274,7 @@ export class TransactionBuilderService {
       );
     }
 
+    let transaction: Transaction;
     try {
       let builder = new TransactionBuilder(
         sourceAccount as ConstructorParameters<typeof TransactionBuilder>[0],
@@ -271,59 +288,128 @@ export class TransactionBuilderService {
         builder = builder.addMemo(memo.sdkMemo);
       }
 
-      const transaction = builder.setTimeout(timeout).build();
+      transaction = builder.setTimeout(timeout).build();
 
       if (transaction.signatures.length !== 0) {
         throw new TransactionBuildError('Transaction should not have signatures');
       }
-
-      return {
-        xdr: transaction.toXDR(),
-        network: selectedNetwork,
-        operation: {
-          type: 'invoke_contract',
-          contractId: params.vaultContractId,
-          function: 'deposit',
-          args: [
-            { type: 'address', value: params.userPublicKey },
-            { type: 'i128', value: amountStroops.toString() },
-          ],
-        },
-        fee,
-        timeout,
-        ...(memo
-          ? {
-              memo: {
-                type: 'text' as const,
-                value: memo.value,
-              },
-            }
-          : {}),
-      };
     } catch (error) {
       if (error instanceof TransactionBuildError) {
         throw error;
       }
-
       throw new TransactionBuildError(
         `Failed to build Stellar transaction: ${this.getErrorMessage(error)}`
       );
     }
+
+    const { preparedTx, simulationResult } = await this.simulateAndPrepareTransaction(
+      rpcServer,
+      transaction,
+      networkPassphrase
+    );
+
+    return {
+      xdr: preparedTx.toXDR(),
+      network: selectedNetwork,
+      operation: {
+        type: 'invoke_contract',
+        contractId: params.vaultContractId,
+        function: 'deposit',
+        args: [
+          { type: 'address', value: params.userStellarAddress },
+          { type: 'i128', value: amountStroops.toString() },
+        ],
+      },
+      fee,
+      timeout,
+      resourceFee: simulationResult.minResourceFee ?? '0',
+      minResourceFee: simulationResult.minResourceFee ?? '0',
+      latestLedger: simulationResult.latestLedger ?? 0,
+      ...(memo
+        ? {
+            memo: {
+              type: 'text' as const,
+              value: memo.value,
+            },
+          }
+        : {}),
+    };
+  }
+
+  private async simulateAndPrepareTransaction(
+    rpcServer: rpc.Server,
+    transaction: Transaction,
+    networkPassphrase: string
+  ): Promise<{
+    preparedTx: Transaction;
+    simulationResult: rpc.Api.SimulateTransactionSuccessResponse;
+  }> {
+    let simulatedTx: rpc.Api.SimulateTransactionResponse;
+
+    try {
+      simulatedTx = await withRetry(
+        () => rpcServer.simulateTransaction(transaction),
+        {
+          maxAttempts: (this.options.maxRetries ?? DEFAULT_MAX_RETRIES) + 1,
+          baseDelayMs: this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
+          shouldRetry: isRpcTransientError,
+        }
+      );
+    } catch (error) {
+      throw new SimulationError(
+        `Soroban simulation failed: ${this.getErrorMessage(error)}`,
+        error
+      );
+    }
+
+    if (!rpc.Api.isSimulationSuccess(simulatedTx)) {
+      throw new SimulationError(
+        'Soroban simulation failed',
+        simulatedTx
+      );
+    }
+
+    let preparedTx: Transaction;
+
+    try {
+      const builder = assembleTransaction(transaction, simulatedTx);
+      preparedTx = builder.build();
+    } catch (error) {
+      throw new SimulationError(
+        `Soroban assembleTransaction failed: ${this.getErrorMessage(error)}`,
+        error
+      );
+    }
+
+    if (preparedTx.signatures.length !== 0) {
+      throw new TransactionBuildError('Prepared transaction should not have signatures');
+    }
+
+    return {
+      preparedTx,
+      simulationResult: simulatedTx,
+    };
   }
 
   private getNetworkConfig(network: StellarNetwork): {
     networkPassphrase: string;
     horizonUrl: string;
+    sorobanRpcUrl: string;
   } {
     const networkConfig = config.stellar.networks[network];
     return {
       networkPassphrase: networkConfig.networkPassphrase,
       horizonUrl: networkConfig.horizonUrl,
+      sorobanRpcUrl: networkConfig.sorobanRpcUrl,
     };
   }
 
   private createServer(horizonUrl: string): HorizonAccountLoader {
     return this.options.createServer?.(horizonUrl) ?? new Horizon.Server(horizonUrl);
+  }
+
+  private createRpcServer(rpcUrl: string): rpc.Server {
+    return this.options.createRpcServer?.(rpcUrl) ?? new rpc.Server(rpcUrl, { allowHttp: true });
   }
 
   private resolveFee(): string {
@@ -332,8 +418,8 @@ export class TransactionBuilderService {
       typeof configuredFee === 'number'
         ? configuredFee
         : /^\d+$/.test(configuredFee)
-          ? Number.parseInt(configuredFee, 10)
-          : Number.NaN;
+        ? Number.parseInt(configuredFee, 10)
+        : Number.NaN;
 
     if (!Number.isSafeInteger(parsedFee) || parsedFee <= 0) {
       throw new TransactionBuildError('Invalid Stellar base fee configuration');

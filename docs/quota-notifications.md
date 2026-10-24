@@ -1,16 +1,18 @@
 Quota Notifications
 Callora automatically notifies developers when their API usage crosses critical
 thresholds within a calendar month. This document explains the event schema,
-delivery mechanics, idempotency guarantees, and how to wire the notifier into a
+delivery mechanics, at-most-once guarantee, and how to wire the notifier into a
 production deployment.
 
 Overview
 The QuotaNotifier service runs on a configurable interval and:
 
 Loads the current list of developer quotas via an injected getDeveloperQuotas callback.
-Counts each developer's API calls in the current UTC calendar month by querying usage_events.
-For each configured threshold (80%, 95%, 100%), fires a quota.threshold.reached webhook
-event if the developer has crossed that threshold and the notification has not already been sent.
+Counts each developer's API calls in SQL with `COUNT(*)`, using the
+`idx_usage_events_developer_created` index and the UTC half-open month range
+`[month start, next month start)`.
+For each configured threshold (80%, 95%, 100%), atomically claims the
+`quota.threshold.reached` notification before dispatching it.
 Event schema
 quota.threshold.reached
 Delivered as a standard WebhookPayload:
@@ -43,14 +45,23 @@ webhooks.md for header
 names, Node/Python verification samples, delivery-id replay protection, and
 secret rotation.
 
-Idempotency guarantee
+At-most-once delivery
 Each (developerId, period, threshold) triple is persisted in
-quota_notifications_sent before the webhook is dispatched. This means:
+`quota_notifications_sent` with one atomic
+`INSERT ... ON CONFLICT DO NOTHING RETURNING` before the webhook is dispatched.
+Only the run that inserts the row dispatches. This means:
 
 Repeated ticks within the same month never re-fire the same alert.
-A process restart or crash after markSent but before delivery will not
-produce a duplicate — the next tick will skip the already-recorded entry.
-A crash before markSent will retry on the next tick (at-most-once delivery).
+A process restart or crash after the claim but before delivery will not produce
+a duplicate; the next tick skips the already-claimed entry. This is intentionally
+at-most-once delivery: a claimed alert is not retried if its dispatch fails.
+Claims are still recorded when the developer has no webhook subscribers, so
+those thresholds are not re-evaluated on every tick.
+
+`runQuotaCheck` reports `{ claimed, dispatched, noSubscribers }` totals.
+`claimed` counts successful threshold claims, `dispatched` counts claimed
+thresholds for which at least one webhook delivery was attempted, and
+`noSubscribers` counts claims for developers without a matching webhook.
 Database migration
 Apply the migration before starting the service:
 
@@ -76,10 +87,11 @@ Wiring into production (src/index.ts)
 TypeScript
 
 import { createQuotaNotifierJob, PgQuotaNotificationStore } from './services/quotaNotifier.js';
-import { InMemoryUsageEventsRepository } from './repositories/usageEventsRepository.js';
+import { PgUsageEventsRepository } from './repositories/usageEventsRepository.pg.js';
 
 // 1. Build the notification store backed by PostgreSQL
 const notificationStore = new PgQuotaNotificationStore(pool);
+const usageEventsRepository = new PgUsageEventsRepository(pool);
 
 // 2. Provide a function that returns current developer quotas.
 //    This can query a `developer_quotas` table, a config file, etc.
@@ -111,8 +123,9 @@ High-traffic, near-real-time alerts	60_000 (1 minute)
 Standard production	300_000 (5 minutes)
 Low-traffic / cost-sensitive	900_000 (15 minutes)
 A shorter interval reduces alert latency but increases database read load.
-The notifier skips a tick if a previous tick is still in progress, so there is
-no risk of overlapping runs.
+Usage is counted in SQL rather than loading every matching usage event into
+application memory. The notifier skips a tick if a previous tick is still in
+progress, so one job instance does not overlap its own runs.
 
 Local / test setup
 For unit tests and local development without a PostgreSQL instance, use the
@@ -162,8 +175,8 @@ Developers not registered in the webhook store will have their thresholds
 checked and recorded, but no HTTP delivery will be attempted.
 
 Monitoring
-The notifier logs structured messages at info level on each successful
-dispatch and error level on any failure:
+The notifier logs structured messages at info level when a claimed alert is
+dispatched and error level on any failure:
 
 text
 
@@ -174,10 +187,9 @@ These can be scraped by any log aggregator (e.g., CloudWatch, Datadog, Loki).
 Error handling
 Failure point	Behaviour
 getDeveloperQuotas throws	Entire tick is skipped; error is logged
-usageRepo.findByDeveloper throws for one developer	That developer is skipped; other developers proceed
-notificationStore.hasBeenSent throws	That threshold is skipped; error is logged
-notificationStore.markSent throws	Webhook is not dispatched (prevents duplicate if delivery succeeds later)
-Webhook delivery fails	Error is logged; markSent is already recorded so the next tick will not retry delivery
+usageRepo.countByDeveloper throws for one developer	That developer is skipped; other developers proceed
+notificationStore.tryClaim throws	That threshold is skipped and the error is logged; dispatch does not run
+Webhook delivery fails	Error is logged; the claim remains recorded and the next tick will not retry delivery
 Thresholds reference
 Threshold	Meaning	Recommended action
 80%	800 out of 1000 calls used	Review usage, consider upgrading plan

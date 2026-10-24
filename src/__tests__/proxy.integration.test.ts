@@ -875,7 +875,7 @@ describe('Proxy usage recording – finish vs premature close', () => {
       apiId: TEST_API_ID,
       endpointId: 'default',
       userId: TEST_DEVELOPER_ID,
-      amountUsdc: 1,
+      amountUsdc: 10000000n,
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });

@@ -19,7 +19,7 @@ export interface UsageEvent {
   apiId: string;
   endpointId: string;
   userId: string;         // developerId of the caller
-  amountUsdc: number;     // endpoint price charged
+  amountUsdc: bigint;     // endpoint price in contract units (1 USDC = 10,000,000)
   statusCode: number;
   timestamp: string;      // ISO-8601
   settlementId?: string;  // ID of the settlement batch if paid out

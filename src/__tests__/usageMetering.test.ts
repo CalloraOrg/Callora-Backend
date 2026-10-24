@@ -147,7 +147,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     // Verify enriched fields
     const event = events[0];
     expect(event.endpointId).toBe('ep_data');
-    expect(event.amountUsdc).toBe(0.05);
+    expect(event.amountUsdc).toBe(500000n);
     expect(event.userId).toBe(TEST_DEVELOPER_ID);
     expect(event.requestId).toBeTruthy();
 
@@ -171,7 +171,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     const events = usageStore.getEvents(TEST_API_KEY);
     expect(events).toHaveLength(1);
     expect(events[0].endpointId).toBe('ep_default');
-    expect(events[0].amountUsdc).toBe(0.01);
+    expect(events[0].amountUsdc).toBe(100000n);
 
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.99);
   });
@@ -189,7 +189,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     const events = usageStore.getEvents(TEST_API_KEY);
     expect(events).toHaveLength(1);
     expect(events[0].endpointId).toBe('ep_free');
-    expect(events[0].amountUsdc).toBe(0);
+    expect(events[0].amountUsdc).toBe(0n);
 
     // Balance should remain unchanged
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(1000);
@@ -333,7 +333,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
       apiId: TEST_API_ID,
       endpointId: 'ep_data',
       userId: TEST_DEVELOPER_ID,
-      amountUsdc: 0.05,
+      amountUsdc: 500000n,
       statusCode: 200,
       timestamp: new Date().toISOString()
     };

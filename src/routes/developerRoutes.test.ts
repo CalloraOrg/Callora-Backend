@@ -82,12 +82,12 @@ describe('GET /api/developers/revenue', () => {
 
   it('returns correct revenue summary and clamped limit', async () => {
     mockSettlementStore.getDeveloperSettlements.mockReturnValue([
-      { id: 's1', developerId: 'dev-1', amount: 100, status: 'completed' },
-      { id: 's2', developerId: 'dev-1', amount: 50, status: 'pending' },
+      { id: 's1', developerId: 'dev-1', amount: 1000000000n, status: 'completed' },
+      { id: 's2', developerId: 'dev-1', amount: 500000000n, status: 'pending' },
     ]);
     mockUsageStore.getUnsettledEvents.mockReturnValue([
-      { id: 'u1', userId: 'dev-1', amountUsdc: 25 },
-      { id: 'u2', userId: 'other-dev', amountUsdc: 999 },
+      { id: 'u1', userId: 'dev-1', amountUsdc: 250000000n },
+      { id: 'u2', userId: 'other-dev', amountUsdc: 9990000000n },
     ]);
 
     const res = await request(app)
@@ -109,7 +109,7 @@ describe('GET /api/developers/revenue', () => {
     // dev-1 is authenticated; settlements are scoped to dev-1 by the store
     mockSettlementStore.getDeveloperSettlements.mockImplementation((devId: string) =>
       devId === 'dev-1'
-        ? [{ id: 's1', developerId: 'dev-1', amount: 100, status: 'completed' }]
+        ? [{ id: 's1', developerId: 'dev-1', amount: 1000000000n, status: 'completed' }]
         : [],
     );
     mockUsageStore.getUnsettledEvents.mockReturnValue([]);

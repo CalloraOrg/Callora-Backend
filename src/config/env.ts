@@ -48,9 +48,9 @@ export const envSchema = z
       ),
 
     // Database pool
-    DB2_POOL_MAX: z.coerce.number().default(10),
-    DB_IDlE_TIMEOUT_MS: z.coerce.number().default(30_000),
-    DB2_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
+    DB_POOL_MAX: z.coerce.number().default(10),
+    DB_IDLE_TIMEOUT_MS: z.coerce.number().default(30_000),
+    DB_CONN_TIMEOUT_MS: z.coerce.number().default(2_000),
 
     /**
      * REPLICA_URLS — optional comma-separated list of PostgreSQL read-replica
@@ -100,7 +100,7 @@ export const envSchema = z
     // Database (individual fields for health checks)
     DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().default(5432),
-    DB2_USER: z.string().default("postgres"),
+    DB_USER: z.string().default("postgres"),
     DB_PASSWORD: z.string().default("postgres"),
     DB_NAME: z.string().default("callora"),
 
@@ -108,6 +108,14 @@ export const envSchema = z
     JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
     ADMIN_API_KEY: z.string().min(1, "ADMIN_API_KEY is required"),
     METRICS_API_KEY: z.string().min(1, "METRICS_API_KEY is required"),
+
+    // Export object storage. Disabled unless explicitly enabled.
+    EXPORTS_ENABLED: z.string().optional().transform((value) => value === "true").default(false),
+    EXPORTS_S3_BUCKET: z.string().trim().min(1).optional(),
+    EXPORTS_S3_ENDPOINT: z.string().url().optional(),
+    EXPORTS_S3_REGION: z.string().trim().min(1).optional(),
+    EXPORTS_SIGNING_SECRET: z.string().min(32).optional(),
+    EXPORTS_S3_ENDPOINT_ALLOWLIST: z.string().optional(),
     TRUST_FORWARDED_USER_ID: z
       .string()
       .optional()
@@ -197,55 +205,6 @@ export const envSchema = z
       .positive()
       .default(100),
 
-    // Fee abstraction (POST /api/billing/fee-abstraction)
-    //
-    // The fee-bump endpoint signs transactions with the platform fee account,
-    // so every fee-bump must be backed by a verified, single-use quote and an
-    // on-chain app-token payment. These settings control quote pricing,
-    // payment verification and the inner-transaction allowlist.
-    //
-    // FEE_ABSTRACTION_RATE_* — integer-scaled conversion from stroops to
-    // app-token units. The quoted amount is computed as
-    //   ceil(feeStroops * FEE_ABSTRACTION_RATE_NUMERATOR / FEE_ABSTRACTION_RATE_DENOMINATOR)
-    // using bigint math only (no floats). Defaults to 1 app-token unit per
-    // 10 stroops (i.e. 0.10 XLM against the historical rate).
-    // Both values must be positive integers; the superRefine below rejects
-    // zero so the bigint division in the quote service can never divide by
-    // zero at runtime.
-    FEE_ABSTRACTION_RATE_NUMERATOR: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(1),
-    FEE_ABSTRACTION_RATE_DENOMINATOR: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(10),
-    // Lifetime of a signed quote. After this window the quote is expired and
-    // execution returns 410.
-    FEE_ABSTRACTION_QUOTE_TTL_SECONDS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(300),
-    // Treasury Stellar address that must receive the app-token payment.
-    FEE_ABSTRACTION_TREASURY_ADDRESS: z.string().min(1).optional(),
-    // App-token issuer/asset used for payment verification.
-    FEE_ABSTRACTION_APP_TOKEN_ASSET_CODE: z.string().min(1).default("APP"),
-    FEE_ABSTRACTION_APP_TOKEN_ISSUER: z.string().min(1).optional(),
-    // Vault contract ids allowed as the target of an inner invokeHostFunction.
-    // Comma-separated; when unset the network-specific vault contract id is
-    // used (STELLAR_*_VAULT_CONTRACT_ID).
-    FEE_ABSTRACTION_VAULT_CONTRACT_IDS: z.string().optional(),
-    // Upper bound on the time spent verifying the payment on-chain. Must be
-    // less than the route timeout so verification fails closed.
-    FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(5_000),
-
     // CORS
     CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
 
@@ -302,10 +261,6 @@ export const envSchema = z
     SOROBAN_BILLING_NETWORK: stellarNetworkSchema.default("testnet"),
 
     // Stellar accounts / contracts
-    STELLAR_TESTNET_HORIZON_URL: z.string().url().optional(),
-    STELLAR_MAINNET_HORIZON_URL: z.string().url().optional(),
-    STELLAR_TESTNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
-    STELLAR_MAINNET_VAULT_CONTRACT_ID: z.string().min(1).optional(),
     STELLAR_FEE_ACCOUNT_SECRET_KEY: z.string().min(1).optional(),
     STELLAR_FEE_ACCOUNT_PUBLIC_KEY: z.string().min(1).optional(),
     SOROBAN_BILLING_BALANCE_FN: z.string().min(1).default("balance"),
@@ -501,11 +456,26 @@ export const envSchema = z
       .int()
       .positive()
       .default(86400),
+    IDEMPOTENCY_SWEEPER_ENABLED: z
+      .string()
+      .optional()
+      .transform((v) => v !== "false")
+      .default(true),
     IDEMPOTENCY_SWEEPER_INTERVAL_MS: z.coerce
       .number()
       .int()
       .positive()
       .default(60_000),
+    IDEMPOTENCY_SWEEPER_BATCH_SIZE: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5000),
+    IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5000),
 
     // Slow query alerting
     SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),
@@ -645,11 +615,63 @@ export const envSchema = z
       .default(false),
   })
   .superRefine((data, ctx) => {
-    if (data.FEE_ABSTRACTION_RATE_DENOMINATOR === 0) {
+    if (data.EXPORTS_ENABLED) {
+      for (const [key, value] of [
+        ["EXPORTS_S3_BUCKET", data.EXPORTS_S3_BUCKET],
+        ["EXPORTS_S3_ENDPOINT", data.EXPORTS_S3_ENDPOINT],
+        ["EXPORTS_S3_REGION", data.EXPORTS_S3_REGION],
+        ["EXPORTS_SIGNING_SECRET", data.EXPORTS_SIGNING_SECRET],
+      ] as const) {
+        if (!value) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when EXPORTS_ENABLED=true`,
+          });
+        }
+      }
+    }
+
+    if (data.NODE_ENV === "production" && data.FORWARDED_IDENTITY_ALLOW_LEGACY) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["FORWARDED_IDENTITY_ALLOW_LEGACY"], message: "Legacy forwarded identities are forbidden in production" });
+    }
+    if (data.NODE_ENV === "production" && !data.SOROBAN_BILLING_CONTRACT_ID) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["FEE_ABSTRACTION_RATE_DENOMINATOR"],
-        message: "FEE_ABSTRACTION_RATE_DENOMINATOR must be greater than zero",
+        path: ["SOROBAN_BILLING_CONTRACT_ID"],
+        message: "SOROBAN_BILLING_CONTRACT_ID is required in production",
+      });
+    }
+
+    if (data.SOROBAN_RPC_ENABLED && !data.SOROBAN_RPC_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SOROBAN_RPC_URL"],
+        message: "SOROBAN_RPC_URL is required when SOROBAN_RPC_ENABLED=true",
+      });
+    }
+
+    if (data.HORIZON_ENABLED && !data.HORIZON_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["HORIZON_URL"],
+        message: "HORIZON_URL is required when HORIZON_ENABLED=true",
+      });
+    }
+
+    // In production the upstream host allowlist must be explicitly configured.
+    // The default empty allowlist rejects all upstream hosts, so operators
+    // must set UPSTREAM_HOST_ALLOWLIST to a non-empty value to proxy traffic.
+    if (
+      data.NODE_ENV === "production" &&
+      (!data.UPSTREAM_HOST_ALLOWLIST ||
+        data.UPSTREAM_HOST_ALLOWLIST.trim() === "")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["UPSTREAM_HOST_ALLOWLIST"],
+        message:
+          "UPSTREAM_HOST_ALLOWLIST is required in production and must be a non-empty comma-separated list of allowed upstream hosts",
       });
     }
 
@@ -774,4 +796,14 @@ export const envSchema = z
 
 export type EnvSchema = z.infer<typeof envSchema>;
 
-export const env = envSchema.parse(process.env);
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error("❌ Invalid environment configuration:");
+  parsed.error.issues.forEach((issue) => {
+    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
+  });
+  process.exit(1);
+}
+
+export const env = parsed.data;

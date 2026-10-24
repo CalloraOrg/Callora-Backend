@@ -55,10 +55,9 @@ export interface SorobanRpcSettlementClientOptions {
 
 export interface SorobanSettlementClient {
   /** Transfer USDC to developer address. */
-  distribute(developerAddress: string, amountUsdc: number): Promise<PayoutResult>;
+  distribute(developerAddress: string, amountUsdc: bigint): Promise<PayoutResult>;
 }
 
-const USDC_STROOPS_MULTIPLIER = 10_000_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
@@ -95,19 +94,6 @@ function resolveSorobanRpcOptions(
     contractId,
     networkPassphrase: options.networkPassphrase ?? selectedNetworkConfig.networkPassphrase,
   };
-}
-
-function convertUsdcToStroops(amountUsdc: number): string {
-  if (!Number.isFinite(amountUsdc) || amountUsdc <= 0) {
-    throw new Error('Settlement amount must be greater than zero');
-  }
-
-  const amountStroops = Math.round((amountUsdc + Number.EPSILON) * USDC_STROOPS_MULTIPLIER);
-  if (amountStroops <= 0) {
-    throw new Error('Settlement amount must be greater than zero');
-  }
-
-  return String(amountStroops);
 }
 
 function extractErrorMessage(error: unknown, depth = 0): string | undefined {
@@ -169,14 +155,18 @@ export function normalizeSorobanError(
 export function buildSorobanSettlementInvocation(
   contractId: string,
   developerAddress: string,
-  amountUsdc: number
+  amountUsdc: bigint
 ): SorobanSettlementInvocation {
+  if (amountUsdc <= 0n) {
+    throw new Error('Settlement amount must be greater than zero');
+  }
   return {
     contractId,
     function: 'distribute',
     args: [
       { type: 'address', value: developerAddress },
-      { type: 'i128', value: convertUsdcToStroops(amountUsdc) },
+      // amountUsdc is already in contract units (stroops); pass through directly.
+      { type: 'i128', value: String(amountUsdc) },
     ],
   };
 }
@@ -190,7 +180,7 @@ export class SorobanRpcSettlementClient implements SorobanSettlementClient {
     this.fetchImpl = options.fetchImpl ?? (env.SOROBAN_CHAOS ? withSorobanLatencyWrapper(fetch) : fetch);
   }
 
-  async distribute(developerAddress: string, amountUsdc: number): Promise<PayoutResult> {
+  async distribute(developerAddress: string, amountUsdc: bigint): Promise<PayoutResult> {
     let invocation: SorobanSettlementInvocation;
 
     try {
@@ -337,7 +327,7 @@ export class MockSorobanSettlementClient implements SorobanSettlementClient {
     this.failureRate = failureRate;
   }
 
-  async distribute(developerAddress: string, _amountUsdc: number): Promise<PayoutResult> {
+  async distribute(developerAddress: string, _amountUsdc: bigint): Promise<PayoutResult> {
     // Simulate network delay
     await new Promise((resolve) => setTimeout(resolve, 50));
 

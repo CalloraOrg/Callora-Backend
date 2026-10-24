@@ -48,7 +48,7 @@ function createMockPool(client: PoolClient): Pool {
 const baseSettlement: Settlement = {
   id: 'settle_001',
   developerId: 'dev_abc',
-  amount: 10.5,
+  amount: 105000000n,
   status: 'pending',
   tx_hash: null,
   created_at: '2025-01-15T10:00:00Z',
@@ -406,7 +406,7 @@ describe('PostgresSettlementStore', () => {
 
       assert.equal(capturedParams[0], 'settle_001');
       assert.equal(capturedParams[1], 'dev_abc');
-      assert.equal(capturedParams[2], 10.5);
+      assert.equal(capturedParams[2], '10.5');  // formatUnitsToUsdc(105000000n) → minimal decimal string
       assert.equal(capturedParams[3], null); // tx_hash
       assert.equal(capturedParams[4], 'pending');
       assert.equal(capturedParams[5], '2025-01-15T10:00:00Z');
@@ -477,9 +477,9 @@ describe('PostgresSettlementStore', () => {
 
       assert.equal(results.length, 2);
       assert.equal(results[0].id, 'settle_1');
-      assert.equal(results[0].amount, 10);
+      assert.equal(results[0].amount, 100000000n);
       assert.equal(results[1].id, 'settle_2');
-      assert.equal(results[1].amount, 20);
+      assert.equal(results[1].amount, 200000000n);
     });
 
     test('returns empty array for developer with no settlements', async () => {

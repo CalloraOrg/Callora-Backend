@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { calloraEvents } from "../events/event.emitter.js";
+import { parseUsdcToUnits, formatUnitsToUsdc, formatUnitsToUsdcFixed } from "../lib/usdcUnits.js";
 import type { UtcMonthPeriod } from "../lib/periods.js";
 
 export interface InvoiceGenerationResult {
@@ -21,7 +22,9 @@ export class InvoiceService {
     const periodStart = start.toISOString().slice(0, 10);
     const periodEnd = new Date(end.getTime() - 1).toISOString().slice(0, 10);
     const client = await this.pool.connect();
-    const createdEvents: Array<{ invoiceId: string; developerId: string; total: number }> = [];
+
+    // Collect {invoiceId, developerId, total} for post-commit event emission.
+    const createdEvents: Array<{ invoiceId: string; developerId: string; total: bigint }> = [];
 
     try {
       await client.query("BEGIN");
@@ -46,13 +49,20 @@ export class InvoiceService {
       }
 
       // Aggregate usage strictly within the requested calendar month.
-      const usage = await client.query(
+      // Cast SUM to text so we receive an exact decimal string without any
+      // float coercion by the pg driver.
+      const usage = await client.query<{
+        developer_id: string;
+        api_id: string;
+        usage_count: string | number;
+        amount: string;
+      }>(
         `
         SELECT
           user_id AS developer_id,
           api_id,
           COUNT(*) AS usage_count,
-          SUM(amount_usdc) AS amount
+          SUM(amount_usdc)::text AS amount
         FROM usage_events
         WHERE created_at >= $1
           AND created_at < $2
@@ -63,7 +73,12 @@ export class InvoiceService {
 
       let invoicesCreated = 0;
 
-      const grouped = new Map<string, Array<{ developer_id: string; api_id: string; usage_count: string | number; amount: string | number }>>();
+      const grouped = new Map<string, Array<{
+        developer_id: string;
+        api_id: string;
+        usage_count: string | number;
+        amount: string;
+      }>>();
 
       for (const row of usage.rows) {
         if (!grouped.has(row.developer_id)) {
@@ -74,9 +89,10 @@ export class InvoiceService {
       }
 
       for (const [developerId, items] of grouped.entries()) {
+        // Sum in bigint contract units — exact, no float drift.
         const total = items.reduce(
-          (sum, item) => sum + Number(item.amount),
-          0
+          (sum, item) => sum + parseUsdcToUnits(item.amount),
+          0n
         );
 
         const invoice = await client.query(
@@ -99,7 +115,8 @@ export class InvoiceService {
           )
           RETURNING id
           `,
-          [developerId, periodId, periodStart, periodEnd, total]
+          // Store the total as a minimal decimal string (no trailing zeros).
+          [developerId, periodId, periodStart, periodEnd, formatUnitsToUsdc(total)]
         );
 
         const invoiceId = invoice.rows[0].id;
@@ -120,6 +137,7 @@ export class InvoiceService {
               invoiceId,
               item.api_id,
               item.usage_count,
+              // Store the line-item amount as-is (already a decimal string from SUM::text).
               item.amount,
             ]
           );
@@ -141,7 +159,8 @@ export class InvoiceService {
           invoiceId: event.invoiceId,
           developerId: event.developerId,
           periodId,
-          totalAmount: event.total.toFixed(7),
+          // Webhook uses the 7-decimal canonical string format.
+          totalAmount: formatUnitsToUsdcFixed(event.total),
           currency: "USDC",
           createdAt: new Date().toISOString(),
         });

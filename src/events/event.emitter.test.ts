@@ -179,7 +179,7 @@ describe('calloraEvents', () => {
       apiId: 'api_456',
       endpointId: 'ep_789',
       developerId: 'dev_usage',
-      amountUsdc: 25,
+      amountUsdc: "0.0000025",
       statusCode: 200,
       timestamp: '2026-07-25T10:00:00.000Z',
     };
@@ -261,7 +261,7 @@ describe('calloraEvents', () => {
     const usageEventCreatedListener: CalloraEventListener<'usage_event.created'> = (_developerId, payload) => {
       expect(payload.id).toBeDefined();
       expect(payload.requestId).toBeDefined();
-      expect(payload.amountUsdc).toBeGreaterThanOrEqual(0);
+      expect(typeof payload.amountUsdc).toBe("string");
     };
 
     const offNewApi = calloraEvents.on('new_api_call', newApiListener);
@@ -295,7 +295,7 @@ describe('calloraEvents', () => {
       apiId: 'api_1',
       endpointId: 'ep_1',
       developerId: 'dev_1',
-      amountUsdc: 25,
+      amountUsdc: "0.0000025",
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });

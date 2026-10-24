@@ -1,4 +1,5 @@
 import { Settlement, SettlementStore } from '../types/developer.js';
+import { parseUsdcToUnits, formatUnitsToUsdc } from '../lib/usdcUnits.js';
 
 export class InMemorySettlementStore implements SettlementStore {
   private settlements: Settlement[] = [];
@@ -84,25 +85,25 @@ interface SettlementStoreRow {
   stellar_tx_hash: string | null;
   created_at: Date | string;
   retry_after: string | null;
-  retry_count: number | null;
+  retry_count: string | number | null;
 }
 
 export interface SettlementStoreQueryable {
   query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
 }
 
-const toNumber = (value: string | number): number =>
+const toCount = (value: string | number): number =>
   typeof value === 'number' ? value : Number(value);
 
 const mapSettlementRow = (row: SettlementStoreRow): Settlement => ({
   id: row.external_id,
   developerId: row.developer_id,
-  amount: toNumber(row.amount_usdc),
+  amount: parseUsdcToUnits(typeof row.amount_usdc === 'number' ? row.amount_usdc.toFixed(7) : String(row.amount_usdc)),
   status: row.status,
   tx_hash: row.stellar_tx_hash,
   created_at: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
   retry_after: row.retry_after ?? null,
-  retry_count: row.retry_count ?? 0,
+  retry_count: toCount(row.retry_count ?? 0),
 });
 
 export class PostgresSettlementStore implements SettlementStore {
@@ -125,7 +126,7 @@ export class PostgresSettlementStore implements SettlementStore {
       [
         settlement.id,
         settlement.developerId,
-        settlement.amount,
+        formatUnitsToUsdc(settlement.amount),   // write exact decimal string
         settlement.tx_hash,
         settlement.status,
         settlement.created_at,

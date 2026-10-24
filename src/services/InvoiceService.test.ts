@@ -64,20 +64,43 @@ describe("InvoiceService.generateMonthlyInvoices", () => {
     const result = await new InvoiceService(pool).generateMonthlyInvoices(january);
 
     expect(result).toEqual({ success: true, periodId: "2024-01", invoicesCreated: 2 });
-    const invoices = await pool.query("SELECT developer_id, period_id, period_start, period_end, total_amount FROM invoices ORDER BY developer_id");
-    expect(invoices.rows).toEqual([
-      expect.objectContaining({ developer_id: "dev-1", period_id: "2024-01", total_amount: 4 }),
-      expect.objectContaining({ developer_id: "dev-2", period_id: "2024-01", total_amount: 3.5 }),
-    ]);
-    expect(invoices.rows[0].period_start).toEqual(new Date("2024-01-01T00:00:00.000Z"));
-    expect(invoices.rows[0].period_end).toEqual(new Date("2024-01-31T00:00:00.000Z"));
 
-    const lineItems = await pool.query("SELECT i.developer_id, li.api_id, li.usage_count, li.amount_usdc FROM invoice_line_items li JOIN invoices i ON i.id = li.invoice_id ORDER BY i.developer_id, li.api_id");
-    expect(lineItems.rows).toEqual([
-      { developer_id: "dev-1", api_id: "api-a", usage_count: 2, amount_usdc: 2 },
-      { developer_id: "dev-1", api_id: "api-b", usage_count: 1, amount_usdc: 2 },
-      { developer_id: "dev-2", api_id: "api-a", usage_count: 1, amount_usdc: 3.5 },
+    const invoices = await pool.query(
+      "SELECT developer_id, period_id, total_amount::text AS total_amount FROM invoices ORDER BY developer_id"
+    );
+    expect(invoices.rows).toEqual([
+      expect.objectContaining({ developer_id: "dev-1", period_id: "2024-01", total_amount: "4" }),
+      expect.objectContaining({ developer_id: "dev-2", period_id: "2024-01", total_amount: "3.5" }),
     ]);
+
+    const periods = await pool.query("SELECT period_start, period_end FROM invoices ORDER BY developer_id");
+    expect(periods.rows[0].period_start).toEqual(new Date("2024-01-01T00:00:00.000Z"));
+    expect(periods.rows[0].period_end).toEqual(new Date("2024-01-31T00:00:00.000Z"));
+
+    const lineItems = await pool.query(
+      "SELECT i.developer_id, li.api_id, li.usage_count, li.amount_usdc::text AS amount_usdc FROM invoice_line_items li JOIN invoices i ON i.id = li.invoice_id ORDER BY i.developer_id, li.api_id"
+    );
+    expect(lineItems.rows).toEqual([
+      { developer_id: "dev-1", api_id: "api-a", usage_count: 2, amount_usdc: "2" },
+      { developer_id: "dev-1", api_id: "api-b", usage_count: 1, amount_usdc: "2" },
+      { developer_id: "dev-2", api_id: "api-a", usage_count: 1, amount_usdc: "3.5" },
+    ]);
+  });
+
+  it("invoice total equals exact bigint sum — regression for float drift", async () => {
+    // 3 line items summing to exactly 6.0000003 USDC
+    const pool = await createPool();
+    await addEvent(pool, { userId: "dev-1", apiId: "api-a", amount: "2.0000001", requestId: "r1", createdAt: "2024-01-01T00:00:00Z" });
+    await addEvent(pool, { userId: "dev-1", apiId: "api-b", amount: "2.0000001", requestId: "r2", createdAt: "2024-01-02T00:00:00Z" });
+    await addEvent(pool, { userId: "dev-1", apiId: "api-c", amount: "2.0000001", requestId: "r3", createdAt: "2024-01-03T00:00:00Z" });
+
+    await new InvoiceService(pool).generateMonthlyInvoices(january);
+
+    const invoices = await pool.query(
+      "SELECT total_amount::text AS total_amount FROM invoices WHERE developer_id = 'dev-1'"
+    );
+    // Exact: 3 × 2.0000001 = 6.0000003 — no float drift
+    expect(invoices.rows[0].total_amount).toBe("6.0000003");
   });
 
   it("excludes events outside the requested period and is idempotent", async () => {

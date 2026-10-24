@@ -4,9 +4,16 @@ import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 import { createExportSchedulesRouter } from './schedules.js';
 import { InMemoryScheduleStore, HmacObjectStorageClient, ScheduledExportsService } from '../../services/scheduledExports.js';
-import { exportsLogger } from '../../middleware/exportsAccessLog.js';
 
-const service = new ScheduledExportsService({ findByApiId: async () => [] }, new InMemoryScheduleStore(), new HmacObjectStorageClient());
+jest.mock('../../middleware/requireAuth.js', () => ({
+  requireAuth: (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const userId = req.header('x-user-id');
+    if (userId) res.locals.authenticatedUser = { id: userId };
+    next();
+  },
+}));
+
+const service = new ScheduledExportsService({ findByApiId: async () => [] }, new InMemoryScheduleStore('test-encryption-key'), new HmacObjectStorageClient());
 
 const IDEM_SCHEDULE_BODY = {
   name: 'Nightly',
@@ -20,26 +27,28 @@ const IDEM_SCHEDULE_BODY = {
 
 function createMockDb() {
   const store = new Map<string, Record<string, unknown>>();
+  const recordKey = (scope: unknown, key: unknown) => `${String(scope)}:${String(key)}`;
   return {
     query: jest.fn().mockImplementation(async (sql: string, params: unknown[]) => {
       if (sql.includes('DELETE')) {
         return { rows: [] };
       }
       if (sql.includes('SELECT')) {
-        const key = params[0] as string;
+        const key = recordKey(params[0], params[1]);
         return { rows: store.has(key) ? [store.get(key)!] : [] };
       }
       if (sql.includes('INSERT') && !sql.includes('SELECT')) {
-        store.set(params[0] as string, {
-          request_hash: params[1],
-          status: params[2],
-          expires_at: params[3],
+        store.set(recordKey(params[0], params[1]), {
+          request_hash: params[2],
+          status: params[3],
+          expires_at: params[4],
         });
-        return { rows: [] };
+        return { rows: [], rowCount: 1 };
       }
       if (sql.includes('UPDATE')) {
-        store.set(params[3] as string, {
-          ...store.get(params[3] as string),
+        const key = recordKey(params[3], params[4]);
+        store.set(key, {
+          ...store.get(key),
           status: params[0],
           response_status: params[1],
           response_body: params[2],
@@ -61,6 +70,30 @@ function createTestApp(mockDb?: ReturnType<typeof createMockDb>) {
   return app;
 }
 
+test('GET /api/exports/schedules lists schedules for the authenticated developer', async () => {
+  const response = await request(createTestApp())
+    .get('/api/exports/schedules')
+    .set('x-user-id', 'dev-1');
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toEqual(expect.any(Array));
+});
+
+test('GET /api/exports/schedules requires an authenticated developer', async () => {
+  const response = await request(createTestApp()).get('/api/exports/schedules');
+  expect(response.status).toBe(401);
+});
+
+test('GET /api/exports/schedules forwards service errors', async () => {
+  const list = jest.spyOn(service, 'listSchedulesForDeveloper').mockRejectedValueOnce(new Error('store unavailable'));
+  const response = await request(createTestApp())
+    .get('/api/exports/schedules')
+    .set('x-user-id', 'dev-1');
+
+  expect(response.status).toBe(500);
+  list.mockRestore();
+});
+
 test('POST /api/exports/schedules creates a schedule with redacted secret', async () => {
   const app = createTestApp();
   const response = await request(app)
@@ -70,6 +103,43 @@ test('POST /api/exports/schedules creates a schedule with redacted secret', asyn
 
   expect(response.status).toBe(201);
   expect(response.body.data.s3SecretAccessKey).toBe('[REDACTED]');
+});
+
+test('POST /api/exports/schedules rejects an invalid cron expression', async () => {
+  const response = await request(createTestApp())
+    .post('/api/exports/schedules')
+    .set('x-user-id', 'dev-1')
+    .send({ ...IDEM_SCHEDULE_BODY, cron: 'invalid' });
+
+  expect(response.status).toBe(400);
+  expect(response.body.error.code).toBe('BAD_REQUEST');
+});
+
+test.each(['http://169.254.169.254', 'http://10.0.0.5:9000', 'https://[::ffff:10.0.0.1]'])(
+  'POST /api/exports/schedules rejects unsafe endpoint %s',
+  async (s3Endpoint) => {
+    const response = await request(createTestApp())
+      .post('/api/exports/schedules')
+      .set('x-user-id', 'dev-1')
+      .send({ ...IDEM_SCHEDULE_BODY, s3Endpoint });
+
+    expect(response.status).toBe(400);
+  },
+);
+
+test('PATCH /api/exports/schedules rejects an unsafe endpoint', async () => {
+  const app = createTestApp();
+  const created = await request(app)
+    .post('/api/exports/schedules')
+    .set('x-user-id', 'dev-1')
+    .send(IDEM_SCHEDULE_BODY);
+
+  const response = await request(app)
+    .patch(`/api/exports/schedules/${created.body.data.id}`)
+    .set('x-user-id', 'dev-1')
+    .send({ s3Endpoint: 'http://localhost:9000' });
+
+  expect(response.status).toBe(400);
 });
 
 test('PATCH /api/exports/schedules rejects invalid cron with standardized error envelope', async () => {
@@ -85,8 +155,26 @@ test('PATCH /api/exports/schedules rejects invalid cron with standardized error 
     .send({ cron: 'invalid' });
 
   expect(response.status).toBe(400);
-  expect(response.body.error.code).toBe('INVALID_EXPORT_SCHEDULE');
+  expect(response.body.error.code).toBe('BAD_REQUEST');
   expect(response.body.requestId).toBeDefined();
+});
+
+test('PATCH /api/exports/schedules rejects an empty update', async () => {
+  const response = await request(createTestApp())
+    .patch('/api/exports/schedules/schedule-id')
+    .set('x-user-id', 'dev-1')
+    .send({});
+
+  expect(response.status).toBe(400);
+});
+
+test('PATCH /api/exports/schedules returns not found for another developer schedule', async () => {
+  const response = await request(createTestApp())
+    .patch('/api/exports/schedules/unknown-schedule')
+    .set('x-user-id', 'dev-1')
+    .send({ name: 'Updated' });
+
+  expect(response.status).toBe(404);
 });
 
 describe('Idempotency-Key on /api/exports/schedules', () => {
@@ -165,7 +253,7 @@ describe('Idempotency-Key on /api/exports/schedules', () => {
       .send(conflictBody);
 
     expect(conflict.status).toBe(409);
-    expect(conflict.body.code).toBe('IDEMPOTENCY_KEY_REUSE_MISMATCH');
+    expect(conflict.body.error.code).toBe('IDEMPOTENCY_KEY_REUSE_MISMATCH');
   });
 
   test('POST without Idempotency-Key still succeeds', async () => {

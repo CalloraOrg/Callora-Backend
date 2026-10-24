@@ -12,6 +12,7 @@ import { correlationMiddleware } from '../middleware/correlation.js';
 import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import { env } from '../config/env.js';
 import { logger } from '../logger.js';
+import { parseUsdcToUnits, formatUnitsToUsdc } from '../lib/usdcUnits.js';
 
 import {
   BadGatewayError,
@@ -88,6 +89,8 @@ function resolveApiKey(
 }
 
 const CREDIT_COST_PER_CALL = 1;
+// Bigint contract units for CREDIT_COST_PER_CALL (1 USDC = 10,000,000 units)
+const CREDIT_COST_PER_CALL_UNITS = parseUsdcToUnits(CREDIT_COST_PER_CALL.toFixed(7));
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BODY_SIZE = '1mb';
 
@@ -485,7 +488,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
           apiId: keyRecord.apiId,
           endpointId: 'legacy',
           userId: keyRecord.developerId,
-          amountUsdc: CREDIT_COST_PER_CALL,
+          amountUsdc: CREDIT_COST_PER_CALL_UNITS,
           statusCode: upstreamStatus,
           timestamp: new Date().toISOString(),
         });
@@ -498,7 +501,7 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
             apiId: keyRecord.apiId,
             endpointId: 'legacy',
             userId: keyRecord.developerId,
-            amountUsdc: CREDIT_COST_PER_CALL,
+            amountUsdc: formatUnitsToUsdc(CREDIT_COST_PER_CALL_UNITS),
             statusCode: upstreamStatus,
             timestamp: new Date().toISOString(),
           });

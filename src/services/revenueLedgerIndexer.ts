@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
+import { recordRevenueLedgerSkipped } from '../metrics.js';
 import type {
   RevenueLedgerUsageEvent,
   UsageEventsPgRepository,
@@ -63,35 +64,72 @@ export class RevenueLedgerIndexer {
   }
 
   private async runOnceInternal(): Promise<RevenueLedgerIndexerRunResult> {
-    let cursor: string | undefined;
+    const lockable = this.usageEventsRepository as UsageEventsPgRepository & {
+      getRevenueLedgerCheckpoint?: () => Promise<string>;
+      advanceRevenueLedgerCheckpoint?: (id: string) => Promise<void>;
+      acquireRevenueLedgerIndexerLock?: () => Promise<boolean>;
+      releaseRevenueLedgerIndexerLock?: () => Promise<void>;
+      reverseVoidedRevenueLedgerEvents?: () => Promise<number>;
+      recordRevenueLedgerSkip?: (id: string, reason: string, cap: number) => Promise<{ attempts: number; permanent: boolean }>;
+      clearRevenueLedgerSkip?: (id: string) => Promise<void>;
+    };
+    const locked = lockable.acquireRevenueLedgerIndexerLock
+      ? await lockable.acquireRevenueLedgerIndexerLock()
+      : true;
+    if (!locked) return { scanned: 0, inserted: 0 };
+
     let scanned = 0;
     let inserted = 0;
 
-    while (true) {
-      const events = await this.usageEventsRepository.findUnindexedRevenueLedgerEvents(
-        cursor,
-        this.batchSize,
-      );
-      if (events.length === 0) {
-        return { scanned, inserted };
+    try {
+      let cursor: string | undefined = lockable.getRevenueLedgerCheckpoint
+        ? await lockable.getRevenueLedgerCheckpoint()
+        : undefined;
+      const reversed = await lockable.reverseVoidedRevenueLedgerEvents?.();
+      if (reversed) {
+        this.logger.error('Revenue ledger voided events were reversed', { count: reversed });
       }
+      while (true) {
+        const events = await this.usageEventsRepository.findUnindexedRevenueLedgerEvents(cursor, this.batchSize);
+        if (events.length === 0) return { scanned, inserted };
 
-      scanned += events.length;
-      for (const event of events) {
-        inserted += await this.insertEvent(event);
+        scanned += events.length;
+        for (const event of events) {
+          const explicitStatus = event.deductionStatus;
+          const confirmed = event.stellarTxHash !== null && event.stellarTxHash !== undefined && explicitStatus !== 'pending' && explicitStatus !== 'voided';
+          if (explicitStatus === 'voided') {
+            await lockable.recordRevenueLedgerSkip?.(event.usageEventId, 'voided', 1);
+            recordRevenueLedgerSkipped('voided');
+          } else if (!confirmed) {
+            await lockable.recordRevenueLedgerSkip?.(event.usageEventId, 'pending', 2147483647);
+            recordRevenueLedgerSkipped('pending');
+          } else {
+            const added = await this.insertEvent(event);
+            inserted += added ?? 0;
+            if (added === null) {
+              // A failed developer/API lookup is durably retried with exponential backoff.
+              await lockable.recordRevenueLedgerSkip?.(event.usageEventId, 'unknown_api', 8);
+              recordRevenueLedgerSkipped('unknown_api');
+            } else {
+              await lockable.clearRevenueLedgerSkip?.(event.usageEventId);
+            }
+          }
+          cursor = event.usageEventId;
+          await lockable.advanceRevenueLedgerCheckpoint?.(cursor);
+        }
       }
-
-      cursor = events[events.length - 1]?.usageEventId;
+    } finally {
+      await lockable.releaseRevenueLedgerIndexerLock?.();
     }
   }
 
-  private async insertEvent(event: RevenueLedgerUsageEvent): Promise<number> {
+  private async insertEvent(event: RevenueLedgerUsageEvent): Promise<number | null> {
     try {
       const developerId = await this.resolveDeveloperId(event.apiId);
 
       if (!developerId) {
         this.logger.error('Revenue ledger indexing failed: API or developer not found', { apiId: event.apiId });
-        return 0;
+        return null;
       }
 
       return (await this.usageEventsRepository.indexRevenueLedgerEvent(event, developerId)) ? 1 : 0;

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { DataType, newDb } from 'pg-mem';
+import pg from 'pg';
+import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 
 import {
   PgUsageEventsRepository,
@@ -10,16 +11,40 @@ import {
   createRevenueLedgerIndexerJob,
 } from './revenueLedgerIndexer.js';
 
-function createIndexerHarness() {
-  const db = newDb();
+// The indexer relies on PostgreSQL features pg-mem does not emulate
+// (multi-join lookups, GREATEST on timestamps, ON CONFLICT ... WHERE and
+// advisory locks), so the database-backed tests run against a real
+// PostgreSQL container. Each harness gets its own database.
+let container: StartedTestContainer | undefined;
+let adminPool: InstanceType<typeof pg.Pool> | undefined;
+let databaseCounter = 0;
 
-  db.public.registerFunction({
-    name: 'now',
-    returns: DataType.timestamp,
-    implementation: () => new Date('2026-03-01T00:00:00.000Z'),
-  });
+function databaseUrl(name: string): string {
+  if (!container) throw new Error('PostgreSQL container is not running');
+  return `postgresql://postgres:postgres@${container.getHost()}:${container.getMappedPort(5432)}/${name}`;
+}
 
-  db.public.none(`
+beforeAll(async () => {
+  container = await new GenericContainer('postgres:16-alpine')
+    .withEnvironment({ POSTGRES_USER: 'postgres', POSTGRES_PASSWORD: 'postgres', POSTGRES_DB: 'postgres' })
+    .withExposedPorts(5432)
+    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
+    .start();
+  adminPool = new pg.Pool({ connectionString: databaseUrl('postgres') });
+}, 120_000);
+
+afterAll(async () => {
+  await adminPool?.end();
+  await container?.stop();
+});
+
+async function createIndexerHarness() {
+  databaseCounter += 1;
+  const name = `revenue_indexer_${databaseCounter}`;
+  await adminPool!.query(`CREATE DATABASE ${name}`);
+  const pool = new pg.Pool({ connectionString: databaseUrl(name) });
+
+  await pool.query(`
     CREATE TABLE usage_events (
       id BIGSERIAL PRIMARY KEY,
       user_id VARCHAR(255) NOT NULL,
@@ -45,19 +70,23 @@ function createIndexerHarness() {
       developer_id VARCHAR(255) NOT NULL,
       amount_usdc NUMERIC(20, 0) NOT NULL,
       usage_event_id BIGINT UNIQUE REFERENCES usage_events(id),
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      settlement_id BIGINT,
+      reversed_at TIMESTAMP,
+      reversal_of_usage_event_id BIGINT UNIQUE
     );
+
+    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMP);
+    CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMP NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
   `);
 
-  const { Pool } = db.adapters.createPg();
-  const pool = new Pool();
-  const repository = new PgUsageEventsRepository(pool as UsageEventsRepositoryQueryable);
+  const repository = new PgUsageEventsRepository(pool as unknown as UsageEventsRepositoryQueryable);
 
   return { pool, repository };
 }
 
 test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered batches', async () => {
-  const { pool, repository } = createIndexerHarness();
+  const { pool, repository } = await createIndexerHarness();
 
   try {
     await pool.query(
@@ -73,6 +102,7 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
       developerId: 'dev-1',
       amount: 100n,
       requestId: 'req-1',
+      stellarTxHash: 'tx-1',
       createdAt: new Date('2026-02-01T10:00:00.000Z'),
     });
     await repository.create({
@@ -83,6 +113,7 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
       developerId: 'dev-1',
       amount: 200n,
       requestId: 'req-2',
+      stellarTxHash: 'tx-2',
       createdAt: new Date('2026-02-02T10:00:00.000Z'),
     });
     await repository.create({
@@ -93,6 +124,7 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
       developerId: 'dev-1',
       amount: 300n,
       requestId: 'req-3',
+      stellarTxHash: 'tx-3',
       createdAt: new Date('2026-02-03T10:00:00.000Z'),
     });
 
@@ -122,6 +154,76 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
   }
 });
 
+test('only confirmed on-chain charges are accrued, and a pending charge is picked up after confirmation', async () => {
+  const { pool, repository } = await createIndexerHarness();
+  try {
+    await pool.query("ALTER TABLE usage_events ADD COLUMN deduction_status VARCHAR(16) NOT NULL DEFAULT 'pending'");
+    await pool.query('INSERT INTO apis (id, developer_id) VALUES ($1, $2)', ['api-1', 'dev-1']);
+    await repository.create({ userId: 'c1', apiId: 'api-1', endpointId: 'e1', apiKeyId: 'k1', amount: 10n, requestId: 'confirmed', stellarTxHash: 'tx-confirmed' });
+    await repository.create({ userId: 'c2', apiId: 'api-1', endpointId: 'e2', apiKeyId: 'k2', amount: 20n, requestId: 'pending' });
+    await pool.query("UPDATE usage_events SET deduction_status = 'confirmed' WHERE request_id = 'confirmed'");
+
+    const indexer = new RevenueLedgerIndexer(repository, { resolveDeveloperId: async () => 'dev-1' });
+    const first = await indexer.runOnce();
+    assert.deepEqual(first, { scanned: 2, inserted: 1 });
+    assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM revenue_ledger')).rows[0]?.count, 1);
+
+    await pool.query("UPDATE usage_events SET stellar_tx_hash = 'tx-pending', deduction_status = 'confirmed' WHERE request_id = 'pending'");
+    await pool.query("UPDATE revenue_ledger_skips SET next_retry_at = NOW() - INTERVAL '1 second' WHERE reason = 'pending'");
+    const second = await indexer.runOnce();
+    assert.equal(second.inserted, 1);
+
+    const invariant = await pool.query(`
+      SELECT COUNT(*)::int AS count FROM revenue_ledger rl
+      JOIN usage_events ue ON ue.id = rl.usage_event_id
+      WHERE (ue.stellar_tx_hash IS NULL OR ue.deduction_status = 'voided')
+        AND rl.reversed_at IS NULL
+    `);
+    assert.equal(invariant.rows[0]?.count, 0);
+    assert.equal((await repository.getRevenueLedgerCheckpoint()), '2');
+  } finally {
+    await pool.end();
+  }
+});
+
+test('unknown APIs are persisted with retry backoff and do not block later events', async () => {
+  const { pool, repository } = await createIndexerHarness();
+  try {
+    await pool.query("INSERT INTO apis (id, developer_id) VALUES ('api-known', 'dev-1')");
+    await repository.create({ userId: 'c1', apiId: 'api-missing', endpointId: 'e1', apiKeyId: 'k1', amount: 10n, requestId: 'poison', stellarTxHash: 'tx-poison' });
+    await repository.create({ userId: 'c2', apiId: 'api-known', endpointId: 'e2', apiKeyId: 'k2', amount: 20n, requestId: 'healthy', stellarTxHash: 'tx-healthy' });
+    const resolveDeveloperId = jest.fn(async (apiId: string) => apiId === 'api-known' ? 'dev-1' : undefined);
+    const indexer = new RevenueLedgerIndexer(repository, { resolveDeveloperId });
+
+    const first = await indexer.runOnce();
+    const second = await indexer.runOnce();
+    const skip = await pool.query('SELECT reason, attempts, permanent FROM revenue_ledger_skips WHERE usage_event_id = 1');
+    const ledger = await pool.query('SELECT usage_event_id::text FROM revenue_ledger');
+    assert.equal(first.inserted, 1);
+    assert.equal(second.scanned, 0);
+    expect(resolveDeveloperId).toHaveBeenCalledTimes(2);
+    assert.equal(skip.rows[0]?.reason, 'unknown_api');
+    assert.equal(skip.rows[0]?.attempts, 1);
+    assert.deepEqual(ledger.rows, [{ usage_event_id: '2' }]);
+    assert.equal(await repository.getRevenueLedgerCheckpoint(), '2');
+  } finally {
+    await pool.end();
+  }
+});
+
+test('database lease prevents concurrent indexer instances from scanning together', async () => {
+  const { pool, repository } = await createIndexerHarness();
+  try {
+    assert.equal(await repository.acquireRevenueLedgerIndexerLock(), true);
+    assert.equal(await repository.acquireRevenueLedgerIndexerLock(), false);
+    await repository.releaseRevenueLedgerIndexerLock();
+    assert.equal(await repository.acquireRevenueLedgerIndexerLock(), true);
+    await repository.releaseRevenueLedgerIndexerLock();
+  } finally {
+    await pool.end();
+  }
+});
+
 test('RevenueLedgerIndexerJob drains in-flight work during shutdown', async () => {
   jest.useFakeTimers();
 
@@ -141,6 +243,7 @@ test('RevenueLedgerIndexerJob drains in-flight work during shutdown', async () =
                     developerId: 'dev-1',
                     amount: 100n,
                     createdAt: new Date('2026-02-01T10:00:00.000Z'),
+                    stellarTxHash: 'tx-1',
                   },
                 ]);
               };
@@ -158,7 +261,9 @@ test('RevenueLedgerIndexerJob drains in-flight work during shutdown', async () =
     });
 
     job.start();
-    await Promise.resolve();
+    for (let i = 0; i < 20 && typeof releaseFirstQuery !== 'function'; i += 1) {
+      await Promise.resolve();
+    }
 
     const idlePromise = job.awaitIdle();
     let settled = false;
@@ -205,6 +310,7 @@ test('RevenueLedgerIndexer validates configuration and logs insert failures', as
           developerId: 'dev-9',
           amount: 999n,
           createdAt: new Date('2026-02-09T10:00:00.000Z'),
+          stellarTxHash: 'tx-9',
         },
       ]),
     indexRevenueLedgerEvent: jest.fn().mockRejectedValue(new Error('boom')),
@@ -294,6 +400,7 @@ test('RevenueLedgerIndexerJob logs job failures and stop is safe when idle', asy
         developerId: 'dev-11',
         amount: 11n,
         createdAt: new Date('2026-02-11T10:00:00.000Z'),
+        stellarTxHash: 'tx-11',
       },
     ]),
     indexRevenueLedgerEvent: jest.fn().mockRejectedValue(new Error('job-failure')),

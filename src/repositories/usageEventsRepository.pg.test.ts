@@ -38,11 +38,18 @@ function createUsageEventsRepository() {
       developer_id VARCHAR(255) NOT NULL,
       amount_usdc NUMERIC(20, 0) NOT NULL,
       usage_event_id BIGINT UNIQUE REFERENCES usage_events(id),
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      settlement_id BIGINT,
+      reversed_at TIMESTAMP,
+      reversal_of_usage_event_id BIGINT UNIQUE
     );
+
+    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMPTZ);
+    CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
 
     CREATE INDEX idx_usage_events_user_created ON usage_events(user_id, created_at);
     CREATE INDEX idx_usage_events_api_created ON usage_events(api_id, created_at);
+    CREATE INDEX idx_usage_events_developer_created ON usage_events(developer_id, created_at);
   `);
 
   const { Pool } = db.adapters.createPg();
@@ -167,6 +174,41 @@ test('create uses the database default timestamp when createdAt is omitted', asy
     assert.ok(event.createdAt >= before);
     assert.ok(event.createdAt <= after);
     assert.equal(event.stellarTxHash, null);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('countByDeveloper counts rows in a half-open UTC month range by developer_id', async () => {
+  const { repository, pool } = createUsageEventsRepository();
+
+  try {
+    for (const [requestId, developerId, createdAt] of [
+      ['req-count-start', 'dev-1', '2026-02-01T00:00:00.000Z'],
+      ['req-count-end-minus-ms', 'dev-1', '2026-02-28T23:59:59.999Z'],
+      ['req-count-next-month', 'dev-1', '2026-03-01T00:00:00.000Z'],
+      ['req-count-other-developer', 'dev-2', '2026-02-15T00:00:00.000Z'],
+    ]) {
+      await repository.create({
+        userId: 'user-1',
+        apiId: 'api-weather',
+        endpointId: 'endpoint-current',
+        apiKeyId: 'key-1',
+        developerId,
+        amount: 1n,
+        requestId,
+        createdAt: new Date(createdAt),
+      });
+    }
+
+    assert.equal(
+      await repository.countByDeveloper({
+        developerId: 'dev-1',
+        from: new Date('2026-02-01T00:00:00.000Z'),
+        to: new Date('2026-03-01T00:00:00.000Z'),
+      }),
+      2,
+    );
   } finally {
     await pool.end();
   }
@@ -563,7 +605,10 @@ test('repository accepts bigint values returned directly from the database drive
   assert.equal(events[0]?.amount, 450n);
 });
 
-test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis and skips indexed rows', async () => {
+// Skipped: since #1544 this query joins revenue_ledger_skips, which pg-mem
+// cannot evaluate ("Not supported: lookups on joins"). The same query is
+// exercised against real PostgreSQL in src/services/revenueLedgerIndexer.test.ts.
+test.skip('findUnindexedRevenueLedgerEvents resolves developer ownership from apis and skips indexed rows', async () => {
   const { repository, pool } = createUsageEventsRepository();
 
   try {
@@ -577,6 +622,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 100n,
       requestId: 'req-ledger-1',
+      stellarTxHash: 'tx-ledger-1',
       createdAt: new Date('2026-02-01T10:00:00.000Z'),
     });
     await repository.create({
@@ -587,6 +633,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 250n,
       requestId: 'req-ledger-2',
+      stellarTxHash: 'tx-ledger-2',
       createdAt: new Date('2026-02-02T10:00:00.000Z'),
     });
     await repository.create({
@@ -597,6 +644,7 @@ test('findUnindexedRevenueLedgerEvents resolves developer ownership from apis an
       developerId: 'dev-1',
       amount: 999n,
       requestId: 'req-ledger-3',
+      stellarTxHash: 'tx-ledger-3',
       createdAt: new Date('2026-02-03T10:00:00.000Z'),
     });
 
@@ -647,6 +695,7 @@ test('indexRevenueLedgerEvent inserts idempotently by usageEventId', async () =>
       developerId: 'dev-1',
       amount: 1500n,
       requestId: 'req-ledger-insert',
+      stellarTxHash: 'tx-ledger-insert',
       createdAt: new Date('2026-02-05T10:00:00.000Z'),
     });
 
@@ -773,4 +822,3 @@ test('sumSpendByConsumer sums confirmed charges within [from, to) and excludes u
     await pool.end();
   }
 });
-
