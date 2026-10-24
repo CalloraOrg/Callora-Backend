@@ -115,6 +115,21 @@ describe('InMemoryUsageEventsRepository – findByDeveloper', () => {
   });
 });
 
+describe('InMemoryUsageEventsRepository – countByDeveloper', () => {
+  it('counts developer events in a half-open time range', async () => {
+    const from = new Date('2026-03-01T00:00:00.000Z');
+    const to = new Date('2026-04-01T00:00:00.000Z');
+    const repo = new InMemoryUsageEventsRepository([
+      makeEvent({ id: 'e-from', occurredAt: from }),
+      makeEvent({ id: 'e-before-to', occurredAt: new Date('2026-03-31T23:59:59.999Z') }),
+      makeEvent({ id: 'e-to', occurredAt: to }),
+      makeEvent({ id: 'e-other-dev', developerId: 'dev-2', occurredAt: from }),
+    ]);
+
+    assert.equal(await repo.countByDeveloper({ developerId: 'dev-1', from, to }), 2);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // findByUser
 // ---------------------------------------------------------------------------
