@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import { config } from './config/index.js';
-import { logger } from './logger.js';
 import { getReplicaPool, type Queryable } from './db/replicaPool.js';
+import { logger } from './logger.js';
 
 function createTimeoutPromise(timeoutMs: number, message: string): {
   promise: Promise<never>;
@@ -30,11 +30,37 @@ function createTimeoutPromise(timeoutMs: number, message: string): {
  * - idleTimeoutMillis: how long idle clients stay open before being closed (DB_IDLE_TIMEOUT_MS, default 30s)
  * - connectionTimeoutMillis: how long to wait when acquiring a client from the pool (DB_CONN_TIMEOUT_MS, default 2s)
  */
-export const pool = new Pool({
-  connectionString: config.databaseUrl,
-  max: config.dbPool.max,
-  idleTimeoutMillis: config.dbPool.idleTimeoutMillis,
-  connectionTimeoutMillis: config.dbPool.connectionTimeoutMillis,
+let sharedPool: Pool | undefined;
+
+function getPool(): Pool {
+  if (config.demoMode) {
+    throw new Error('PostgreSQL is unavailable in demo mode');
+  }
+  sharedPool ??= new Pool({
+    connectionString: config.databaseUrl,
+    max: config.dbPool.max,
+    idleTimeoutMillis: config.dbPool.idleTimeoutMillis,
+    connectionTimeoutMillis: config.dbPool.connectionTimeoutMillis,
+  });
+  return sharedPool;
+}
+
+/** Preserve the shared Pool API without constructing a pool at import time. */
+export const pool = new Proxy({} as Pool, {
+  get(target, property) {
+    if (Object.hasOwn(target, property)) {
+      return Reflect.get(target, property);
+    }
+    if (config.demoMode && ['totalCount', 'idleCount', 'waitingCount'].includes(String(property))) {
+      return 0;
+    }
+    const instance = getPool();
+    const value = Reflect.get(instance, property, instance);
+    return typeof value === 'function' ? value.bind(instance) : value;
+  },
+  set(target, property, value) {
+    return Reflect.set(target, property, value);
+  },
 });
 
 let poolClosed = false;
@@ -72,6 +98,7 @@ export function readQuery<T = unknown>(
   text: string,
   params?: unknown[],
 ): Promise<{ rows: T[] }> {
+  getPool();
   return getReplicaPool(pool).read<T>(text, params);
 }
 
@@ -90,6 +117,7 @@ export function writeQuery<T = unknown>(
   text: string,
   params?: unknown[],
 ): Promise<{ rows: T[] }> {
+  getPool();
   return getReplicaPool(pool).write<T>(text, params);
 }
 
@@ -123,7 +151,7 @@ export async function checkDbHealth(): Promise<{ ok: boolean; error?: string }> 
 }
 
 export async function closePgPool(): Promise<void> {
-  if (poolClosed) {
+  if (poolClosed || !sharedPool) {
     return;
   }
   // Close replica pools before the primary so no in-flight replica queries
