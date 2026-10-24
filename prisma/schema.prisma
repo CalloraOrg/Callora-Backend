@@ -8,11 +8,12 @@ datasource db {
 }
 
 model User {
-  id              String   @id @default(uuid()) @db.Uuid
+  id              String   @id  @default(uuid())  @db.Uuid
   stellar_address String   @unique
   created_at      DateTime @default(now())
 
   invoices Invoice[]
+  feeAbstractionQuotes FeeAbstractionQuote[]
 
   @@map("users")
 }
@@ -21,17 +22,17 @@ model Invoice {
   id               String   @id @default(uuid()) @db.Uuid
   user_id          String   @db.Uuid
   invoice_number   String   @unique
-  status           String   @default("pending") // pending | paid | void | canceled
+  status            String   @default("pending") // pending | paid | void | canceled
   total_amount_usdc Decimal @default(0) @db.Decimal(20, 7)
   currency         String   @default("USDC")
   description      String?
-  period_start     DateTime?
-  period_end       DateTime?
-  created_at       DateTime @default(now())
-  updated_at       DateTime @updatedAt
+  period_start      DateTime?
+  period_end        DateTime?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @default(now()) @updatedAt
   pdf_generated_at DateTime?
 
-  user      User              @relation(fields: [user_id], references: [id])
+  user       User              @relation(fields: [user_id], references: [id])
   line_items InvoiceLineItem[]
 
   @@index([user_id])
@@ -43,15 +44,38 @@ model Invoice {
 model InvoiceLineItem {
   id              String   @id @default(uuid()) @db.Uuid
   invoice_id      String   @db.Uuid
-  description     String
-  amount_usdc     Decimal  @db.Decimal(20, 7)
-  quantity        Int      @default(1)
-  unit_price_usdc Decimal  @db.Decimal(20, 7)
-  item_type       String   @default("usage") // usage | fee | credit | adjustment
-  created_at      DateTime @default(now())
+  description      String
+  amount_usdc      Decimal  @db.Decimal(20, 7)
+  quantity         Int      @default(1)
+  unit_price_usdc  Decimal  @db.Decimal(20, 7)
+  item_type        String   @default("usage") // usage | fee | credit | adjustment
+  created_at        DateTime @default(now())
 
   invoice Invoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
 
   @@index([invoice_id])
   @@map("invoice_line_items")
+}
+
+model FeeAbstractionQuote {
+  id                     String   @id @default(uuid()) @db.Uuid
+  user_id               String   @db.Uuid
+  inner_tx_hash         String   @unique
+  fee_stroops           BigInt
+  app_token_amount      BigInt
+  app_token_asset       String
+  treasury_address       String
+  status                 String   @default("pending") // pending | consumed | expired
+  expires_at             DateTime
+  app_token_payment_tx_id String?  @unique
+  consumed_at            DateTime?
+  created_at             DateTime @default(now())
+  updated_at             DateTime @default(now()) @updatedAt
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@index([status])
+  @@index([expires_at])
+  @@map("fee_abstraction_quotes")
 }

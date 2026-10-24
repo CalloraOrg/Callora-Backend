@@ -1,11 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import request from 'supertest';
 import express from 'express';
+import crypto from 'crypto';
 import { RefreshTokenService } from '../../src/services/refreshTokenService.js';
 import { AuthController } from '../../src/controllers/authController.js';
 import { createAuthRoutes } from '../../src/routes/authRoutes.js';
 import { errorHandler } from '../../src/middleware/errorHandler.js';
 import { TEST_JWT_SECRET } from '../helpers/jwt.js';
+import type { ConsumeResult, NewRefreshTokenTemplate } from '../../src/repositories/refreshTokenRepository.js';
 
 // ---------------------------------------------------------------------------
 // Mock repository
@@ -92,6 +94,45 @@ class MockRefreshTokenRepository {
       }
     }
     return count;
+  }
+
+  /**
+   * Atomic consume implementation for in-memory testing.
+   *
+   * The Map is single-threaded in Node.js (no true concurrency within a
+   * microtask batch), so we simulate atomicity by checking-and-setting in
+   * one synchronous block. For the concurrency test we use a mutex-style flag.
+   */
+  async consumeRefreshToken(
+    tokenId: string,
+    userId: string,
+    tokenHash: string,
+    newToken: NewRefreshTokenTemplate,
+  ): Promise<ConsumeResult> {
+    // Find the token
+    let found: any = null;
+    for (const token of this.tokens.values()) {
+      if (token.id === tokenId && token.userId === userId) {
+        found = token;
+        break;
+      }
+    }
+
+    if (!found) return { status: 'not_found' };
+    if (found.isRevoked) return { status: 'revoked' };
+    if (found.expiresAt <= new Date()) return { status: 'expired' };
+    if (found.tokenHash !== tokenHash) return { status: 'hash_mismatch' };
+
+    // Atomically revoke
+    found.isRevoked = true;
+    found.lastUsedAt = new Date();
+
+    // Insert new token inheriting familyId from consumed
+    const newId = newToken.id || crypto.randomUUID();
+    const record = { id: newId, familyId: found.familyId, ...newToken };
+    this.tokens.set(newId, record);
+
+    return { status: 'consumed', token: { ...found } };
   }
 
   /** Test helper: return all tokens for a user */
@@ -344,11 +385,28 @@ describe('Refresh Token Integration Tests', () => {
       expect(responseErrorCode(res)).toBe('INVALID_REFRESH_TOKEN');
     });
 
-    it('should reject token with wrong hash', async () => {
+    it('should return EXPIRED_TOKEN when DB record is expired (CAS path)', async () => {
+      const userId = 'test-user-123';
+      const tokenPair = refreshTokenService.createTokenPair(userId);
+      // Store with an expired date so the consume UPDATE guard fires
+      const tokenRecord = refreshTokenService.createRefreshTokenRecord(userId, tokenPair.refreshToken);
+      tokenRecord.expiresAt = new Date(Date.now() - 1000); // force expired in DB
+      await mockRepository.createRefreshToken(tokenRecord);
+
+      const res = await request(app)
+        .post('/auth/refresh')
+        .send({ refreshToken: tokenPair.refreshToken });
+
+      expect(res.status).toBe(401);
+      expect(responseErrorCode(res)).toBe('EXPIRED_TOKEN');
+    });
+
+    it('should reject token with wrong hash (INVALID_REFRESH_TOKEN)', async () => {
       const userId = 'test-user-123';
       const tokenPair = refreshTokenService.createTokenPair(userId);
       const differentTokenPair = refreshTokenService.createTokenPair(userId);
 
+      // Store a record whose hash belongs to a different token
       const tokenRecord = refreshTokenService.createRefreshTokenRecord(
         userId,
         differentTokenPair.refreshToken
@@ -443,6 +501,43 @@ describe('Refresh Token Integration Tests', () => {
 
       expect(res.status).toBe(401);
       expect(responseErrorCode(res)).toBe('REVOKED_TOKEN');
+    });
+
+    it('10 concurrent refreshes with same token: exactly 1 succeeds, rest are REVOKED_TOKEN, family fully revoked', async () => {
+      const CONCURRENCY = 10;
+      const userId = `concurrent-user-${crypto.randomUUID()}`;
+
+      const tokenPair = refreshTokenService.createTokenPair(userId);
+      const tokenRecord = refreshTokenService.createRefreshTokenRecord(userId, tokenPair.refreshToken);
+      await mockRepository.createRefreshToken(tokenRecord);
+
+      // Create a second independent token to prove whole-user revocation
+      const pair2 = refreshTokenService.createTokenPair(userId);
+      const record2 = refreshTokenService.createRefreshTokenRecord(userId, pair2.refreshToken);
+      await mockRepository.createRefreshToken(record2);
+
+      // Fire all requests concurrently
+      const responses = await Promise.all(
+        Array.from({ length: CONCURRENCY }, () =>
+          request(app).post('/auth/refresh').send({ refreshToken: tokenPair.refreshToken })
+        )
+      );
+
+      const successes = responses.filter(r => r.status === 200);
+      const failures = responses.filter(r => r.status === 401);
+
+      // Regression proof: exactly 1 should succeed
+      expect(successes.length).toBe(1);
+      expect(failures.length).toBe(CONCURRENCY - 1);
+
+      // All failures must be REVOKED_TOKEN (not INVALID_REFRESH_TOKEN or other)
+      for (const fail of failures) {
+        expect(responseErrorCode(fail)).toBe('REVOKED_TOKEN');
+      }
+
+      // The entire family (and all user tokens) must be revoked
+      const activeCount = await mockRepository.countActiveTokens(userId);
+      expect(activeCount).toBe(0);
     });
   });
 

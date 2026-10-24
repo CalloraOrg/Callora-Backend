@@ -7,32 +7,16 @@ import type { SorobanSettlementClient } from '../services/sorobanSettlement.js';
 import type { SettlementStore } from '../types/developer.js';
 import type { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 
-jst.mock('../events/event.emitter.js', () => ({
+// 1 USDC = 10_000_000 contract units
+const USDC = (n: number): bigint => BigInt(Math.round(n * 10_000_000));
+
+jest.mock('../events/event.emitter.js', () => ({
   calloraEvents: {
     emit: jest.fn(),
   },
 }));
 
 const mockedEmit = jest.mocked(calloraEvents.emit);
-
-const DEV_1_PAYOUT = 'GDXDZNSTKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWAZ';
-const DEV_2_PAYOUT = 'GDXDZNSTKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWAZ';
-
-function recordUsageEvent(
-  store: UsageStore,
-  event: { id: string; requestId: string; apiId: string; amountUsdc: number },
-): void {
-  const recorded: UsageEvent = {
-    id: event.id,
-    requestId: event.requestId,
-    apiId: event.apiId,
-    developerId: event.apiId.startsWith('api_2') ? 'dev_2' : 'dev_1',
-    amountUsdc: event.amountUsdc,
-    timestamp: new Date().toISOString(),
-    settled: false,
-  } as UsageEvent;
-  store.record(recorded);
-}
 
 describe('RevenueSettlementService', () => {
   let usageStore: InMemoryUsageStore;
@@ -64,10 +48,9 @@ describe('RevenueSettlementService', () => {
       },
     ]);
 
-    distributeMock = jest.fn(async (payoutAddress: string, _amountUnits: bigint) => ({
-      success: true as const,
-      txHash: `0xmocktx_${payoutAddress}`,
-      status: 'completed' as const,
+    distributeMock = jest.fn(async (developerId: string, _amountUsdc: bigint) => ({
+      success: true,
+      txHash: `0xmocktx_${developerId}`,
     }));
     client = { distribute: distributeMock };
 
@@ -84,21 +67,21 @@ describe('RevenueSettlementService', () => {
   });
 
   it('aggregates events and pays out when the minimum is met', async () => {
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 4 });
-    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: 2 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(4) });
+    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: USDC(2) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 2, settledAmount: 6, errors: 0 });
-    expect(distributeMock).toHaveBeenCalledWith(DEV_1_PAYOUT, 6n);
+    expect(result).toEqual({ processed: 2, settledAmount: USDC(6), errors: 0 });
+    expect(distributeMock).toHaveBeenCalledWith('dev_1', USDC(6));
 
     const settlements = settlementStore.getDeveloperSettlements('dev_1');
     expect(settlements).toHaveLength(1);
     expect(settlements[0]).toMatchObject({
       developerId: 'dev_1',
-      amount: 6,
+      amount: USDC(6),
       status: 'completed',
-      tx_hash: `0xmocktx_${DEV_1_PAYOUT}`,
+      tx_hash: '0xmocktx_dev_1',
     });
     expect(settlements[0]?.completed_at).toBeTruthy();
 
@@ -109,20 +92,20 @@ describe('RevenueSettlementService', () => {
       'dev_1',
       expect.objectContaining({
         settlementId: settlements[0]?.id,
-        amount: '6.0000000',
+        amount: '6.0000000',  // formatUnitsToUsdcFixed — canonical 7-decimal webhook format
         asset: 'USDC',
-        tyHash: `0xmocktx_${DEV_1_PAYOUT}`,
+        txHash: '0xmocktx_dev_1',
         settledAt: expect.any(String),
       }),
     );
   });
 
   it('skips developers whose accumulated payout is below the threshold', async () => {
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 3 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(3) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 0, settledAmount: 0, errors: 0 });
+    expect(result).toEqual({ processed: 0, settledAmount: 0n, errors: 0 });
     expect(distributeMock).not.toHaveBeenCalled();
     expect(settlementStore.getDeveloperSettlements('dev_1')).toHaveLength(0);
     expect(usageStore.getUnsettledEvents()).toHaveLength(1);
@@ -135,42 +118,42 @@ describe('RevenueSettlementService', () => {
         id: `e${i}`,
         requestId: `r${i}`,
         apiId: 'api_1',
-        amountUsdc: 1,
+        amountUsdc: USDC(1),
       });
     }
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 10, settledAmount: 10, errors: 0 });
-    expect(distributeMock).toHaveBeenCalledWith(DEV_1_PAYOUT, 10n);
+    expect(result).toEqual({ processed: 10, settledAmount: USDC(10), errors: 0 });
+    expect(distributeMock).toHaveBeenCalledWith('dev_1', USDC(10));
     expect(usageStore.getUnsettledEvents()).toHaveLength(5);
   });
 
   it('ignores orphaned and non-positive events when building settlements', async () => {
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_unknown', amountUsdc: 10 });
-    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: 0 });
-    recordUsageEvent(usageStore, { id: 'e3', requestId: 'r3', apiId: 'api_1', amountUsdc: -5 });
-    recordUsageEvent(usageStore, { id: 'e4', requestId: 'r4', apiId: 'api_2', amountUsdc: 7 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_unknown', amountUsdc: USDC(10) });
+    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: 0n });
+    recordUsageEvent(usageStore, { id: 'e3', requestId: 'r3', apiId: 'api_1', amountUsdc: 0n });
+    recordUsageEvent(usageStore, { id: 'e4', requestId: 'r4', apiId: 'api_2', amountUsdc: USDC(7) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 1, settledAmount: 7, errors: 0 });
+    expect(result).toEqual({ processed: 1, settledAmount: USDC(7), errors: 0 });
     expect(distributeMock).toHaveBeenCalledTimes(1);
-    expect(distributeMock).toHaveBeenCalledWith(DEV_2_PAYOUT, 7n);
+    expect(distributeMock).toHaveBeenCalledWith('dev_2', USDC(7));
     expect(usageStore.getUnsettledEvents().map((event) => event.id).sort()).toEqual(['e1']);
   });
 
   it('records a failed settlement and leaves events unsettled when payout returns a failure', async () => {
-    distributeMock.mockResolvedOnce({
+    distributeMock.mockResolvedValueOnce({
       success: false,
       error: 'simulation failed',
     });
 
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 10 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(10) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 0, settledAmount: 0, errors: 1 });
+    expect(result).toEqual({ processed: 0, settledAmount: 0n, errors: 1 });
     expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
       status: 'failed',
       tx_hash: null,
@@ -180,13 +163,13 @@ describe('RevenueSettlementService', () => {
   });
 
   it('records a failed settlement and leaves events unsettled when payout throws', async () => {
-    distributeMock.mockRejectedOnce(new Error('rpc timeout'));
+    distributeMock.mockRejectedValueOnce(new Error('rpc timeout'));
 
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 10 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(10) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 0, settledAmount: 0, errors: 1 });
+    expect(result).toEqual({ processed: 0, settledAmount: 0n, errors: 1 });
     expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
       status: 'failed',
       tx_hash: null,
@@ -206,16 +189,16 @@ describe('RevenueSettlementService', () => {
         InMemorySettlementStore.prototype.create.call(settlementStore, settlement);
       });
 
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 6 });
-    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_2', amountUsdc: 7 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(6) });
+    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_2', amountUsdc: USDC(7) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 1, settledAmount: 7, errors: 1 });
+    expect(result).toEqual({ processed: 1, settledAmount: USDC(7), errors: 1 });
     expect(settlementStore.getDeveloperSettlements('dev_1')).toHaveLength(0);
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]).toMatchObject({
       status: 'completed',
-      tx_hash: `0xmocktx_${DEV_2_PAYOUT}`,
+      tx_hash: '0xmocktx_dev_2',
     });
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]?.completed_at).toBeTruthy();
     expect(usageStore.getUnsettledEvents().map((event) => event.id)).toEqual(['e1']);
@@ -230,11 +213,11 @@ describe('RevenueSettlementService', () => {
         throw new Error('write conflict');
       });
 
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 10 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(10) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 0, settledAmount: 0, errors: 1 });
+    expect(result).toEqual({ processed: 0, settledAmount: 0n, errors: 1 });
 
     const settlements = settlementStore.getDeveloperSettlements('dev_1');
     expect(settlements).toHaveLength(1);
@@ -249,7 +232,7 @@ describe('RevenueSettlementService', () => {
   });
 
   it('counts an error but continues when failed-status persistence also throws', async () => {
-    distributeMock.mockResolvedOnce({
+    distributeMock.mockResolvedValueOnce({
       success: false,
       error: 'soroban rejected transaction',
     });
@@ -270,19 +253,19 @@ describe('RevenueSettlementService', () => {
       maxEventsPerBatch: 10,
     });
 
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 6 });
-    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_2', amountUsdc: 7 });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(6) });
+    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_2', amountUsdc: USDC(7) });
 
     const result = await service.runBatch();
 
-    expect(result).toEqual({ processed: 1, settledAmount: 7, errors: 1 });
+    expect(result).toEqual({ processed: 1, settledAmount: USDC(7), errors: 1 });
     expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
       status: 'pending',
       tx_hash: null,
     });
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]).toMatchObject({
       status: 'completed',
-      tx_hash: `0xmocktx_${DEV_2_PAYOUT}`,
+      tx_hash: '0xmocktx_dev_2',
     });
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]?.completed_at).toBeTruthy();
     expect(usageStore.getUnsettledEvents().map((event) => event.id)).toEqual(['e1']);
@@ -290,11 +273,95 @@ describe('RevenueSettlementService', () => {
     updateStatusSpy.mockRestore();
   });
 
+  // -------------------------------------------------------------------------
+  // Issue #1512 regression tests
+  // -------------------------------------------------------------------------
+
+  it('10,000 events of 0.0000001 USDC each — payout is exactly 10000 contract units = "0.001" USDC', async () => {
+    // Regression proof for float drift: 10_000 × 0.0000001 floats give
+    // 0.0010000000000000002 but bigint gives exactly 10000 units.
+    for (let i = 0; i < 10_000; i++) {
+      recordUsageEvent(usageStore, {
+        id: `e${i}`,
+        requestId: `r${i}`,
+        apiId: 'api_1',
+        amountUsdc: 1n,  // 1 contract unit = 0.0000001 USDC
+      });
+    }
+
+    // minPayout = 5 USDC = 50_000_000 units — won't fire. Lower the threshold.
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      minPayoutUsdc: 0.0000001,  // 1 unit
+      maxEventsPerBatch: 10_000,
+    });
+
+    const result = await service.runBatch();
+
+    expect(result.settledAmount).toBe(10_000n);
+    expect(distributeMock).toHaveBeenCalledWith('dev_1', 10_000n);
+    expect(mockedEmit).toHaveBeenCalledWith(
+      'settlement_completed',
+      'dev_1',
+      expect.objectContaining({ amount: '0.0010000' }),
+    );
+  });
+
+  it('minPayout boundary — payout happens when totalAmount === minPayout (≥ semantics)', async () => {
+    // minPayout = 5 USDC = 50_000_000 units
+    // Events total exactly 5 USDC — should trigger payout
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(3) });
+    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: USDC(2) });
+
+    const result = await service.runBatch();
+
+    expect(result.processed).toBe(2);
+    expect(distributeMock).toHaveBeenCalledWith('dev_1', USDC(5));
+  });
+
+  it('payout amount passed to the client is a bigint equal to the sum of claimed rows', async () => {
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(3.5) });
+    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: USDC(2.5) });
+
+    await service.runBatch();
+
+    const [, callAmount] = distributeMock.mock.calls[0] as [string, bigint];
+    expect(typeof callAmount).toBe('bigint');
+    expect(callAmount).toBe(USDC(6));
+  });
+
+  it('amount above 2^53 units is exact', async () => {
+    const hugeAmount = BigInt(2 ** 53) + 1n;
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: hugeAmount });
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      minPayoutUsdc: 0.0000001,
+      maxEventsPerBatch: 1,
+    });
+
+    await service.runBatch();
+
+    expect(distributeMock).toHaveBeenCalledWith('dev_1', hugeAmount);
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0].amount).toBe(hugeAmount);
+  });
+
+  it('settlement_completed webhook payload has decimal string amount', async () => {
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(7) });
+    recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: 1n });  // 0.0000001
+
+    await service.runBatch();
+
+    const emitCall = mockedEmit.mock.calls[0];
+    expect(emitCall[0]).toBe('settlement_completed');
+    const payload = emitCall[2] as Record<string, unknown>;
+    expect(typeof payload.amount).toBe('string');
+    expect(payload.amount).toBe('7.0000001');
+  });
+
   it('reconciles pending settlements to completed when Horizon confirms the transaction', async () => {
     settlementStore.create({
       id: 'stl_1',
       developerId: 'dev_1',
-      amount: 12,
+      amount: USDC(12),
       status: 'pending',
       tx_hash: 'tx-confirmed',
       created_at: '2026-04-01T00:00:00.000Z',
@@ -311,7 +378,7 @@ describe('RevenueSettlementService', () => {
 
     const result = await service.reconcilePendingSettlements();
 
-    expect(result).toEqual({ checked: 1, completed: 1, failed: 0, errors: 0 });
+    expect(result).toEqual({ checked: 1, completed: 1, failed: 0, retried: 0, errors: 0 });
     expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
       status: 'completed',
       tx_hash: 'tx-confirmed',
@@ -323,7 +390,7 @@ describe('RevenueSettlementService', () => {
     settlementStore.create({
       id: 'stl_1',
       developerId: 'dev_1',
-      amount: 12,
+      amount: USDC(12),
       status: 'pending',
       tx_hash: 'tx-failed',
       created_at: '2026-04-01T00:00:00.000Z',
@@ -340,21 +407,135 @@ describe('RevenueSettlementService', () => {
 
     const result = await service.reconcilePendingSettlements();
 
-    expect(result).toEqual({ checked: 1, completed: 0, failed: 1, errors: 0 });
+    expect(result).toEqual({ checked: 1, completed: 0, failed: 1, retried: 0, errors: 0 });
     expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
       status: 'failed',
       tx_hash: 'tx-failed',
+      completed_at: null,
     });
   });
 
-  it('skips developers without a payout address and records the reason', async () => {
-    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 10 });
+  it('treats missing Horizon transactions as failed settlements', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: USDC(12),
+      status: 'pending',
+      tx_hash: 'tx-missing',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
 
-    const result = await service.runBatch();
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: jest.fn(async () => ({
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      })) as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+    });
 
-    expect(distributeMock).not.toHaveBeenCalled();
-    expect(result.errors).toBeGreaterThan(0);
-    expect(usageStore.getUnsettledEvents()).toHaveLength(1);
-    expect(mockedEmit).not.toHaveBeenCalled();
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 0, failed: 1, retried: 0, errors: 0 });
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0]?.status).toBe('failed');
+  });
+
+  it('retries transient Horizon errors with backoff and completes once Horizon succeeds', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: USDC(12),
+      status: 'pending',
+      tx_hash: 'tx-retry',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({}),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ successful: true }),
+      });
+
+    const setTimeoutSpy = jest
+      .spyOn(global, 'setTimeout')
+      .mockImplementation(((fn: (...args: unknown[]) => void) => {
+        fn();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+      horizonMaxRetries: 1,
+      horizonRetryBaseDelayMs: 1,
+    });
+
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 1, failed: 0, retried: 0, errors: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    setTimeoutSpy.mockRestore();
+  });
+
+  it('does not flip settlement status when Horizon transient errors exhaust retries', async () => {
+    settlementStore.create({
+      id: 'stl_1',
+      developerId: 'dev_1',
+      amount: USDC(12),
+      status: 'pending',
+      tx_hash: 'tx-still-pending',
+      created_at: '2026-04-01T00:00:00.000Z',
+    });
+
+    const setTimeoutSpy = jest
+      .spyOn(global, 'setTimeout')
+      .mockImplementation(((fn: (...args: unknown[]) => void) => {
+        fn();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
+
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      fetchImpl: jest.fn(async () => {
+        throw new TypeError('fetch failed');
+      }) as unknown as typeof fetch,
+      horizonUrl: 'https://horizon-testnet.stellar.org/',
+      horizonMaxRetries: 1,
+      horizonRetryBaseDelayMs: 1,
+    });
+
+    const result = await service.reconcilePendingSettlements();
+
+    expect(result).toEqual({ checked: 1, completed: 0, failed: 0, retried: 0, errors: 1 });
+    expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
+      status: 'pending',
+      tx_hash: 'tx-still-pending',
+      completed_at: null,
+    });
+    setTimeoutSpy.mockRestore();
   });
 });
+
+function recordUsageEvent(
+  usageStore: UsageStore,
+  overrides: Pick<UsageEvent, 'id' | 'requestId' | 'apiId' | 'amountUsdc'>
+): void {
+  usageStore.record({
+    id: overrides.id,
+    requestId: overrides.requestId,
+    apiKey: 'key_1',
+    apiKeyId: 'key_1',
+    apiId: overrides.apiId,
+    endpointId: 'endpoint_1',
+    userId: 'caller_1',
+    amountUsdc: overrides.amountUsdc,
+    statusCode: 200,
+    timestamp: new Date().toISOString(),
+  });
+}

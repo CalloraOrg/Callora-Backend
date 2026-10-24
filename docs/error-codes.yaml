@@ -115,6 +115,10 @@ error_codes:
     section: Billing request
     description: The requested billing record was not found
 
+  - code: BILLING_REQUEST_ID_CONFLICT
+    section: Billing request
+    description: The requestId was already used for a different deduction (different user, amount, API or endpoint)
+
   # Billing forecast
   - code: FORECAST_DATA_UNAVAILABLE
     section: Billing forecast
@@ -306,6 +310,10 @@ error_codes:
   - code: IDEMPOTENCY_CONFLICT
     section: Idempotency
     description: Idempotency key conflict with different request
+
+  - code: IDEMPOTENCY_RESPONSE_TOO_LARGE
+    section: Idempotency
+    description: The original response exceeded the replay limit; fetch the resource by identifier.
 
   - code: IDEMPOTENCY_IN_PROGRESS
     section: Idempotency

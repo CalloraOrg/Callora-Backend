@@ -153,14 +153,15 @@ async function getIdempotencyStoreRowCountEstimate(
   try {
     // Query the system catalog for the estimated row count (reltuples).
     // This is what VACUUM ANALYZE keeps current, and it's available immediately.
-    const result = await queryable.query<{ estimate: number }>(
+    const result = await queryable.query<{ estimate: number | string }>(
       `SELECT GREATEST(0, CAST(reltuples AS bigint)) AS estimate
        FROM pg_class
        WHERE relname = $1`,
       ['idempotency_store'],
     );
 
-    const estimate = result.rows[0]?.estimate ?? 0;
+    // pg returns bigint columns as strings; normalize before comparing.
+    const estimate = Number(result.rows[0]?.estimate ?? 0);
     if (estimate > 0) {
       return estimate;
     }

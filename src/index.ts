@@ -19,9 +19,17 @@ export {
 /** The fully wired Express application (see `createApp` in ./app.ts). */
 export const app = createApp();
 
-const isDirectExecution =
-  process.argv[1] &&
-  (process.argv[1].endsWith("index.ts") || process.argv[1].endsWith("index.js"));
+export function checkDirectExecution(
+  argv1: string | undefined = process.argv[1],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.VERCEL) return false;
+  if (!argv1) return false;
+  if (argv1.endsWith(".mjs") || argv1.endsWith("index.mjs")) return false;
+  return argv1.endsWith("index.ts") || argv1.endsWith("index.js");
+}
+
+const isDirectExecution = checkDirectExecution();
 
 async function startServer(): Promise<void> {
   try {

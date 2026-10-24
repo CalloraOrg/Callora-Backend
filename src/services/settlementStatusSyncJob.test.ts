@@ -44,7 +44,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_1',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-with-codes',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -84,7 +84,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_2',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-no-codes',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -122,7 +122,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_3',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-empty-codes',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -162,7 +162,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_4',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-not-found',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -196,7 +196,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_5a',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-ok-1',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -205,7 +205,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_5b',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-throws',
         created_at: '2026-04-01T00:00:01.000Z',
@@ -214,7 +214,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_5c',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-ok-2',
         created_at: '2026-04-01T00:00:02.000Z',
@@ -268,7 +268,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_6',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-success',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -300,7 +300,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_7',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-malformed',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -335,7 +335,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_8a',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-db-fail',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -344,7 +344,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_8b',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-ok',
         created_at: '2026-04-01T00:00:01.000Z',
@@ -395,7 +395,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_9',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-9',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -421,7 +421,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_11',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-too-early',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -458,7 +458,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_12',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'retryable',
         tx_hash: 'tx-too-early-exhausted',
         created_at: '2026-04-01T00:00:00.000Z',
@@ -493,7 +493,7 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
       settlementStore.create({
         id: 'stl_10',
         developerId: 'dev_1',
-        amount: 12,
+        amount: 120000000n,
         status: 'pending',
         tx_hash: 'tx-retry',
         created_at: '2026-04-01T00:00:00.000Z',

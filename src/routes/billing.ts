@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
-import { encodeCursor, parseCursor } from "../lib/cursorPagination.js";
+import { parseCursor } from "../lib/cursorPagination.js";
 
 import {
   BadGatewayError,
@@ -32,8 +32,13 @@ import { etagMiddleware } from "../middleware/etag.js";
 import { createTimeoutMiddleware } from "../middleware/timeout.js";
 import { config } from "../config/index.js";
 import { logger } from "../logger.js";
-import { getRequestId } from "../lib/envelope.js";
+import { getRequestId, successEnvelope } from "../lib/envelope.js";
 import { getBillingService } from "./billing/billingService.js";
+import {
+  PgUsageEventsRepository,
+  type UsageEventsRepositoryQueryable,
+} from "../repositories/usageEventsRepository.pg.js";
+import type { UsageEventsRepository } from "../repositories/usageEventsRepository.js";
 
 const router = Router();
 
@@ -82,6 +87,27 @@ function getPool(req: Request): Pool {
   return pool;
 }
 
+/**
+ * Returns the usage-events repository for this request.
+ *
+ * When tests inject a repository via `req.app.locals.usageEventsRepository`
+ * that value is returned directly.  In production the PgUsageEventsRepository
+ * is constructed from the db pool that is always present in `app.locals`.
+ */
+function getUsageEventsRepository(
+  req: Request,
+): UsageEventsRepository & Pick<PgUsageEventsRepository, "listChargesByConsumer"> {
+  const injected = req.app?.locals
+    ?.usageEventsRepository as (UsageEventsRepository & Pick<PgUsageEventsRepository, "listChargesByConsumer">) | undefined;
+  if (injected) {
+    return injected;
+  }
+  const pool = getPool(req);
+  return new PgUsageEventsRepository(
+    pool as unknown as UsageEventsRepositoryQueryable,
+  );
+}
+
 function sendSimulationFailure(
   res: Response,
   result: Pick<BillingDeductResult, "error" | "simulationDetails">,
@@ -97,10 +123,13 @@ function sendSimulationFailure(
 /**
  * GET /api/billing
  *
- * Returns paginated billing requests for the authenticated developer.
- * Hot-path lookup is filtered by `developer_id` and backed by the
- * EXPLAIN-verified index `idx_billing_requests_lookup_hot`
- * (see migrations/billing_index.sql).
+ * Returns paginated billing history for the authenticated consumer (caller).
+ * Rows are sourced from usage_events — the table that BillingService.runPhase1
+ * writes deductions into — and ordered by (created_at DESC, id DESC) so the
+ * most recent charges appear first.
+ *
+ * Index hit: idx_usage_events_user_created (user_id, created_at).
+ * Pagination: opaque base64 keyset cursor produced by encodeCursor().
  */
 router.get(
   "/",
@@ -118,7 +147,6 @@ router.get(
         return;
       }
 
-      const pool = getPool(req);
       const limit = Number(req.query.limit ?? 20);
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
         next(new BadRequestError("limit must be an integer between 1 and 100"));
@@ -131,64 +159,45 @@ router.get(
         return;
       }
 
-      // Hot path: filter by developer_id — uses idx_billing_requests_lookup_hot
-      const query = {
-        text: `
-          SELECT id, request_id, developer_id, api_id, endpoint_id, api_key_id, amount_usdc, created_at
-          FROM billing_requests
-          WHERE developer_id = $1
-          ${cursor ? "AND (created_at < $2 OR (created_at = $2 AND id < $3))" : ""}
-          ORDER BY created_at DESC, id DESC
-          LIMIT $4
-        `,
-        values: cursor
-          ? [user.id, cursor.timestamp, cursor.id, limit + 1]
-          : [user.id, limit + 1],
-      };
-
-      const result = await pool.query(query);
-      const rows = result.rows as Array<{
-        id: string;
-        request_id: string;
-        developer_id: string;
-        api_id: string;
-        endpoint_id: string;
-        api_key_id: string;
-        amount_usdc: string;
-        created_at: Date;
-      }>;
-
-      const hasMore = rows.length > limit;
-      const data = hasMore ? rows.slice(0, limit) : rows;
-      const nextCursor = hasMore && data.length > 0
-        ? encodeCursor(data[data.length - 1].created_at, data[data.length - 1].id)
-        : null;
-
-      const correlationId = getRequestId(req) ?? "unknown";
-      logger.info(`Billing requests retrieved for developer ${user.id}`, {
-        correlationId,
-        developerId: user.id,
-        count: data.length,
-        indexHint: "idx_billing_requests_lookup_hot",
+      const repo = getUsageEventsRepository(req);
+      const { charges, nextCursor, hasMore } = await repo.listChargesByConsumer({
+        userId: user.id,
+        limit,
+        cursor: cursor ?? undefined,
       });
 
-      res.status(200).json({
-        data: data.map((row) => ({
-          id: row.id,
-          requestId: row.request_id,
-          developerId: row.developer_id,
-          apiId: row.api_id,
-          endpointId: row.endpoint_id,
-          apiKeyId: row.api_key_id,
-          amountUsdc: row.amount_usdc,
-          createdAt: row.created_at.toISOString(),
-        })),
-        meta: {
-          limit,
-          nextCursor,
-          hasMore,
-        },
+      const requestId = getRequestId(req);
+      logger.info("Billing history retrieved for consumer", {
+        correlationId: requestId,
+        userId: user.id,
+        count: charges.length,
+        indexHint: "idx_usage_events_user_created",
       });
+
+      res.status(200).json(
+        successEnvelope(
+          {
+            data: charges.map((charge) => ({
+              id: charge.id,
+              userId: charge.userId,
+              apiId: charge.apiId,
+              endpointId: charge.endpointId,
+              apiKeyId: charge.apiKeyId,
+              requestId: charge.requestId,
+              amountUsdc: charge.amountUsdc,
+              stellarTxHash: charge.stellarTxHash,
+              status: charge.status,
+              createdAt: charge.createdAt.toISOString(),
+            })),
+            meta: {
+              limit,
+              nextCursor,
+              hasMore,
+            },
+          },
+          requestId,
+        ),
+      );
     } catch (error) {
       next(error);
     }

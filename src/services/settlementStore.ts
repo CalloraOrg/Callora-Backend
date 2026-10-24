@@ -1,4 +1,5 @@
 import { Settlement, SettlementStore } from '../types/developer.js';
+import { parseUsdcToUnits, formatUnitsToUsdc } from '../lib/usdcUnits.js';
 
 export class InMemorySettlementStore implements SettlementStore {
   private settlements: Settlement[] = [];
@@ -27,13 +28,20 @@ export class InMemorySettlementStore implements SettlementStore {
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }
 
-  scheduleRetry(id: string, retryAfter: string): void {
+  scheduleRetry(id: string, retryAfter: string, maxRetries = 5): boolean {
     const s = this.settlements.find((s) => s.id === id);
-    if (s) {
+    if (!s || (s.status !== 'pending' && s.status !== 'retryable')) return false;
+
+    const retryCount = s.retry_count ?? 0;
+    if (retryCount >= maxRetries) {
+      s.status = 'failed';
+      s.retry_after = null;
+    } else {
       s.status = 'retryable';
       s.retry_after = retryAfter;
-      s.retry_count = (s.retry_count ?? 0) + 1;
+      s.retry_count = retryCount + 1;
     }
+    return true;
   }
 
   getPendingSettlements(): Settlement[] {
@@ -69,6 +77,7 @@ export function createSettlementStore(): InMemorySettlementStore {
 }
 
 interface SettlementStoreRow {
+  id?: number | string;
   external_id: string;
   developer_id: string;
   amount_usdc: string | number;
@@ -76,25 +85,25 @@ interface SettlementStoreRow {
   stellar_tx_hash: string | null;
   created_at: Date | string;
   retry_after: string | null;
-  retry_count: number | null;
+  retry_count: string | number | null;
 }
 
 export interface SettlementStoreQueryable {
   query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
 }
 
-const toNumber = (value: string | number): number =>
+const toCount = (value: string | number): number =>
   typeof value === 'number' ? value : Number(value);
 
 const mapSettlementRow = (row: SettlementStoreRow): Settlement => ({
   id: row.external_id,
   developerId: row.developer_id,
-  amount: toNumber(row.amount_usdc),
+  amount: parseUsdcToUnits(typeof row.amount_usdc === 'number' ? row.amount_usdc.toFixed(7) : String(row.amount_usdc)),
   status: row.status,
   tx_hash: row.stellar_tx_hash,
   created_at: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
   retry_after: row.retry_after ?? null,
-  retry_count: row.retry_count ?? 0,
+  retry_count: toCount(row.retry_count ?? 0),
 });
 
 export class PostgresSettlementStore implements SettlementStore {
@@ -117,7 +126,7 @@ export class PostgresSettlementStore implements SettlementStore {
       [
         settlement.id,
         settlement.developerId,
-        settlement.amount,
+        formatUnitsToUsdc(settlement.amount),   // write exact decimal string
         settlement.tx_hash,
         settlement.status,
         settlement.created_at,
@@ -148,17 +157,38 @@ export class PostgresSettlementStore implements SettlementStore {
     );
   }
 
-  async scheduleRetry(id: string, retryAfter: string): Promise<void> {
-    await this.db.query(
+  async scheduleRetry(
+    id: string,
+    retryAfter: string,
+    maxRetries = 5,
+    lastError = 'tx_failed_too_early',
+  ): Promise<boolean> {
+    const result = await this.db.query(
       `
         UPDATE settlements
-        SET status = 'retryable',
-            retry_after = $2,
-            retry_count = COALESCE(retry_count, 0) + 1
+        SET status = CASE
+              WHEN COALESCE(retry_count, 0) >= $3 THEN 'failed'
+              ELSE 'retryable'
+            END,
+            retry_after = CASE
+              WHEN COALESCE(retry_count, 0) >= $3 THEN NULL
+              ELSE $2::timestamp
+            END,
+            retry_count = CASE
+              WHEN COALESCE(retry_count, 0) >= $3 THEN COALESCE(retry_count, 0)
+              ELSE COALESCE(retry_count, 0) + 1
+            END,
+            last_error = CASE
+              WHEN COALESCE(retry_count, 0) >= $3 THEN $4
+              ELSE NULL
+            END
         WHERE external_id = $1
+          AND status IN ('pending', 'retryable')
+        RETURNING external_id
       `,
-      [id, retryAfter],
+      [id, retryAfter, maxRetries, lastError],
     );
+    return result.rows.length > 0;
   }
 
   async getDeveloperSettlements(developerId: string): Promise<Settlement[]> {
@@ -187,6 +217,7 @@ export class PostgresSettlementStore implements SettlementStore {
     const result = await this.db.query<SettlementStoreRow>(
       `
         SELECT
+          id,
           external_id,
           developer_id,
           amount_usdc,
@@ -197,7 +228,34 @@ export class PostgresSettlementStore implements SettlementStore {
           retry_count
         FROM settlements
         WHERE status = 'pending'
-           OR (status = 'retryable' AND (retry_after IS NULL OR retry_after <= NOW()))
+        UNION ALL
+        SELECT
+          id,
+          external_id,
+          developer_id,
+          amount_usdc,
+          status,
+          stellar_tx_hash,
+          created_at,
+          retry_after,
+          retry_count
+        FROM settlements
+        WHERE status = 'retryable'
+          AND retry_after IS NULL
+        UNION ALL
+        SELECT
+          id,
+          external_id,
+          developer_id,
+          amount_usdc,
+          status,
+          stellar_tx_hash,
+          created_at,
+          retry_after,
+          retry_count
+        FROM settlements
+        WHERE status = 'retryable'
+          AND retry_after <= NOW()
         ORDER BY created_at ASC, id ASC
       `,
     );

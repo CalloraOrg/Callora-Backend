@@ -3,10 +3,6 @@ import type { BillingUsageEvent } from '../repositories/usageEventsRepository.pg
 import { eventsToCsv, eventsToJson, type ObjectStorageClient } from './scheduledExports.js';
 import { logger } from '../logger.js';
 
-// ─────────────────────────────────────────────
-// Data model
-// ─────────────────────────────────────────────
-
 export interface DeveloperExportRecord {
   id: string;
   developerId: string;
@@ -16,11 +12,7 @@ export interface DeveloperExportRecord {
   expiresAt: Date;
 }
 
-export interface DeveloperExportCursor {
-  exportedAt: Date;
-  id: string;
-}
-
+export interface DeveloperExportCursor { exportedAt: Date; id: string }
 export interface DeveloperExportListOptions {
   limit: number;
   offset?: number;
@@ -29,39 +21,52 @@ export interface DeveloperExportListOptions {
   format?: DeveloperExportRecord['format'];
 }
 
-// ─────────────────────────────────────────────
-// Store interface + in-memory implementation
-// ─────────────────────────────────────────────
-
 export interface DeveloperExportStore {
   save(record: DeveloperExportRecord): Promise<DeveloperExportRecord>;
-  listByDeveloper(
-    developerId: string,
-    opts: DeveloperExportListOptions,
-  ): Promise<DeveloperExportRecord[]>;
+  listByDeveloper(developerId: string, opts: DeveloperExportListOptions): Promise<DeveloperExportRecord[]>;
   getById(id: string): Promise<DeveloperExportRecord | undefined>;
+  claimDay(developerId: string, day: string, force?: boolean): Promise<boolean>;
+  completeDay(developerId: string, day: string): Promise<void>;
+  releaseDay(developerId: string, day: string): Promise<void>;
 }
 
 export class InMemoryExportStore implements DeveloperExportStore {
   private readonly records = new Map<string, DeveloperExportRecord>();
+  private readonly dailyClaims = new Map<string, 'claimed' | 'completed'>();
 
   async save(record: DeveloperExportRecord): Promise<DeveloperExportRecord> {
+    for (const [id, existing] of this.records) {
+      if (existing.developerId === record.developerId && existing.s3Key === record.s3Key) {
+        this.records.delete(id);
+      }
+    }
     this.records.set(record.id, record);
     return record;
   }
 
-  async listByDeveloper(
-    developerId: string,
-    opts: DeveloperExportListOptions,
-  ): Promise<DeveloperExportRecord[]> {
+  async claimDay(developerId: string, day: string, force = false): Promise<boolean> {
+    const key = `${developerId}\u0000${day}`;
+    const state = this.dailyClaims.get(key);
+    if (state === 'claimed' || (state === 'completed' && !force)) return false;
+    this.dailyClaims.set(key, 'claimed');
+    return true;
+  }
+
+  async completeDay(developerId: string, day: string): Promise<void> {
+    this.dailyClaims.set(`${developerId}\u0000${day}`, 'completed');
+  }
+
+  async releaseDay(developerId: string, day: string): Promise<void> {
+    const key = `${developerId}\u0000${day}`;
+    if (this.dailyClaims.get(key) === 'claimed') this.dailyClaims.delete(key);
+  }
+
+  async listByDeveloper(developerId: string, opts: DeveloperExportListOptions): Promise<DeveloperExportRecord[]> {
     const results = [...this.records.values()]
-      .filter(
-        (r) => r.developerId === developerId && r.expiresAt > opts.now,
-      )
+      .filter((r) => r.developerId === developerId && r.expiresAt > opts.now)
       .filter((r) => opts.format === undefined || r.format === opts.format)
       .sort(compareExportsNewestFirst)
       .filter((r) => isAfterExportCursor(r, opts.cursor));
-
     const offset = opts.cursor ? 0 : (opts.offset ?? 0);
     return results.slice(offset, offset + opts.limit);
   }
@@ -73,62 +78,42 @@ export class InMemoryExportStore implements DeveloperExportStore {
 
 function compareExportsNewestFirst(a: DeveloperExportRecord, b: DeveloperExportRecord): number {
   const timestampDiff = b.exportedAt.getTime() - a.exportedAt.getTime();
-  if (timestampDiff !== 0) {
-    return timestampDiff;
-  }
-
-  if (a.id === b.id) {
-    return 0;
-  }
-
-  return a.id > b.id ? -1 : 1;
+  if (timestampDiff !== 0) return timestampDiff;
+  return a.id === b.id ? 0 : a.id > b.id ? -1 : 1;
 }
 
-function isAfterExportCursor(
-  record: DeveloperExportRecord,
-  cursor: DeveloperExportCursor | undefined,
-): boolean {
-  if (!cursor) {
-    return true;
-  }
-
+function isAfterExportCursor(record: DeveloperExportRecord, cursor: DeveloperExportCursor | undefined): boolean {
+  if (!cursor) return true;
   const recordTime = record.exportedAt.getTime();
   const cursorTime = cursor.exportedAt.getTime();
-
   return recordTime < cursorTime || (recordTime === cursorTime && record.id < cursor.id);
 }
 
-// ─────────────────────────────────────────────
-// Repository interface used by this service
-// ─────────────────────────────────────────────
-
-/**
- * Minimal repository interface consumed by ReportExporterService.
- * The production Pg repository satisfies this via its `findByApiId` / `getEvents` methods.
- * For tests, any object providing `getEvents()` works.
- */
 export interface ExportUsageEventsRepository {
-  getEvents(): Promise<BillingUsageEvent[]>;
+  getEventsInRange(
+    from: Date,
+    to: Date,
+    options: { developerId?: string; cursor?: string; limit: number },
+  ): Promise<BillingUsageEvent[]>;
 }
 
-// ─────────────────────────────────────────────
-// Service
-// ─────────────────────────────────────────────
-
-const ONE_DAY_MS = 86_400_000;
-const DEFAULT_EXPORT_TTL_MS = 7 * ONE_DAY_MS;
+const DAY_MS = 86_400_000;
+const DEFAULT_EXPORT_TTL_MS = 7 * DAY_MS;
+const EXPORT_PAGE_SIZE = 1_000;
 
 export interface ReportExporterServiceOptions {
   s3Bucket: string;
   s3Endpoint: string;
   s3SecretAccessKey: string;
   exportTtlMs?: number;
+  pageSize?: number;
   logger?: Pick<typeof logger, 'info' | 'error'>;
 }
 
 export class ReportExporterService {
   private readonly log: Pick<typeof logger, 'info' | 'error'>;
   private readonly exportTtlMs: number;
+  private readonly pageSize: number;
   private readonly s3Bucket: string;
   private readonly s3Endpoint: string;
   private readonly s3SecretAccessKey: string;
@@ -143,175 +128,151 @@ export class ReportExporterService {
     this.s3Endpoint = opts.s3Endpoint;
     this.s3SecretAccessKey = opts.s3SecretAccessKey;
     this.exportTtlMs = opts.exportTtlMs ?? DEFAULT_EXPORT_TTL_MS;
+    this.pageSize = opts.pageSize ?? EXPORT_PAGE_SIZE;
     this.log = opts.logger ?? logger;
   }
 
-  /**
-   * Runs daily exports for the 24-hour UTC window `[date - 1 day, date)`.
-   * For each developer that had at least one event in the window, uploads CSV
-   * and JSON artifacts to S3 and writes `DeveloperExportRecord` entries.
-   */
-  async runDailyExports(date: Date): Promise<DeveloperExportRecord[]> {
-    const windowStart = new Date(date.getTime() - ONE_DAY_MS);
-    const windowEnd = date;
-
-    // Fetch all events and filter to the window
-    const allEvents = await this.usageEventsRepository.getEvents();
-    const windowEvents = allEvents.filter(
-      (e) => e.createdAt >= windowStart && e.createdAt < windowEnd,
-    );
-
-    // Group by developerId
-    const byDeveloper = new Map<string, BillingUsageEvent[]>();
-    for (const event of windowEvents) {
-      const bucket = byDeveloper.get(event.developerId);
-      if (bucket) {
-        bucket.push(event);
-      } else {
-        byDeveloper.set(event.developerId, [event]);
-      }
+  /** Export one UTC calendar day, named by the day whose events it contains. */
+  async runDailyExports(day: string, opts: { force?: boolean } = {}): Promise<DeveloperExportRecord[]> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('day must be YYYY-MM-DD');
+    const windowStart = new Date(`${day}T00:00:00.000Z`);
+    if (Number.isNaN(windowStart.getTime()) || windowStart.toISOString().slice(0, 10) !== day) {
+      throw new Error('day must be a valid UTC calendar date');
     }
-
-    const dateSlug = date.toISOString().slice(0, 10);
-    const expiresAt = new Date(date.getTime() + this.exportTtlMs);
+    const windowEnd = new Date(windowStart.getTime() + DAY_MS);
+    const developers = await this.findDevelopersInRange(windowStart, windowEnd);
     const savedRecords: DeveloperExportRecord[] = [];
 
-    for (const [developerId, events] of byDeveloper) {
-      if (events.length === 0) continue;
+    for (const developerId of developers) {
+      if (!(await this.exportRecordStore.claimDay(developerId, day, opts.force))) continue;
+      try {
+        const exportedAt = new Date();
+        const expiresAt = new Date(exportedAt.getTime() + this.exportTtlMs);
+        const csvKey = `daily-exports/${developerId}/${day}.csv`;
+        const jsonKey = `daily-exports/${developerId}/${day}.json`;
+        await this.objectStorageClient.uploadObject({
+          bucket: this.s3Bucket, key: csvKey,
+          body: this.csvStream(windowStart, windowEnd, developerId),
+          contentType: 'text/csv', accessKeyId: '',
+          secretAccessKey: this.s3SecretAccessKey, region: '', endpoint: this.s3Endpoint,
+        });
+        await this.objectStorageClient.uploadObject({
+          bucket: this.s3Bucket, key: jsonKey,
+          body: this.jsonStream(windowStart, windowEnd, developerId),
+          contentType: 'application/json', accessKeyId: '',
+          secretAccessKey: this.s3SecretAccessKey, region: '', endpoint: this.s3Endpoint,
+        });
 
-      const csvKey = `daily-exports/${developerId}/${dateSlug}.csv`;
-      const jsonKey = `daily-exports/${developerId}/${dateSlug}.json`;
-
-      // Upload CSV
-      await this.objectStorageClient.uploadObject({
-        bucket: this.s3Bucket,
-        key: csvKey,
-        body: eventsToCsv(events),
-        contentType: 'text/csv',
-        accessKeyId: '',
-        secretAccessKey: this.s3SecretAccessKey,
-        region: '',
-        endpoint: this.s3Endpoint,
-      });
-
-      // Upload JSON
-      await this.objectStorageClient.uploadObject({
-        bucket: this.s3Bucket,
-        key: jsonKey,
-        body: eventsToJson(events),
-        contentType: 'application/json',
-        accessKeyId: '',
-        secretAccessKey: this.s3SecretAccessKey,
-        region: '',
-        endpoint: this.s3Endpoint,
-      });
-
-      const now = new Date();
-
-      const csvRecord = await this.exportRecordStore.save({
-        id: crypto.randomUUID(),
-        developerId,
-        format: 'csv',
-        s3Key: csvKey,
-        exportedAt: now,
-        expiresAt,
-      });
-
-      const jsonRecord = await this.exportRecordStore.save({
-        id: crypto.randomUUID(),
-        developerId,
-        format: 'json',
-        s3Key: jsonKey,
-        exportedAt: now,
-        expiresAt,
-      });
-
-      savedRecords.push(csvRecord, jsonRecord);
-
-      this.log.info('daily export completed', {
-        developerId,
-        date: dateSlug,
-        rowCount: events.length,
-      });
+        const csvRecord = await this.exportRecordStore.save({
+          id: crypto.randomUUID(), developerId, format: 'csv', s3Key: csvKey, exportedAt, expiresAt,
+        });
+        const jsonRecord = await this.exportRecordStore.save({
+          id: crypto.randomUUID(), developerId, format: 'json', s3Key: jsonKey, exportedAt, expiresAt,
+        });
+        await this.exportRecordStore.completeDay(developerId, day);
+        savedRecords.push(csvRecord, jsonRecord);
+        this.log.info('daily export completed', { developerId, date: day });
+      } catch (error) {
+        await this.exportRecordStore.releaseDay(developerId, day);
+        throw error;
+      }
     }
-
     return savedRecords;
   }
 
-  /**
-   * Returns non-expired export records for a developer, newest first.
-   */
+  private async findDevelopersInRange(from: Date, to: Date): Promise<Set<string>> {
+    const developers = new Set<string>();
+    let cursor: string | undefined;
+    while (true) {
+      const events = await this.usageEventsRepository.getEventsInRange(from, to, { cursor, limit: this.pageSize });
+      if (events.length === 0) break;
+      for (const event of events) developers.add(event.developerId);
+      if (events.length < this.pageSize) break;
+      cursor = events[events.length - 1]?.id;
+    }
+    return developers;
+  }
+
+  private async *pages(from: Date, to: Date, developerId: string): AsyncGenerator<BillingUsageEvent[]> {
+    let cursor: string | undefined;
+    while (true) {
+      const events = await this.usageEventsRepository.getEventsInRange(from, to, {
+        developerId, cursor, limit: this.pageSize,
+      });
+      if (events.length === 0) return;
+      yield events;
+      if (events.length < this.pageSize) return;
+      cursor = events[events.length - 1]?.id;
+    }
+  }
+
+  private async *csvStream(from: Date, to: Date, developerId: string): AsyncGenerator<string> {
+    yield 'id,userId,apiId,endpointId,apiKeyId,developerId,amount,requestId,stellarTxHash,createdAt\n';
+    for await (const page of this.pages(from, to, developerId)) {
+      for (const event of page) yield `${eventsToCsv([event]).split('\n').slice(1).join('\n')}\n`;
+    }
+  }
+
+  private async *jsonStream(from: Date, to: Date, developerId: string): AsyncGenerator<string> {
+    yield '[';
+    let first = true;
+    for await (const page of this.pages(from, to, developerId)) {
+      for (const event of page) {
+        const serialized = eventsToJson([event]);
+        const object = serialized.slice(3, -2);
+        yield `${first ? '\n' : ',\n'}${object}`;
+        first = false;
+      }
+    }
+    yield first ? ']' : '\n]';
+  }
+
   async listExportsForDeveloper(
     developerId: string,
     opts: Omit<DeveloperExportListOptions, 'now'>,
   ): Promise<DeveloperExportRecord[]> {
-    return this.exportRecordStore.listByDeveloper(developerId, {
-      ...opts,
-      now: new Date(),
-    });
+    return this.exportRecordStore.listByDeveloper(developerId, { ...opts, now: new Date() });
   }
 
-  /**
-   * Generates a signed download URL for an export record.
-   * Credentials are consumed internally and never returned.
-   */
   getSignedUrl(record: DeveloperExportRecord, ttlSeconds: number): string {
     return this.objectStorageClient.createSignedDownloadUrl({
-      bucket: this.s3Bucket,
-      key: record.s3Key,
-      expiresInSeconds: ttlSeconds,
-      secretAccessKey: this.s3SecretAccessKey,
-      endpoint: this.s3Endpoint,
+      bucket: this.s3Bucket, key: record.s3Key, expiresInSeconds: ttlSeconds,
+      secretAccessKey: this.s3SecretAccessKey, endpoint: this.s3Endpoint,
     });
   }
 }
 
-// ─────────────────────────────────────────────
-// Worker
-// ─────────────────────────────────────────────
+export interface ReportExporterWorker { start(): void; stop(): void; awaitIdle(): Promise<void> }
 
-export interface ReportExporterWorker {
-  start(): void;
-  stop(): void;
-  awaitIdle(): Promise<void>;
-}
+function utcDay(date: Date): string { return date.toISOString().slice(0, 10); }
 
 export function createReportExporterWorker(
   service: ReportExporterService,
-  opts: {
-    intervalMs: number;
-    logger?: Pick<typeof logger, 'info' | 'error'>;
-  },
+  opts: { intervalMs: number; maxCatchUpDays?: number; logger?: Pick<typeof logger, 'info' | 'error'> },
 ): ReportExporterWorker {
   const log = opts.logger ?? logger;
+  const maxCatchUpDays = opts.maxCatchUpDays ?? 7;
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<DeveloperExportRecord[]> | null = null;
-
   const tick = async (): Promise<void> => {
     if (running) return;
-    running = service.runDailyExports(new Date());
-    try {
-      await running;
-    } catch (error) {
-      log.error('report exporter worker failed', error);
-    } finally {
-      running = null;
+    const today = new Date();
+    const lastCompleteDay = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - DAY_MS);
+    const days: string[] = [];
+    for (let offset = Math.min(maxCatchUpDays, 365); offset > 0; offset--) {
+      days.push(utcDay(new Date(lastCompleteDay.getTime() - (offset - 1) * DAY_MS)));
     }
+    running = (async () => {
+      const records: DeveloperExportRecord[] = [];
+      for (const day of days) records.push(...await service.runDailyExports(day));
+      return records;
+    })();
+    try { await running; } catch (error) { log.error('report exporter worker failed', error); }
+    finally { running = null; }
   };
-
   return {
-    start() {
-      if (timer) return;
-      void tick();
-      timer = setInterval(() => void tick(), opts.intervalMs);
-    },
-    stop() {
-      if (!timer) return;
-      clearInterval(timer);
-      timer = null;
-    },
-    async awaitIdle() {
-      if (running) await running.catch(() => undefined);
-    },
+    start() { if (timer) return; void tick(); timer = setInterval(() => void tick(), opts.intervalMs); },
+    stop() { if (!timer) return; clearInterval(timer); timer = null; },
+    async awaitIdle() { if (running) await running.catch(() => undefined); },
   };
 }
