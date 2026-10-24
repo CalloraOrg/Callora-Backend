@@ -75,7 +75,7 @@ describe('PostgresSettlementStore schema contract', () => {
     await store.create({
       id: 'pending_retry',
       developerId: 'dev_1',
-      amount: 15,
+      amount: 150_000_000n,
       status: 'pending',
       tx_hash: 'tx-pending',
       created_at: new Date().toISOString(),
@@ -119,7 +119,7 @@ describe('PostgresSettlementStore schema contract', () => {
     await store.create({
       id: 'completed_retry',
       developerId: 'dev_1',
-      amount: 1,
+      amount: 10_000_000n,
       status: 'completed',
       tx_hash: 'tx-completed',
       created_at: new Date().toISOString(),

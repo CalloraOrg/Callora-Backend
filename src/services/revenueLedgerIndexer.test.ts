@@ -51,7 +51,7 @@ function createIndexerHarness() {
       reversal_of_usage_event_id BIGINT UNIQUE
     );
 
-    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMP);
+    CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMPTZ);
     CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMP NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
   `);
 
@@ -219,6 +219,7 @@ test('RevenueLedgerIndexerJob drains in-flight work during shutdown', async () =
                     developerId: 'dev-1',
                     amount: 100n,
                     createdAt: new Date('2026-02-01T10:00:00.000Z'),
+                    stellarTxHash: 'tx-1',
                   },
                 ]);
               };
@@ -236,7 +237,9 @@ test('RevenueLedgerIndexerJob drains in-flight work during shutdown', async () =
     });
 
     job.start();
-    await Promise.resolve();
+    for (let i = 0; i < 20 && typeof releaseFirstQuery !== 'function'; i += 1) {
+      await Promise.resolve();
+    }
 
     const idlePromise = job.awaitIdle();
     let settled = false;
@@ -283,6 +286,7 @@ test('RevenueLedgerIndexer validates configuration and logs insert failures', as
           developerId: 'dev-9',
           amount: 999n,
           createdAt: new Date('2026-02-09T10:00:00.000Z'),
+          stellarTxHash: 'tx-9',
         },
       ]),
     indexRevenueLedgerEvent: jest.fn().mockRejectedValue(new Error('boom')),
@@ -372,6 +376,7 @@ test('RevenueLedgerIndexerJob logs job failures and stop is safe when idle', asy
         developerId: 'dev-11',
         amount: 11n,
         createdAt: new Date('2026-02-11T10:00:00.000Z'),
+        stellarTxHash: 'tx-11',
       },
     ]),
     indexRevenueLedgerEvent: jest.fn().mockRejectedValue(new Error('job-failure')),

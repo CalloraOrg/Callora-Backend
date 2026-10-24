@@ -21,15 +21,11 @@ import { Pool } from 'pg';
 import { GenericContainer, Wait } from 'testcontainers';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import {
   sweepIdempotencyStoreRows,
   DEFAULT_SWEEPER_CONFIG,
   type IdempotencySweeperConfig,
 } from '../../src/services/idempotencySweeper.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // ============================================================================
 // Test Setup
