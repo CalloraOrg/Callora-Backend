@@ -2,6 +2,7 @@ import express from 'express';
 import request from 'supertest';
 import { errorHandler } from './errorHandler.js';
 import { createGatewayRateLimitMiddleware, InMemoryGatewayRateLimiter } from './gatewayRateLimit.js';
+import { createRateLimiter } from '../services/rateLimiter.js';
 
 /**
  * Build a test app with gateway rate limiting applied.
@@ -275,8 +276,8 @@ describe('gatewayRateLimit middleware', () => {
       limiter.check('user:test', now);
       expect(limiter.getTokens('user:test', now)).toBe(9);
 
-      // After 500ms, should have ~5 more tokens (10 tokens / 1000ms * 500ms)
-      expect(limiter.getTokens('user:test', now + 500)).toBeCloseTo(14, 0);
+      // After 500ms, should have refilled but capped at maxRequests
+      expect(limiter.getTokens('user:test', now + 500)).toBe(10);
     });
 
     test('reset clears all buckets', () => {
@@ -301,6 +302,210 @@ describe('gatewayRateLimit middleware', () => {
       
       // Wait a very long time - tokens should cap at maxRequests (10)
       expect(limiter.getTokens('user:test', now + 1000000)).toBe(10);
+    });
+  });
+
+  describe('per-key rate limiting (#1505)', () => {
+    function buildAppWithPerKey(
+      windowMs = 60_000,
+      userMaxRequests = 100,
+      keyLimiter?: ReturnType<typeof createRateLimiter>,
+    ) {
+      const app = express();
+
+      app.use((req, res, next) => {
+        const userId = req.header('x-user-id');
+        if (userId) {
+          req.apiKeyRecord = {
+            id: req.header('x-api-key-id') ?? 'key-1',
+            userId,
+            rateLimitPerMinute: req.header('x-rate-limit-per-minute')
+              ? Number(req.header('x-rate-limit-per-minute'))
+              : null,
+          } as any;
+        }
+        res.locals.apiKeyTier = req.header('x-api-key-tier') ?? 'free';
+        next();
+      });
+
+      const rateLimiter = new InMemoryGatewayRateLimiter(windowMs, userMaxRequests);
+      const gatewayRateLimit = createGatewayRateLimitMiddleware(
+        { windowMs, maxRequests: userMaxRequests },
+        rateLimiter,
+        keyLimiter,
+      );
+
+      app.get('/gateway/proxy', gatewayRateLimit, (req, res) => {
+        res.json({ ok: true });
+      });
+
+      app.use(errorHandler);
+      return app;
+    }
+
+    test('Key limit 5/min, tier 100/min -> 6th call gets 429', async () => {
+      const keyLimiter = createRateLimiter(100, 60_000);
+      const app = buildAppWithPerKey(60_000, 100, keyLimiter);
+
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '5')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '5')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '5')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '5')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '5')
+        .expect(200);
+      const response = await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '5');
+
+      expect(response.status).toBe(429);
+      expect(response.body.code).toBe('TOO_MANY_REQUESTS');
+    });
+
+    test('Two keys of one user, key A limited to 2 gets 429 on 3rd; key B unaffected by key A limit', async () => {
+      const keyLimiter = createRateLimiter(100, 60_000);
+      const app = buildAppWithPerKey(60_000, 100, keyLimiter);
+
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '2')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '2')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-a')
+        .set('x-rate-limit-per-minute', '2')
+        .expect(429);
+
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-b')
+        .set('x-rate-limit-per-minute', '2')
+        .expect(200);
+    });
+
+    test('Key limit above the tier applies tier limit', async () => {
+      const keyLimiter = createRateLimiter(100, 60_000);
+      const app = buildAppWithPerKey(60_000, 10000, keyLimiter);
+
+      // pro tier ceiling is 500 in defaults; key asks for 10000
+      const first = await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-pro')
+        .set('x-api-key-tier', 'pro')
+        .set('x-rate-limit-per-minute', '10000');
+      expect(first.status).toBe(200);
+    });
+
+    test('Null key limit leaves tier behaviour unchanged', async () => {
+      const keyLimiter = createRateLimiter(100, 60_000);
+      const app = buildAppWithPerKey(60_000, 2, keyLimiter);
+
+      await request(app).get('/gateway/proxy').set('x-user-id', 'user-1').set('x-api-key-id', 'key-null').expect(200);
+      await request(app).get('/gateway/proxy').set('x-user-id', 'user-1').set('x-api-key-id', 'key-null').expect(200);
+      await request(app).get('/gateway/proxy').set('x-user-id', 'user-1').set('x-api-key-id', 'key-null').expect(429);
+    });
+
+    test('plan_tier = "constructor" gives default policy not NaN with finite headers', async () => {
+      const keyLimiter = createRateLimiter(5, 60_000);
+      const app = buildAppWithPerKey(60_000, 5, keyLimiter);
+
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-ctor')
+        .set('x-api-key-tier', 'constructor')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-ctor')
+        .set('x-api-key-tier', 'constructor')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-ctor')
+        .set('x-api-key-tier', 'constructor')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-ctor')
+        .set('x-api-key-tier', 'constructor')
+        .expect(200);
+      await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-ctor')
+        .set('x-api-key-tier', 'constructor')
+        .expect(200);
+      const response = await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-ctor')
+        .set('x-api-key-tier', 'constructor');
+
+      expect(response.status).toBe(429);
+      expect(response.headers['ratelimit-limit']).toBeDefined();
+      expect(Number.isFinite(Number(response.headers['ratelimit-limit']))).toBe(true);
+    });
+
+    test('Headers on a 429 reflect the key bucket', async () => {
+      const keyLimiter = createRateLimiter(100, 60_000);
+      const app = buildAppWithPerKey(60_000, 100, keyLimiter);
+
+      for (let i = 0; i < 2; i++) {
+        await request(app)
+          .get('/gateway/proxy')
+          .set('x-user-id', 'user-1')
+          .set('x-api-key-id', 'key-h')
+          .set('x-rate-limit-per-minute', '2');
+      }
+      const response = await request(app)
+        .get('/gateway/proxy')
+        .set('x-user-id', 'user-1')
+        .set('x-api-key-id', 'key-h')
+        .set('x-rate-limit-per-minute', '2');
+
+      expect(response.status).toBe(429);
+      expect(response.headers['ratelimit-limit']).toBe('2');
+      expect(response.headers['retry-after']).toBeDefined();
     });
   });
 });

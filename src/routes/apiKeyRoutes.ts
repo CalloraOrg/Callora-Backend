@@ -8,6 +8,11 @@ import { getTokenRevocationService } from '../services/tokenRevocation.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import {
+  PLAN_TIERS,
+  DEFAULT_TIER_POLICIES,
+  isKnownPlanTier,
+} from '../services/rateLimiter.js';
+import {
   ForbiddenError,
   NotFoundError,
   UnauthorizedError,
@@ -29,10 +34,34 @@ const keyIdParamsSchema = z.object({
 const createApiKeyBodySchema = z.object({
   scopes: z.array(z.string().min(1)).max(20).optional().default(['*']),
   rateLimitPerMinute: z.number().int().positive().nullable().optional().default(null),
+  // `plan_tier` is validated against the known set at creation time so an
+  // unknown tier can never reach the limiter's tier resolution (which would
+  // otherwise fall back to defaults). Unknown tier -> 400.
+  tier: z.enum(PLAN_TIERS).optional().default('free'),
 });
 
 function maskKey(prefix: string): string {
   return `${prefix}****************`;
+}
+
+/**
+ * The effective per-key ceiling: the smaller of the key's own
+ * `rateLimitPerMinute` and its tier policy. Keys only narrow — an unset
+ * per-key limit leaves the tier ceiling untouched, and a per-key limit above
+ * the tier is clamped down. Mirrors `StoreBackedRateLimiter.checkKeyLimit`.
+ */
+export function effectiveRateLimitPerMinute(
+  tier: string | undefined,
+  rateLimitPerMinute: number | null | undefined,
+): number {
+  const tierCeiling =
+    tier && isKnownPlanTier(tier)
+      ? DEFAULT_TIER_POLICIES[tier].maxRequests
+      : DEFAULT_TIER_POLICIES.free.maxRequests;
+  if (typeof rateLimitPerMinute === 'number' && rateLimitPerMinute > 0) {
+    return Math.min(rateLimitPerMinute, tierCeiling);
+  }
+  return tierCeiling;
 }
 
 async function assertDeveloperOwnsApi(
@@ -81,7 +110,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
         }
 
         const { apiId } = apiIdParamsSchema.parse(req.params);
-        const { scopes, rateLimitPerMinute } = createApiKeyBodySchema.parse(req.body);
+        const { scopes, rateLimitPerMinute, tier } = createApiKeyBodySchema.parse(req.body);
 
         await assertDeveloperOwnsApi(user.id, apiId, deps);
 
@@ -90,6 +119,7 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
           userId: user.id,
           scopes,
           rateLimitPerMinute,
+          tier,
         });
 
         res.status(201).json({
@@ -100,7 +130,9 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
           createdAt: created.createdAt.toISOString(),
           revoked: false,
           scopes,
+          tier,
           rateLimitPerMinute,
+          effectiveRateLimitPerMinute: effectiveRateLimitPerMinute(tier, rateLimitPerMinute),
         });
       } catch (error) {
         next(error);
@@ -129,7 +161,12 @@ export function createApiKeyRouter(deps: ApiKeyRoutesDeps): Router {
           prefix: record.prefix,
           maskedKey: maskKey(record.prefix),
           scopes: record.scopes,
+          tier: record.tier,
           rateLimitPerMinute: record.rateLimitPerMinute,
+          effectiveRateLimitPerMinute: effectiveRateLimitPerMinute(
+            record.tier,
+            record.rateLimitPerMinute,
+          ),
           createdAt: record.createdAt.toISOString(),
           revoked: record.revoked,
         }));

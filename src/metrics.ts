@@ -627,7 +627,7 @@ const gatewayApiKeyLookupTotal = new client.Counter({
 
 register.registerMetric(gatewayApiKeyLookupTotal);
 
-export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired';
+export type ApiKeyLookupOutcome = 'hit' | 'miss' | 'revoked' | 'expired' | 'error';
 
 export function recordApiKeyLookup(outcome: ApiKeyLookupOutcome): void {
   gatewayApiKeyLookupTotal.inc({ outcome });
@@ -681,7 +681,7 @@ const proxyPrematureAbortsTotal = new client.Counter({
 
 const idempotencyStoreRows = new client.Gauge({
   name: 'idempotency_store_rows',
-  help: 'Current number of rows in the idempotency_store table',
+  help: 'Estimated number of rows in the idempotency_store table (from pg_class.reltuples; may lag behind true count until next ANALYZE). Updated by the idempotency sweeper on each run.',
 });
 
 const endpointThroughputSaturationRatio = new client.Gauge({

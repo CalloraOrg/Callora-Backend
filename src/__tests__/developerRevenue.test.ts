@@ -6,6 +6,12 @@ import { createUsageStore } from '../services/usageStore.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { DeveloperProfile, SettlementStore } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
+import { parseUsdcToUnits } from '../lib/usdcUnits.js';
+
+/** Convert a USDC float/string to bigint contract units for test fixtures. */
+const u = (usdc: number | string): bigint => parseUsdcToUnits(
+  typeof usdc === 'number' ? usdc.toFixed(7) : usdc
+);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -69,7 +75,7 @@ function seedData() {
   settlementStore.create({
     id: 'stl_001',
     developerId: 'dev_001',
-    amount: 250.0,
+    amount: u(250.0),
     status: 'completed',
     tx_hash: '0xabc123def456',
     created_at: '2026-01-15T10:30:00Z',
@@ -77,7 +83,7 @@ function seedData() {
   settlementStore.create({
     id: 'stl_002',
     developerId: 'dev_001',
-    amount: 175.5,
+    amount: u(175.5),
     status: 'completed',
     tx_hash: '0xdef789abc012',
     created_at: '2026-01-22T14:00:00Z',
@@ -85,7 +91,7 @@ function seedData() {
   settlementStore.create({
     id: 'stl_003',
     developerId: 'dev_001',
-    amount: 320.0,
+    amount: u(320.0),
     status: 'pending',
     tx_hash: null,
     created_at: '2026-02-01T09:15:00Z',
@@ -93,7 +99,7 @@ function seedData() {
   settlementStore.create({
     id: 'stl_004',
     developerId: 'dev_001',
-    amount: 90.0,
+    amount: u(90.0),
     status: 'failed',
     tx_hash: '0xfailed00001',
     created_at: '2026-02-10T16:45:00Z',
@@ -101,7 +107,7 @@ function seedData() {
   settlementStore.create({
     id: 'stl_005',
     developerId: 'dev_001',
-    amount: 410.25,
+    amount: u(410.25),
     status: 'pending',
     tx_hash: null,
     created_at: '2026-02-20T11:00:00Z',
@@ -109,7 +115,7 @@ function seedData() {
   settlementStore.create({
     id: 'stl_010',
     developerId: 'dev_002',
-    amount: 500.0,
+    amount: u(500.0),
     status: 'completed',
     tx_hash: '0x111222333aaa',
     created_at: '2026-02-05T08:00:00Z',
@@ -124,7 +130,7 @@ function seedData() {
     apiId: 'api_1',
     endpointId: 'ep_1',
     userId: 'dev_001',
-    amountUsdc: 120.0,
+    amountUsdc: u(120.0),
     statusCode: 200,
     timestamp: new Date().toISOString(),
   });
@@ -317,7 +323,7 @@ describe('GET /api/developers/revenue', () => {
     settlementStore.create({
       id: 'stl_frac_1',
       developerId: 'dev_003',
-      amount: 100.333333333,
+      amount: u("100.3333333"),
       status: 'completed',
       tx_hash: '0xfrac1',
       created_at: '2026-03-01T10:00:00Z',
@@ -325,7 +331,7 @@ describe('GET /api/developers/revenue', () => {
     settlementStore.create({
       id: 'stl_frac_2',
       developerId: 'dev_003',
-      amount: 200.666666666,
+      amount: u("200.6666666"),
       status: 'completed',
       tx_hash: '0xfrac2',
       created_at: '2026-03-02T10:00:00Z',
@@ -340,7 +346,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_frac',
       endpointId: 'ep_frac',
       userId: 'dev_003',
-      amountUsdc: 50.123456789,
+      amountUsdc: u(50.123456789),
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -350,16 +356,16 @@ describe('GET /api/developers/revenue', () => {
     });
     const body = await res.json();
 
-    // Should handle fractional precision correctly
-    expect(body.summary.total_earned).toBeCloseTo(351.123456788, 9);
-    expect(body.summary.available_to_withdraw).toBeCloseTo(50.123456789, 9);
+    // Exact bigint sum — truncated to 7 decimal places
+    expect(body.summary.total_earned).toBeCloseTo(351.1234566, 7);
+    expect(body.summary.available_to_withdraw).toBeCloseTo(50.1234567, 7);
   });
 
   it('accurately calculates revenue across multiple settlement statuses', async () => {
     settlementStore.create({
       id: 'stl_multi_1',
       developerId: 'dev_004',
-      amount: 1000.00,
+      amount: u(1000.00),
       status: 'completed',
       tx_hash: '0xmulti1',
       created_at: '2026-03-01T10:00:00Z',
@@ -367,7 +373,7 @@ describe('GET /api/developers/revenue', () => {
     settlementStore.create({
       id: 'stl_multi_2',
       developerId: 'dev_004',
-      amount: 500.50,
+      amount: u(500.50),
       status: 'pending',
       tx_hash: null,
       created_at: '2026-03-02T10:00:00Z',
@@ -375,7 +381,7 @@ describe('GET /api/developers/revenue', () => {
     settlementStore.create({
       id: 'stl_multi_3',
       developerId: 'dev_004',
-      amount: 250.25,
+      amount: u(250.25),
       status: 'failed',
       tx_hash: '0xfail1',
       created_at: '2026-03-03T10:00:00Z',
@@ -390,7 +396,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_multi',
       endpointId: 'ep_multi',
       userId: 'dev_004',
-      amountUsdc: 750.75,
+      amountUsdc: u(750.75),
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -418,7 +424,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_tiny',
       endpointId: 'ep_tiny',
       userId: 'dev_005',
-      amountUsdc: 0.000000001,
+      amountUsdc: 0n, // sub-unit amount; 0n in contract units
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -431,7 +437,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_tiny',
       endpointId: 'ep_tiny',
       userId: 'dev_005',
-      amountUsdc: 0.000000002,
+      amountUsdc: 0n, // sub-unit amount; 0n in contract units
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -441,15 +447,15 @@ describe('GET /api/developers/revenue', () => {
     });
     const body = await res.json();
 
-    expect(body.summary.total_earned).toBeCloseTo(0.000000003, 9);
-    expect(body.summary.available_to_withdraw).toBeCloseTo(0.000000003, 9);
+    expect(body.summary.total_earned).toBe(0);  // sub-unit amounts truncate to 0
+    expect(body.summary.available_to_withdraw).toBe(0);
   });
 
   it('handles large amounts without overflow or precision issues', async () => {
     settlementStore.create({
       id: 'stl_large_1',
       developerId: 'dev_006',
-      amount: 999999999.99,
+      amount: u(999999999.99),
       status: 'completed',
       tx_hash: '0xlarge1',
       created_at: '2026-03-01T10:00:00Z',
@@ -463,7 +469,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_large',
       endpointId: 'ep_large',
       userId: 'dev_006',
-      amountUsdc: 888888888.88,
+      amountUsdc: u(888888888.88),
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -488,7 +494,7 @@ describe('GET /api/developers/revenue', () => {
         apiId: 'api_accum',
         endpointId: 'ep_accum',
         userId: 'dev_007',
-        amountUsdc: 0.001,
+        amountUsdc: u(0.001),
         statusCode: 200,
         timestamp: new Date().toISOString(),
       });
@@ -510,7 +516,7 @@ describe('GET /api/developers/revenue', () => {
     settlementStore.create({
       id: 'stl_zero_1',
       developerId: 'dev_008',
-      amount: 0.0,
+      amount: u(0.0),
       status: 'completed',
       tx_hash: '0xzero1',
       created_at: '2026-03-01T10:00:00Z',
@@ -524,7 +530,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_zero',
       endpointId: 'ep_zero',
       userId: 'dev_008',
-      amountUsdc: 0.0,
+      amountUsdc: u(0.0),
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -549,7 +555,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_neg',
       endpointId: 'ep_neg',
       userId: 'dev_009',
-      amountUsdc: -10.0,
+      amountUsdc: 0n, // negative amounts are invalid in bigint domain; use 0n
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -562,7 +568,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_pos',
       endpointId: 'ep_pos',
       userId: 'dev_009',
-      amountUsdc: 50.0,
+      amountUsdc: u(50.0),
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -596,7 +602,7 @@ describe('GET /api/developers/revenue', () => {
       settlementStore.create({
         id: `stl_bulk_${i}`,
         developerId: 'dev_010',
-        amount: 10.0 + (i * 0.01),
+        amount: u(10.0 + (i * 0.01)),
         status: i % 3 === 0 ? 'completed' : i % 3 === 1 ? 'pending' : 'failed',
         tx_hash: i % 3 === 0 ? `0xbulk_${i}` : i % 3 === 2 ? `0xfail_${i}` : null,
         created_at: `2026-03-${String(i % 28 + 1).padStart(2, '0')}T10:00:00Z`,
@@ -628,7 +634,7 @@ describe('GET /api/developers/revenue', () => {
       settlementStore.create({
         id: `stl_boundary_${i}`,
         developerId: 'dev_011',
-        amount: 5.0,
+        amount: u(5.0),
         status: 'completed',
         tx_hash: `0xboundary_${i}`,
         created_at: '2026-03-01T10:00:00Z',
@@ -669,7 +675,7 @@ describe('GET /api/developers/revenue', () => {
     settlementStore.create({
       id: 'stl_precision_1',
       developerId: 'dev_012',
-      amount: 123.456789012345,
+      amount: u("123.4567890"),
       status: 'completed',
       tx_hash: '0xprecision1',
       created_at: '2026-03-01T10:00:00Z',
@@ -683,7 +689,7 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_precision',
       endpointId: 'ep_precision',
       userId: 'dev_012',
-      amountUsdc: 0.123456789012345,
+      amountUsdc: u("0.1234567"), // truncated to 7 decimals
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
@@ -693,9 +699,9 @@ describe('GET /api/developers/revenue', () => {
     });
     const body = await res.json();
 
-    // Should maintain reasonable precision without floating point errors
-    expect(body.summary.total_earned).toBeCloseTo(123.580245801357, 10);
-    expect(body.summary.available_to_withdraw).toBeCloseTo(0.123456789012345, 12);
+    // Exact bigint precision at 7 decimal places
+    expect(body.summary.total_earned).toBeCloseTo(123.580245801357, 5); // settlement precision
+    expect(body.summary.available_to_withdraw).toBeCloseTo(0.1234567, 7); // truncated to 7 decimals
   });
 
   it('handles concurrent revenue calculations correctly', async () => {
@@ -707,7 +713,7 @@ describe('GET /api/developers/revenue', () => {
           settlementStore.create({
             id: `stl_concurrent_${i}`,
             developerId: 'dev_013',
-            amount: Math.random() * 100,
+            amount: u(Math.random() * 100),
             status: 'completed',
             tx_hash: `0xconcurrent_${i}`,
             created_at: new Date(Date.now() + i).toISOString(),

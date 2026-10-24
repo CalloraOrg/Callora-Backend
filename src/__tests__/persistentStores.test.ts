@@ -79,7 +79,7 @@ test('PostgresSettlementStore preserves ordering and status updates', async () =
     await settlementStore.create({
       id: 'stl_older',
       developerId: 'dev_1',
-      amount: 10,
+      amount: 100000000n,
       status: 'pending',
       tx_hash: null,
       created_at: '2026-01-01T00:00:00.000Z',
@@ -87,7 +87,7 @@ test('PostgresSettlementStore preserves ordering and status updates', async () =
     await settlementStore.create({
       id: 'stl_newer',
       developerId: 'dev_1',
-      amount: 25,
+      amount: 250000000n,
       status: 'pending',
       tx_hash: null,
       created_at: '2026-01-02T00:00:00.000Z',
@@ -101,7 +101,7 @@ test('PostgresSettlementStore preserves ordering and status updates', async () =
     expect(settlements[0]).toMatchObject({
       status: 'completed',
       tx_hash: 'stellar-tx-1',
-      amount: 25,
+      amount: 250000000n,
     });
   } finally {
     await pool.end();
@@ -125,7 +125,7 @@ test('PostgresUsageStore records idempotently without accruing unconfirmed reven
       apiId: 'api-1',
       endpointId: 'endpoint-1',
       userId: 'dev_1',
-      amountUsdc: 4.25,
+      amountUsdc: 42500000n,
       statusCode: 200,
       timestamp: '2026-02-01T10:00:00.000Z',
     });
@@ -138,7 +138,7 @@ test('PostgresUsageStore records idempotently without accruing unconfirmed reven
       apiId: 'api-1',
       endpointId: 'endpoint-1',
       userId: 'dev_1',
-      amountUsdc: 999,
+      amountUsdc: 9990000000n,
       statusCode: 500,
       timestamp: '2026-02-02T10:00:00.000Z',
     });
@@ -154,7 +154,7 @@ test('PostgresUsageStore records idempotently without accruing unconfirmed reven
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       requestId: 'req-1',
-      amountUsdc: 4.25,
+      amountUsdc: 42500000n,
       statusCode: 200,
       apiKey: 'key-1',
       userId: 'api-owner-1',
@@ -173,7 +173,7 @@ test('PostgresUsageStore records idempotently without accruing unconfirmed reven
     await settlementStore.create({
       id: 'stl_1',
       developerId: 'dev_1',
-      amount: 4.25,
+      amount: 42500000n,
       status: 'pending',
       tx_hash: null,
       created_at: '2026-02-03T10:00:00.000Z',
@@ -198,7 +198,7 @@ test('voided unsettled revenue is reversed and settled revenue receives a negati
     await pool.query('INSERT INTO apis (id, developer_id) VALUES ($1, $2)', ['api-void', 'dev-void']);
     await usageStore.record({
       id: 'void-unsettled', requestId: 'req-void-unsettled', apiKey: 'key-void', apiKeyId: 'key-void',
-      apiId: 'api-void', endpointId: 'ep-void', userId: 'consumer', amountUsdc: 7, statusCode: 200,
+      apiId: 'api-void', endpointId: 'ep-void', userId: 'consumer', amountUsdc: 7n, statusCode: 200,
       timestamp: '2026-02-01T00:00:00.000Z',
     });
     await pool.query("UPDATE usage_events SET stellar_tx_hash = 'tx-u', deduction_status = 'confirmed' WHERE request_id = 'req-void-unsettled'");
@@ -216,7 +216,7 @@ test('voided unsettled revenue is reversed and settled revenue receives a negati
 
     await usageStore.record({
       id: 'void-settled', requestId: 'req-void-settled', apiKey: 'key-void', apiKeyId: 'key-void',
-      apiId: 'api-void', endpointId: 'ep-void', userId: 'consumer', amountUsdc: 9, statusCode: 200,
+      apiId: 'api-void', endpointId: 'ep-void', userId: 'consumer', amountUsdc: 9n, statusCode: 200,
       timestamp: '2026-02-02T00:00:00.000Z',
     });
     await pool.query("UPDATE usage_events SET stellar_tx_hash = 'tx-s', deduction_status = 'confirmed' WHERE request_id = 'req-void-settled'");
@@ -225,7 +225,7 @@ test('voided unsettled revenue is reversed and settled revenue receives a negati
        SELECT api_id, 'dev-void', amount_usdc, id, created_at FROM usage_events WHERE request_id = 'req-void-settled'`,
     );
     await settlementStore.create({
-      id: 'stl-void-settled', developerId: 'dev-void', amount: 9, status: 'completed', tx_hash: 'tx-settlement',
+      id: 'stl-void-settled', developerId: 'dev-void', amount: 9n, status: 'completed', tx_hash: 'tx-settlement',
       created_at: '2026-02-03T00:00:00.000Z',
     });
     const settledEvent = (await usageStore.getEvents('key-void')).find((event) => event.requestId === 'req-void-settled');
@@ -267,7 +267,7 @@ test('persistent stores survive new instances and keep developer revenue availab
     await harness.settlementStore.create({
       id: 'stl_completed',
       developerId: 'dev_restart',
-      amount: 8,
+      amount: 80000000n,
       status: 'completed',
       tx_hash: 'stellar-complete',
       created_at: '2026-02-01T00:00:00.000Z',
@@ -275,7 +275,7 @@ test('persistent stores survive new instances and keep developer revenue availab
     await harness.settlementStore.create({
       id: 'stl_pending',
       developerId: 'dev_restart',
-      amount: 5,
+      amount: 50000000n,
       status: 'pending',
       tx_hash: null,
       created_at: '2026-02-02T00:00:00.000Z',
@@ -288,7 +288,7 @@ test('persistent stores survive new instances and keep developer revenue availab
       apiId: 'api-restart',
       endpointId: 'endpoint-restart',
       userId: 'dev_restart',
-      amountUsdc: 3,
+      amountUsdc: 30000000n,
       statusCode: 200,
       timestamp: '2026-02-03T00:00:00.000Z',
     });

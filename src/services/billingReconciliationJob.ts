@@ -64,6 +64,39 @@ export interface BillingReconciliationJobOptions {
   logger?: Pick<typeof logger, 'info' | 'warn' | 'error'>;
 }
 
+export class ReconciliationDataError extends Error {
+  public readonly developerId?: string;
+  public readonly source?: string;
+  public readonly rawValue?: unknown;
+
+  constructor(
+    message: string,
+    options?: { developerId?: string; source?: string; rawValue?: unknown },
+  ) {
+    super(message);
+    this.name = 'ReconciliationDataError';
+    this.developerId = options?.developerId;
+    this.source = options?.source;
+    this.rawValue = options?.rawValue;
+    Object.setPrototypeOf(this, ReconciliationDataError.prototype);
+  }
+}
+
+function parseReconciliationTotal(
+  rawTotal: string,
+  developerId: string,
+  source: string,
+): bigint {
+  const trimmed = (rawTotal ?? '').trim();
+  if (!/^-?\d+$/.test(trimmed)) {
+    throw new ReconciliationDataError(
+      `Invalid non-integer ${source} total "${rawTotal}" for developer ${developerId}`,
+      { developerId, source, rawValue: rawTotal },
+    );
+  }
+  return BigInt(trimmed);
+}
+
 // ---------------------------------------------------------------------------
 // Core job class
 // ---------------------------------------------------------------------------
@@ -176,7 +209,7 @@ export class BillingReconciliationJob {
     );
     return result.rows.map((r) => ({
       developer_id: r.developer_id,
-      total: BigInt(r.total),
+      total: parseReconciliationTotal(r.total, r.developer_id, 'usage_events'),
     }));
   }
 
@@ -188,7 +221,7 @@ export class BillingReconciliationJob {
     );
     return result.rows.map((r) => ({
       developer_id: r.developer_id,
-      total: BigInt(r.total),
+      total: parseReconciliationTotal(r.total, r.developer_id, 'revenue_ledger'),
     }));
   }
 }

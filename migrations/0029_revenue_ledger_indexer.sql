@@ -1,3 +1,4 @@
+-- dialect: postgres
 -- Durable revenue ledger indexing, retry tracking, and reversal support.
 
 CREATE TABLE IF NOT EXISTS indexer_checkpoints (
@@ -28,3 +29,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_revenue_ledger_reversal_event
 -- unique idx_revenue_ledger_usage_event anti-join index from migration 005.
 CREATE INDEX IF NOT EXISTS idx_usage_events_revenue_scan
   ON usage_events (id) WHERE stellar_tx_hash IS NOT NULL;
+
+-- Reversal rows are zeroed (unsettled) or negative (compensating a settled
+-- payout). Migration 0026 requires amount_usdc > 0, so allow non-positive
+-- amounts only on rows that are marked reversed.
+ALTER TABLE revenue_ledger
+  DROP CONSTRAINT IF EXISTS chk_revenue_ledger_amount_usdc_positive;
+ALTER TABLE revenue_ledger
+  ADD CONSTRAINT chk_revenue_ledger_amount_usdc_positive
+  CHECK (amount_usdc > 0 OR reversed_at IS NOT NULL);

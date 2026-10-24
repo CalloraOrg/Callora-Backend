@@ -179,7 +179,7 @@ describe('TransactionBuilderService — smoke tests (extended)', () => {
 
   test('smoke: happy path returns a valid unsigned XDR transaction', async () => {
     const result = await makeService().buildDepositTransaction({
-      userPublicKey: VALID_USER_KEY,
+      userStellarAddress: VALID_USER_KEY,
       vaultContractId: VALID_VAULT,
       amountUsdc: VALID_AMOUNT,
     });
@@ -201,7 +201,7 @@ describe('TransactionBuilderService — smoke tests (extended)', () => {
     const createServer = jest.fn().mockReturnValue(fakeServer);
 
     await makeService({ createServer }).buildDepositTransaction({
-      userPublicKey: VALID_USER_KEY,
+      userStellarAddress: VALID_USER_KEY,
       vaultContractId: VALID_VAULT,
       amountUsdc: VALID_AMOUNT,
     });
@@ -214,7 +214,7 @@ describe('TransactionBuilderService — smoke tests (extended)', () => {
 
   test('smoke: whitespace-only memo is treated as absent (no memo added)', async () => {
     const result = await makeService().buildDepositTransaction({
-      userPublicKey: VALID_USER_KEY,
+      userStellarAddress: VALID_USER_KEY,
       vaultContractId: VALID_VAULT,
       amountUsdc: VALID_AMOUNT,
       memoText: '   ',
@@ -226,7 +226,7 @@ describe('TransactionBuilderService — smoke tests (extended)', () => {
 
   test('smoke: null memo is treated as absent (no memo added)', async () => {
     const result = await makeService().buildDepositTransaction({
-      userPublicKey: VALID_USER_KEY,
+      userStellarAddress: VALID_USER_KEY,
       vaultContractId: VALID_VAULT,
       amountUsdc: VALID_AMOUNT,
       memoText: null,
@@ -238,7 +238,7 @@ describe('TransactionBuilderService — smoke tests (extended)', () => {
 
   test('smoke: amount with maximum allowed value builds successfully', async () => {
     const result = await makeService().buildDepositTransaction({
-      userPublicKey: VALID_USER_KEY,
+      userStellarAddress: VALID_USER_KEY,
       vaultContractId: VALID_VAULT,
       amountUsdc: '1000000000.0000000', // exactly 1 billion USDC
     });
@@ -256,7 +256,7 @@ describe('TransactionBuilderService — smoke tests (extended)', () => {
 test('smoke: rejects mismatched vault contract ID with NetworkError before account load', async () => {
     await assert.rejects(
       makeService().buildDepositTransaction({
-        userPublicKey: VALID_USER_KEY,
+        userStellarAddress: VALID_USER_KEY,
         vaultContractId: 'BADCONTRACT',
         amountUsdc: VALID_AMOUNT,
       }),
@@ -269,7 +269,7 @@ test('smoke: rejects mismatched vault contract ID with NetworkError before accou
   test('smoke: rejects bad user public key with InvalidStellarAddressError', async () => {
     await assert.rejects(
       makeService().buildDepositTransaction({
-        userPublicKey: 'BADKEY',
+        userStellarAddress: 'BADKEY',
         vaultContractId: VALID_VAULT,
         amountUsdc: VALID_AMOUNT,
       }),
@@ -282,7 +282,7 @@ test('smoke: rejects mismatched vault contract ID with NetworkError before accou
   test('smoke: rejects zero-value amount with InvalidAmountError', async () => {
     await assert.rejects(
       makeService().buildDepositTransaction({
-        userPublicKey: VALID_USER_KEY,
+        userStellarAddress: VALID_USER_KEY,
         vaultContractId: VALID_VAULT,
         amountUsdc: '0.0000000',
       }),
@@ -295,7 +295,7 @@ test('smoke: rejects mismatched vault contract ID with NetworkError before accou
   test('smoke: rejects amount missing decimal part with InvalidAmountError', async () => {
     await assert.rejects(
       makeService().buildDepositTransaction({
-        userPublicKey: VALID_USER_KEY,
+        userStellarAddress: VALID_USER_KEY,
         vaultContractId: VALID_VAULT,
         amountUsdc: '100',
       }),
@@ -306,7 +306,7 @@ test('smoke: rejects mismatched vault contract ID with NetworkError before accou
   test('smoke: rejects amount with fewer than 7 decimal places with InvalidAmountError', async () => {
     await assert.rejects(
       makeService().buildDepositTransaction({
-        userPublicKey: VALID_USER_KEY,
+        userStellarAddress: VALID_USER_KEY,
         vaultContractId: VALID_VAULT,
         amountUsdc: '1.000',
       }),
@@ -319,7 +319,7 @@ test('smoke: rejects mismatched vault contract ID with NetworkError before accou
   test('smoke: rejects request network that differs from configured network', async () => {
     await assert.rejects(
       makeService().buildDepositTransaction({
-        userPublicKey: VALID_USER_KEY,
+        userStellarAddress: VALID_USER_KEY,
         vaultContractId: 'CVAULTMAIN',
         amountUsdc: VALID_AMOUNT,
         network: 'mainnet', // config is set to testnet
@@ -333,7 +333,7 @@ test('smoke: rejects mismatched vault contract ID with NetworkError before accou
   test('smoke: rejects vault contract ID that does not match configured ID', async () => {
     await assert.rejects(
       makeService().buildDepositTransaction({
-        userPublicKey: VALID_USER_KEY,
+        userStellarAddress: VALID_USER_KEY,
         vaultContractId: 'CDIFFERENTVAULT',
         amountUsdc: VALID_AMOUNT,
       }),
