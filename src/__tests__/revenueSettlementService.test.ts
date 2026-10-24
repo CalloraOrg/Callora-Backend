@@ -66,6 +66,21 @@ describe('RevenueSettlementService', () => {
     errorSpy.mockRestore();
   });
 
+  it('handles concurrent batches and claim/release paths safely', async () => {
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(6) });
+    const [res1, res2] = await Promise.all([
+      service.runBatch(),
+      service.runBatch(),
+    ]);
+    expect(res1.processed + res2.processed).toBe(1);
+    expect(res1.settledAmount + res2.settledAmount).toBe(USDC(6));
+  });
+
+  it('throws on markAsSettled row-count mismatch or missing settlement', async () => {
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(5) });
+    expect(() => usageStore.markAsSettled(['e1', 'nonexistent'], 'stl_missing')).toThrow();
+  });
+
   it('aggregates events and pays out when the minimum is met', async () => {
     recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: USDC(4) });
     recordUsageEvent(usageStore, { id: 'e2', requestId: 'r2', apiId: 'api_1', amountUsdc: USDC(2) });
