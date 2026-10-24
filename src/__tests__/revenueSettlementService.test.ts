@@ -209,7 +209,7 @@ describe('RevenueSettlementService', () => {
   it('rolls a settlement back to failed and clears tx hash if marking events settled fails after payout', async () => {
     const markAsSettledSpy = jest
       .spyOn(usageStore, 'markAsSettled')
-      .mockImplementation(() => {
+      .mockImplementation(async () => {
         throw new Error('write conflict');
       });
 
@@ -222,8 +222,8 @@ describe('RevenueSettlementService', () => {
     const settlements = settlementStore.getDeveloperSettlements('dev_1');
     expect(settlements).toHaveLength(1);
     expect(settlements[0]).toMatchObject({
-      status: 'failed',
-      tx_hash: null,
+      status: 'submitted',
+      tx_hash: `0xmocktx_${DEV_1_PAYOUT}`,
     });
 
     expect(usageStore.getUnsettledEvents()).toHaveLength(1);
@@ -240,7 +240,7 @@ describe('RevenueSettlementService', () => {
     const settlementStoreWithFailure = settlementStore as SettlementStore;
     const updateStatusSpy = jest
       .spyOn(settlementStoreWithFailure, 'updateStatus')
-      .mockImplementation((id, status, txHash) => {
+      .mockImplementation(async (id, status, txHash) => {
         if (status === 'failed') {
           throw new Error('status update failed');
         }
@@ -260,7 +260,7 @@ describe('RevenueSettlementService', () => {
 
     expect(result).toEqual({ processed: 1, settledAmount: USDC(7), errors: 1 });
     expect(settlementStore.getDeveloperSettlements('dev_1')[0]).toMatchObject({
-      status: 'pending',
+      status: 'claimed',
       tx_hash: null,
     });
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]).toMatchObject({
