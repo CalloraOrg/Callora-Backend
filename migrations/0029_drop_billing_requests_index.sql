@@ -5,5 +5,5 @@
 -- migration.  GET /api/billing has been rewritten to serve from usage_events,
 -- so this index is dead.  Drop it if it somehow exists.
 --
--- destructive-approved: #billing-history
+-- destructive-approved: #1532
 DROP INDEX IF EXISTS idx_billing_requests_lookup_hot;

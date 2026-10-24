@@ -21,15 +21,11 @@ import { Pool } from 'pg';
 import { GenericContainer, Wait } from 'testcontainers';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import {
   sweepIdempotencyStoreRows,
   DEFAULT_SWEEPER_CONFIG,
   type IdempotencySweeperConfig,
 } from '../../src/services/idempotencySweeper.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // ============================================================================
 // Test Setup
@@ -53,7 +49,7 @@ beforeAll(async () => {
       POSTGRES_USER: 'test_user',
       POSTGRES_PASSWORD: 'test_password',
     })
-    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/))
+    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
     .withExposedPorts(5432)
     .start();
 
@@ -223,9 +219,20 @@ describe('Idempotency Sweeper Integration Tests', () => {
       );
     }
 
-    // Sweep with very tight time budget (100ms)
+    // Sweep with a 100ms budget. The clock is driven deterministically: the
+    // run starts at t=0, the first batch check sees t=0 and every later check
+    // sees t=1000, so exactly one batch runs regardless of runner speed.
     const config: IdempotencySweeperConfig = { batchSize: 5000, timeBudgetMs: 100 };
-    const rowCount = await sweepIdempotencyStoreRows(pool, config);
+    const nowSpy = jest
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(1000);
+    try {
+      await sweepIdempotencyStoreRows(pool, config);
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     // With a 100ms budget, we expect to delete only the first batch (5k rows)
     // and possibly the second batch if execution is fast enough

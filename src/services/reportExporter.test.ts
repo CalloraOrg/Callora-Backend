@@ -200,7 +200,7 @@ test('paged ranged reads replace full table reads for large export sets', async 
   expect(getPage).toHaveBeenCalledWith(expect.any(Date), expect.any(Date), expect.objectContaining({ limit: 100 }));
   expect(getPage.mock.calls.some(([, , options]) => options.developerId !== undefined)).toBe(true);
   expect(client.uploads).toHaveLength(10);
-  expect(client.uploads.find((upload) => upload.key.endsWith('.csv'))?.body.split('\n')).toHaveLength(10_001);
+  expect(client.uploads.find((upload) => upload.key.endsWith('.csv'))?.body.trimEnd().split('\n')).toHaveLength(10_001);
 });
 
 // ─── listExportsForDeveloper ───────────────────────────────────────────────

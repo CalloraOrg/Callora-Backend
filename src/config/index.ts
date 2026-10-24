@@ -12,11 +12,9 @@ interface StellarNetworkConfig {
   networkPassphrase: string;
   vaultContractId?: string;
   settlementContractId?: string;
-  revenuePoolContractId?: string;
-  xusdContractId?: string;
 }
 
-const TESTNET_NETWORK_PASPPRASE = "Test DF Network ; September 2015";
+const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 const MAINNET_NETWORK_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
 
@@ -71,12 +69,10 @@ const testnetConfig: StellarNetworkConfig = {
     "SOROBAN_TESTNET_RPC_URL",
     env.SOROBAN_TESTNET_RPC_URL,
   ),
-  networkPassphrase: TESTNET_NETWORK_PASPPRASE,
+  networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_TESTNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID,
-  revenuePoolContractId: env.STELLAR_TESTNET_REVENUE_POOL_CONTRACT_ID,
-  xusdContractId: env.STELLAR_TESTNET_USDC_CONTRACT_ID,
-} as StellarNetworkConfig;
+};
 
 const mainnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
@@ -90,9 +86,7 @@ const mainnetConfig: StellarNetworkConfig = {
   networkPassphrase: MAINNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
-  revenuePoolContractId: env.STELLAR_MAINNET_REVENUE_POOL_CONTRACT_ID,
-  xusdContractId: env.STELLAR_MAINNET_USDC_CONTRACT_ID,
-} as StellarNetworkConfig;
+};
 
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;

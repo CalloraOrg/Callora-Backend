@@ -357,6 +357,7 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
     const apiId = assertNonEmpty(event.apiId, 'apiId');
     const endpointId = assertNonEmpty(event.endpointId, 'endpointId');
     const apiKeyId = assertNonEmpty(event.apiKeyId, 'apiKeyId');
+    const developerId = (event.developerId ?? '').trim();
     const requestId = assertNonEmpty(event.requestId, 'requestId');
     const amountVal = typeof event.amount === 'bigint'
       ? assertAmount(event.amount)
@@ -365,55 +366,49 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
 
     const result = await this.writeDb.query<UsageEventRow>(
       `
-      WITH owner AS (
-        SELECT developer_id::text AS developer_id FROM apis WHERE id::text = $2 LIMIT 1
-      ), reservation AS (
-        INSERT INTO usage_event_request_ids (request_id, usage_event_id, developer_id)
-        SELECT $6, nextval(pg_get_serial_sequence('usage_events', 'id')), developer_id FROM owner
-        ON CONFLICT (request_id) DO NOTHING
-        RETURNING usage_event_id, developer_id
-      ), inserted AS (
-        INSERT INTO usage_events (
-          id, user_id, api_id, endpoint_id, api_key_id, developer_id,
-          amount_usdc, request_id, stellar_tx_hash, created_at
-        )
-        SELECT r.usage_event_id, $1, $2, $3, $4, r.developer_id,
-               $5, $6, $7, COALESCE($8, NOW())
-        FROM reservation r
-        RETURNING id, user_id, api_id, endpoint_id, api_key_id, developer_id,
-                  amount_usdc, request_id, stellar_tx_hash, created_at
+      INSERT INTO usage_events (
+        user_id,
+        api_id,
+        endpoint_id,
+        api_key_id,
+        developer_id,
+        amount_usdc,
+        request_id,
+        stellar_tx_hash,
+        created_at
       )
-      SELECT * FROM inserted
-      UNION ALL
-      SELECT ue.id, ue.user_id, ue.api_id, ue.endpoint_id, ue.api_key_id,
-             ue.developer_id, ue.amount_usdc, ue.request_id, ue.stellar_tx_hash, ue.created_at
-      FROM usage_event_request_ids r
-      JOIN usage_events ue ON ue.id = r.usage_event_id
-      WHERE r.request_id = $6 AND NOT EXISTS (SELECT 1 FROM inserted)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()))
+      ON CONFLICT (request_id, developer_id)
+      DO UPDATE SET request_id = EXCLUDED.request_id
+      RETURNING
+        id,
+        user_id,
+        api_id,
+        endpoint_id,
+        api_key_id,
+        developer_id,
+        amount_usdc,
+        request_id,
+        stellar_tx_hash,
+        created_at
     `,
       [
-        userId, apiId, endpointId, apiKeyId, amount, requestId,
-        event.stellarTxHash ?? null, event.createdAt ?? null,
+        userId,
+        apiId,
+        endpointId,
+        apiKeyId,
+        developerId,
+        amount,
+        requestId,
+        event.stellarTxHash ?? null,
+        event.createdAt ?? null,
       ],
     );
 
     const row = result.rows[0];
 
     if (!row) {
-      const api = await this.writeDb.query('SELECT 1 FROM apis WHERE id::text = $1 LIMIT 1', [apiId]);
-      if (!api.rows[0]) {
-        throw Object.assign(new Error(`Unknown API: ${apiId}`), { statusCode: 404, code: 'API_NOT_FOUND' });
-      }
-      // A concurrent writer may have committed the reservation after this
-      // statement's snapshot was taken. A fresh statement sees its complete row.
-      const retry = await this.writeDb.query<UsageEventRow>(
-        `SELECT ue.id, ue.user_id, ue.api_id, ue.endpoint_id, ue.api_key_id,
-                ue.developer_id, ue.amount_usdc, ue.request_id, ue.stellar_tx_hash, ue.created_at
-           FROM usage_event_request_ids r JOIN usage_events ue ON ue.id = r.usage_event_id
-          WHERE r.request_id = $1`, [requestId],
-      );
-      if (!retry.rows[0]) throw new Error(`Reserved request id has no usage event: ${requestId}`);
-      return mapUsageEventRow(retry.rows[0]);
+      throw new Error(`Failed to create or retrieve usage event for requestId "${requestId}".`);
     }
 
     return mapUsageEventRow(row);
@@ -754,14 +749,21 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
         client.release();
       }
     }
-    const result = await this.writeDb.query<{ name: string }>(
-      `INSERT INTO indexer_checkpoints (name, last_usage_event_id, updated_at, locked_until)
-       VALUES ('revenue_ledger', 0, NOW(), NOW() + INTERVAL '15 minutes')
-       ON CONFLICT (name) DO UPDATE SET locked_until = NOW() + INTERVAL '15 minutes'
-       WHERE indexer_checkpoints.locked_until IS NULL OR indexer_checkpoints.locked_until < NOW()
+    // Lease fallback: take an expired/free lease atomically, otherwise create
+    // the checkpoint row. Exactly one concurrent caller wins either statement.
+    const taken = await this.writeDb.query<{ name: string }>(
+      `UPDATE indexer_checkpoints SET locked_until = NOW() + INTERVAL '15 minutes'
+       WHERE name = 'revenue_ledger' AND (locked_until IS NULL OR locked_until < NOW())
        RETURNING name`,
     );
-    return result.rows.length > 0;
+    if (taken.rows.length > 0) return true;
+    const created = await this.writeDb.query<{ name: string }>(
+      `INSERT INTO indexer_checkpoints (name, last_usage_event_id, updated_at, locked_until)
+       VALUES ('revenue_ledger', 0, NOW(), NOW() + INTERVAL '15 minutes')
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+    );
+    return created.rows.length > 0;
   }
 
   async releaseRevenueLedgerIndexerLock(): Promise<void> {
@@ -792,13 +794,15 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
           usage_event_id,
           created_at
         )
-        SELECT $1, $2, $3::numeric, ue.id, $5::timestamp
-        FROM usage_events ue
-        WHERE ue.id = $4::bigint
-          AND ue.stellar_tx_hash IS NOT NULL
-          ${confirmationPredicate}
+        SELECT $1, $2, $3::numeric, $4::bigint, $5::timestamp
+        WHERE EXISTS (
+            SELECT 1 FROM usage_events ue
+            WHERE ue.id = $4::bigint
+              AND ue.stellar_tx_hash IS NOT NULL
+              ${confirmationPredicate}
+          )
           AND NOT EXISTS (
-            SELECT 1 FROM revenue_ledger existing WHERE existing.usage_event_id = ue.id
+            SELECT 1 FROM revenue_ledger existing WHERE existing.usage_event_id = $4::bigint
           )
         ON CONFLICT (usage_event_id) DO NOTHING
         RETURNING 1 AS inserted

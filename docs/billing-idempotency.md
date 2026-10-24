@@ -745,7 +745,7 @@ original request identifier. Do not generate a new identifier to retry a charge.
 
 The lease prevents stale database writes, but cannot cancel an external side
 effect after a disconnect or crash. Billing's persistent request identifier and
-Soroban idempotency remain necessary. Apply migration `0027_idempotency_lease`
+Soroban idempotency remain necessary. Apply migration `0028_idempotency_lease`
 and drain old application instances before enabling takeover: old binaries do
 not fence writes. Existing completed JSON records remain replayable. On rollback,
 roll back the application before removing the lease column; new response-format

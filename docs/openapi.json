@@ -1253,18 +1253,6 @@
                       "requestId": "req-abc123"
                     }
                   },
-                  "requestIdConflict": {
-                    "summary": "requestId already used for a different deduction",
-                    "value": {
-                      "success": false,
-                      "error": {
-                        "code": "BILLING_REQUEST_ID_CONFLICT",
-                        "message": "requestId already used for a different deduction"
-                      },
-                      "requestId": "req-abc123",
-                      "timestamp": "2026-07-28T10:00:00.000Z"
-                    }
-                  },
                   "reconciliationRequired": {
                     "summary": "Previous deduction attempt pending reconciliation",
                     "value": {
@@ -1354,20 +1342,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BillingBulkDeductErrorResponse"
-                },
-                "examples": {
-                  "requestIdConflict": {
-                    "summary": "A bulk item reuses a requestId with different deduction fields",
-                    "value": {
-                      "success": false,
-                      "error": {
-                        "code": "BILLING_REQUEST_ID_CONFLICT",
-                        "message": "requestId already used for a different deduction"
-                      },
-                      "requestId": "req-abc123",
-                      "timestamp": "2026-07-28T10:00:00.000Z"
-                    }
-                  }
                 }
               }
             }
@@ -8376,7 +8350,6 @@
           "IDEMPOTENCY_CONFLICT",
           "IDEMPOTENCY_RESPONSE_TOO_LARGE",
           "IDEMPOTENCY_IN_PROGRESS",
-          "BILLING_REQUEST_ID_CONFLICT",
           "SIMULATION_FAILED",
           "INVALID_AUTH_HEADER",
           "MISSING_TOKEN",
