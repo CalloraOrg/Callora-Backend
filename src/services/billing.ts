@@ -34,6 +34,7 @@ import type { Pool, PoolClient } from "pg";
 import type { SimulationDetails } from "../lib/simulationDiagnostics.js";
 import { computeJitteredDelay, type RandomSource } from "../lib/retry.js";
 import { DeveloperSemaphore } from "../utils/developerSemaphore.js";
+import { logger } from "../logger.js";
 import {
   parseUsdcToContractUnits,
   formatContractUnitsToUsdc,

@@ -1,4 +1,4 @@
--- Rollback: 0026_usage_events_amount_units
+-- Rollback: 0030_usage_events_amount_units
 -- destructive-approved: #1276
 
 BEGIN;

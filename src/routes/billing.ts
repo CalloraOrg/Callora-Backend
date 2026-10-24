@@ -96,9 +96,9 @@ function getPool(req: Request): Pool {
  */
 function getUsageEventsRepository(
   req: Request,
-): UsageEventsRepository & Pick<PgUsageEventsRepository, "listChargesByConsumer"> {
+): Pick<UsageEventsRepository, "listChargesByConsumer"> {
   const injected = req.app?.locals
-    ?.usageEventsRepository as (UsageEventsRepository & Pick<PgUsageEventsRepository, "listChargesByConsumer">) | undefined;
+    ?.usageEventsRepository as Pick<UsageEventsRepository, "listChargesByConsumer"> | undefined;
   if (injected) {
     return injected;
   }

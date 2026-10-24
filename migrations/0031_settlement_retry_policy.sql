@@ -1,3 +1,4 @@
+-- destructive-approved: #1547
 -- Add bounded retry state for settlement reconciliation.
 ALTER TABLE settlements
   ADD COLUMN retry_after TIMESTAMP NULL,

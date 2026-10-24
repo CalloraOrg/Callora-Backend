@@ -12,11 +12,9 @@ interface StellarNetworkConfig {
   networkPassphrase: string;
   vaultContractId?: string;
   settlementContractId?: string;
-  revenuePoolContractId?: string;
-  xusdContractId?: string;
 }
 
-const TESTNET_NETWORK_PASPPRASE = "Test DF Network ; September 2015";
+const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 const MAINNET_NETWORK_PASSPHRASE =
   "Public Global Stellar Network ; September 2015";
 
@@ -71,12 +69,10 @@ const testnetConfig: StellarNetworkConfig = {
     "SOROBAN_TESTNET_RPC_URL",
     env.SOROBAN_TESTNET_RPC_URL,
   ),
-  networkPassphrase: TESTNET_NETWORK_PASPPRASE,
+  networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_TESTNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID,
-  revenuePoolContractId: env.STELLAR_TESTNET_REVENUE_POOL_CONTRACT_ID,
-  xusdContractId: env.STELLAR_TESTNET_USDC_CONTRACT_ID,
-} as StellarNetworkConfig;
+};
 
 const mainnetConfig: StellarNetworkConfig = {
   horizonUrl: validateStellarEndpointUrl(
@@ -90,9 +86,7 @@ const mainnetConfig: StellarNetworkConfig = {
   networkPassphrase: MAINNET_NETWORK_PASSPHRASE,
   vaultContractId: env.STELLAR_MAINNET_VAULT_CONTRACT_ID,
   settlementContractId: env.STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID,
-  revenuePoolContractId: env.STELLAR_MAINNET_REVENUE_POOL_CONTRACT_ID,
-  xusdContractId: env.STELLAR_MAINNET_USDC_CONTRACT_ID,
-} as StellarNetworkConfig;
+};
 
 const activeConfig =
   selectedNetwork === "mainnet" ? mainnetConfig : testnetConfig;
@@ -175,6 +169,18 @@ export const config = {
   },
   metrics: {
     apiKey: env.METRICS_API_KEY,
+  },
+
+  exports: {
+    enabled: env.EXPORTS_ENABLED,
+    bucket: env.EXPORTS_S3_BUCKET,
+    endpoint: env.EXPORTS_S3_ENDPOINT,
+    region: env.EXPORTS_S3_REGION,
+    signingSecret: env.EXPORTS_SIGNING_SECRET,
+    endpointAllowlist: (env.EXPORTS_S3_ENDPOINT_ALLOWLIST ?? "")
+      .split(",")
+      .map((host) => host.trim())
+      .filter(Boolean),
   },
 
   proxy: {
@@ -264,7 +270,7 @@ export const config = {
     intervalMs: env.SETTLEMENT_RECON_INTERVAL_MS,
   },
   revenueLedgerIndexer: {
-    intervalMs: env.REVENUE_LEGDER_INDEXER_INTERVAL_MS,
+    intervalMs: env.REVENUE_LEDGER_INDEXER_INTERVAL_MS,
     batchSize: env.REVENUE_LEDGER_INDEXER_BATCH_SIZE,
   },
 
@@ -298,11 +304,11 @@ export const config = {
 
   billingConcurrency: {
     maxPerDeveloper: env.BILLING_MAX_CONCURRENCY_PER_DEV,
-    semaphoreTmlMs: env.BILLING_SEMAPHORE_TTL_MS,
+    semaphoreTtlMs: env.BILLING_SEMAPHORE_TTL_MS,
   },
   keyConcurrency: {
     maxPerKey: env.KEY_MAX_CONCURRENCY_PER_KEY,
-    semaphoreTmlMs: env.KEY_SEMAPHORE_TTL_MS,
+    semaphoreTtlMs: env.KEY_SEMAPHORE_TTL_MS,
   },
   routeBodyLimits: env.ROUTE_BODY_LIMITS,
   idempotency: {
@@ -322,7 +328,7 @@ export const config = {
     webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
     p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
     pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLOW_QUERY_DEBUP_WINDOW_SECONDS * 1000,
+    dedupWindowMs: env.SLOW_QUERY_DEDUP_WINDOW_SECONDS * 1000,
   },
 
   memoryAccounting: {
@@ -337,11 +343,18 @@ export const config = {
     windowMs: env.USAGE_ANOMALY_WINDOW_MS,
     baselineWindows: env.USAGE_ANOMALY_BASELINE_WINDOWS,
     dedupWindowMs:
-      env.USAGE_ANOMALY_DETUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
+      env.USAGE_ANOMALY_DEDUP_WINDOW_MS ?? env.USAGE_ANOMALY_WINDOW_MS,
   },
 
   monthlyInvoiceJob: {
     intervalMs: env.MONTHLY_INVOICE_JOB_INTERVAL_MS,
+  },
+
+  idempotencySweeper: {
+    enabled: env.IDEMPOTENCY_SWEEPER_ENABLED,
+    intervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
+    batchSize: env.IDEMPOTENCY_SWEEPER_BATCH_SIZE,
+    timeBudgetMs: env.IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS,
   },
 
   sloAlert: {
@@ -349,7 +362,7 @@ export const config = {
       Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
     webhookUrl: env.SLO_ALERT_WEBHOOK_URL,
     pollIntervalMs: env.SLO_ALERT_POLL_INTERVAL_MS,
-    dedupWindowMs: env.SLO_ALERT_DEUP_WINDOW_MS,
+    dedupWindowMs: env.SLO_ALERT_DEDUP_WINDOW_MS,
     observationWindowMs: env.SLO_ALERT_OBSERVATION_WINDOW_MS,
     configs: env.SLO_ROUTE_CONFIGS as Array<{
       method: string;

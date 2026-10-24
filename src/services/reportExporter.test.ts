@@ -4,6 +4,7 @@ import {
   createReportExporterWorker,
   type DeveloperExportRecord,
 } from './reportExporter.js';
+import crypto from 'node:crypto';
 import { HmacObjectStorageClient } from './scheduledExports.js';
 import type { BillingUsageEvent } from '../repositories/usageEventsRepository.pg.js';
 
@@ -199,7 +200,7 @@ test('paged ranged reads replace full table reads for large export sets', async 
   expect(getPage).toHaveBeenCalledWith(expect.any(Date), expect.any(Date), expect.objectContaining({ limit: 100 }));
   expect(getPage.mock.calls.some(([, , options]) => options.developerId !== undefined)).toBe(true);
   expect(client.uploads).toHaveLength(10);
-  expect(client.uploads.find((upload) => upload.key.endsWith('.csv'))?.body.split('\n')).toHaveLength(10_001);
+  expect(client.uploads.find((upload) => upload.key.endsWith('.csv'))?.body.trimEnd().split('\n')).toHaveLength(10_001);
 });
 
 // ─── listExportsForDeveloper ───────────────────────────────────────────────
@@ -270,6 +271,27 @@ test('getSignedUrl returns a URL string containing the record s3Key', () => {
   expect(url.length).toBeGreaterThan(0);
   // The HmacObjectStorageClient encodes the key in the URL path
   expect(url).toContain(encodeURIComponent('daily-exports/dev-1/2026-06-01.csv'));
+});
+
+test('getSignedUrl uses the configured signing secret', () => {
+  const { service } = makeService([]);
+  const record: DeveloperExportRecord = {
+    id: 'rec-secret',
+    developerId: 'dev-1',
+    format: 'csv',
+    s3Key: 'daily-exports/dev-1/secret.csv',
+    exportedAt: new Date(),
+    expiresAt: new Date(Date.now() + 86_400_000),
+  };
+
+  const signedUrl = new URL(service.getSignedUrl(record, 900));
+  const expires = signedUrl.searchParams.get('expires');
+  const payload = `test-bucket/${record.s3Key}:${expires}`;
+  const expected = crypto.createHmac('sha256', 'test-secret').update(payload).digest('hex');
+  const wrongSecret = crypto.createHmac('sha256', 'another-secret').update(payload).digest('hex');
+
+  expect(signedUrl.searchParams.get('signature')).toBe(expected);
+  expect(signedUrl.searchParams.get('signature')).not.toBe(wrongSecret);
 });
 
 // ─── worker lifecycle ─────────────────────────────────────────────────────

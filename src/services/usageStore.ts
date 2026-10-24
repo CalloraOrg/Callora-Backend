@@ -1,17 +1,13 @@
 import { UsageStore, UsageEvent } from '../types/gateway.js';
-import {
-  parseUsdcToContractUnits,
-  formatContractUnitsToUsdc,
-} from '../lib/usdcUnits.js';
 
 export interface UsageAggregateSnapshot {
   developerId: string;
   totalEvents: number;
   settledEvents: number;
   unsettledEvents: number;
-  totalAmountUsdc: number;
-  settledAmountUsdc: number;
-  unsettledAmountUsdc: number;
+  totalAmountUsdc: bigint;
+  settledAmountUsdc: bigint;
+  unsettledAmountUsdc: bigint;
   apiCount: number;
   endpointCount: number;
   firstEventAt: string | null;
@@ -26,8 +22,8 @@ export interface UsageAdminStore extends UsageStore {
 
 const emptyStatusCounts = (): Record<string, number> => ({});
 
-const sumAmounts = (events: UsageEvent[]): number =>
-  events.reduce((total, event) => total + event.amountUsdc, 0);
+const sumAmounts = (events: UsageEvent[]): bigint =>
+  events.reduce((total, event) => total + event.amountUsdc, 0n);
 
 const toIsoOrNull = (value: Date | string | null | undefined): string | null => {
   if (!value) {
@@ -117,7 +113,7 @@ export class InMemoryUsageStore implements UsageAdminStore {
 
   /** Retrieve all usage events that haven't been settled yet and have a non-zero price. */
   getUnsettledEvents(): UsageEvent[] {
-    return this.events.filter((e) => !e.settlementId && e.amountUsdc > 0);
+    return this.events.filter((e) => !e.settlementId && e.amountUsdc > 0n);
   }
 
   /** Mark a specific set of events as settled. */
@@ -186,54 +182,38 @@ interface StatusCodeCountRow {
   count: string | number;
 }
 
-const toNumber = (value: string | number): number =>
+/**
+ * Parse a DB amount_usdc column value to bigint contract units.
+ * usage_events.amount_usdc stores integer contract units (migration 0026),
+ * so the value is read as an integer, never as a decimal USDC amount.
+ */
+const parseAmountUsdc = (value: string | number | bigint): bigint => {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+  const intPart = String(value).trim().split('.')[0] || '0';
+  return BigInt(intPart);
+};
+
+const nullableUnits = (value: string | number | null): bigint =>
+  value === null ? 0n : parseAmountUsdc(value);
+
+const toCount = (value: string | number): number =>
   typeof value === 'number' ? value : Number(value);
 
-const contractUnitsToNumber = (value: string | number | null): number => {
-  if (value === null || value === undefined) {
-    return 0;
-  }
-  const str = String(value).trim();
-  const intPart = str.split('.')[0];
-  if (!intPart || intPart === '0') {
-    return 0;
-  }
-  return Number(formatContractUnitsToUsdc(BigInt(intPart)));
-};
-
-const toContractUnits = (val: number | string | bigint): bigint => {
-  if (typeof val === 'bigint') {
-    return val;
-  }
-  if (typeof val === 'string') {
-    return parseUsdcToContractUnits(val);
-  }
-  if (typeof val === 'number') {
-    const str = val.toFixed(7).replace(/\.?0+$/, '');
-    return parseUsdcToContractUnits(str || '0');
-  }
-  throw new Error(`Invalid amountUsdc: ${String(val)}`);
-};
-
-const mapUsageEventRow = (row: UsageEventRow): UsageEvent => {
-  const rowAmountStr = String(row.amount_usdc).trim();
-  const intPart = rowAmountStr.split('.')[0] || '0';
-  const amountUsdcNumber = Number(formatContractUnitsToUsdc(BigInt(intPart)));
-
-  return {
-    id: String(row.id),
-    requestId: row.request_id,
-    apiKey: row.api_key ?? row.api_key_id,
-    apiKeyId: row.api_key_id,
-    apiId: row.api_id,
-    endpointId: row.endpoint_id,
-    userId: row.user_id,
-    amountUsdc: amountUsdcNumber,
-    statusCode: row.status_code,
-    timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
-    settlementId: row.settlement_external_id ?? undefined,
-  };
-};
+const mapUsageEventRow = (row: UsageEventRow): UsageEvent => ({
+  id: String(row.id),
+  requestId: row.request_id,
+  apiKey: row.api_key ?? row.api_key_id,
+  apiKeyId: row.api_key_id,
+  apiId: row.api_id,
+  endpointId: row.endpoint_id,
+  userId: row.user_id,
+  amountUsdc: parseAmountUsdc(row.amount_usdc),
+  statusCode: row.status_code,
+  timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
+  settlementId: row.settlement_external_id ?? undefined,
+});
 
 const usageEventSelect = `
   SELECT
@@ -243,14 +223,16 @@ const usageEventSelect = `
     ue.api_key_id,
     ue.api_id,
     ue.endpoint_id,
-    rl.developer_id AS user_id,
+    COALESCE(rl.developer_id, a.developer_id::text, ue.user_id::text) AS user_id,
     ue.amount_usdc,
     ue.status_code,
     ue.created_at,
     s.external_id AS settlement_external_id
   FROM usage_events ue
-  INNER JOIN revenue_ledger rl
-    ON rl.usage_event_id = ue.id
+  LEFT JOIN revenue_ledger rl
+    ON rl.usage_event_id = ue.id AND rl.reversed_at IS NULL
+  LEFT JOIN apis a
+    ON a.id = ue.api_id
   LEFT JOIN settlements s
     ON s.id = rl.settlement_id
 `;
@@ -268,7 +250,8 @@ export class PostgresUsageStore implements UsageAdminStore {
     try {
       await client.query('BEGIN');
 
-      const amountContractUnits = toContractUnits(event.amountUsdc).toString();
+      // usage_events.amount_usdc stores integer contract units (migration 0026).
+      const amountContractUnits = event.amountUsdc.toString();
 
       const insertResult = await client.query<{ id: string | number }>(
         `
@@ -307,33 +290,6 @@ export class PostgresUsageStore implements UsageAdminStore {
         await client.query('ROLLBACK');
         return false;
       }
-
-      await client.query(
-        `
-          INSERT INTO revenue_ledger (
-            api_id,
-            developer_id,
-            amount_usdc,
-            usage_event_id,
-            created_at
-          )
-          SELECT
-            $1,
-            a.developer_id,
-            $2::numeric,
-            $3::bigint,
-            $4::timestamp
-          FROM apis a
-          WHERE a.id = $1
-          ON CONFLICT (usage_event_id) DO NOTHING
-        `,
-        [
-          event.apiId,
-          amountContractUnits,
-          inserted.id,
-          event.timestamp,
-        ],
-      );
 
       await client.query('COMMIT');
       return true;
@@ -377,6 +333,8 @@ export class PostgresUsageStore implements UsageAdminStore {
       `
         ${usageEventSelect}
         WHERE rl.settlement_id IS NULL
+          AND rl.id IS NOT NULL
+          AND rl.reversed_at IS NULL
           AND ue.amount_usdc > 0
         ORDER BY ue.created_at ASC, ue.id ASC
       `,
@@ -404,6 +362,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           INNER JOIN usage_events ue
             ON ue.id = rl.usage_event_id
           WHERE rl.developer_id = $1
+            AND rl.reversed_at IS NULL
         `,
         [developerId],
       ),
@@ -414,6 +373,7 @@ export class PostgresUsageStore implements UsageAdminStore {
           INNER JOIN usage_events ue
             ON ue.id = rl.usage_event_id
           WHERE rl.developer_id = $1
+            AND rl.reversed_at IS NULL
           GROUP BY ue.status_code
           ORDER BY ue.status_code ASC
         `,
@@ -422,27 +382,27 @@ export class PostgresUsageStore implements UsageAdminStore {
     ]);
 
     const aggregate = aggregateResult.rows[0];
-    if (!aggregate || toNumber(aggregate.total_events) === 0) {
+    if (!aggregate || toCount(aggregate.total_events) === 0) {
       return undefined;
     }
 
     const statusCodes = emptyStatusCounts();
     for (const row of statusResult.rows) {
-      statusCodes[String(row.status_code)] = toNumber(row.count);
+      statusCodes[String(row.status_code)] = toCount(row.count);
     }
 
     return {
       developerId,
-      totalEvents: toNumber(aggregate.total_events),
-      settledEvents: toNumber(aggregate.settled_events),
-      unsettledEvents: toNumber(aggregate.unsettled_events),
-      totalAmountUsdc: contractUnitsToNumber(aggregate.total_amount_usdc),
-      settledAmountUsdc: contractUnitsToNumber(aggregate.settled_amount_usdc),
-      unsettledAmountUsdc: contractUnitsToNumber(aggregate.unsettled_amount_usdc),
-      apiCount: toNumber(aggregate.api_count),
-      endpointCount: toNumber(aggregate.endpoint_count),
-      firstEventAt: toIsorNull(aggregate.first_event_at),
-      lastEventAt: toIsorNull(aggregate.last_event_at),
+      totalEvents: toCount(aggregate.total_events),
+      settledEvents: toCount(aggregate.settled_events),
+      unsettledEvents: toCount(aggregate.unsettled_events),
+      totalAmountUsdc: nullableUnits(aggregate.total_amount_usdc),
+      settledAmountUsdc: nullableUnits(aggregate.settled_amount_usdc),
+      unsettledAmountUsdc: nullableUnits(aggregate.unsettled_amount_usdc),
+      apiCount: toCount(aggregate.api_count),
+      endpointCount: toCount(aggregate.endpoint_count),
+      firstEventAt: toIsoOrNull(aggregate.first_event_at),
+      lastEventAt: toIsoOrNull(aggregate.last_event_at),
       statusCodes,
     };
   }
@@ -573,7 +533,7 @@ export class PostgresUsageStore implements UsageAdminStore {
         `
           UPDATE usage_events ue
           SET settlement_id = $1
-          FROM revenue_ledgger rl
+          FROM revenue_ledgers rl
           WHERE rl.usage_event_id = ue.id
             AND rl.usage_event_id = ANY($2::bigint[])
             AND (rl.settlement_id IS NULL OR rl.settlement_id = $3)

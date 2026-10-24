@@ -594,11 +594,123 @@ UPDATE usage_events SET status = 'applied' WHERE stellar_tx_hash IS NOT NULL;
 
 6. **Deploy and monitor** for duplicate request rate
 
+## Idempotency Store Maintenance (Sweeper)
+
+### Overview
+
+The **idempotency sweeper** is a background job that removes expired rows from `idempotency_store` to prevent unbounded table growth. It runs at regular intervals and is designed to be safe for concurrent deployments.
+
+### How It Works
+
+The sweeper uses PostgreSQL advisory locks and batched deletes to:
+
+1. **Acquire a transaction-scoped advisory lock** — ensures only one sweeper instance runs at a time across all replicas
+2. **Delete in batches** — splits large deletes into smaller transactions to avoid locking the table for extended periods
+3. **Respect time budgets** — stops early if a per-run time limit is reached, ensuring the next tick can start
+4. **Automatically release locks** — uses transaction-scoped locks (`pg_try_advisory_xact_lock`) so locks are released on COMMIT or ROLLBACK, preventing leaks
+
+### Configuration
+
+Control the sweeper via environment variables:
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `IDEMPOTENCY_SWEEPER_ENABLED` | bool | `true` | Enable/disable the sweeper job |
+| `IDEMPOTENCY_SWEEPER_INTERVAL_MS` | int | `60000` | Run interval in milliseconds (60 seconds) |
+| `IDEMPOTENCY_SWEEPER_BATCH_SIZE` | int | `5000` | Rows deleted per transaction batch |
+| `IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS` | int | `5000` | Max wall-clock time (ms) per run |
+
+### Example
+
+```bash
+# Run the sweeper every 30 seconds, deleting 1000 rows per batch, with a 3-second time budget
+IDEMPOTENCY_SWEEPER_ENABLED=true
+IDEMPOTENCY_SWEEPER_INTERVAL_MS=30000
+IDEMPOTENCY_SWEEPER_BATCH_SIZE=1000
+IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS=3000
+```
+
+### Metrics
+
+**Gauge: `idempotency_store_rows`**
+
+- Help: "Estimated number of rows in the idempotency_store table (from pg_class.reltuples; may lag behind true count until next ANALYZE). Updated by the idempotency sweeper on each run."
+- Updated on every sweep run
+- Uses `pg_class.reltuples` for efficiency (cheaper than `COUNT(*)`)
+- Falls back to `COUNT(*)` if reltuples is unavailable
+
+### Monitoring
+
+#### Healthy Operation
+
+1. **Rows remain in expected range** — gauge stays within your retention window
+2. **Sweeper runs regularly** — logs show "Sweep complete" messages at expected intervals
+3. **No lock contention** — if a second instance tries to sweep, it logs "Another instance owns the sweeper lock"
+4. **Batches complete within time budget** — logs show multiple batches if rows exceed batch size
+
+#### Troubleshooting
+
+**Issue: Gauge stuck at 0 or growing unbounded**
+
+Diagnosis:
+```sql
+SELECT COUNT(*) FROM idempotency_store;
+SELECT reltuples FROM pg_class WHERE relname = 'idempotency_store';
+```
+
+Solution:
+- If `COUNT(*)` > 0 but `reltuples` ≈ 0, run `ANALYZE idempotency_store` to update statistics
+- If sweeper logs show "Sweep failed", check for table locks or permissions
+
+**Issue: Sweeper logs don't appear**
+
+Diagnosis:
+- Check if `IDEMPOTENCY_SWEEPER_ENABLED` is set to `false`
+- Verify the job was wired in `src/index.ts` and started at boot
+
+Solution:
+- Set `IDEMPOTENCY_SWEEPER_ENABLED=true` and restart the server
+- Confirm startup logs include "[idempotencySweeper] Started with interval..."
+
+**Issue: High delete latency / table lock contention**
+
+Diagnosis:
+- Check logs for "Time budget reached" — indicates batches are taking longer than expected
+- Query `pg_stat_user_tables` to see if `idempotency_store` has high sequential scan count
+
+Solution:
+- Reduce `IDEMPOTENCY_SWEEPER_BATCH_SIZE` (e.g., 5000 → 1000)
+- Increase `IDEMPOTENCY_SWEEPER_TIME_BUDGET_MS` if the table is very large
+- Ensure the `expires_at` index exists and is not bloated
+
+### Test Scenarios
+
+The sweeper is tested with:
+
+1. **Single sweep** — lock acquired, rows deleted, lock released (no leak)
+2. **Concurrent sweeps** — two instances contend for lock; one deletes, other skips
+3. **Batching** — 25k rows with 5k batches → 5 batches, all removed
+4. **Time budget** — tight budget stops early; next run continues
+5. **Error recovery** — delete error rolls back and releases lock/client
+6. **Regression** — no lock leaks after multiple sweeps
+
+See `tests/integration/idempotencySweeper.test.ts` for detailed integration tests using testcontainers.
+
+### Performance Notes
+
+- **Lock scope**: Transaction-scoped (released automatically on transaction end)
+- **Lock contention**: Minimal — only one instance holds the lock per sweep
+- **Table locking**: Row-level locks are brief; transactions commit after each batch
+- **Metrics cost**: Uses `pg_class.reltuples` (free) instead of `COUNT(*)` (expensive)
+- **Scale**: Tested with 25k rows and configurable batch sizes
+
 ## References
 
 - [Idempotency Keys - Stripe Documentation](https://stripe.com/docs/api/idempotent_requests)
 - [PostgreSQL Unique Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS)
-- (Database Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+- [Database Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
+- [PostgreSQL Advisory Locks](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS)
+- [PostgreSQL CTID](https://www.postgresql.org/docs/current/ddl-system-columns.html)
 
 ## HTTP idempotency leases and response replay
 
@@ -633,7 +745,7 @@ original request identifier. Do not generate a new identifier to retry a charge.
 
 The lease prevents stale database writes, but cannot cancel an external side
 effect after a disconnect or crash. Billing's persistent request identifier and
-Soroban idempotency remain necessary. Apply migration `0027_idempotency_lease`
+Soroban idempotency remain necessary. Apply migration `0028_idempotency_lease`
 and drain old application instances before enabling takeover: old binaries do
 not fence writes. Existing completed JSON records remain replayable. On rollback,
 roll back the application before removing the lease column; new response-format

@@ -44,13 +44,12 @@ export const MIGRATION_DIALECT_MANIFEST: Record<string, MigrationDialect> = {
   "0023_transaction_sequences.sql": "postgres",
   "0024_hash_api_keys.sql": "postgres",
   "0025_idempotency_store_scope.sql": "postgres",
-  "0026_add_developer_payout_address.sql": "postgres",
   "0026_forwarded_identity_replays.sql": "postgres",
-  "0026_settlement_retry_policy.sql": "postgres",
-  "0026_usage_events_amount_units.sql": "postgres",
-  "0026_usage_events_deduction_status.sql": "postgres",
-  "0027_drop_billing_requests_index.sql": "both",
-  "0027_idempotency_lease.sql": "postgres",
+  "0027_usage_events_deduction_status.sql": "postgres",
+  "0028_idempotency_lease.sql": "postgres",
+  "0029_drop_billing_requests_index.sql": "both",
+  "0030_usage_events_amount_units.sql": "postgres",
+  "0031_settlement_retry_policy.sql": "postgres",
 };
 
 /**
