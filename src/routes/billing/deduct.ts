@@ -146,6 +146,10 @@ router.post(
       await res.locals.idempotency?.renew();
 
       if (!result.success) {
+        if (result.errorCode === "API_NOT_FOUND") {
+          next(new NotFoundError(result.error ?? "API not found"));
+          return;
+        }
         if (result.simulationDetails) {
           next(
             simulationFailureError(

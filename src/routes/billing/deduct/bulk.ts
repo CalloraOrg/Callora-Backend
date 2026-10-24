@@ -1,6 +1,6 @@
 import { Router, type Response, type NextFunction, type Request } from 'express';
 import { z } from 'zod';
-import { UnauthorizedError, PaymentRequiredError, InternalServerError } from '../../../errors/index.js';
+import { UnauthorizedError, PaymentRequiredError, InternalServerError, NotFoundError } from '../../../errors/index.js';
 import { requireAuth, type AuthenticatedLocals } from '../../../middleware/requireAuth.js';
 import { validate } from '../../../middleware/validate.js';
 import { idempotencyMiddleware } from '../../../middleware/idempotency.js';
@@ -78,6 +78,10 @@ router.post(
       );
 
       if (!result.success) {
+        if (result.errorCode === 'API_NOT_FOUND') {
+          next(new NotFoundError(result.error ?? 'API not found'));
+          return;
+        }
         if (result.error?.toLowerCase().includes('insufficient balance')) {
           next(new PaymentRequiredError(result.error, 'INSUFFICIENT_BALANCE'));
           return;
