@@ -60,6 +60,7 @@ export interface UpdateDeveloperProfileInput {
 
 export interface SettlementStore {
   create(settlement: Settlement): Awaitable<void>;
+  createClaimed?(settlement: Settlement): Awaitable<void>;
   updateStatus(id: string, status: Settlement['status'], txHash?: string | null): Awaitable<void>;
   scheduleRetry(
     id: string,
