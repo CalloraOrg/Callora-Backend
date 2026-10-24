@@ -121,6 +121,9 @@ export class InMemoryUsageStore implements UsageAdminStore {
     const ids = new Set(eventIds);
     for (const event of this.events) {
       if (ids.has(event.id)) {
+        if (event.settlementId && event.settlementId !== settlementId) {
+          throw new Error(`Event ${event.id} is already settled in settlement ${event.settlementId}`);
+        }
         event.settlementId = settlementId;
       }
     }
@@ -458,6 +461,82 @@ export class PostgresUsageStore implements UsageAdminStore {
     }
   }
 
+  async getUnsettledDeveloperIds(): Promise<string[]> {
+    const result = await this.db.query<{ developer_id: string }>(
+      `
+        SELECT DISTINCT rl.developer_id
+        FROM revenue_ledger rl
+        INNER JOIN usage_events ue ON ue.id = rl.usage_event_id
+        WHERE rl.settlement_id IS NULL
+          AND rl.reversed_at IS NULL
+          AND ue.amount_usdc > 0
+      `
+    );
+    return result.rows.map((r) => r.developer_id);
+  }
+
+  async claimUnsettledEvents(developerId: string, limit: number): Promise<{ events: UsageEvent[]; totalAmount: bigint }> {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const rows = await client.query<UsageEventRow & { ledger_id: string | number; ledger_amount: string | number }>(
+        `
+          SELECT
+            ue.id,
+            ue.request_id,
+            ue.api_key,
+            ue.api_key_id,
+            ue.api_id,
+            ue.endpoint_id,
+            COALESCE(rl.developer_id, a.developer_id::text, ue.user_id::text) AS user_id,
+            ue.amount_usdc,
+            ue.status_code,
+            ue.created_at,
+            s.external_id AS settlement_external_id,
+            rl.id AS ledger_id,
+            rl.amount_usdc AS ledger_amount
+          FROM revenue_ledger rl
+          INNER JOIN usage_events ue ON ue.id = rl.usage_event_id
+          LEFT JOIN apis a ON a.id = ue.api_id
+          LEFT JOIN settlements s ON s.id = rl.settlement_id
+          WHERE rl.developer_id = $1
+            AND rl.settlement_id IS NULL
+            AND rl.reversed_at IS NULL
+            AND ue.amount_usdc > 0
+          ORDER BY ue.created_at ASC, ue.id ASC
+          LIMIT $2
+          FOR UPDATE OF rl SKIP LOCKED
+        `,
+        [developerId, limit]
+      );
+
+      const events = rows.rows.map(mapUsageEventRow);
+      const totalAmount = events.reduce((sum, e) => sum + e.amountUsdc, 0n);
+
+      await client.query('COMMIT');
+      return { events, totalAmount };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async releaseEvents(eventIds: string[]): Promise<void> {
+    if (eventIds.length === 0) return;
+    const ids = eventIds.map((id) => Number(id));
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+    await this.db.query(
+      `
+        UPDATE revenue_ledger
+        SET settlement_id = NULL
+        WHERE usage_event_id IN (${placeholders})
+      `,
+      ids
+    );
+  }
+
   async markAsSettled(eventIds: string[], settlementId: string): Promise<void> {
     if (eventIds.length === 0) {
       return;
@@ -475,20 +554,26 @@ export class PostgresUsageStore implements UsageAdminStore {
 
     const persistedSettlementId = settlementResult.rows[0]?.id;
     if (persistedSettlementId === undefined) {
-      return;
+      throw new Error(`Settlement ${settlementId} not found`);
     }
 
     const eventIdParams = eventIds.map((id) => Number(id));
     const placeholders = eventIdParams.map((_, index) => `$${index + 2}`).join(', ');
 
-    await this.db.query(
+    const updateResult = await this.db.query(
       `
         UPDATE revenue_ledger
         SET settlement_id = $1
         WHERE usage_event_id IN (${placeholders})
+          AND (settlement_id IS NULL OR settlement_id = $1)
+        RETURNING usage_event_id
       `,
       [persistedSettlementId, ...eventIdParams],
     );
+
+    if (updateResult.rows.length !== eventIds.length) {
+      throw new Error(`Row count mismatch during markAsSettled: updated ${updateResult.rows.length}, expected ${eventIds.length}`);
+    }
   }
 }
 
