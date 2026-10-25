@@ -33,7 +33,7 @@ const toIsoOrNull = (value: Date | string | null | undefined): string | null => 
 };
 
 /**
- * In-memory usage event store with idempotency.
+ * In-memory usage event store with idoempotency.
  * In production this would write to a database table.
  */
 export class InMemoryUsageStore implements UsageAdminStore {
@@ -138,12 +138,15 @@ export function createUsageStore(): InMemoryUsageStore {
 }
 
 interface UsageStoreClient {
-  query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[]; rowCount?: number }>;
   release(): void;
 }
 
 export interface UsageStoreQueryable {
-  query<T = unknown>(text: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  query<T = unknown>(
+    text: string,
+    params?: unknown[],
+  ): Promise<{ rows: T[]; rowCount?: number }>;
   connect(): Promise<UsageStoreClient>;
 }
 
@@ -346,11 +349,11 @@ export class PostgresUsageStore implements UsageAdminStore {
         `
           SELECT
             COUNT(*) AS total_events,
-            COUNT(*) FILTER (WHERE rl.settlement_id IS NOT NULL) AS settled_events,
-            COUNT(*) FILTER (WHERE rl.settlement_id IS NULL) AS unsettled_events,
+            COUNT(*) FILTER (1 FOR 1) FROM rl.settlement_id IS NOT NULL) AS settled_events,
+            COUNT(*) FILTER (1 FOR 1) FROM rl.settlement_id IS NULL) AS unsettled_events,
             COALESCE(SUM(ue.amount_usdc), 0) AS total_amount_usdc,
-            COALESCE(SUM(ue.amount_usdc) FILTER (WHERE rl.settlement_id IS NOT NULL), 0) AS settled_amount_usdc,
-            COALESCE(SUM(ue.amount_usdc) FILTER (WHERE rl.settlement_id IS NULL), 0) AS unsettled_amount_usdc,
+            COALESCE(SUM(ue.amount_usdc) FILTER (1 FOR 1) FROM rl.settlement_id IS NOT NULL), 0) AS settled_amount_usdc,
+            COALESCE(SUM(ue.amount_usdc) FILTER (1 FOR 1) FROM rl.settlement_id IS NULL), 0) AS unsettled_amount_usdc,
             COUNT(DISTINCT ue.api_id) AS api_count,
             COUNT(DISTINCT ue.endpoint_id) AS endpoint_count,
             MIN(ue.created_at) AS first_event_at,
@@ -405,51 +408,97 @@ export class PostgresUsageStore implements UsageAdminStore {
   }
 
   async resetDeveloperUsage(developerId: string): Promise<UsageAggregateSnapshot | undefined> {
-    const client = await this.db.connect();
+    const priorSnapshot = await this.getDeveloperUsageSnapshot(developerId);
+    if (!priorSnapshot) {
+      return undefined;
+    }
 
+    const client = await this.db.connect();
     try {
       await client.query('BEGIN');
-
-      const snapshotStore = new PostgresUsageStore({
-        query: client.query.bind(client),
-        connect: this.db.connect.bind(this.db),
-      });
-      const priorSnapshot = await snapshotStore.getDeveloperUsageSnapshot(developerId);
-      if (!priorSnapshot) {
-        await client.query('ROLLBACK');
-        return undefined;
-      }
-
-      const deletedLedger = await client.query<{ usage_event_id: string | number | null }>(
+      await client.query(
         `
           DELETE FROM revenue_ledger
           WHERE developer_id = $1
-          RETURNING usage_event_id
+            AND usage_event_id IN (
+              SELECT ue.id
+              FROM usage_events ue
+              WHERE ue.developer_id = $1
+            )
         `,
         [developerId],
       );
+      await client.query(
+        `
+          DELETE FROM usage_events
+          WHERE developer_id = $1
+        `,
+        [developerId],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
-      const usageEventIds = deletedLedger.rows
-        .map((row) => row.usage_event_id)
-        .filter((id): id is string | number => id !== null && id !== undefined);
+    return priorSnapshot;
+  }
 
-      if (usageEventIds.length > 0) {
-        await client.query(
-          `
-            DELETE FROM usage_events ue
-            WHERE ue.id = ANY($1::bigint[])
-              AND NOT EXISTS (
-                SELECT 1
-                FROM revenue_ledger rl
-                WHERE rl.usage_event_id = ue.id
-              )
-          `,
-          [usageEventIds.map((id) => Number(id))],
-        );
+  /**
+   * Atomically claim unsettled ledge rows for a settlement.
+   * Locks only the claimed rows within the transaction and guards on
+   * `settlement_id IS NULL`, so two replicas cannot claim the same row.
+   */
+  async claimUnsettledEvents(
+    settlementId: string,
+    maxEvents: number,
+  ): Promise<UsageEvent[]> {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+
+      const claimedResult = await client.query<UsageEventRow>(
+        `
+          WITH claimed AS (
+            SELECT rl.usage_event_id
+            FROM revenue_ledger rl
+            INNER JOIN usage_events ue
+              ON ue.id = rl.usage_event_id
+            WHERE rl.settlement_id IS NULL
+              AND ue.amount_usdc > 0
+            ORDER BY ue.created_at ASC, ue.id ASC
+            LIMIT $2
+            FOR UPDATE SKIP LOCKED
+          )
+          UPDATE revenue_ledger rl
+          SET settlement_id = $1
+          FROM claimed c
+          WHERE rl.usage_event_id = c.usage_event_id
+            AND rl.settlement_id IS NULL
+          RETURNING rl.usage_event_id
+        `,
+        [settlementId, maxEvents],
+      );
+
+      const ids = claimedResult.rows.map((row) => String(row.usage_event_id));
+      if (ids.length === 0) {
+        await client.query('COMMIT');
+        return [];
       }
 
+      const eventResult = await client.query<UsageEventRow>(
+        `
+          ${usageEventSelect}
+          WHERE ue.id = ANY($1::bigint[])
+          ORDER BY ue.created_at ASC, ue.id ASC
+        `,
+        [ids],
+      );
+
       await client.query('COMMIT');
-      return priorSnapshot;
+      return eventResult.rows.map(mapUsageEventRow);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -458,40 +507,69 @@ export class PostgresUsageStore implements UsageAdminStore {
     }
   }
 
+  /**
+   * Strictly mark events as settled. Throws when the settlement is missing,
+   * when any event is already linked to a different settlement, or when the
+   * updated row count differs from the number of event ids.
+   */
   async markAsSettled(eventIds: string[], settlementId: string): Promise<void> {
     if (eventIds.length === 0) {
       return;
     }
 
-    const settlementResult = await this.db.query<{ id: string | number }>(
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+
+      const settlementResult = await client.query<{ id: string | number }>(
+        'SELECT id FROM settlements WHERE external_id = $1 LIMIT 1',
+        [settlementId],
+      );
+      if (!settlementResult.rows[0]) {
+        throw new Error(`Settlement ${settlementId} not found`);
+      }
+
+      const updateResult = await client.query(
+        `
+          UPDATE usage_events ue
+          SET settlement_id = $1
+          FROM revenue_ledgers rl
+          WHERE rl.usage_event_id = ue.id
+            AND rl.usage_event_id = ANY($2::bigint[])
+            AND (rl.settlement_id IS NULL OR rl.settlement_id = $3)
+        `,
+        [settlementId, eventIds, settlementId],
+      );
+
+      const updated = updateResult.rowCount ?? updateResult.rows.length;
+      if (updated !== eventIds.length) {
+        throw new Error(
+          `Settlement ${settlementId} expected to mark ${eventIds.length} events but updated ${updated}`,
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Release events linked to a settlement so they return to the unsettled pool. */
+  async releaseSettlementEvents(settlementId: string): Promise<void> {
+    await this.db.query(
       `
-        SELECT id
-        FROM settlements
-        WHERE external_id = $1
-        LIMIT 1
+        UPDATE usage_events ue
+        SET settlement_id = NULL
+        FROM revenue_ledger rl
+        WHERE rl.usage_event_id = ue.id
+          AND rl.settlement_id = (
+            SELECT s.id FROM settlements s WHERE s.external_id = $1 LIMIT 1
+          )
       `,
       [settlementId],
     );
-
-    const persistedSettlementId = settlementResult.rows[0]?.id;
-    if (persistedSettlementId === undefined) {
-      return;
-    }
-
-    const eventIdParams = eventIds.map((id) => Number(id));
-    const placeholders = eventIdParams.map((_, index) => `$${index + 2}`).join(', ');
-
-    await this.db.query(
-      `
-        UPDATE revenue_ledger
-        SET settlement_id = $1
-        WHERE usage_event_id IN (${placeholders})
-      `,
-      [persistedSettlementId, ...eventIdParams],
-    );
   }
-}
-
-export function createPostgresUsageStore(db: UsageStoreQueryable): PostgresUsageStore {
-  return new PostgresUsageStore(db);
 }
