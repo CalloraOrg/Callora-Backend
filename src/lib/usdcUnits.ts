@@ -96,6 +96,14 @@ export function parseUsdcToUnits(amountUsdc: string): bigint {
 }
 
 /**
+ * Boundary conversion for a JS number USDC amount (for example a configured
+ * threshold). Rounds to the 7-decimal grid, then parses the canonical string.
+ */
+export function usdcNumberToUnits(amountUsdc: number): bigint {
+  return parseUsdcToUnits(amountUsdc.toFixed(7));
+}
+
+/**
  * Format bigint contract units to a minimal USDC decimal string.
  * Trailing fractional zeros are stripped; integers have no decimal point.
  *

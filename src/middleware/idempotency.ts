@@ -34,6 +34,12 @@ export const INVALID_IDEMPOTENCY_KEY = 'INVALID_IDEMPOTENCY_KEY' as const;
 
 export interface IdempotencyLease {
   renew(): Promise<void>;
+  /** Principal scope the key is namespaced under: user id, admin actor, or 'anonymous'. */
+  scope: string;
+  /** Trimmed Idempotency-Key header value. */
+  idempotencyKey: string;
+  /** Request fingerprint from calculateRequestHash; the value replay compares. */
+  requestHash: string;
 }
 
 /**
@@ -393,6 +399,9 @@ export async function idempotencyMiddleware(
         if (!renewed.rows[0]) throw new Error('Idempotency lease ownership lost');
         leaseToken = renewed.rows[0].lease_token;
       }),
+      scope,
+      idempotencyKey,
+      requestHash,
     } satisfies IdempotencyLease;
 
     // ponytail: one cap-sized buffer per request that writes a body; grow lazily if large caps matter.

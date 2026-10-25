@@ -3,7 +3,7 @@ import path from 'node:path';
 
 // Historical migrations use two numbering schemes and contain deployed
 // duplicate prefixes. They are frozen; new migrations begin at 0022.
-const LEGACY_MAX_PREFIX = 21;
+export const LEGACY_MAX_PREFIX = 21;
 const LEGACY_UNNUMBERED = new Set([
   'add_refresh_token_family.sql', 'add_refresh_tokens.down.sql', 'add_refresh_tokens.sql',
   'auth_index.down.sql', 'auth_index.sql', 'billing_index.down.sql', 'billing_index.sql',
@@ -15,7 +15,7 @@ function prefix(filename: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-function isUpMigration(filename: string): boolean {
+export function isUpMigration(filename: string): boolean {
   return (filename.endsWith('.sql') || filename.endsWith('.up.sql')) && !filename.endsWith('.down.sql');
 }
 

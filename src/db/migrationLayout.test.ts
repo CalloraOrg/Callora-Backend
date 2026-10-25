@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from '@jest/globals';
-import { validateMigrationLayout } from './migrationPolicy.js';
+import { validateMigrationLayout } from './migrationLayout.js';
 
 function withMigrations(files: Record<string, string>, test: (dir: string) => void): void {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'callora-migrations-'));

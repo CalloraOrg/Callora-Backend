@@ -5,22 +5,32 @@
 -- inner transaction hash, fee in stroops, app-token amount and a status.
 -- The payment tx id is unique so a single payment can back at most one
 -- fee-bump, enforced by the database not only application logic.
--- Additive and idempotent: IF NOT EXISTS keeps it a no-op where the
--- historical quote table was already created.
+--
+-- Databases that already have the historical quote table (from the
+-- pre-renumbering 0027 DDL) keep it unchanged: the table is created only when
+-- absent, and the table comment records that 0034 created it. The matching
+-- down migration uses that comment to remove only a table this migration made.
 
-CREATE TABLE IF NOT EXISTS "fee_abstraction_quotes" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "user_id" UUID NOT NULL,
-    "inner_tx_hash" TEXT NOT NULL,
-    "fee_stroops" BIGINT NOT NULL,
-    "app_token_amount" BIGINT NOT NULL,
-    "network" TEXT NOT NULL,
-    "status" TEXT NOT NULL DEFAULT 'pending',
-    "app_token_payment_tx_id" TEXT NULL,
-    "expires_at" TIMESTAMP WITH TIME ZONE NOT NULL,
-    "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    "consumed_at" TIMESTAMP WITH TIME ZONE
-);
+DO $$
+BEGIN
+  IF to_regclass('fee_abstraction_quotes') IS NULL THEN
+    CREATE TABLE "fee_abstraction_quotes" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "user_id" UUID NOT NULL,
+        "inner_tx_hash" TEXT NOT NULL,
+        "fee_stroops" BIGINT NOT NULL,
+        "app_token_amount" BIGINT NOT NULL,
+        "network" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'pending',
+        "app_token_payment_tx_id" TEXT NULL,
+        "expires_at" TIMESTAMP WITH TIME ZONE NOT NULL,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "consumed_at" TIMESTAMP WITH TIME ZONE
+    );
+    COMMENT ON TABLE "fee_abstraction_quotes" IS 'callora-migration-0034-created';
+  END IF;
+END
+$$;
 
 -- A payment tx id can back at most one fee-bump. This is the database
 -- guarantee against double-spend of a single payment.

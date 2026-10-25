@@ -67,7 +67,7 @@ Configuration is validated with Zod at startup (`src/config/env.ts`); the server
 | Variable | Required | Description |
 | --- | --- | --- |
 | `PORT` | no (3000) | HTTP port |
-| `NODE_ENV` | no | `development` \| `production` \| `test`. Production rejects proxy upstreams outside the explicitly configured host allowlist |
+| `NODE_ENV` | no | `development` \| `production` \| `test`. Production requires `UPSTREAM_HOST_ALLOWLIST` and, outside demo mode, `SOROBAN_BILLING_CONTRACT_ID` |
 | `DATABASE_URL` | yes | PostgreSQL connection string (metering, billing, audit) |
 | `JWT_SECRET` | yes | Secret for access/refresh tokens |
 | `ADMIN_API_KEY` | yes | Key for `/api/admin/*` (`x-admin-api-key` header) |
@@ -132,12 +132,33 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the route map and design notes.
 
 ## Demo mode
 
+Unsupported capabilities return HTTP **503** with the canonical error envelope,
+`error.code: "DEMO_MODE_UNSUPPORTED"`, `error.details: { feature }`, and the
+request ID. There is no `Retry-After`: these features require standard mode.
+The guard runs before authentication, validation, and database-backed handlers.
+
+| Route prefix (including subpaths) | Methods unavailable in demo |
+| --- | --- |
+| `/api/billing`, `/api/invoices` | All |
+| `/api/usage`, `/api/exports` | All |
+| `/api/admin/usage`, `/api/admin/db/explain` | All |
+| `/api/vault/deposit/prepare` | POST |
+| `/api/vault/onchain`, `/api/vault/balance` | GET, HEAD |
+| `/api/audit` | POST, PUT, PATCH, DELETE (reads remain available) |
+| `/api/credits`, `/api/refunds` | All |
+| `/api/health/health`, `/api/health/dependencies` | GET, HEAD |
+
+`GET /api/health` remains available and reports `data.mode: "demo"` or
+`"standard"`. `GET /api/apis` continues serving the seeded SQLite catalog.
+Demo mode never constructs the billing Soroban client or opens the shared
+PostgreSQL pool; dependency probes cannot contact external services.
+
 `DEMO_MODE=true` is what the public deployment uses. On startup it classifies migrations (via `-- dialect: sqlite|postgres|both` header comments or the built-in manifest) and applies every SQLite-compatible migration to an ephemeral SQLite database, logging applied/skipped/failed counts. Any genuine failure in a SQLite-applicable migration fails fast naming the broken file.
 
 It then executes an idempotent seed that creates a demo developer and 3 sample APIs, referencing the developer's dynamic ID (`lastInsertRowid`) rather than assuming ID 1. Consequences:
 
 - Catalog/marketplace/health/docs endpoints return real data; state is **not persistent** (serverless instances are ephemeral).
-- Features needing PostgreSQL (metering, billing, invoices, audit persistence, usage exports) respond with standard 503 error envelopes (`SERVICE_UNAVAILABLE`) in demo mode, avoiding module-resolution crashes on missing Prisma clients.
+- Features needing PostgreSQL (metering, billing, invoices, audit persistence, usage exports) respond with typed 503 error envelopes (`DEMO_MODE_UNSUPPORTED`) in demo mode, avoiding module-resolution crashes on missing Prisma clients.
 - OpenAPI *response* validation is switched off in demo mode (some responses omit optional contract fields); request validation stays on.
 - Stellar/Soroban calls are not made.
 

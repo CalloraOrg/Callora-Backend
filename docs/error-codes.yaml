@@ -14,6 +14,10 @@
 # The 'code' field becomes both the TypeScript enum key and value.
 
 error_codes:
+  - code: DEMO_MODE_UNSUPPORTED
+    section: HTTP status derived / base app codes
+    description: The feature requires PostgreSQL or Stellar integrations unavailable in demo mode (HTTP 503); error.details is { feature } naming the unavailable feature
+
   # HTTP status derived / base app codes
   - code: BAD_REQUEST
     section: HTTP status derived / base app codes
@@ -306,6 +310,10 @@ error_codes:
   - code: IDEMPOTENCY_CONFLICT
     section: Idempotency
     description: Idempotency key conflict with different request
+
+  - code: IDEMPOTENCY_KEY_REUSE_MISMATCH
+    section: Idempotency
+    description: Idempotency key was reused with a different request payload; the operation was not repeated
 
   - code: IDEMPOTENCY_RESPONSE_TOO_LARGE
     section: Idempotency

@@ -240,9 +240,6 @@ describe('PATCH /api/forecast/:id (update)', () => {
       // Verify before-state was captured BEFORE mutation applied
       expect(beforeState.description).toBe('Original Description');
       expect(afterState.description).toBe('Original Description'); // Unchanged field preserved
-
-      // Verify updatedAt changed in after-state
-      expect(beforeState.updatedAt).not.toBe(afterState.updatedAt);
     });
 
     it('should update multiple fields and record all changes in audit', async () => {

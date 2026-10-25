@@ -46,6 +46,7 @@ export function createSorobanBillingService(
   pool: Pool,
   dependencies?: SorobanBillingDependencies,
 ): BillingService | undefined {
+  if (config.demoMode) return undefined;
   if (dependencies?.billingService) return dependencies.billingService;
 
   const injectedClient = dependencies?.billingSorobanClient ??

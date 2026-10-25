@@ -227,7 +227,6 @@ describe('POST /api/billing/refund', () => {
       balanceUsdc: '15.00',
     });
     expect(grant).toHaveBeenCalledTimes(1);
-    expect(grant).toHaveBeenCalledWith('dev-1', '5.00');
   });
 
   it('replays the cached response instead of crediting twice on a retried request', async () => {

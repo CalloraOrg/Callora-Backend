@@ -449,7 +449,140 @@ async function scenarioExpiryWhileWaiting() {
   }
 }
 
+// 0034 lifecycle: the up migration stamps only tables it creates; the down migration drops only stamped, empty tables.
+const OWNED_STAMP = 'callora-migration-0034-created';
+
+async function resetQuoteTable() {
+  await ctx.setup.query('DROP TABLE IF EXISTS fee_abstraction_quotes');
+}
+
+async function migrateUp(client = ctx.setup) {
+  await client.query(ctx.upSql);
+}
+
+async function migrateDown(client = ctx.setup) {
+  await client.query(ctx.downSql);
+}
+
+async function tableExists(client) {
+  const { rows } = await client.query("SELECT to_regclass('fee_abstraction_quotes') IS NOT NULL AS present");
+  return rows[0].present;
+}
+
+async function stampOf(client) {
+  const { rows } = await client.query(
+    "SELECT obj_description(to_regclass('fee_abstraction_quotes')::oid, 'pg_class') AS stamp",
+  );
+  return rows[0].stamp;
+}
+
+async function rowCount(client) {
+  const { rows } = await client.query('SELECT count(*)::int AS n FROM fee_abstraction_quotes');
+  return rows[0].n;
+}
+
+async function insertQuoteVia(client) {
+  const { rows } = await client.query(
+    `INSERT INTO fee_abstraction_quotes
+       (user_id, inner_tx_hash, fee_stroops, app_token_amount, network, status, expires_at)
+     VALUES ($1, $2, $3, $4, $5, 'pending', clock_timestamp() + '1 hour'::interval)
+     RETURNING id`,
+    [USER_ID, hex64(), FEE.toString(), APP_TOKEN_UNITS.toString(), NETWORK],
+  );
+  return rows[0].id;
+}
+
+// Waits (bounded, pg_stat_activity) until `applicationName` is blocked on a Lock held by `blockerPid`.
+async function waitForLockWaiter(label, applicationName, blockerPid) {
+  const deadline = Date.now() + STEP_DEADLINE_MS;
+  for (;;) {
+    const { rows } = await ctx.monitor.query(
+      `SELECT pid, wait_event_type, wait_event, pg_blocking_pids(pid) AS blockers
+         FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND application_name = $1
+          AND state = 'active'
+          AND wait_event_type = 'Lock'`,
+      [applicationName],
+    );
+    if (rows.length === 1 && rows[0].blockers.includes(blockerPid)) return rows[0];
+    if (Date.now() >= deadline) {
+      const activity = await dumpActivity().catch((err) => `(activity dump failed: ${describeError(err)})`);
+      throw new Error(`timed out waiting for ${label}\npg_stat_activity:\n${activity}`);
+    }
+    await sleep(25);
+  }
+}
+
+// Applies the immutable pre-1550 DDL (tests/fixtures/migrations/0027_fee_abstraction_quotes.sql) to the empty schema.
+async function applyLegacyFixture() {
+  const sql = await readFile(path.join(root, 'tests/fixtures/migrations/0027_fee_abstraction_quotes.sql'), 'utf8');
+  await ctx.setup.query(sql);
+}
+
+// Scenario 5: a legacy table created by pre-1550 DDL, with rows, survives 0034 up and down unchanged.
+async function scenarioLegacyTableSurvivesUpDown() {
+  await resetQuoteTable();
+  await applyLegacyFixture();
+  await seedQuote('1 hour');
+  await seedQuote('1 hour');
+  await migrateUp();
+  assert.equal(await stampOf(ctx.setup), null, 's5: up must not stamp an existing table');
+  await migrateDown();
+  assert.equal(await tableExists(ctx.setup), true, 's5: down must not drop an unstamped table');
+  assert.equal(await rowCount(ctx.setup), 2, 's5: legacy rows must survive down');
+}
+
+// Scenario 6: an owned, empty table is dropped by down and recreated by up.
+async function scenarioOwnedEmptyTableRollsBack() {
+  await resetQuoteTable();
+  await migrateUp();
+  assert.equal(await stampOf(ctx.setup), OWNED_STAMP, 's6: up must stamp the table it creates');
+  await migrateDown();
+  assert.equal(await tableExists(ctx.setup), false, 's6: down must drop an owned empty table');
+  await migrateUp();
+  assert.equal(await tableExists(ctx.setup), true, 's6: up must recreate the table after rollback');
+}
+
+// Scenario 7: a writer holds an uncommitted insert; down must wait on the table lock, then refuse once it commits.
+async function scenarioOwnedTableConcurrentInsertBlocksDown() {
+  await resetQuoteTable();
+  await migrateUp();
+  const writer = await openControl('s7-writer');
+  const downClient = await connect('s7-down');
+  const downAttempt = [];
+  try {
+    await writer.client.query('BEGIN');
+    writer.inTx = true;
+    await insertQuoteVia(writer.client);
+    downAttempt.push(settle(migrateDown(downClient)));
+    await waitForLockWaiter('s7 down waits on uncommitted insert', 'callora-race-s7-down', writer.pid);
+    await writer.client.query('COMMIT');
+    writer.inTx = false;
+    const [outcome] = await withDeadline(Promise.all(downAttempt), 's7 down outcome');
+    assert.equal(outcome.ok, false, 's7: down must refuse once the writer commits a row');
+    assert.match(
+      describeError(outcome.error),
+      /archive them before rolling back 0034/,
+      's7: refusal must name the archive requirement',
+    );
+    assert.equal(await tableExists(ctx.setup), true, 's7: refused down must keep the table');
+    assert.equal(await rowCount(ctx.setup), 1, 's7: committed row must survive refused down');
+    assert.equal(await stampOf(ctx.setup), OWNED_STAMP, 's7: stamp must remain intact');
+  } finally {
+    await releaseControl(writer);
+    await drainAttempts(downAttempt, 's7 drain');
+    await withDeadline(downClient.end(), 's7 down client end', 5_000).catch((err) =>
+      cleanupErrors.push(`s7 down client end: ${describeError(err)}`),
+    );
+  }
+}
+
+
+let scenariosRun = 0;
+
 async function runScenario(name, fn) {
+  scenariosRun += 1;
   const started = Date.now();
   try {
     await fn();
@@ -474,8 +607,9 @@ async function setUp() {
 
   await ctx.setup.query(`CREATE SCHEMA ${SCHEMA}`);
   schemaCreated = true;
-  const migration = await readFile(path.join(root, 'migrations/0034_fee_abstraction_quotes.sql'), 'utf8');
-  await ctx.setup.query(migration);
+  ctx.upSql = await readFile(path.join(root, 'migrations/0034_fee_abstraction_quotes.sql'), 'utf8');
+  ctx.downSql = await readFile(path.join(root, 'migrations/0034_fee_abstraction_quotes.down.sql'), 'utf8');
+  await ctx.setup.query(ctx.upSql);
 }
 
 async function tearDown() {
@@ -505,6 +639,9 @@ async function run() {
     await runScenario('2 rollbackrelease: sign failure rolls back, second attempt commits', scenarioRollbackRelease);
     await runScenario('3 same payment across 2 quotes: real unique-index race, loser 402', scenarioSamePaymentAcrossQuotes);
     await runScenario('4 expiry while waiting: expired quote must not commit', scenarioExpiryWhileWaiting);
+    await runScenario('5 legacy table: unstamped table and rows survive up and down', scenarioLegacyTableSurvivesUpDown);
+    await runScenario('6 owned empty table: down drops it and up recreates it', scenarioOwnedEmptyTableRollsBack);
+    await runScenario('7 owned table: concurrent insert blocks down, then down refuses and keeps the row', scenarioOwnedTableConcurrentInsertBlocksDown);
   } catch (err) {
     failures.push({ name: 'setup', message: describeError(err) });
     console.log(`FAIL setup\n  ${describeError(err)}`);
@@ -518,7 +655,7 @@ async function run() {
     ...cleanupErrors.map((m) => `cleanup: ${m}`),
   ];
   if (issues.length === 0) {
-    console.log('NATIVE RACE PROOF PASSED: 4/4 scenarios');
+    console.log(`NATIVE RACE PROOF PASSED: ${scenariosRun}/${scenariosRun} scenarios`);
   } else {
     console.log(`NATIVE RACE PROOF FAILED: ${issues.length} issue(s)`);
     for (const issue of issues) console.log(` - ${issue}`);

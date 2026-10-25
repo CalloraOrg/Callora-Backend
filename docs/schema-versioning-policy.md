@@ -71,8 +71,8 @@ CREATE TABLE IF NOT EXISTS schema_versions (
 2. Create the up-migration file: `migrations/NNNN_description.sql`.
 3. Create the down-migration file: `migrations/NNNN_description.down.sql`.
 4. Run `npx tsx src/migrate.ts` to apply the migration.
-   - The runner computes a **SHA-256 checksum** of the file.
-   - It inserts a record into both `_migrations` and `schema_versions` tables.
+   - The runner computes a **SHA-256 checksum** of the file and records it in `_migrations`.
+   - Versions 22 and later also get a `schema_versions` row; legacy versions (`<= 21`) do not.
 5. Commit both migration files to version control.
 
 ### Rollback
@@ -107,9 +107,8 @@ function computeChecksum(filePath: string): string {
 }
 ```
 
-The checksum is stored in both:
-- `_migrations.checksum` (internal runner table)
-- `schema_versions.checksum` (public tracking table)
+The checksum is stored in `_migrations.checksum` for every planned SQLite migration,
+and in `schema_versions.checksum` for versions 22 and later.
 
 ---
 

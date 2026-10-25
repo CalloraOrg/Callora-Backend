@@ -35,7 +35,7 @@ duplicates) are legacy. The enforced new sequence begins at `0022`. Versions `00
 the published history on `main`, `0033_idempotency_response_headers` is the
 unpublished response-header addition, and `0034_fee_abstraction_quotes` is an
 additive restoration of the fee quote table, so the next new migration is
-`0035`. Do not
+`0036`. Do not
 reuse a prefix: **one forward migration per numeric version**. In particular,
 the three legacy `0014_*` forward migrations are a collision to preserve, not
 a pattern to copy. Add new versions consecutively, without gaps.
@@ -86,13 +86,19 @@ Run the local SQLite migration runner with:
 npx tsx src/migrate.ts
 ```
 
-`src/migrate.ts` discovers forward migrations, applies each one transactionally,
-and records its filename, numeric version, and SHA-256 checksum in both its
-internal `_migrations` table and the public `schema_versions` table. Migration
-`0013_schema_versions.sql` and `drizzle/schema-versions.sql` define the
-`schema_versions` contract; the runner creates the table as a safety net before
-applying migrations. Do not edit an applied file to repair drift—create a new
-migration.
+`src/migrate.ts` plans the SQLite-applicable migrations: the global layout policy
+runs first over every forward file, then non-Postgres numbered files are applied
+in version order, each transactionally. Each applied file is recorded in
+`_migrations` with its SHA-256 checksum. Versions `0022` and later also get one
+`schema_versions` row. Legacy versions (`<= 0021`) are authoritative in
+`_migrations` only, because their historical duplicates cannot share one
+`schema_versions` version. The runner creates both tables if they are absent.
+
+Production (`NODE_ENV=production`) validates instead of applying. It fails when a
+planned migration is unrecorded, a checksum differs or is missing, a ledger row is
+unknown, or a database has tables but no migration history. Such a database needs a
+maintainer-approved plan; it is never replayed or backfilled. Do not edit an applied
+file to repair drift; create a new migration.
 
 Validate the repository layout and checksum state with:
 

@@ -1,12 +1,14 @@
 import { eq } from 'drizzle-orm';
 import { db, schema, sqlite } from '../db/index.js';
 import type { Credit, NewCredit } from '../db/schema.js';
+import { ErrorCode } from '../errors/codes.js';
+import { ConflictError } from '../errors/index.js';
 
 export interface CreditsRepository {
   findByUserId(userId: string): Promise<Credit | undefined>;
   getOrCreateByUserId(userId: string): Promise<Credit>;
   updateBalance(userId: string, newBalance: string): Promise<Credit>;
-  grant(userId: string, amountUsdc: string): Promise<Credit>;
+  grant(userId: string, amountUsdc: string, receipt?: CreditGrantReceipt): Promise<Credit>;
 }
 
 export const defaultCreditsRepository: CreditsRepository = {
@@ -131,38 +133,88 @@ export async function updateBalance(userId: string, newBalance: string): Promise
 }
 
 /**
+ * Identity of one grant attempt, supplied by the route from the idempotency
+ * middleware: principal scope, trimmed Idempotency-Key, and request fingerprint.
+ */
+export interface CreditGrantReceipt {
+  scope: string;
+  idempotencyKey: string;
+  requestHash: string;
+}
+
+interface StoredGrantReceipt {
+  request_hash: string;
+  user_id: string;
+  balance_usdc: string;
+}
+
+/**
  * Add prepaid credits without passing through floating-point arithmetic.
  *
- * The read/modify/write sequence runs in one synchronous SQLite transaction,
- * preventing concurrent admin grants from overwriting each other.
+ * The read/modify/write sequence and the receipt insert run in one synchronous
+ * SQLite transaction, preventing concurrent grants from overwriting each other.
+ * With a receipt, a repeated (scope, key) with the same fingerprint returns the
+ * stored grant result and changes nothing; a different fingerprint throws
+ * ConflictError with IDEMPOTENCY_KEY_REUSE_MISMATCH.
  */
-export async function grant(userId: string, amountUsdc: string): Promise<Credit> {
+export async function grant(
+  userId: string,
+  amountUsdc: string,
+  receipt?: CreditGrantReceipt,
+): Promise<Credit> {
   const amountUnits = toUsdcUnits(amountUsdc);
   if (amountUnits <= 0n) {
     throw new Error('amountUsdc must be greater than zero');
   }
 
   const grantTransaction = sqlite.transaction((id: string, amount: bigint): Credit => {
+    if (receipt) {
+      const stored = sqlite
+        .prepare('SELECT request_hash, user_id, balance_usdc FROM credit_grant_receipts WHERE scope = ? AND idempotency_key = ?')
+        .get(receipt.scope, receipt.idempotencyKey) as StoredGrantReceipt | undefined;
+      if (stored) {
+        if (stored.request_hash !== receipt.requestHash) {
+          throw new ConflictError(
+            'Idempotency key has already been used with a different request payload. Use a new idempotency key for a different request.',
+            ErrorCode.IDEMPOTENCY_KEY_REUSE_MISMATCH,
+          );
+        }
+        const row = sqlite
+          .prepare('SELECT id, user_id, balance_usdc, created_at, updated_at FROM credits WHERE user_id = ?')
+          .get(stored.user_id) as RawCredit | undefined;
+        if (!row) throw new Error('Credits record missing for stored grant receipt');
+        return { ...mapRawCredit(row), balance_usdc: stored.balance_usdc };
+      }
+    }
+
     const existing = sqlite
       .prepare('SELECT id, user_id, balance_usdc, created_at, updated_at FROM credits WHERE user_id = ?')
       .get(id) as RawCredit | undefined;
     const now = Math.floor(Date.now() / 1_000);
 
+    let credit: Credit;
     if (!existing) {
       const balanceUsdc = fromUsdcUnits(amount);
       const inserted = sqlite
         .prepare('INSERT INTO credits (user_id, balance_usdc, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id, user_id, balance_usdc, created_at, updated_at')
         .get(id, balanceUsdc, now, now) as RawCredit | undefined;
       if (!inserted) throw new Error('Credits record insert failed');
-      return mapRawCredit(inserted);
+      credit = mapRawCredit(inserted);
+    } else {
+      const balanceUsdc = fromUsdcUnits(toUsdcUnits(existing.balance_usdc) + amount);
+      const updated = sqlite
+        .prepare('UPDATE credits SET balance_usdc = ?, updated_at = ? WHERE id = ? RETURNING id, user_id, balance_usdc, created_at, updated_at')
+        .get(balanceUsdc, now, existing.id) as RawCredit | undefined;
+      if (!updated) throw new Error('Credits balance update failed');
+      credit = mapRawCredit(updated);
     }
 
-    const balanceUsdc = fromUsdcUnits(toUsdcUnits(existing.balance_usdc) + amount);
-    const updated = sqlite
-      .prepare('UPDATE credits SET balance_usdc = ?, updated_at = ? WHERE id = ? RETURNING id, user_id, balance_usdc, created_at, updated_at')
-      .get(balanceUsdc, now, existing.id) as RawCredit | undefined;
-    if (!updated) throw new Error('Credits balance update failed');
-    return mapRawCredit(updated);
+    if (receipt) {
+      sqlite
+        .prepare('INSERT INTO credit_grant_receipts (scope, idempotency_key, request_hash, user_id, amount_usdc, balance_usdc) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(receipt.scope, receipt.idempotencyKey, receipt.requestHash, id, amountUsdc, credit.balance_usdc);
+    }
+    return credit;
   });
 
   return grantTransaction(userId, amountUnits);

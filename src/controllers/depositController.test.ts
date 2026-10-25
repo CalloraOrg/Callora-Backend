@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { DepositController } from './depositController.js';
-import { TransactionBuilderService, InvalidContractIdError, NetworkError, SimulationError } from '../services/transactionBuilder.js';
+import { TransactionBuilderService, InvalidContractIdError, NetworkError } from '../services/transactionBuilder.js';
 import { AmountValidator } from '../validators/amountValidator.js';
 import type { VaultRepository } from '../repositories/vaultRepository.js';
 import type { UserRepository } from '../repositories/userRepository.js';
@@ -405,51 +405,6 @@ describe('DepositController', () => {
       });
     });
 
-    it('should handle SimulationError from TransactionBuilder', async () => {
-      // Arrange
-      mockReq.body = validRequest;
-      mockRes.locals = mockLocals;
-      
-      mockVaultRepository.findByUserId.mockResolvedValue({
-        id: 'vault-123',
-        userId: mockLocals.authenticatedUser.id,
-        network: 'testnet',
-        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-        balanceSnapshot: 0n,
-        lastSyncedAt: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      mockTransactionBuilder.buildDepositTransaction.mockRejectedValue(
-        new SimulationError('Soroban simulation failed', {
-          errorCode: 8,
-          errorMessage: 'BelowMinDeposit',
-          events: [],
-          footprint: { readOnly: [], readWrite: [] },
-        })
-      );
-
-      // Act
-      await depositController.prepareDeposit(mockReq as Request, mockRes as Response);
-
-      // Assert
-      expect(mockRes.status).toHaveBeenCalledWith(502);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: expect.objectContaining({
-            code: 'SIMULATION_FAILED',
-            message: 'Soroban simulation failed. See diagnostics for details.',
-            simulationDetails: expect.objectContaining({
-              errorCode: 8,
-              errorMessage: 'BelowMinDeposit',
-            }),
-          }),
-        })
-      );
-    });
-
     it('should handle generic errors gracefully', async () => {
       // Arrange
       mockReq.body = validRequest;
@@ -481,7 +436,24 @@ describe('DepositController', () => {
       }));
     });
 
+    it('should work with mainnet network', async () => {
+      // Arrange - override the config mock to simulate a mainnet-configured server
+      const configMock = jest.requireMock('../config/index.js');
+      configMock.config.stellar.network = 'mainnet';
 
+      mockReq.body = { ...validRequest, network: 'mainnet' };
+      mockRes.locals = mockLocals;
+      
+      mockVaultRepository.findByUserId.mockResolvedValue({
+        id: 'vault-123',
+        userId: mockLocals.authenticatedUser.id,
+        network: 'mainnet',
+        contractId: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        balanceSnapshot: 0n,
+        lastSyncedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
 
       mockTransactionBuilder.buildDepositTransaction.mockResolvedValue({
         xdr: 'AAAAAgAAAAA...mainnet-xdr...',

@@ -56,6 +56,14 @@ replay an applied migration to make layout validation pass; the usage-status
 backfill can overwrite later reconciliation decisions. The required deployment
 history clarification is tracked in [issue #1499](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
 
+## Refund grant receipts
+
+`POST /api/billing/refund` requires `Idempotency-Key`. The idempotency middleware namespaces that key by principal and fingerprints the request. Responses at or under `IDEMPOTENCY_MAX_BODY_BYTES` are cached and replayed; larger responses are not cached, so a retry reaches the handler again. To keep that retry from granting twice, each grant writes a receipt to `credit_grant_receipts` (migration `0035_credit_grant_receipts.sql`), keyed by `(scope, idempotency key)`, in the same SQLite transaction as the balance change.
+
+- Same key and same request fingerprint: the stored grant result is returned and the balance is unchanged.
+- Same key and a different request: `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`, no grant.
+
+Receipts are business records, not HTTP responses, and exist only on the SQLite backend where credits live. The down migration refuses to drop a non-empty receipts table.
 
 ## How It Works
 

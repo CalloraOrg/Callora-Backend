@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { SuccessEnvelope, ErrorEnvelope, ResponseMeta } from '../types/ResponseEnvelope.js';
-import type { ValidationErrorDetail } from '../middleware/validate.js';
+import type { SuccessEnvelope, ErrorEnvelope, ErrorDetails, ResponseMeta } from '../types/ResponseEnvelope.js';
 
 /**
  * Wraps data in the canonical success envelope.
@@ -27,7 +26,7 @@ export function errorEnvelope(
   code: string,
   message: string,
   requestId: string,
-  details?: ValidationErrorDetail[],
+  details?: ErrorDetails,
 ): ErrorEnvelope {
   return {
     success: false,

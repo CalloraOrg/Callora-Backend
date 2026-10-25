@@ -1,62 +1,8 @@
-import express from 'express';
 import request from 'supertest';
-import { VaultController } from './vaultController.js';
-import {
-  InMemoryVaultRepository,
-  type VaultRepository,
-} from '../repositories/vaultRepository.js';
-import { errorHandler } from '../middleware/errorHandler.js';
-import { requestIdMiddleware } from '../middleware/requestId.js';
-import { validate } from '../middleware/validate.js';
-import { stellarNetworkQuerySchema } from '../validators/networkSchema.js';
-import type {
-  OnchainVaultState,
-  VaultStateReader,
-} from '../services/sorobanVaultReader.js';
-
-const state: OnchainVaultState = {
-  balance: 1_234_567n,
-  maxDeduct: 23_456_789n,
-  paused: true,
-  usdcToken: 'GUSDC',
-  settlement: 'GSETTLEMENT',
-  ledger: 987654,
-};
-
-function createApp(
-  repository: VaultRepository,
-  reader?: VaultStateReader,
-  snapshotMaxAgeMs = 60_000,
-  demoTestnetContractId?: string,
-) {
-  const app = express();
-  app.use(requestIdMiddleware);
-  app.use((req, res, next) => {
-    const userId = req.headers['x-user-id'];
-    if (typeof userId === 'string' && userId.length > 0) {
-      res.locals.authenticatedUser = { id: userId, email: `${userId}@example.com` };
-    }
-    next();
-  });
-  const controller = new VaultController(
-    repository,
-    reader,
-    snapshotMaxAgeMs,
-    demoTestnetContractId,
-  );
-  app.get(
-    '/api/vault/balance',
-    validate({ query: stellarNetworkQuerySchema }),
-    controller.getBalance.bind(controller),
-  );
-  app.get(
-    '/api/vault/onchain',
-    validate({ query: stellarNetworkQuerySchema }),
-    controller.getOnchain.bind(controller),
-  );
-  app.use(errorHandler);
-  return app;
-}
+import { config } from '../config/index.js';
+import { InMemoryVaultRepository } from '../repositories/vaultRepository.js';
+import type { VaultStateReader } from '../services/sorobanVaultReader.js';
+import { createApp, state } from '../../tests/helpers/vaultControllerHarness.js';
 
 describe('vault on-chain controller behavior', () => {
   it('refreshes and persists a snapshot older than the configured maximum age', async () => {
@@ -190,8 +136,7 @@ describe('vault on-chain controller behavior', () => {
   });
 
   it('returns a configured testnet vault to anonymous demo requests', async () => {
-    const priorDemoMode = process.env.DEMO_MODE;
-    process.env.DEMO_MODE = 'true';
+    const demoMode = jest.replaceProperty(config, 'demoMode', true);
     try {
       const reader: VaultStateReader = {
         readVault: jest.fn(async () => state),
@@ -212,8 +157,7 @@ describe('vault on-chain controller behavior', () => {
         'testnet',
       );
     } finally {
-      if (priorDemoMode === undefined) delete process.env.DEMO_MODE;
-      else process.env.DEMO_MODE = priorDemoMode;
+      demoMode.restore();
     }
   });
 

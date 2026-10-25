@@ -9,22 +9,22 @@
  *   Admin (adminAuth): POST / — issue a refund
  *
  * Idempotency:
- *   Refunds move money and this route has no ledger table of its own to
- *   detect duplicate submissions (unlike /billing/deduct, which dedupes via
- *   the `usage_events.request_id` unique constraint). The `Idempotency-Key`
- *   header is therefore REQUIRED — the generic `idempotencyMiddleware`
- *   caches the first response per key and replays it (with an
- *   `Idempotent-Replayed: true` header) for retries, instead of crediting
- *   the balance twice. See docs/billing-refund-idempotency.md.
+ *   The `Idempotency-Key` header is REQUIRED. The generic `idempotencyMiddleware`
+ *   caches small responses per key and replays them (with an
+ *   `Idempotent-Replayed: true` header). Responses over the cache cap are not
+ *   cached, so a retry reaches the handler again. The grant therefore records a
+ *   receipt per (scope, key) in the same SQLite transaction as the balance
+ *   change; a same-key retry returns the stored result. See
+ *   docs/billing-idempotency.md ("Refund grant receipts").
  */
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { adminAuth } from '../../middleware/adminAuth.js';
 import { bodyValidator } from '../../middleware/validate.js';
-import { idempotencyMiddleware } from '../../middleware/idempotency.js';
+import { idempotencyMiddleware, type IdempotencyLease } from '../../middleware/idempotency.js';
 import { logger } from '../../logger.js';
-import { BadRequestError, UnauthorizedError } from '../../errors/index.js';
+import { BadRequestError, InternalServerError, UnauthorizedError } from '../../errors/index.js';
 import {
   defaultCreditsRepository,
   type CreditsRepository,
@@ -85,8 +85,18 @@ export function createRefundRouter(deps: RefundRouterDeps = {}): Router {
           return;
         }
 
+        const lease: IdempotencyLease | undefined = res.locals.idempotency;
+        if (!lease) {
+          next(new InternalServerError('Refund idempotency context is missing'));
+          return;
+        }
+
         const input = refundRequestSchema.parse(req.body) as RefundRequestInput;
-        const credit = await creditsRepo.grant(input.developerId, input.amountUsdc);
+        const credit = await creditsRepo.grant(input.developerId, input.amountUsdc, {
+          scope: lease.scope,
+          idempotencyKey: lease.idempotencyKey,
+          requestHash: lease.requestHash,
+        });
 
         logger.audit('REFUND_ISSUED', adminActor, {
           developerId: input.developerId,

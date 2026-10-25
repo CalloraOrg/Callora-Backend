@@ -5,6 +5,7 @@
  */
 
 import type { ValidationErrorDetail } from '../middleware/validate.js';
+import type { FeatureErrorDetails } from '../middleware/envelopeSchemas.js';
 
 export interface SuccessEnvelope<T = unknown> {
   success: true;
@@ -13,6 +14,9 @@ export interface SuccessEnvelope<T = unknown> {
   requestId: string;
   timestamp: string; // ISO 8601
 }
+
+/** `error.details` is a validation list, or a feature object for demo-mode guards. */
+export type ErrorDetails = ValidationErrorDetail[] | FeatureErrorDetails;
 
 /**
  * Redacted Soroban simulation diagnostics attached to a `SIMULATION_FAILED`
@@ -31,7 +35,7 @@ export interface ErrorEnvelope {
   error: {
     code: string;
     message: string;
-    details?: ValidationErrorDetail[];
+    details?: ErrorDetails;
     /** Present only for simulation failures; additive and optional. */
     simulationDetails?: SimulationDetailsSummary;
   };

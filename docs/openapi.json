@@ -691,7 +691,8 @@
                       "success": true,
                       "data": {
                         "status": "ok",
-                        "service": "callora-backend"
+                        "service": "callora-backend",
+                        "mode": "standard"
                       },
                       "requestId": "req-mock-uuid",
                       "timestamp": "2026-07-25T10:00:00.000Z"
@@ -8293,16 +8294,34 @@
             "type": "string"
           },
           "details": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "feature"
+                ],
+                "properties": {
+                  "feature": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
           }
         }
       },
       "ErrorCode": {
         "type": "string",
         "enum": [
+          "DEMO_MODE_UNSUPPORTED",
           "BAD_REQUEST",
           "UNAUTHORIZED",
           "FORBIDDEN",
@@ -8373,6 +8392,7 @@
           "IP_NOT_ALLOWED",
           "DATABASE_NOT_AVAILABLE",
           "IDEMPOTENCY_CONFLICT",
+          "IDEMPOTENCY_KEY_REUSE_MISMATCH",
           "IDEMPOTENCY_RESPONSE_TOO_LARGE",
           "IDEMPOTENCY_IN_PROGRESS",
           "SIMULATION_FAILED",
@@ -8539,6 +8559,14 @@
               },
               "checks": {
                 "$ref": "#/components/schemas/HealthChecks"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "demo",
+                  "standard"
+                ],
+                "description": "Runtime capabilities: demo uses seeded SQLite without PostgreSQL or Stellar integrations."
               }
             }
           },

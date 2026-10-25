@@ -233,7 +233,13 @@ test('voided unsettled revenue is reversed and settled revenue receives a negati
     await pool.query("UPDATE usage_events SET deduction_status = 'voided' WHERE request_id = 'req-void-settled'");
 
     expect(await repository.reverseVoidedRevenueLedgerEvents()).toBe(1);
-    const rows = await pool.query(
+    type RevenueLedgerRow = {
+      usage_event_id: string;
+      amount_usdc: string;
+      reversed_at: Date | null;
+      reversal_of_usage_event_id: string | null;
+    };
+    const rows: { rows: RevenueLedgerRow[] } = await pool.query(
       `SELECT usage_event_id, amount_usdc::text, reversed_at, reversal_of_usage_event_id
        FROM revenue_ledger ORDER BY id`,
     );

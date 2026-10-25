@@ -12,6 +12,9 @@
  */
 
 export const ErrorCode = {
+  /** The feature requires PostgreSQL or Stellar integrations unavailable in demo mode (HTTP 503); error.details is { feature } naming the unavailable feature */
+  DEMO_MODE_UNSUPPORTED: "DEMO_MODE_UNSUPPORTED",
+
   /** The request is malformed, missing required input, or otherwise invalid */
   BAD_REQUEST: "BAD_REQUEST",
 
@@ -221,6 +224,9 @@ export const ErrorCode = {
 
   /** Idempotency key conflict with different request */
   IDEMPOTENCY_CONFLICT: "IDEMPOTENCY_CONFLICT",
+
+  /** Idempotency key was reused with a different request payload; the operation was not repeated */
+  IDEMPOTENCY_KEY_REUSE_MISMATCH: "IDEMPOTENCY_KEY_REUSE_MISMATCH",
 
   /** Legacy hash-only idempotency record whose response was never stored; the operation is not re-run. Fetch the resource by identifier. New oversized responses are not cached. */
   IDEMPOTENCY_RESPONSE_TOO_LARGE: "IDEMPOTENCY_RESPONSE_TOO_LARGE",

@@ -13,6 +13,7 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 
 | Code | Catalog section |
 |---|---|
+| `DEMO_MODE_UNSUPPORTED` | HTTP status derived / base app codes |
 | `BAD_REQUEST` | HTTP status derived / base app codes |
 | `UNAUTHORIZED` | HTTP status derived / base app codes |
 | `FORBIDDEN` | HTTP status derived / base app codes |
@@ -83,6 +84,7 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `IP_NOT_ALLOWED` | IP allowlist |
 | `DATABASE_NOT_AVAILABLE` | DB / infrastructure |
 | `IDEMPOTENCY_CONFLICT` | Idempotency |
+| `IDEMPOTENCY_KEY_REUSE_MISMATCH` | Idempotency |
 | `IDEMPOTENCY_RESPONSE_TOO_LARGE` | Idempotency |
 | `IDEMPOTENCY_IN_PROGRESS` | Idempotency |
 | `SIMULATION_FAILED` | Misc / direct middleware responses |
