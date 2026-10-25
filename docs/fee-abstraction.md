@@ -185,7 +185,7 @@ This event can trigger downstream webhook deliveries if the developer has subscr
 | `FEE_ABSTRACTION_APP_TOKEN_ASSET_CODE` | No (default `APP`) | Valid Stellar credit-asset code |
 | `FEE_ABSTRACTION_RATE_NUMERATOR`, `FEE_ABSTRACTION_RATE_DENOMINATOR` | No (default `1`, `10`) | Positive integer app-token/XLM conversion ratio |
 | `FEE_ABSTRACTION_QUOTE_TTL_SECONDS` | No (default `300`) | Quote validity window |
-| `FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS` | No (default `5000`) | Maximum Horizon verification duration |
+| `FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS` | No (default `4000`) | Maximum Horizon verification duration; must be below `BILLING_TIMEOUT_MS` (default `5000`) when that deadline is enabled. A violation returns HTTP 500 before any quote or payment work |
 
 ## Verification
 
@@ -197,5 +197,7 @@ node tests/integration/feeAbstraction.postgres.mjs --dsn 'postgresql://fixture@1
 ```
 
 It creates and removes only its own randomly named test schema. Checks cover a single winning execution, rollback releasing a waiter, payment-ID contention and expiry during a lock wait. Signing is synthetic in this database regression; it does not move funds or contact Horizon.
+
+The request deadline (`BILLING_TIMEOUT_MS`) cancels in-flight Horizon verification and aborts the consume transaction at its checkpoints (before connecting, after the quote row lock, and before signing). A request cancelled before signing rolls back, leaving the quote `pending` so it can be retried. Once `COMMIT` returns, the quote is consumed; cancellation does not make the HTTP response delivery atomic with that authorization, so clients must not assume a fee-bump was delivered when the response is lost after commit.
 
 Protocol references: Stellar's [transaction object](https://developers.stellar.org/docs/data/apis/horizon/api-reference/resources/transactions/object) and [payment object](https://developers.stellar.org/docs/data/apis/horizon/api-reference/resources/payments/object).

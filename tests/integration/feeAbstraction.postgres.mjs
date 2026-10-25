@@ -578,6 +578,66 @@ async function scenarioOwnedTableConcurrentInsertBlocksDown() {
   }
 }
 
+// Scenario 8: the HTTP caller aborts while its consume waits on a row lock. The aborted consume must reject
+// with AbortError, must not sign, and must leave the quote pending; a retry with a fresh signal commits once.
+async function scenarioAbortWhileWaitingForRowLock() {
+  const quoteId = await seedQuote('1 hour');
+  const control = await openControl('s8-abort');
+  const signLog = [];
+  const payment = hex64();
+  const attempts = [];
+  const abort = new AbortController();
+  try {
+    await holdRowLock(control, quoteId);
+    attempts.push(
+      settle(
+        consumeQuoteAndSign(
+          ctx.pool,
+          { ...consumeInput(quoteId, payment), signal: abort.signal },
+          makeSign(signLog, 'aborted'),
+        ),
+      ),
+    );
+    const [waiter] = await waitForBlocked('s8 consume behind control row lock', 1, (rows) =>
+      sameInts(rows[0].blockers, [control.pid]),
+    );
+    console.log(`  s8 control pid=${control.pid} waiter: ${describeWaiters([waiter])}`);
+
+    abort.abort();
+    await control.client.query('ROLLBACK');
+    control.inTx = false;
+
+    const aborted = await withDeadline(attempts[0], 's8 aborted outcome');
+    assert.equal(aborted.ok, false, 's8: aborted consume must not commit');
+    assert.equal(
+      aborted.error?.name,
+      'AbortError',
+      `s8: aborted consume must reject with AbortError, got ${describeError(aborted.error)}`,
+    );
+    assert.deepEqual(signLog, [], 's8: aborted consume must not invoke the signer');
+    assert.deepEqual(await quoteState(quoteId), PENDING, 's8: aborted consume must leave the quote pending');
+
+    const retry = await withDeadline(
+      consumeQuoteAndSign(
+        ctx.pool,
+        { ...consumeInput(quoteId, payment), signal: new AbortController().signal },
+        makeSign(signLog, 'retry'),
+      ),
+      's8 retry',
+    );
+    assert.equal(retry.feeBumpXdr, 'signed:retry');
+    assert.deepEqual(signLog, ['retry'], 's8: retry must sign exactly once');
+    assert.deepEqual(await quoteState(quoteId), {
+      status: 'consumed',
+      app_token_payment_tx_id: payment,
+      consumed_at_set: true,
+    });
+  } finally {
+    await releaseControl(control);
+    await drainAttempts(attempts, 's8 drain');
+  }
+}
+
 
 let scenariosRun = 0;
 
@@ -642,6 +702,7 @@ async function run() {
     await runScenario('5 legacy table: unstamped table and rows survive up and down', scenarioLegacyTableSurvivesUpDown);
     await runScenario('6 owned empty table: down drops it and up recreates it', scenarioOwnedEmptyTableRollsBack);
     await runScenario('7 owned table: concurrent insert blocks down, then down refuses and keeps the row', scenarioOwnedTableConcurrentInsertBlocksDown);
+    await runScenario('8 abort while waiting: aborted consume does not sign, retry commits once', scenarioAbortWhileWaitingForRowLock);
   } catch (err) {
     failures.push({ name: 'setup', message: describeError(err) });
     console.log(`FAIL setup\n  ${describeError(err)}`);

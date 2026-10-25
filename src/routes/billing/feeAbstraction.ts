@@ -97,6 +97,11 @@ function resolvePaymentSettings(overrides: Partial<FeeAbstractionPaymentSettings
       `Fee-abstraction payments are not configured: ${missing.join(', ')} must be set to a Stellar public key`,
     );
   }
+  if (config.billingTimeoutMs > 0 && settings.verifyTimeoutMs >= config.billingTimeoutMs) {
+    throw new InternalServerError(
+      `Fee-abstraction verification budget (${settings.verifyTimeoutMs} ms) must be below the billing request deadline (${config.billingTimeoutMs} ms)`,
+    );
+  }
   return settings;
 }
 
@@ -267,6 +272,7 @@ export function createFeeAbstractionRouter(options: FeeAbstractionRouterOptions 
             horizonUrl: settings.horizonUrl,
             timeoutMs: settings.verifyTimeoutMs,
             fetchImpl: options.fetchImpl,
+            signal: req.abortSignal,
           },
         );
 
@@ -277,6 +283,7 @@ export function createFeeAbstractionRouter(options: FeeAbstractionRouterOptions 
             userId: user.id,
             paymentTxHash,
             feeStroops: quote.feeStroops,
+            signal: req.abortSignal,
           },
           () => createFeeBumpTransaction(innerXdr),
         );

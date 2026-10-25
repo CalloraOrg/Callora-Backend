@@ -22,6 +22,7 @@
 - Classify PostgreSQL-only quote and replay-header migrations correctly during SQLite demo bootstrap; production SQL remains unchanged.
 - Require fresh, method/path-bound v1 forwarded identity signatures, reject replay with bounded memory or shared PostgreSQL storage, and restrict legacy migration mode to non-production.
 - Refund grants record a durable SQLite receipt per (scope, idempotency key) in the same transaction as the balance change. A same-key retry after an over-cap response, which is not cached, now returns the stored result instead of crediting again; a different request body returns `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`.
+- Fee-abstraction requests cancelled by the billing deadline before fee signing roll back the quote consumption, leaving the quote `pending` so the same quote can be retried with its payment. Verification now shares the request deadline (`FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS`, default `4000`), which must stay below `BILLING_TIMEOUT_MS` or the request fails before quoting or payment. Cancellation after `COMMIT` does not make HTTP delivery atomic with the consumed quote.
 
 - Propagated `X-Correlation-Id` across the quota self-service routes and outbound webhook dispatches so quota requests and related notifications can be traced end-to-end.
 - Removed a broken, unmounted CORS middleware call and a duplicate import from `src/routes/billing.ts` that were left over from a conflicted merge and failed to compile.

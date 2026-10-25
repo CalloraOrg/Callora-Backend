@@ -199,7 +199,7 @@ export const integrationEnvironmentFields = {
   // Comma-separated; when unset the network-specific vault contract id is
   // used (STELLAR_*_VAULT_CONTRACT_ID).
   FEE_ABSTRACTION_VAULT_CONTRACT_IDS: z.string().optional(),
-  // Upper bound on the time spent verifying the payment on-chain. Must be
-  // less than the route timeout so verification fails closed.
-  FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  // Upper bound on the time spent verifying the payment on-chain. Must be less than BILLING_TIMEOUT_MS
+  // when that deadline is enabled; fee-abstraction requests check this before quoting or payment.
+  FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS: z.coerce.number().int().positive().default(4_000),
 } as const;

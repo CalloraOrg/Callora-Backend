@@ -65,6 +65,8 @@ export interface HorizonVerifierOptions {
   horizonUrl: string;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
+  /** Caller cancellation (for example the request deadline); aborts in-flight Horizon I/O. */
+  signal?: AbortSignal;
 }
 
 const horizonTransactionSchema = z.object({
@@ -106,12 +108,18 @@ export async function verifyAppTokenPayment(
 ): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const base = options.horizonUrl.endsWith('/') ? options.horizonUrl : `${options.horizonUrl}/`;
+  // A request that is already cancelled fails before any allocation or Horizon I/O.
+  if (options.signal?.aborted) {
+    throw verificationUnavailable();
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  // Both Horizon requests stop on the component budget or on the caller's cancellation.
+  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
   try {
     const txRes = await fetchImpl(`${base}transactions/${expected.paymentTxHash}`, {
-      signal: controller.signal,
+      signal,
     });
     if (txRes.status === 404) {
       throw new PaymentRequiredError('App-token payment transaction was not found on the network');
@@ -145,7 +153,7 @@ export async function verifyAppTokenPayment(
     }
 
     const opsRes = await fetchImpl(`${base}transactions/${expected.paymentTxHash}/operations?limit=200`, {
-      signal: controller.signal,
+      signal,
     });
     if (!opsRes.ok) {
       throw verificationUnavailable();
@@ -278,8 +286,9 @@ export async function loadSenderAddress(pool: Pool, userId: string): Promise<str
 /**
  * Atomically consumes a pending quote bound to a payment and signs inside the same
  * transaction. `sign` runs only after the conditional UPDATE succeeds; any failure
- * (including signing or COMMIT) rolls the quote back to pending, and the signed
- * result is returned only after COMMIT.
+ * (including signing, COMMIT or cancellation through `signal`) rolls the quote back to pending,
+ * and the signed result is returned only after COMMIT. Cancellation observed before `sign`
+ * is therefore retryable; the signal does not make HTTP delivery after COMMIT atomic.
  */
 export async function consumeQuoteAndSign(
   pool: Pool,
@@ -288,11 +297,15 @@ export async function consumeQuoteAndSign(
     userId: string;
     paymentTxHash: string;
     feeStroops: bigint;
+    signal?: AbortSignal;
   },
   sign: () => FeeBumpResult,
 ): Promise<FeeBumpResult> {
+  input.signal?.throwIfAborted();
   const client = await pool.connect();
   try {
+    // Cancelled while queued for a connection: release without starting a transaction.
+    input.signal?.throwIfAborted();
     await client.query('BEGIN');
     try {
       // Lock first: UPDATE can evaluate its expiry predicate before waiting for a row lock.
@@ -300,6 +313,7 @@ export async function consumeQuoteAndSign(
         'SELECT id FROM fee_abstraction_quotes WHERE id = $1 AND user_id = $2 FOR UPDATE',
         [input.quoteId, input.userId],
       );
+      input.signal?.throwIfAborted();
       const consumed = await client.query<{ id: string }>(
         `UPDATE fee_abstraction_quotes
             SET status = 'consumed', app_token_payment_tx_id = $3, consumed_at = clock_timestamp()
@@ -311,6 +325,7 @@ export async function consumeQuoteAndSign(
         throw new ConflictError('Fee-abstraction quote is no longer pending or has expired');
       }
 
+      input.signal?.throwIfAborted();
       const result = sign();
       if (result.feeStroops !== input.feeStroops) {
         throw new InternalServerError('Signed fee-bump fee does not match the quoted fee');
