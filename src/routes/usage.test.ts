@@ -3,15 +3,9 @@ import request from 'supertest';
 import { createUsageRouter } from './usage.js';
 import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 import { errorHandler } from '../middleware/errorHandler.js';
-import { type UsageEventsRepository } from '../repositories/usageEventsRepository.js';
+import { InMemoryUsageEventsRepository } from '../repositories/usageEventsRepository.js';
 
-const mockUsageEventsRepository: jest.Mocked<UsageEventsRepository> = {
-  record: jest.fn(),
-  findByUser: jest.fn().mockResolvedValue([]),
-  findByApi: jest.fn().mockResolvedValue([]),
-  aggregateByUser: jest.fn().mockResolvedValue({ totalCalls: 0, totalRevenue: 0, breakdownByApi: [] }),
-  aggregateByApi: jest.fn().mockResolvedValue({ totalCalls: 0, totalRevenue: 0, breakdownByApi: [] }),
-};
+const usageEventsRepository = new InMemoryUsageEventsRepository();
 
 describe('Usage Router Rate Limiting', () => {
   function buildApp() {
@@ -29,7 +23,7 @@ describe('Usage Router Rate Limiting', () => {
     });
 
     const router = createUsageRouter({
-      usageEventsRepository: mockUsageEventsRepository,
+      usageEventsRepository,
       rateLimitMiddleware,
     });
 
@@ -53,14 +47,7 @@ describe('Usage Router Rate Limiting', () => {
     // Third request should hit the rate limit
     response = await request(app).get('/usage');
     expect(response.status).toBe(429);
-    expect(response.body).toEqual({
-      success: false,
-      error: {
-        code: 'TOO_MANY_REQUESTS',
-        message: 'Too Many Requests'
-      },
-      requestId: 'test-request-id',
-    });
+    expect(response.body.error.code).toBe('TOO_MANY_REQUESTS');
     expect(response.headers['retry-after']).toBeDefined();
     
     // Wait for window to reset (mocking time might be better but real wait is simple here)

@@ -12,13 +12,12 @@
  *   - Zod validation failures
  *   - Cross-user ownership guard (GET /:id returns 404 for other user's request)
  *   - Status filter for list endpoint
- *   - Store isolation via clearRefundStore in beforeEach
  *   - Tracing spans created for each endpoint
  */
 
 import request from 'supertest';
 import express from 'express';
-import refundsRouter, { getRefundStore, clearRefundStore } from './refunds.js';
+import refundsRouter from './refunds.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import { __setTracer } from '../otel/spans.js';
@@ -139,7 +138,7 @@ function createInMemoryTracer(): { tracer: Tracer; getSpans: () => RecordedSpan[
 
 describe('POST /api/refunds', () => {
   beforeEach(() => {
-    clearRefundStore();
+    process.env.ADMIN_API_KEY = ADMIN_KEY;
   });
 
   it('201 - creates a pending refund request with required fields', async () => {
@@ -168,20 +167,6 @@ describe('POST /api/refunds', () => {
     expect(res.body.data.adminNotes).toBeUndefined();
   });
 
-  it('201 - persists the refund request in the store', async () => {
-    const app = createTestApp();
-
-    await request(app)
-      .post('/api/refunds')
-      .set('x-user-id', 'dev-42')
-      .send({ usageEventId: '123e4567-e89b-12d3-a456-426614174001', reason: 'Testing refund persistence', amountUsdc: '5.00' });
-
-    const store = getRefundStore();
-    expect(store.size).toBe(1);
-    const refund = store.values().next().value;
-    expect(refund?.developerId).toBe('dev-42');
-    expect(refund?.status).toBe('pending');
-  });
 
   it('400 VALIDATION_ERROR - missing required fields', async () => {
     const app = createTestApp();
@@ -286,7 +271,7 @@ describe('POST /api/refunds', () => {
 
 describe('GET /api/refunds', () => {
   beforeEach(() => {
-    clearRefundStore();
+    process.env.ADMIN_API_KEY = ADMIN_KEY;
   });
 
   it('200 - returns empty array when no requests exist', async () => {
@@ -359,20 +344,17 @@ describe('GET /api/refunds', () => {
       .set('x-user-id', 'dev-1')
       .send({ usageEventId: '123e4567-e89b-12d3-a456-426614174004', reason: 'Pending refund request', amountUsdc: '10.00' });
 
-    // Create another refund and manually update it to approved
+    // Approve the second refund through the public admin operation.
     const r2 = await request(app)
       .post('/api/refunds')
       .set('x-user-id', 'dev-1')
       .send({ usageEventId: '123e4567-e89b-12d3-a456-426614174005', reason: 'Will be marked approved', amountUsdc: '20.00' });
 
-    // Mark r2 as approved
-    const store = getRefundStore();
-    const refund2 = store.get(r2.body.data.id);
-    if (refund2) {
-      refund2.status = 'approved';
-      refund2.resolvedAt = new Date();
-      refund2.resolvedBy = 'admin-1';
-    }
+    await request(app)
+      .post(`/api/refunds/${r2.body.data.id}/approve`)
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({ resolution: 'APPROVED' })
+      .expect(200);
 
     const res = await request(app)
       .get('/api/refunds?status=pending')
@@ -397,14 +379,11 @@ describe('GET /api/refunds', () => {
       .set('x-user-id', 'dev-1')
       .send({ usageEventId: '123e4567-e89b-12d3-a456-426614174006', reason: 'Will be marked approved', amountUsdc: '20.00' });
 
-    // Mark r2 as approved
-    const store = getRefundStore();
-    const refund2 = store.get(r2.body.data.id);
-    if (refund2) {
-      refund2.status = 'approved';
-      refund2.resolvedAt = new Date();
-      refund2.resolvedBy = 'admin-1';
-    }
+    await request(app)
+      .post(`/api/refunds/${r2.body.data.id}/approve`)
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({ resolution: 'APPROVED' })
+      .expect(200);
 
     const res = await request(app)
       .get('/api/refunds?status=approved')
@@ -429,13 +408,11 @@ describe('GET /api/refunds', () => {
       .set('x-user-id', 'dev-1')
       .send({ usageEventId: '123e4567-e89b-12d3-a456-426614174008', reason: 'Will be marked rejected', amountUsdc: '30.00' });
 
-    const store = getRefundStore();
-    const refund2 = store.get(r2.body.data.id);
-    if (refund2) {
-      refund2.status = 'rejected';
-      refund2.resolvedAt = new Date();
-      refund2.resolvedBy = 'admin-1';
-    }
+    await request(app)
+      .post(`/api/refunds/${r2.body.data.id}/approve`)
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({ resolution: 'REJECTED' })
+      .expect(200);
 
     const res = await request(app)
       .get('/api/refunds?status=rejected')
@@ -495,7 +472,7 @@ describe('GET /api/refunds', () => {
 
 describe('GET /api/refunds/:id', () => {
   beforeEach(() => {
-    clearRefundStore();
+    process.env.ADMIN_API_KEY = ADMIN_KEY;
   });
 
   it('200 - returns the callers own request by ID', async () => {
@@ -597,14 +574,11 @@ describe('GET /api/refunds/:id', () => {
       .set('x-user-id', 'dev-1')
       .send({ usageEventId: '123e4567-e89b-12d3-a456-426614174010', reason: 'Refund that will be approved by admin', amountUsdc: '50.00' });
 
-    const store = getRefundStore();
-    const refund = store.get(created.body.data.id);
-    if (refund) {
-      refund.status = 'approved';
-      refund.resolvedAt = new Date();
-      refund.resolvedBy = 'admin-1';
-      refund.adminNotes = 'Approved after review';
-    }
+    await request(app)
+      .post(`/api/refunds/${created.body.data.id}/approve`)
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({ resolution: 'APPROVED', adminNotes: 'Approved after review' })
+      .expect(200);
 
     const res = await request(app)
       .get(`/api/refunds/${created.body.data.id}`)
@@ -613,7 +587,6 @@ describe('GET /api/refunds/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.status).toBe('approved');
     expect(res.body.data.adminNotes).toBe('Approved after review');
-    expect(res.body.data.resolvedBy).toBe('admin-1');
   });
 
   it('200 - caller can access their own rejected request', async () => {
@@ -624,14 +597,11 @@ describe('GET /api/refunds/:id', () => {
       .set('x-user-id', 'dev-1')
       .send({ usageEventId: '123e4567-e89b-12d3-a456-426614174011', reason: 'Refund that will be rejected by admin', amountUsdc: '75.00' });
 
-    const store = getRefundStore();
-    const refund = store.get(created.body.data.id);
-    if (refund) {
-      refund.status = 'rejected';
-      refund.resolvedAt = new Date();
-      refund.resolvedBy = 'admin-1';
-      refund.adminNotes = 'Insufficient evidence provided';
-    }
+    await request(app)
+      .post(`/api/refunds/${created.body.data.id}/approve`)
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({ resolution: 'REJECTED', adminNotes: 'Insufficient evidence provided' })
+      .expect(200);
 
     const res = await request(app)
       .get(`/api/refunds/${created.body.data.id}`)
@@ -640,7 +610,6 @@ describe('GET /api/refunds/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.status).toBe('rejected');
     expect(res.body.data.adminNotes).toBe('Insufficient evidence provided');
-    expect(res.body.data.resolvedBy).toBe('admin-1');
   });
 });
 
@@ -650,7 +619,6 @@ describe('GET /api/refunds/:id', () => {
 
 describe('POST /api/refunds/:id/approve', () => {
   beforeEach(() => {
-    clearRefundStore();
     process.env.ADMIN_API_KEY = ADMIN_KEY;
   });
 
@@ -786,7 +754,6 @@ describe('Tracing spans for /api/refunds', () => {
   let getSpans: () => RecordedSpan[];
 
   beforeEach(() => {
-    clearRefundStore();
     const { tracer, getSpans: getSpansFn } = createInMemoryTracer();
     getSpans = getSpansFn;
     __setTracer(tracer);

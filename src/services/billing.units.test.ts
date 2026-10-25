@@ -3,13 +3,14 @@ import { newDb, DataType } from 'pg-mem';
 import type { Pool } from 'pg';
 import { BillingService, type SorobanClient } from './billing.js';
 import { formatContractUnitsToUsdc } from '../lib/usdcUnits.js';
+import { createUsageEventsTable } from '../../tests/helpers/db.js';
 
 describe('BillingService Unit Tests (SQL-level with pg-mem)', () => {
   let pool: Pool;
   let mockSorobanClient: SorobanClient;
   let billingService: BillingService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const db = newDb();
 
     db.public.registerFunction({
@@ -18,26 +19,11 @@ describe('BillingService Unit Tests (SQL-level with pg-mem)', () => {
       implementation: () => new Date('2026-03-01T00:00:00.000Z'),
     });
 
-    db.public.none(`
-      CREATE TABLE usage_events (
-        id BIGSERIAL PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        api_id VARCHAR(255) NOT NULL,
-        endpoint_id VARCHAR(255) NOT NULL,
-        api_key_id VARCHAR(255) NOT NULL,
-        developer_id VARCHAR(255) NOT NULL DEFAULT '',
-        amount_usdc NUMERIC(30, 0) NOT NULL CHECK (amount_usdc > 0),
-        request_id VARCHAR(255) NOT NULL UNIQUE,
-        stellar_tx_hash VARCHAR(64),
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        deduction_status VARCHAR(16) NOT NULL DEFAULT 'pending',
-        resolved_at TIMESTAMP,
-        resolution_reason TEXT
-      );
-    `);
+
 
     const pgAdapter = db.adapters.createPg();
     pool = new pgAdapter.Pool() as unknown as Pool;
+    await createUsageEventsTable(pool);
 
     mockSorobanClient = {
       getBalance: async () => ({ balance: '100000000000' }), // plenty of balance in contract units

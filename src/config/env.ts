@@ -13,6 +13,14 @@ export const envSchema = z.object({
   ...sloEnvironmentFields,
 })
   .superRefine((data, ctx) => {
+    if (data.FEE_ABSTRACTION_RATE_DENOMINATOR === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["FEE_ABSTRACTION_RATE_DENOMINATOR"],
+        message: "FEE_ABSTRACTION_RATE_DENOMINATOR must be greater than zero",
+      });
+    }
+
     if (data.EXPORTS_ENABLED) {
       for (const [key, value] of [
         ["EXPORTS_S3_BUCKET", data.EXPORTS_S3_BUCKET],

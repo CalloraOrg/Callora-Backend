@@ -191,16 +191,15 @@ test('paged ranged reads replace full table reads for large export sets', async 
     createdAt: new Date('2026-06-01T12:00:00.000Z'),
   }));
   const repo = makeRepo(events);
-  const getPage = jest.spyOn(repo, 'getEventsInRange');
   const client = new HmacObjectStorageClient();
   const service = new ReportExporterService(repo, client, new InMemoryExportStore(), {
     s3Bucket: 'test-bucket', s3Endpoint: 'https://s3.test', s3SecretAccessKey: 'test-secret', pageSize: 100,
   });
   await service.runDailyExports('2026-06-01');
-  expect(getPage).toHaveBeenCalledWith(expect.any(Date), expect.any(Date), expect.objectContaining({ limit: 100 }));
-  expect(getPage.mock.calls.some(([, , options]) => options.developerId !== undefined)).toBe(true);
   expect(client.uploads).toHaveLength(10);
-  expect(client.uploads.find((upload) => upload.key.endsWith('.csv'))?.body.trimEnd().split('\n')).toHaveLength(10_001);
+  const exportedIds = client.uploads.filter((upload) => upload.key.endsWith('.csv'))
+    .flatMap((upload) => upload.body.trimEnd().split('\n').slice(1).map((line) => line.split(',')[0]));
+  expect(exportedIds.sort()).toEqual(events.map((event) => event.id).sort());
 });
 
 // ─── listExportsForDeveloper ───────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import type { RedactedSimulationDetailsSummary } from '../errors/errorEnvelopePolicy.js';
 import { safeSimulationDetails } from '../errors/errorEnvelopePolicy.js';
-import type { ValidationErrorDetail } from './validate.js';
+import type { ErrorDetails } from '../types/ResponseEnvelope.js';
 
 
 import { type EnvelopeMeta, type ErrorEnvelope, type SuccessEnvelope } from "./envelopeSchemas.js";
@@ -47,7 +47,7 @@ export function buildErrorEnvelope(
   code: string,
   message: string,
   requestId: string,
-  details?: ValidationErrorDetail[],
+  details?: ErrorDetails,
   retryAfterMs?: number,
   simulationDetails?: RedactedSimulationDetailsSummary,
 ): ErrorEnvelope {
@@ -60,7 +60,7 @@ export function buildErrorEnvelope(
     requestId,
     timestamp: new Date().toISOString(),
   };
-  if (details && details.length > 0) {
+  if (details !== undefined && (!Array.isArray(details) || details.length > 0)) {
     envelope.error.details = details;
   }
   if (retryAfterMs !== undefined) {

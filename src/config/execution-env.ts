@@ -94,6 +94,7 @@ export const executionEnvironmentFields = {
     .int()
     .positive()
     .default(5000),
+  IDEMPOTENCY_MAX_BODY_BYTES: z.coerce.number().int().positive().default(256 * 1024),
 
   // Slow query alerting
   SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),

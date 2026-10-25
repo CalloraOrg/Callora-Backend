@@ -22,16 +22,24 @@ export const simulationDetailsSchema = z.object({
   footprintPresent: z.boolean().optional(),
 });
 
+export const featureErrorDetailsSchema = z.object({
+  feature: z.string().max(200),
+});
+
+export const errorDetailsSchema = z.union([z.array(z.object({
+  field: z.string(),
+  message: z.string(),
+  code: z.string(),
+})), featureErrorDetailsSchema]);
+
+export type FeatureErrorDetails = z.infer<typeof featureErrorDetailsSchema>;
+
 export const errorEnvelopeSchema = z.object({
   success: z.literal(false),
   error: z.object({
     code: z.string(),
     message: z.string(),
-    details: z.union([z.array(z.object({
-      field: z.string(),
-      message: z.string(),
-      code: z.string(),
-    })), z.object({ feature: z.string() })]).optional(),
+    details: errorDetailsSchema.optional(),
     retryAfterMs: z.number().optional(),
     simulationDetails: simulationDetailsSchema.optional(),
   }),

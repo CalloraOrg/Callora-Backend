@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 
@@ -14,10 +15,13 @@ import {
 // The indexer relies on PostgreSQL features pg-mem does not emulate
 // (multi-join lookups, GREATEST on timestamps, ON CONFLICT ... WHERE and
 // advisory locks), so the database-backed tests run against a real
-// PostgreSQL container. Each harness gets its own database.
+// PostgreSQL. Each harness gets its own database under Docker; with
+// CALLORA_TEST_DISPOSABLE_DATABASE_URL it gets its own schema instead, because
+// the app role cannot CREATE DATABASE there.
 let container: StartedTestContainer | undefined;
 let adminPool: InstanceType<typeof pg.Pool> | undefined;
 let databaseCounter = 0;
+const disposableDatabaseUrl = process.env.CALLORA_TEST_DISPOSABLE_DATABASE_URL;
 
 function databaseUrl(name: string): string {
   if (!container) throw new Error('PostgreSQL container is not running');
@@ -25,6 +29,10 @@ function databaseUrl(name: string): string {
 }
 
 beforeAll(async () => {
+  if (disposableDatabaseUrl) {
+    adminPool = new pg.Pool({ connectionString: disposableDatabaseUrl });
+    return;
+  }
   container = await new GenericContainer('postgres:16-alpine')
     .withEnvironment({ POSTGRES_USER: 'postgres', POSTGRES_PASSWORD: 'postgres', POSTGRES_DB: 'postgres' })
     .withExposedPorts(5432)
@@ -41,10 +49,26 @@ afterAll(async () => {
 async function createIndexerHarness() {
   databaseCounter += 1;
   const name = `revenue_indexer_${databaseCounter}`;
-  await adminPool!.query(`CREATE DATABASE ${name}`);
-  const pool = new pg.Pool({ connectionString: databaseUrl(name) });
+  // Native: a unique schema per harness, with every pooled connection pinned to it by search_path.
+  // Docker: a database per harness.
+  const schema = disposableDatabaseUrl ? `${name}_${randomUUID().replace(/-/g, '')}` : undefined;
+  await adminPool!.query(schema ? `CREATE SCHEMA ${schema}` : `CREATE DATABASE ${name}`);
+  const pool = new pg.Pool(
+    schema
+      ? { connectionString: disposableDatabaseUrl, options: `-c search_path=${schema}` }
+      : { connectionString: databaseUrl(name) },
+  );
+  // Native cleanup drops only this harness's schema. Docker keeps its database, as before.
+  const close = async (): Promise<void> => {
+    try {
+      await pool.end();
+    } finally {
+      if (schema) await adminPool!.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    }
+  };
+  try {
 
-  await pool.query(`
+    await pool.query(`
     CREATE TABLE usage_events (
       id BIGSERIAL PRIMARY KEY,
       user_id VARCHAR(255) NOT NULL,
@@ -78,15 +102,19 @@ async function createIndexerHarness() {
 
     CREATE TABLE indexer_checkpoints (name VARCHAR(128) PRIMARY KEY, last_usage_event_id BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW(), locked_until TIMESTAMP);
     CREATE TABLE revenue_ledger_skips (usage_event_id BIGINT PRIMARY KEY REFERENCES usage_events(id), reason VARCHAR(64) NOT NULL, first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(), attempts INTEGER NOT NULL DEFAULT 1, next_retry_at TIMESTAMP NOT NULL DEFAULT NOW(), permanent BOOLEAN NOT NULL DEFAULT FALSE);
-  `);
+    `);
+  } catch (error) {
+    await close();
+    throw error;
+  }
 
   const repository = new PgUsageEventsRepository(pool as unknown as UsageEventsRepositoryQueryable);
 
-  return { pool, repository };
+  return { pool, repository, close };
 }
 
 test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered batches', async () => {
-  const { pool, repository } = await createIndexerHarness();
+  const { pool, repository, close } = await createIndexerHarness();
 
   try {
     await pool.query(
@@ -150,12 +178,12 @@ test('RevenueLedgerIndexer backfills unindexed usage events in cursor-ordered ba
       { usage_event_id: '3', api_id: 'api-1', developer_id: 'dev-1', amount_usdc: '300' },
     ]);
   } finally {
-    await pool.end();
+    await close();
   }
 });
 
 test('only confirmed on-chain charges are accrued, and a pending charge is picked up after confirmation', async () => {
-  const { pool, repository } = await createIndexerHarness();
+  const { pool, repository, close } = await createIndexerHarness();
   try {
     await pool.query("ALTER TABLE usage_events ADD COLUMN deduction_status VARCHAR(16) NOT NULL DEFAULT 'pending'");
     await pool.query('INSERT INTO apis (id, developer_id) VALUES ($1, $2)', ['api-1', 'dev-1']);
@@ -182,12 +210,12 @@ test('only confirmed on-chain charges are accrued, and a pending charge is picke
     assert.equal(invariant.rows[0]?.count, 0);
     assert.equal((await repository.getRevenueLedgerCheckpoint()), '2');
   } finally {
-    await pool.end();
+    await close();
   }
 });
 
 test('unknown APIs are persisted with retry backoff and do not block later events', async () => {
-  const { pool, repository } = await createIndexerHarness();
+  const { pool, repository, close } = await createIndexerHarness();
   try {
     await pool.query("INSERT INTO apis (id, developer_id) VALUES ('api-known', 'dev-1')");
     await repository.create({ userId: 'c1', apiId: 'api-missing', endpointId: 'e1', apiKeyId: 'k1', amount: 10n, requestId: 'poison', stellarTxHash: 'tx-poison' });
@@ -207,12 +235,12 @@ test('unknown APIs are persisted with retry backoff and do not block later event
     assert.deepEqual(ledger.rows, [{ usage_event_id: '2' }]);
     assert.equal(await repository.getRevenueLedgerCheckpoint(), '2');
   } finally {
-    await pool.end();
+    await close();
   }
 });
 
 test('database lease prevents concurrent indexer instances from scanning together', async () => {
-  const { pool, repository } = await createIndexerHarness();
+  const { repository, close } = await createIndexerHarness();
   try {
     assert.equal(await repository.acquireRevenueLedgerIndexerLock(), true);
     assert.equal(await repository.acquireRevenueLedgerIndexerLock(), false);
@@ -220,7 +248,7 @@ test('database lease prevents concurrent indexer instances from scanning togethe
     assert.equal(await repository.acquireRevenueLedgerIndexerLock(), true);
     await repository.releaseRevenueLedgerIndexerLock();
   } finally {
-    await pool.end();
+    await close();
   }
 });
 

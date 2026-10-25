@@ -1,48 +1,43 @@
 import express from 'express';
 import request from 'supertest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import * as schema from '../../../db/schema.js';
 
 import { errorHandler } from '../../../middleware/errorHandler.js';
-import { createAdminQuotaBulkRouter } from './bulk.js';
+import { createAdminQuotaBulkRouter, type AdminQuotaBulkRouterDeps } from './bulk.js';
 
 const ADMIN_KEY = 'test-admin-key';
 
-function createMockDb(rows: Array<{ plan_overrides: string | null }>) {
-  const queuedRows = [...rows];
+const connections: Database.Database[] = [];
 
-  const tx = {
-    select: jest.fn(() => ({
-      from: jest.fn(() => ({
-        where: jest.fn(() => ({
-          limit: jest.fn(async () => {
-            const row = queuedRows.shift();
-            return row ? [{ plan_overrides: row.plan_overrides }] : [];
-          }),
-        })),
-      })),
-    })),
-    update: jest.fn(() => ({
-      set: jest.fn(() => ({
-        where: jest.fn(() => Promise.resolve()),
-      })),
-    })),
-  };
+afterEach(() => {
+  for (const connection of connections) connection.close();
+  connections.length = 0;
+});
 
-  return {
-    transaction: async (cb: (tx: typeof tx) => Promise<unknown>) => cb(tx),
-  };
+function createTestDb(rows: Array<{ plan_overrides: string | null }>) {
+  const sqlite = new Database(':memory:');
+  connections.push(sqlite);
+  sqlite.exec(`
+    CREATE TABLE developers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL UNIQUE,
+      name TEXT,
+      website TEXT,
+      description TEXT,
+      category TEXT,
+      plan_overrides TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+  `);
+  const insert = sqlite.prepare('INSERT INTO developers (user_id, plan_overrides) VALUES (?, ?)');
+  rows.forEach((row, index) => insert.run(`dev-${index + 1}`, row.plan_overrides));
+  return drizzle(sqlite, { schema });
 }
 
-type MockTx = typeof createMockDb extends (rows: Array<{ plan_overrides: string | null }>) => infer R
-  ? R extends { transaction: (cb: (tx: infer T) => Promise<unknown>) => Promise<unknown> }
-    ? T
-    : never
-  : never;
-
-type MockDb = {
-  transaction: (cb: (tx: MockTx) => Promise<unknown>) => Promise<unknown>;
-};
-
-function buildApp(db: MockDb) {
+function buildApp(db: NonNullable<AdminQuotaBulkRouterDeps['db']>) {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => {
@@ -60,7 +55,7 @@ function buildApp(db: MockDb) {
 
 describe('POST /api/admin/quotas/bulk-update', () => {
   it('updates plan overrides for multiple developers atomically', async () => {
-    const db = createMockDb([
+    const db = createTestDb([
       { plan_overrides: JSON.stringify({ plan_tier: 'free', monthly_call_limit: 50000 }) },
       { plan_overrides: JSON.stringify({ plan_tier: 'free', rate_limit_max_requests: 1000 }) },
     ]);
@@ -81,7 +76,7 @@ describe('POST /api/admin/quotas/bulk-update', () => {
   });
 
   it('rejects requests with invalid items', async () => {
-    const db = createMockDb([]);
+    const db = createTestDb([]);
     const app = buildApp(db);
 
     const response = await request(app)
@@ -95,7 +90,7 @@ describe('POST /api/admin/quotas/bulk-update', () => {
   });
 
   it('returns 404 when a developer does not exist', async () => {
-    const db = createMockDb([]);
+    const db = createTestDb([]);
     const app = buildApp(db);
 
     const response = await request(app)
@@ -111,8 +106,26 @@ describe('POST /api/admin/quotas/bulk-update', () => {
     expect(response.body.error.code).toBe('NOT_FOUND');
   });
 
+  it('rolls back earlier quota changes when a later developer is missing', async () => {
+    const original = JSON.stringify({ plan_tier: 'free', monthly_call_limit: 50000 });
+    const db = createTestDb([{ plan_overrides: original }]);
+    const response = await request(buildApp(db))
+      .post('/api/admin/quotas/bulk-update')
+      .set('x-admin-api-key', ADMIN_KEY)
+      .send({
+        items: [
+          { developer_id: 'dev-1', plan_tier: 'pro', monthly_call_limit: 100000 },
+          { developer_id: 'missing-dev', plan_tier: 'enterprise' },
+        ],
+      });
+
+    expect(response.status).toBe(404);
+    expect(db.select({ planOverrides: schema.developers.plan_overrides }).from(schema.developers).all())
+      .toEqual([{ planOverrides: original }]);
+  });
+
   it('requires admin authentication', async () => {
-    const db = createMockDb([]);
+    const db = createTestDb([]);
     const app = buildApp(db);
 
     const response = await request(app)

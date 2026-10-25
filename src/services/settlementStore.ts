@@ -1,5 +1,5 @@
 import { Settlement, SettlementStore } from '../types/developer.js';
-import { parseUsdcToUnits, formatUnitsToUsdc } from '../lib/usdcUnits.js';
+import { parseUsdcToUnits, formatUnitsToUsdc, usdcNumberToUnits } from '../lib/usdcUnits.js';
 
 export class InMemorySettlementStore implements SettlementStore {
   private settlements: Settlement[] = [];
@@ -93,12 +93,12 @@ export interface SettlementStoreQueryable {
 }
 
 const toCount = (value: string | number): number =>
-  typeof value === 'number' ? value : Number(value);
+  typeof value === 'number' ? value : Number.parseInt(value, 10);
 
 const mapSettlementRow = (row: SettlementStoreRow): Settlement => ({
   id: row.external_id,
   developerId: row.developer_id,
-  amount: parseUsdcToUnits(typeof row.amount_usdc === 'number' ? row.amount_usdc.toFixed(7) : String(row.amount_usdc)),
+  amount: typeof row.amount_usdc === 'number' ? usdcNumberToUnits(row.amount_usdc) : parseUsdcToUnits(row.amount_usdc),
   status: row.status,
   tx_hash: row.stellar_tx_hash,
   created_at: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),

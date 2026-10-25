@@ -2,10 +2,11 @@ import { NextFunction, Request, Response } from 'express';
 import type { RedactedSimulationDetailsSummary } from '../errors/errorEnvelopePolicy.js';
 import { safeSimulationDetails } from '../errors/errorEnvelopePolicy.js';
 import type { ValidationErrorDetail } from './validate.js';
+import type { ErrorDetails } from '../types/ResponseEnvelope.js';
 
 
 import { buildErrorEnvelope, buildSuccessEnvelope, shouldSkipContentType } from "./envelopeBuilders.js";
-import type { EnvelopeMeta } from "./envelopeSchemas.js";
+import { featureErrorDetailsSchema, type EnvelopeMeta } from "./envelopeSchemas.js";
 
 export { buildErrorEnvelope, buildSuccessEnvelope } from "./envelopeBuilders.js";
 export * from "./envelopeSchemas.js";
@@ -42,7 +43,7 @@ export function envelopeMiddleware(req: Request, res: Response, next: NextFuncti
     if (statusCode >= 400) {
       let code = 'BAD_REQUEST';
       let message = 'Request failed';
-      let details: ValidationErrorDetail[] | undefined;
+      let details: ErrorDetails | undefined;
       let retryAfterMs: number | undefined;
       let simulationDetails: RedactedSimulationDetailsSummary | undefined;
 
@@ -60,6 +61,9 @@ export function envelopeMiddleware(req: Request, res: Response, next: NextFuncti
         }
         if (Array.isArray(bodyObj.details)) {
           details = bodyObj.details as ValidationErrorDetail[];
+        } else {
+          const feature = featureErrorDetailsSchema.safeParse(bodyObj.details);
+          if (feature.success) details = feature.data;
         }
         if (typeof bodyObj.retryAfterMs === 'number') {
           retryAfterMs = bodyObj.retryAfterMs;

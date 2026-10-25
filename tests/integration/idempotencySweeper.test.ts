@@ -17,7 +17,8 @@
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Pool } from 'pg';
+import { randomUUID } from 'node:crypto';
+import { Pool, type PoolConfig } from 'pg';
 import { GenericContainer, Wait } from 'testcontainers';
 import fs from 'fs';
 import path from 'path';
@@ -33,6 +34,14 @@ import {
 
 let pool: Pool;
 let container: any;
+let adminPool: Pool | undefined;
+let poolConfig: PoolConfig;
+
+// Native mode: CALLORA_TEST_DISPOSABLE_DATABASE_URL points at a disposable PostgreSQL database.
+// The suite creates and drops only its own schema there, and pins every pooled connection to it
+// with search_path. Unset: Docker container.
+const disposableDatabaseUrl = process.env.CALLORA_TEST_DISPOSABLE_DATABASE_URL;
+const schema = `idempotency_sweeper_${randomUUID().replace(/-/g, '')}`;
 
 const DEFAULT_TEST_CONFIG: IdempotencySweeperConfig = {
   batchSize: 5000,
@@ -43,21 +52,26 @@ const DEFAULT_TEST_CONFIG: IdempotencySweeperConfig = {
  * Setup: Start PostgreSQL container and initialize schema
  */
 beforeAll(async () => {
-  container = await new GenericContainer('postgres:16-alpine')
-    .withEnvironment({
-      POSTGRES_DB: 'test_idempotency',
-      POSTGRES_USER: 'test_user',
-      POSTGRES_PASSWORD: 'test_password',
-    })
-    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
-    .withExposedPorts(5432)
-    .start();
+  if (disposableDatabaseUrl) {
+    adminPool = new Pool({ connectionString: disposableDatabaseUrl });
+    await adminPool.query(`CREATE SCHEMA ${schema}`);
+    poolConfig = { connectionString: disposableDatabaseUrl, options: `-c search_path=${schema}` };
+  } else {
+    container = await new GenericContainer('postgres:16-alpine')
+      .withEnvironment({
+        POSTGRES_DB: 'test_idempotency',
+        POSTGRES_USER: 'test_user',
+        POSTGRES_PASSWORD: 'test_password',
+      })
+      .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
+      .withExposedPorts(5432)
+      .start();
 
-  const host = container.getHost();
-  const port = container.getMappedPort(5432);
-
-  const connectionString = `postgresql://test_user:test_password@${host}:${port}/test_idempotency`;
-  pool = new Pool({ connectionString });
+    const host = container.getHost();
+    const port = container.getMappedPort(5432);
+    poolConfig = { connectionString: `postgresql://test_user:test_password@${host}:${port}/test_idempotency` };
+  }
+  pool = new Pool(poolConfig);
 
   // Create idempotency_store table
   await pool.query(`
@@ -76,9 +90,14 @@ beforeAll(async () => {
  * Cleanup: Stop container and close pool
  */
 afterAll(async () => {
-  await pool.end();
-  if (container) {
-    await container.stop();
+  try {
+    await pool.end();
+    await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+  } finally {
+    await adminPool?.end();
+    if (container) {
+      await container.stop();
+    }
   }
 }, 30000);
 
@@ -134,7 +153,7 @@ describe('Idempotency Sweeper Integration Tests', () => {
     await pool.query(`INSERT INTO idempotency_store (request_id, expires_at) VALUES ${insertSql}`);
 
     // Create a second connection pool to simulate another instance
-    const pool2 = new Pool({ connectionString: pool.options.connectionString });
+    const pool2 = new Pool(poolConfig);
 
     try {
       // Start both sweeps concurrently
@@ -154,7 +173,7 @@ describe('Idempotency Sweeper Integration Tests', () => {
 
       // Verify both pools released their locks
       const lockCheck = await pool.query(
-        `SELECT COUNT(*)::int AS lock_count FROM pg_locks WHERE locktype = 'advisory'`,
+        `SELECT COUNT(*)::int AS lock_count FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
       );
       const activeLocks = lockCheck.rows[0]?.lock_count ?? 0;
       expect(activeLocks).toBe(0);
@@ -278,7 +297,7 @@ describe('Idempotency Sweeper Integration Tests', () => {
 
     // Verify lock was released
     const lockCheck = await pool.query(
-      `SELECT COUNT(*)::int AS lock_count FROM pg_locks WHERE locktype = 'advisory'`,
+      `SELECT COUNT(*)::int AS lock_count FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
     );
     const activeLocks = lockCheck.rows[0]?.lock_count ?? 0;
     expect(activeLocks).toBe(0);
@@ -308,7 +327,7 @@ describe('Idempotency Sweeper Integration Tests', () => {
 
     // After all sweeps, no locks should be held
     const lockCheck = await pool.query(
-      `SELECT COUNT(*)::int AS lock_count FROM pg_locks WHERE locktype = 'advisory'`,
+      `SELECT COUNT(*)::int AS lock_count FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
     );
     const activeLocks = lockCheck.rows[0]?.lock_count ?? 0;
     expect(activeLocks).toBe(0);

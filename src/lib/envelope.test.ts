@@ -1,5 +1,6 @@
 import { successEnvelope, errorEnvelope, getRequestId } from './envelope.js';
 import type { SuccessEnvelope, ErrorEnvelope } from '../types/ResponseEnvelope.js';
+import { errorEnvelopeSchema } from '../middleware/envelope.js';
 
 describe('Envelope Helpers', () => {
   describe('successEnvelope', () => {
@@ -79,7 +80,7 @@ describe('Envelope Helpers', () => {
       const code = 'VALIDATION_ERROR';
       const message = 'Invalid input';
       const requestId = 'req-123';
-      const details = { field: 'email', issue: 'invalid format' };
+      const details = [{ field: 'body.email', message: 'invalid format', code: 'INVALID_FORMAT' }];
 
       const envelope = errorEnvelope(code, message, requestId, details);
 
@@ -99,17 +100,13 @@ describe('Envelope Helpers', () => {
       expect(envelope.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     });
 
-    it('handles complex details objects', () => {
-      const details = {
-        errors: [
-          { field: 'email', message: 'Invalid' },
-          { field: 'phone', message: 'Required' },
-        ],
-      };
+    it('emits details that satisfy the public error envelope schema', () => {
+      const details = [{ field: 'body.email', message: 'Invalid', code: 'INVALID_FORMAT' }];
 
       const envelope = errorEnvelope('VALIDATION', 'Failed', 'req-123', details);
 
       expect(envelope.error.details).toEqual(details);
+      expect(errorEnvelopeSchema.safeParse(envelope).success).toBe(true);
     });
   });
 

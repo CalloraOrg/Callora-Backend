@@ -298,30 +298,6 @@ describe("createQuotasRouter — /api/quotas route wiring", () => {
     expect(res.status).toBe(429);
   });
 
-  it("accepts an injected rate-limit middleware (dependency injection)", async () => {
-    // Build app with a custom middleware that always blocks (for unit testing)
-    const alwaysBlock: express.RequestHandler = (_req, res, next) => {
-      res.set("Retry-After", "5");
-      next(new (require("../errors/index.js").TooManyRequestsError)("blocked"));
-    };
-
-    const app = express();
-    app.use(requestIdMiddleware);
-    app.use(envelopeMiddleware);
-    app.use(
-      "/api/quotas",
-      createQuotasRouter({ quotaRateLimitMiddleware: alwaysBlock }),
-    );
-    app.use(errorHandler);
-
-    const res = await request(app)
-      .get("/api/quotas/counts")
-      .set("x-user-id", "u1");
-
-    expect(res.status).toBe(429);
-    expect(res.body.success).toBe(false);
-    expect(res.body.error.code).toBe("TOO_MANY_REQUESTS");
-  });
 
   it("applies rate limit to all sub-routes, not just /counts", async () => {
     // Use an always-block middleware to confirm the limiter is mounted at the

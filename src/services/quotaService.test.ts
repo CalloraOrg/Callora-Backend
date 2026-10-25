@@ -304,8 +304,8 @@ describe('quotaService', () => {
       );
 
       expect(result.summary).toEqual({ total: 2, succeeded: 2, failed: 0 });
-      expect(result.results[0].status).toBe('approved');
-      expect(result.results[1].status).toBe('rejected');
+      expect(result.results[0]).toMatchObject({ success: true, status: 'approved' });
+      expect(result.results[1]).toMatchObject({ success: true, status: 'rejected' });
     });
 
     it('throws BulkQuotaUpdateError when any request is not found (atomic - none applied)', async () => {
@@ -410,7 +410,7 @@ describe('quotaService', () => {
       );
 
       expect(result.summary).toEqual({ total: 1, succeeded: 1, failed: 0 });
-      expect(result.results[0].status).toBe('approved');
+      expect(result.results[0]).toMatchObject({ success: true, status: 'approved' });
     });
   });
 });

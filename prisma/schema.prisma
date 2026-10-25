@@ -55,3 +55,22 @@ model InvoiceLineItem {
   @@index([invoice_id])
   @@map("invoice_line_items")
 }
+
+model FeeAbstractionQuote {
+  id                      String    @id @default(uuid()) @db.Uuid
+  user_id                 String    @db.Uuid
+  inner_tx_hash           String
+  fee_stroops             BigInt
+  app_token_amount        BigInt
+  network                 String
+  status                  String    @default("pending") // pending | consumed | expired
+  // Partial unique index in SQL (WHERE NOT NULL); a plain unique index is equivalent since NULLs are distinct.
+  app_token_payment_tx_id String?   @unique(map: "unique_fee_abstraction_payment_tx_id")
+  expires_at              DateTime  @db.Timestamptz(6)
+  created_at              DateTime  @default(now()) @db.Timestamptz(6)
+  consumed_at             DateTime? @db.Timestamptz(6)
+
+  @@index([user_id])
+  @@index([inner_tx_hash])
+  @@map("fee_abstraction_quotes")
+}

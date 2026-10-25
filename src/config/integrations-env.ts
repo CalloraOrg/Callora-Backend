@@ -169,4 +169,37 @@ export const integrationEnvironmentFields = {
   // Body size limits
   REQUEST_BODY_LIMIT: z.string().default("100kb"),
   GATEWAY_BODY_LIMIT: z.string().default("1mb"),
+
+  // Fee abstraction (POST /api/billing/fee-abstraction)
+  //
+  // The fee-bump endpoint signs transactions with the platform fee account,
+  // so every fee-bump must be backed by a verified, single-use quote and an
+  // on-chain app-token payment. These settings control quote pricing,
+  // payment verification and the inner-transaction allowlist.
+  //
+  // FEE_ABSTRACTION_RATE_* — integer-scaled conversion from stroops to
+  // app-token units. The quoted amount is computed as
+  //   ceil(feeStroops * FEE_ABSTRACTION_RATE_NUMERATOR / FEE_ABSTRACTION_RATE_DENOMINATOR)
+  // using bigint math only (no floats). Defaults to 1 app-token unit per
+  // 10 stroops (i.e. 0.10 XLM against the historical rate).
+  // Both values must be positive integers; the superRefine in env.ts rejects
+  // zero so the bigint division in the quote service can never divide by
+  // zero at runtime.
+  FEE_ABSTRACTION_RATE_NUMERATOR: z.coerce.number().int().positive().default(1),
+  FEE_ABSTRACTION_RATE_DENOMINATOR: z.coerce.number().int().positive().default(10),
+  // Lifetime of a persisted quote. Expired quotes cannot be consumed;
+  // execution returns 409.
+  FEE_ABSTRACTION_QUOTE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  // Treasury Stellar address that must receive the app-token payment.
+  FEE_ABSTRACTION_TREASURY_ADDRESS: z.string().min(1).optional(),
+  // App-token issuer/asset used for payment verification.
+  FEE_ABSTRACTION_APP_TOKEN_ASSET_CODE: z.string().min(1).default("APP"),
+  FEE_ABSTRACTION_APP_TOKEN_ISSUER: z.string().min(1).optional(),
+  // Vault contract ids allowed as the target of an inner invokeHostFunction.
+  // Comma-separated; when unset the network-specific vault contract id is
+  // used (STELLAR_*_VAULT_CONTRACT_ID).
+  FEE_ABSTRACTION_VAULT_CONTRACT_IDS: z.string().optional(),
+  // Upper bound on the time spent verifying the payment on-chain. Must be less than BILLING_TIMEOUT_MS
+  // when that deadline is enabled; fee-abstraction requests check this before quoting or payment.
+  FEE_ABSTRACTION_PAYMENT_VERIFY_TIMEOUT_MS: z.coerce.number().int().positive().default(4_000),
 } as const;

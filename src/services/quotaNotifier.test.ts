@@ -30,7 +30,13 @@ import {
 } from './quotaNotifier.js';
 import type { UsageEventsRepository, UsageEvent, UsageEventQuery } from '../repositories/usageEventsRepository.js';
 import { WebhookStore } from '../webhooks/webhook.store.js';
-import { resetWebhookDispatcherForTests } from '../webhooks/webhook.dispatcher.js';
+import { awaitWebhookDispatcherIdle, resetWebhookDispatcherForTests } from '../webhooks/webhook.dispatcher.js';
+
+jest.mock('dns/promises', () => {
+    const actual = jest.requireActual('dns/promises');
+    const lookup = jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+    return { ...actual, __esModule: true, default: { ...actual, lookup }, lookup };
+});
 
 jest.mock('dns/promises', () => ({
     __esModule: true,
@@ -562,6 +568,10 @@ describe('runQuotaCheck — webhook payload shape', () => {
         resetWebhookDispatcherForTests();
     });
 
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
     it('builds the correct QuotaThresholdReachedData payload', async () => {
         // Register a webhook config for dev_1 and capture the dispatched payload
         const capturedPayloads: unknown[] = [];
@@ -569,7 +579,7 @@ describe('runQuotaCheck — webhook payload shape', () => {
             capturedPayloads.push(JSON.parse(init.body));
             return { ok: true, status: 200 } as Response;
         });
-        global.fetch = fakeFetch as unknown as typeof global.fetch;
+        jest.spyOn(global, 'fetch').mockImplementation(fakeFetch);
 
         WebhookStore.register({
             developerId: 'dev_1',
@@ -583,6 +593,7 @@ describe('runQuotaCheck — webhook payload shape', () => {
         const deps = makeDeps(events, [{ developerId: 'dev_1', monthlyLimit: 100 }], store, () => JUNE_15);
 
         const outcome = await runQuotaCheck(deps);
+        await awaitWebhookDispatcherIdle();
 
         expect(outcome).toEqual({ claimed: 1, dispatched: 1, noSubscribers: 0 });
         expect(capturedPayloads).toHaveLength(1);

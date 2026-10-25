@@ -16,7 +16,7 @@
 error_codes:
   - code: DEMO_MODE_UNSUPPORTED
     section: HTTP status derived / base app codes
-    description: The feature requires PostgreSQL or Stellar integrations unavailable in demo mode (HTTP 503)
+    description: The feature requires PostgreSQL or Stellar integrations unavailable in demo mode (HTTP 503); error.details is { feature } naming the unavailable feature
 
   # HTTP status derived / base app codes
   - code: BAD_REQUEST
@@ -311,9 +311,13 @@ error_codes:
     section: Idempotency
     description: Idempotency key conflict with different request
 
+  - code: IDEMPOTENCY_KEY_REUSE_MISMATCH
+    section: Idempotency
+    description: Idempotency key was reused with a different request payload; the operation was not repeated
+
   - code: IDEMPOTENCY_RESPONSE_TOO_LARGE
     section: Idempotency
-    description: The original response exceeded the replay limit; fetch the resource by identifier.
+    description: Legacy hash-only idempotency record whose response was never stored; the operation is not re-run. Fetch the resource by identifier. New oversized responses are not cached.
 
   - code: IDEMPOTENCY_IN_PROGRESS
     section: Idempotency

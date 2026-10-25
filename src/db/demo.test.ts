@@ -5,7 +5,6 @@ import os from "os";
 import {
   bootstrapDemoDb,
   getMigrationDialect,
-  MIGRATION_DIALECT_MANIFEST,
 } from "./demo.js";
 import * as embeddedAssets from "../lib/embeddedAssets.js";
 
@@ -44,7 +43,7 @@ describe("src/db/demo.ts", () => {
       jest.restoreAllMocks();
     });
 
-    it("Scenario 4: Postgres-only migration in demo is skipped and counted as skipped", () => {
+    it("applies SQLite migrations without executing PostgreSQL quote and cache migrations", () => {
       // 0000: SQLite table
       fs.writeFileSync(
         path.join(tmpDir, "0000_apis.sql"),
@@ -82,20 +81,25 @@ describe("src/db/demo.ts", () => {
         THIS IS INVALID SQLITE SYNTAX THAT WOULD FAIL IF EXECUTED;`,
       );
 
-      const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+      for (const file of [
+        "0033_idempotency_response_headers.sql",
+        "0034_fee_abstraction_quotes.sql",
+      ]) {
+        fs.copyFileSync(path.join(process.cwd(), "migrations", file), path.join(tmpDir, file));
+      }
+
 
       bootstrapDemoDb(sqlite, tmpDir);
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("applied 1/2 migrations (1 skipped, 0 failed)"),
-      );
 
       const dev = sqlite.prepare("SELECT * FROM developers WHERE user_id = 'demo-dev'").get() as { id: number };
       expect(dev).toBeDefined();
-      expect(dev.id).toBe(1);
 
       const apis = sqlite.prepare("SELECT * FROM apis").all();
       expect(apis.length).toBe(3);
+      expect(sqlite.prepare(
+        "SELECT name FROM sqlite_master WHERE name IN ('fee_abstraction_quotes', 'idempotency_store')",
+      ).all()).toEqual([]);
     });
 
     it("Scenario 5: Broken SQLite-applicable migration fails bootstrap naming the file", () => {

@@ -104,142 +104,35 @@ Requires authentication via `Authorization: Bearer <JWT>` header.
 
 #### Error Responses
 
-##### 400 Bad Request - Invalid Amount Format
+Errors use the standard `{success:false,error:{code,message,details?},requestId,timestamp}`
+envelope. Validation details are an array of `{field,message,code}` entries,
+not an arbitrary object. The submitted `provided` value, and `configured`
+network for a network mismatch, remain top-level diagnostics.
 
-```json
-{
-  "success": false,
-  "error": {
-    "code": "INVALID_AMOUNT_FORMAT",
-    "message": "Amount must have exactly 7 decimal places (e.g., \"100.0000000\")",
-    "details": [
-      {
-        "field": "amount_usdc",
-        "message": "Amount must have exactly 7 decimal places (e.g., \"100.0000000\")",
-        "code": "custom"
-      }
-    ]
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
+| HTTP | Condition |
+|---|---|
+| 400 | Missing/invalid amount, network, source account, or transaction input |
+| 401 | Authentication required |
+| 404 | No vault exists for the authenticated user on the requested network |
+| 500 | Invalid vault contract configuration or an unexpected internal failure |
+| 502 | Transaction construction or simulation failure |
+| 503 | Stellar network unavailable |
 
-##### 400 Bad Request - Invalid Network
+For example, an invalid network produces:
 
 ```json
 {
   "success": false,
   "error": {
     "code": "INVALID_NETWORK",
-    "message": "network must be either \"testnet\" or \"mainnet\""
+    "message": "network must be either \"testnet\" or \"mainnet\"",
+    "details": [
+      {"field": "body.network", "message": "must be testnet or mainnet", "code": "INVALID_NETWORK"}
+    ]
   },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
-
-##### 400 Bad Request - Invalid Source Account
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "INVALID_SOURCE_ACCOUNT",
-    "message": "source_account must be a valid Stellar public key (G...)"
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
-
-##### 400 Bad Request - Stellar Address Required
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "STELLAR_ADDRESS_REQUIRED",
-    "message": "User does not have a Stellar address configured. Please update your profile."
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
-
-##### 401 Unauthorized
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "UNAUTHORIZED",
-    "message": "Authentication required"
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
-
-##### 404 Not Found - Vault Not Found
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "VAULT_NOT_FOUND",
-    "message": "Vault not found for user on network 'testnet'. Please create a vault first."
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
-
-##### 500 Internal Server Error - Invalid Contract
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "INVALID_CONTRACT_ID",
-    "message": "Invalid vault contract configuration. Please contact support."
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
-
-##### 502 Bad Gateway - Simulation Failed
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "SIMULATION_FAILED",
-    "message": "Soroban simulation failed. See diagnostics for details.",
-    "simulationDetails": {
-      "errorCode": 8,
-      "errorMessage": "BelowMinDeposit",
-      "eventCount": 0,
-      "footprintPresent": true
-    }
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
-}
-```
-
-##### 503 Service Unavailable - Network Error
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "NETWORK_UNAVAILABLE",
-    "message": "Unable to connect to Stellar network. Please try again later."
-  },
-  "requestId": "req-123",
-  "timestamp": "2026-01-01T00:00:00.000Z"
+  "provided": "devnet",
+  "requestId": "req-example",
+  "timestamp": "2026-10-21T12:00:00.000Z"
 }
 ```
 

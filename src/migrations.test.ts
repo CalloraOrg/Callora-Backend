@@ -2,7 +2,7 @@ import assert from 'assert';
 import Database from 'better-sqlite3';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
-import { discoverMigrations } from './migrate.js';
+import { planSqliteMigrations } from './migrate.js';
 
 describe('Migration Rollback Contracts', () => {
   const migrationDir = path.join(process.cwd(), 'migrations');
@@ -13,7 +13,7 @@ describe('Migration Rollback Contracts', () => {
 
   it('verifies all migration rollback contracts against the current schema', () => {
     // 1. Discover all up migrations
-    const available = discoverMigrations(migrationDir);
+    const available = planSqliteMigrations(migrationDir).map((entry) => entry.filename);
     
     // We will test sequentially: apply up, apply down, check if matches, then apply up again to continue.
     const db = new Database(':memory:');

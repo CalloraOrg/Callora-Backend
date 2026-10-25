@@ -14,7 +14,7 @@ excluded from the charge. A batch `Idempotency-Key` header (or top-level
 |---|---|
 | 200 | Every entry was deducted or replayed; see per-entry `alreadyProcessed` and the batch counts. |
 | 402 `INSUFFICIENT_BALANCE` | Aggregate balance check failed; nothing new was charged. |
-| 409 `RECONCILIATION_REQUIRED` | Phase 1 rows were committed but the on-chain batch failed; response details contain `reconciliationRequired: true` and entry results. |
+| 409 `RECONCILIATION_REQUIRED` | Phase 1 rows were committed but the on-chain batch failed; top-level `reconciliationRequired: true` and `results` preserve each entry's outcome. |
 | 409 `IDEMPOTENCY_KEY_REUSE_MISMATCH` | The same batch key was reused with a different body. |
 
 The success body includes `entryCount`, `deductedCount`,
@@ -147,7 +147,7 @@ Authorization: Bearer <jwt>
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `requestId` | `string` | **Yes** | Unique idempotency key for this billing event. Must be a non-empty string. Reusing the same value returns the existing result with `alreadyProcessed: true`. |
-| `developerId` | `string` | No | The developer/account being billed. If omitted entirely, defaults to the authenticated user's ID. If provided, it must be a non-empty string — `null`, an empty string, or a non-string value are all rejected with `400 BAD_REQUEST` rather than being passed through to the billing service. |
+| `developerId` | `string` | No | The account being charged (payer). If provided, it must equal the authenticated user's ID; any other value is rejected with `403 FORBIDDEN`. If omitted, defaults to the authenticated user's ID. A non-empty string is required when provided — `null`, an empty string, or a non-string value are rejected with `400 BAD_REQUEST`. |
 | `apiId` | `string` | **Yes** | The API being called. Non-empty string. |
 | `endpointId` | `string` | **Yes** | The specific endpoint being called. Non-empty string. |
 | `apiKeyId` | `string` | **Yes** | The API key used for the call. Non-empty string. |
@@ -161,7 +161,7 @@ Authorization: Bearer <jwt>
 - When both are present, the middleware computes a hash over the entire body
   **excluding** the `idempotencyKey` field itself, but **including** `requestId`.
 - Two requests with the same `Idempotency-Key` but different `requestId` values
-  will produce different hashes and receive a `409 IDEMPOTENCY_CONFLICT`.
+  will produce different hashes and receive a `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`.
 - If only `requestId` is provided (no `idempotencyKey`/`Idempotency-Key` header),
   only the service-layer idempotency applies.
 
@@ -250,6 +250,7 @@ The `requestId` field is the server-side request tracing ID.It is not the billin
 |---|---|---|---|
 | Missing or empty `requestId` | 400 | `BAD_REQUEST` | `requestId is required and must be a non-empty string` |
 | `developerId` present but `null`, empty, or non-string | 400 | `BAD_REQUEST` | `developerId is required` |
+| `developerId` differs from the authenticated user's ID | 403 | `FORBIDDEN` | `Cannot bill another account` |
 | Missing or empty `apiId` | 400 | `BAD_REQUEST` | `apiId is required and must be a non-empty string` |
 | Missing or empty `endpointId` | 400 | `BAD_REQUEST` | `endpointId is required and must be a non-empty string` |
 | Missing or empty `apiKeyId` | 400 | `BAD_REQUEST` | `apiKeyId is required and must be a non-empty string` |
@@ -275,28 +276,36 @@ The `message` field contains Soroban-level details, e.g. `"Insufficient balance:
 ### Idempotency middleware errors (409) — direct responses
 
 
-These are written directly by the middleware and do **not** use the standard
-error envelope. The body shape is `{ "error", "message", "code" }` — note
-`"error"` instead of `"message"` at the top level, and no `requestId` field.
+Middleware errors use the standard `{success:false,error:{code,message,details?},requestId,timestamp}`
+envelope too. Mismatch diagnostics contain only bounded fingerprints and field
+names in typed `error.details` entries, never submitted payload values.
 
-| Condition | HTTP | Body `code` | Meaning |
+| Condition | HTTP | Body `error.code` | Meaning |
 |---|---|---|---|
-| Same `Idempotency-Key` but different request hash | 409 | `IDEMPOTENCY_CONFLICT` | The payload changed between calls. Use a different key or ensure the request body is identical. |
+| Same `Idempotency-Key` but different request hash | 409 | `IDEMPOTENCY_KEY_REUSE_MISMATCH` | The payload changed between calls. Use a different key or ensure the request body is identical. |
 | Same `Idempotency-Key` with an in-flight request | 409 | `IDEMPOTENCY_IN_PROGRESS` | Another request with this key is still processing. Wait and retry. |
 
 ```json
 {
-  "error": "Conflict",
-  "message": "Idempotency key conflict: payload mismatch",
-  "code": "IDEMPOTENCY_CONFLICT"
+  "success": false,
+  "error": {
+    "code": "IDEMPOTENCY_KEY_REUSE_MISMATCH",
+    "message": "Idempotency key conflict: payload mismatch"
+  },
+  "requestId": "req-example",
+  "timestamp": "2026-10-21T12:00:00.000Z"
 }
 ```
 
 ```json
 {
-  "error": "Conflict",
-  "message": "Request already in progress",
-  "code": "IDEMPOTENCY_IN_PROGRESS"
+  "success": false,
+  "error": {
+    "code": "IDEMPOTENCY_IN_PROGRESS",
+    "message": "Request already in progress"
+  },
+  "requestId": "req-example",
+  "timestamp": "2026-10-21T12:00:00.000Z"
 }
 ```
 
@@ -324,7 +333,7 @@ recommended client behaviour.
 | 400 `BAD_REQUEST` | Fix the request body, then retry with the same `requestId`. |
 | 401 | Refresh the token, then retry with the same `requestId`. |
 | 402 `INSUFFICIENT_BALANCE` | Do not retry until the balance is topped up. Retrying with the same `requestId` is safe once funded. |
-| 409 `IDEMPOTENCY_CONFLICT` | Do not retry with the same key. Use a different `Idempotency-Key` or make the body identical. |
+| 409 `IDEMPOTENCY_KEY_REUSE_MISMATCH` | Do not retry with the same key. Use a different `Idempotency-Key` or make the body identical. |
 | 409 `IDEMPOTENCY_IN_PROGRESS` | Wait briefly (backoff) and retry with the same `Idempotency-Key`. |
 | 500 `DATABASE_NOT_AVAILABLE` | Retry with exponential backoff and the same `requestId`. |
 | 500 `BILLING_DEDUCTION_FAILED` | If `reconciliationRequired: true`, do not retry blindly. Otherwise retry with the same `requestId`. |
@@ -442,7 +451,7 @@ async function deductWithBackoff(payload, idempotencyKey, maxRetries = 5) {
 
 ```js
 
-// DO NOT do this — the middleware will reject it with 409 IDEMPOTENCY_CONFLICT
+// DO NOT do this — the middleware will reject it with 409 IDEMPOTENCY_KEY_REUSE_MISMATCH
 await fetch("/api/billing/deduct", {
   headers: { "Idempotency-Key": "ik_abc" },
   body: JSON.stringify({ requestId: "req_001", ... }),
@@ -452,7 +461,7 @@ await fetch("/api/billing/deduct", {
   headers: { "Idempotency-Key": "ik_abc" }, // same key
   body: JSON.stringify({ requestId: "req_002", ... }), // different body
 });
-// → 409 IDEMPOTENCY_CONFLICT
+// → 409 IDEMPOTENCY_KEY_REUSE_MISMATCH
 ```
 
 ---

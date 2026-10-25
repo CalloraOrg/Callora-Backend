@@ -1,4 +1,6 @@
 import type { ValidationErrorDetail } from '../middleware/validate.js';
+import { featureErrorDetailsSchema } from '../middleware/envelopeSchemas.js';
+import type { ErrorDetails } from '../types/ResponseEnvelope.js';
 
 export const PUBLIC_ERROR_CODES = [
   'BAD_REQUEST',
@@ -58,6 +60,8 @@ export const PUBLIC_ERROR_CODES = [
   'INVALID_WEBHOOK_EVENT_TYPES',
   'INVALID_RETRY_POLICY',
   'WEBHOOK_URL_VALIDATION_FAILED',
+  'IDEMPOTENCY_KEY_REUSE_MISMATCH',
+  'DEMO_MODE_UNSUPPORTED',
 ] as const;
 
 export type PublicErrorCode = typeof PUBLIC_ERROR_CODES[number];
@@ -113,6 +117,17 @@ export function safeValidationDetails(value: unknown): ValidationErrorDetail[] |
     code: detail.code.slice(0, 100),
   }));
   return details.length > 0 ? details : undefined;
+}
+
+/**
+ * Validation arrays go through safeValidationDetails; a single feature object
+ * ({ feature }) is the only other accepted shape. Every other object member,
+ * including secrets or stack text, is dropped.
+ */
+export function safeErrorDetails(value: unknown): ErrorDetails | undefined {
+  if (Array.isArray(value)) return safeValidationDetails(value);
+  const feature = featureErrorDetailsSchema.safeParse(value);
+  return feature.success ? feature.data : undefined;
 }
 
 /**
@@ -178,7 +193,7 @@ export interface NormalizedError {
   statusCode: number;
   code: PublicErrorCode;
   message: string;
-  details?: ValidationErrorDetail[];
+  details?: ErrorDetails;
   retryAfterMs?: number;
   simulationDetails?: RedactedSimulationDetailsSummary;
 }
@@ -198,7 +213,7 @@ export function normalizeError(input: {
     code: normalizePublicCode(input.code, input.statusCode),
     message: safePublicMessage(input.message, input.statusCode, input.trusted, input.development ?? false),
   };
-  const details = safeValidationDetails(input.details);
+  const details = safeErrorDetails(input.details);
   const retryAfterMs = boundedRetryAfterMs(input.retryAfterMs);
   const simulationDetails = safeSimulationDetails(input.simulationDetails);
   if (details) normalized.details = details;

@@ -4,11 +4,72 @@
 
 The billing system implements idempotent deductions to prevent double charges when requests are retried. This is critical for financial operations where duplicate charges can cause serious issues.
 
+## HTTP response cache policy
+
+The HTTP middleware scopes `Idempotency-Key` (or `idempotencyKey` in the body)
+to the authenticated principal and request fingerprint. This cache is separate
+from the billing service's `requestId` protection against duplicate deductions.
+
+| Response | Cached by default |
+| --- | --- |
+| 2xx | Yes |
+| 400, 401, 403, 404, ordinary 409, 410, 422 | Yes |
+| 408, 425, 429, and 5xx | No |
+| Other statuses, including 3xx and 402 | No |
+| Body `code` or `error.code` is `RECONCILIATION_REQUIRED` or `IDEMPOTENCY_IN_PROGRESS` | Never |
+| Stored response body exceeds `IDEMPOTENCY_MAX_BODY_BYTES` | Never |
+
+Non-cacheable responses delete their started cache record, so a retry with the
+same key reaches the handler after the temporary condition clears. A completed
+replay retains the original status and body and sets `Idempotent-Replayed: true`.
+The pure exported `isCacheableIdempotencyResponse` function implements the policy.
+Routes can supply a pure `IdempotencyConfig.cacheableStatus(status)` predicate to
+restrict or extend the eligible statuses; it cannot override transient statuses,
+transient body codes, or the size cap. A 402 therefore remains retryable after
+funding changes, while a cached 422 requires a corrected payload and a new key.
+
+Only `content-type`, `content-encoding`, `location`, `etag`, `retry-after`, and the original
+`x-request-id` are persisted and restored. The encoding is required to interpret
+the captured bytes correctly, including records written by the earlier lease
+implementation. `set-cookie` and all other response headers are excluded. The
+original request ID identifies the cached response; the retry's tracing context remains separate.
+
+`IDEMPOTENCY_MAX_BODY_BYTES` is a positive integer, defaults to **262144 bytes
+(256 KiB)**, and measures the response body bytes as sent. Bodies exactly at
+the limit are eligible; larger bodies are not stored. Oversized responses log
+only the route, byte count, and configured cap, never the body or headers.
+
+Policy inspection decodes `gzip`, `deflate`, and `br` before checking transient
+JSON body codes; stored response bytes remain unchanged. Decoding is bounded by
+the same byte cap. Unsupported/invalid encodings or decoded bodies exceeding
+that inspection budget release the owned key instead of retaining an unsafe reply.
+
+Apply `0033_idempotency_response_headers.sql` after `0028_idempotency_lease` and before deploying the updated
+middleware. The nullable JSONB column preserves existing rows: records without
+header metadata still replay their status and body. The paired down migration
+removes only header metadata. Retention, concurrent-key ownership, and the
+separate started-record lease policy are unchanged.
+
+Deployment remains blocked until the existing three published `0026_*`
+migrations have a data-safe numbering/history resolution. Do not rename or
+replay an applied migration to make layout validation pass; the usage-status
+backfill can overwrite later reconciliation decisions. The required deployment
+history clarification is tracked in [issue #1499](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
+
+## Refund grant receipts
+
+`POST /api/billing/refund` requires `Idempotency-Key`. The idempotency middleware namespaces that key by principal and fingerprints the request. Responses at or under `IDEMPOTENCY_MAX_BODY_BYTES` are cached and replayed; larger responses are not cached, so a retry reaches the handler again. To keep that retry from granting twice, each grant writes a receipt to `credit_grant_receipts` (migration `0035_credit_grant_receipts.sql`), keyed by `(scope, idempotency key)`, in the same SQLite transaction as the balance change.
+
+- Same key and same request fingerprint: the stored grant result is returned and the balance is unchanged.
+- Same key and a different request: `409 IDEMPOTENCY_KEY_REUSE_MISMATCH`, no grant.
+
+Receipts are business records, not HTTP responses, and exist only on the SQLite backend where credits live. The down migration refuses to drop a non-empty receipts table.
+
 ## How It Works
 
 ### Idempotency Key
 
-Every billing deduction request must include a unique `request_id` idempotency key). This key is used to identify duplicate requests.
+Every billing deduction request must include a stable `requestId`. Reuse it when retrying the same deduction. The optional HTTP `Idempotency-Key` header or `idempotencyKey` body field controls the response cache described above.
 
 ```typescript
 interface BillingDeductRequest {
@@ -217,7 +278,7 @@ const requestId = `req_${uuidv4()}`;
 
 ```typescript
 // Check if a request was already processed
-const existing = await billingService.getByRequestId('req_abc123');
+const existing = await billingService.getByRequestId('req_abc123', user.id);
 
 if (existing) {
   console.log('Request already processed');
@@ -731,22 +792,25 @@ save over or delete a replacement owner's record.
 
 Completion is recorded on the response `finish` event, including `json`,
 `send`, `sendStatus`, empty `204 end()`, `end(chunk)`, and streaming responses.
-Non-5xx responses remain cacheable; 5xx responses release the key. A connection
+Only responses allowed by the HTTP response cache policy are stored. Every other outcome, including 5xx, 408, 425, 429 and transient body codes, releases the key so the next retry executes. A connection
 `close` without `finish` releases only that request's lease for immediate retry.
 A failed completion write is logged and cleanup is attempted; if the database
 is unavailable, lease expiry still allows recovery without waiting 24 hours.
 
-Replay retains status, raw body bytes, content type and content encoding. At
-most 256 KiB of response bytes are buffered. Larger responses store only size
-and a SHA-256 hash, then return `409 IDEMPOTENCY_RESPONSE_TOO_LARGE` on retry
-(with `Idempotent-Replayed: true`), instructing the client to fetch the resource
-instead. For billing, use `GET /api/billing/deduct/request/:requestId` with the
-original request identifier. Do not generate a new identifier to retry a charge.
+Replay retains status, raw body bytes, and the allowlisted headers
+(`content-type`, `content-encoding`, `location`, `etag`, `retry-after`, `x-request-id`). Bodies above
+`IDEMPOTENCY_MAX_BODY_BYTES` are never stored: the row is deleted, a warning with
+the route and size is logged, and a retry executes the handler again. Hash-only
+rows left by the superseded retention path still return `409
+IDEMPOTENCY_RESPONSE_TOO_LARGE` until they expire, so an operation that already
+ran is never re-executed. Billing clients can look up a deduction with
+`GET /api/billing/deduct/request/:requestId`; do not generate a new identifier
+to retry a charge.
 
 The lease prevents stale database writes, but cannot cancel an external side
 effect after a disconnect or crash. Billing's persistent request identifier and
-Soroban idempotency remain necessary. Apply migration `0028_idempotency_lease`
-and drain old application instances before enabling takeover: old binaries do
+Soroban idempotency remain necessary. Apply migrations `0028_idempotency_lease`
+and `0033_idempotency_response_headers`, and drain old application instances before enabling takeover: old binaries do
 not fence writes. Existing completed JSON records remain replayable. On rollback,
 roll back the application before removing the lease column; new response-format
 records are not readable by the old middleware and must age out before rollback.

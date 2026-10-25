@@ -196,7 +196,7 @@ const nullableUnits = (value: string | number | null): bigint =>
   value === null ? 0n : parseAmountUsdc(value);
 
 const toCount = (value: string | number): number =>
-  typeof value === 'number' ? value : Number(value);
+  typeof value === 'number' ? value : Number.parseInt(value, 10);
 
 const mapUsageEventRow = (row: UsageEventRow): UsageEvent => ({
   id: String(row.id),
@@ -444,7 +444,7 @@ export class PostgresUsageStore implements UsageAdminStore {
                 WHERE rl.usage_event_id = ue.id
               )
           `,
-          [usageEventIds.map((id) => Number(id))],
+          [usageEventIds],
         );
       }
 
@@ -478,8 +478,7 @@ export class PostgresUsageStore implements UsageAdminStore {
       return;
     }
 
-    const eventIdParams = eventIds.map((id) => Number(id));
-    const placeholders = eventIdParams.map((_, index) => `$${index + 2}`).join(', ');
+    const placeholders = eventIds.map((_, index) => `$${index + 2}`).join(', ');
 
     await this.db.query(
       `
@@ -487,7 +486,7 @@ export class PostgresUsageStore implements UsageAdminStore {
         SET settlement_id = $1
         WHERE usage_event_id IN (${placeholders})
       `,
-      [persistedSettlementId, ...eventIdParams],
+      [persistedSettlementId, ...eventIds],
     );
   }
 }

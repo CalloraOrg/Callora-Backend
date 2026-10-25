@@ -126,7 +126,7 @@ describe('Admin Circuit Breaker Endpoint', () => {
 
     it('returns the original status when registry.list() throws an AppError', async () => {
       const mockRegistry = {
-        list: jest.fn().mockRejectedValue(new AppError('quota exceeded', 429, 'RATE_LIMITED')),
+        list: jest.fn().mockRejectedValue(new AppError('quota exceeded', 429, 'TOO_MANY_REQUESTS')),
       } as unknown as BreakerRegistry;
       const app = buildApp(mockRegistry);
       const res = await request(app)
@@ -196,7 +196,7 @@ describe('Admin Circuit Breaker Endpoint', () => {
 
     it('returns the original status when getMetrics throws an AppError', async () => {
       const breaker = registry.getOrCreate('apperror-api');
-      jest.spyOn(breaker, 'getMetrics').mockRejectedValue(new AppError('rate limit', 429, 'RATE_LIMITED'));
+      jest.spyOn(breaker, 'getMetrics').mockRejectedValue(new AppError('rate limit', 429, 'TOO_MANY_REQUESTS'));
       const app = buildApp(registry);
       const res = await request(app)
         .get('/api/admin/circuit-breakers/apperror-api')

@@ -20,7 +20,7 @@ import Database from 'better-sqlite3';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import path from 'path';
 import { createHash } from 'node:crypto';
-import { validateMigrationLayout } from './migrationPolicy.js';
+import { validateMigrationLayout } from '../src/db/migrationLayout.js';
 
 const rootDir = process.cwd();
 const dbPath = path.join(rootDir, 'database.db');

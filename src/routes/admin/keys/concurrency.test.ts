@@ -1,3 +1,7 @@
+import { once } from 'node:events';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
 import express from 'express';
 import request from 'supertest';
 
@@ -24,6 +28,38 @@ function buildApp(keySemaphore: KeySemaphore) {
   return app;
 }
 
+/** Servers bound by the current test; drained in afterEach. */
+let openServers: Server[] = [];
+
+/**
+ * Binds the app once to a real loopback port and returns its base URL, so every
+ * request in the test shares this one listener instead of supertest binding a
+ * new one per call.
+ */
+async function startServer(app: express.Express): Promise<string> {
+  const server = app.listen(0, '127.0.0.1');
+  openServers.push(server);
+  await once(server, 'listening');
+  const { port } = server.address() as AddressInfo;
+  return `http://127.0.0.1:${port}`;
+}
+
+/** Stops accepting, drops any keep-alive sockets, and waits for 'close'. */
+async function stopServers(): Promise<void> {
+  const servers = openServers;
+  openServers = [];
+  await Promise.all(
+    servers.map(async (server) => {
+      const closed = once(server, 'close');
+      server.close();
+      server.closeAllConnections();
+      await closed;
+    }),
+  );
+}
+
+afterEach(stopServers);
+
 describe('GET /api/admin/keys/concurrency', () => {
   let keySemaphore: KeySemaphore;
 
@@ -36,9 +72,9 @@ describe('GET /api/admin/keys/concurrency', () => {
   });
 
   it('returns empty counts when no keys are active', async () => {
-    const app = buildApp(keySemaphore);
+    const baseUrl = await startServer(buildApp(keySemaphore));
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .get('/api/admin/keys/concurrency')
       .set('x-admin-api-key', ADMIN_KEY);
 
@@ -51,12 +87,12 @@ describe('GET /api/admin/keys/concurrency', () => {
   });
 
   it('returns active slot counts for all keys', async () => {
-    const app = buildApp(keySemaphore);
+    const baseUrl = await startServer(buildApp(keySemaphore));
 
     // Acquire some slots
     await keySemaphore.withSlot('key_abc', async () => {
       await keySemaphore.withSlot('key_abc', async () => {
-        const response = await request(app)
+        const response = await request(baseUrl)
           .get('/api/admin/keys/concurrency')
           .set('x-admin-api-key', ADMIN_KEY);
 
@@ -72,12 +108,12 @@ describe('GET /api/admin/keys/concurrency', () => {
 
   it('returns counts for multiple different keys', async () => {
     const sem = keySemaphore; // shorter alias
-    const app = buildApp(sem);
+    const baseUrl = await startServer(buildApp(sem));
 
     // Hold slots on two different keys and read stats
     await sem.withSlot('key_abc', async () => {
       await sem.withSlot('key_def', async () => {
-        const response = await request(app)
+        const response = await request(baseUrl)
           .get('/api/admin/keys/concurrency')
           .set('x-admin-api-key', ADMIN_KEY);
 
@@ -92,9 +128,9 @@ describe('GET /api/admin/keys/concurrency', () => {
   });
 
   it('requires admin authentication', async () => {
-    const app = buildApp(keySemaphore);
+    const baseUrl = await startServer(buildApp(keySemaphore));
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .get('/api/admin/keys/concurrency');
 
     expect(response.status).toBe(401);
@@ -113,9 +149,9 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
   });
 
   it('returns zero active count for an idle key', async () => {
-    const app = buildApp(keySemaphore);
+    const baseUrl = await startServer(buildApp(keySemaphore));
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .get('/api/admin/keys/concurrency/key_idle')
       .set('x-admin-api-key', ADMIN_KEY);
 
@@ -129,10 +165,10 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
   });
 
   it('returns active count for a key holding slots', async () => {
-    const app = buildApp(keySemaphore);
+    const baseUrl = await startServer(buildApp(keySemaphore));
 
     await keySemaphore.withSlot('key_busy', async () => {
-      const response = await request(app)
+      const response = await request(baseUrl)
         .get('/api/admin/keys/concurrency/key_busy')
         .set('x-admin-api-key', ADMIN_KEY);
 
@@ -145,7 +181,7 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
     });
 
     // After release, count should be zero
-    const response2 = await request(app)
+    const response2 = await request(baseUrl)
       .get('/api/admin/keys/concurrency/key_busy')
       .set('x-admin-api-key', ADMIN_KEY);
 
@@ -156,10 +192,10 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
   it('reports atLimit: true when key is at its concurrency limit', async () => {
     // Use maxConcurrency=1 so a single slot reaches the limit
     const sem = new KeySemaphore(1, 1000);
-    const app = buildApp(sem);
+    const baseUrl = await startServer(buildApp(sem));
 
     await sem.withSlot('key_maxed', async () => {
-      const response = await request(app)
+      const response = await request(baseUrl)
         .get('/api/admin/keys/concurrency/key_maxed')
         .set('x-admin-api-key', ADMIN_KEY);
 
@@ -173,21 +209,21 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
   });
 
   it('requires admin authentication', async () => {
-    const app = buildApp(keySemaphore);
+    const baseUrl = await startServer(buildApp(keySemaphore));
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .get('/api/admin/keys/concurrency/key_abc');
 
     expect(response.status).toBe(401);
   });
 
   it('treats a trailing slash as the collection endpoint, not an empty keyId', async () => {
-    const app = buildApp(keySemaphore);
+    const baseUrl = await startServer(buildApp(keySemaphore));
 
     // Express (with strict routing off) normalises the trailing slash, so this
     // matches GET /concurrency rather than /concurrency/:keyId with an empty
     // param. The detail handler is therefore never reached with a blank keyId.
-    const response = await request(app)
+    const response = await request(baseUrl)
       .get('/api/admin/keys/concurrency/')
       .set('x-admin-api-key', ADMIN_KEY);
 
@@ -198,14 +234,14 @@ describe('GET /api/admin/keys/concurrency/:keyId', () => {
 
   it('reports the configured per-key ceiling alongside the counts', async () => {
     const sem = new KeySemaphore(9, 1000);
-    const app = buildApp(sem);
+    const baseUrl = await startServer(buildApp(sem));
 
-    const listResponse = await request(app)
+    const listResponse = await request(baseUrl)
       .get('/api/admin/keys/concurrency')
       .set('x-admin-api-key', ADMIN_KEY);
     expect(listResponse.body.data.maxConcurrencyPerKey).toBe(9);
 
-    const detailResponse = await request(app)
+    const detailResponse = await request(baseUrl)
       .get('/api/admin/keys/concurrency/key_abc')
       .set('x-admin-api-key', ADMIN_KEY);
     expect(detailResponse.body.data.maxConcurrencyPerKey).toBe(9);

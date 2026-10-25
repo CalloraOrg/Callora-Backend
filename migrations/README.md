@@ -31,11 +31,22 @@ NNNN_lowercase-description.down.sql
 ```
 
 Versions up to `0021` (including the mixed-width prefixes and historical
-duplicates) are legacy. The enforced new sequence begins at `0022`; because
-`0022` and `0023` already exist, the next new migration is `0024`. Do not
+duplicates) are legacy. The enforced new sequence begins at `0022`. Versions `0022` through `0032` are
+the published history on `main`, `0033_idempotency_response_headers` is the
+unpublished response-header addition, and `0034_fee_abstraction_quotes` is an
+additive restoration of the fee quote table, so the next new migration is
+`0036`. Do not
 reuse a prefix: **one forward migration per numeric version**. In particular,
 the three legacy `0014_*` forward migrations are a collision to preserve, not
 a pattern to copy. Add new versions consecutively, without gaps.
+
+Upstream `main` renumbers the earlier colliding `0026_*` files to `0027`–`0031`.
+That renumbering is not proof that a deployed database has the same history: the
+usage-status backfill can overwrite later reconciliation decisions. Verify the
+deployed PostgreSQL `schema_versions` history before relying on it. See the
+[deployment-history request](https://github.com/CalloraOrg/Callora-Backend/issues/1499#issuecomment-6285619975).
+The unpublished response-header addition is `0033_idempotency_response_headers`.
+Reconcile it with the approved collision repair before deployment.
 
 ## Rollback policy
 
@@ -75,13 +86,19 @@ Run the local SQLite migration runner with:
 npx tsx src/migrate.ts
 ```
 
-`src/migrate.ts` discovers forward migrations, applies each one transactionally,
-and records its filename, numeric version, and SHA-256 checksum in both its
-internal `_migrations` table and the public `schema_versions` table. Migration
-`0013_schema_versions.sql` and `drizzle/schema-versions.sql` define the
-`schema_versions` contract; the runner creates the table as a safety net before
-applying migrations. Do not edit an applied file to repair drift—create a new
-migration.
+`src/migrate.ts` plans the SQLite-applicable migrations: the global layout policy
+runs first over every forward file, then non-Postgres numbered files are applied
+in version order, each transactionally. Each applied file is recorded in
+`_migrations` with its SHA-256 checksum. Versions `0022` and later also get one
+`schema_versions` row. Legacy versions (`<= 0021`) are authoritative in
+`_migrations` only, because their historical duplicates cannot share one
+`schema_versions` version. The runner creates both tables if they are absent.
+
+Production (`NODE_ENV=production`) validates instead of applying. It fails when a
+planned migration is unrecorded, a checksum differs or is missing, a ledger row is
+unknown, or a database has tables but no migration history. Such a database needs a
+maintainer-approved plan; it is never replayed or backfilled. Do not edit an applied
+file to repair drift; create a new migration.
 
 Validate the repository layout and checksum state with:
 
@@ -137,7 +154,7 @@ not replace a backup or post-backfill verification.
 
 ## Adding a migration checklist
 
-1. Choose the next unused four-digit version (`0024` at the time of writing).
+1. Choose the next unused four-digit version after resolving any outstanding collision; never copy a stale example number.
 2. Create the canonical forward file and its same-stem `.down.sql` rollback.
 3. Keep the forward migration additive where possible; obtain the destructive
    approval marker when applicable.

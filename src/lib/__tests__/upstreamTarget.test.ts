@@ -4,7 +4,7 @@ import {
   buildUpstreamTargetUrl,
   parseUpstreamHostAllowlist,
   DEFAULT_UPSTREAM_HOST_ALLOWLIST,
-} from '../upstreamTarget';
+} from '../upstreamTarget.js';
 import dns from 'node:dns/promises';
 
 jest.mock('node:dns/promises');

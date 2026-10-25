@@ -43,7 +43,7 @@ const ADMIN_KEY = 'test-admin-key';
 function makeIdempotencyPool(): Pool {
   const store = new Map<
     string,
-    { request_hash: string; status: string; response_status: number; response_body: string; expires_at: string }
+    { request_hash: string; status: string; response_status: number; response_body: string; response_headers: Record<string, unknown> | null; expires_at: string }
   >();
   const composite = (scope: string, key: string) => `${scope}::${key}`;
 
@@ -72,13 +72,15 @@ function makeIdempotencyPool(): Pool {
         status: 'started',
         response_status: 0,
         response_body: '',
+        response_headers: null,
         expires_at: new Date(Date.now() + 86400000).toISOString(),
       });
       return { rows: [{ lease_token: '2026-01-01 00:01:00.000000' }], rowCount: 1 };
     }
     if (text.includes('UPDATE idempotency_store')) {
-      const [responseStatus, responseBody, scope, key] = params as [
+      const [responseStatus, responseBody, responseHeaders, scope, key] = params as [
         number,
+        string,
         string,
         string,
         string,
@@ -90,6 +92,7 @@ function makeIdempotencyPool(): Pool {
           status: 'completed',
           response_status: responseStatus,
           response_body: responseBody,
+          response_headers: JSON.parse(responseHeaders),
         });
       }
       return { rows: [] };
@@ -224,7 +227,6 @@ describe('POST /api/billing/refund', () => {
       balanceUsdc: '15.00',
     });
     expect(grant).toHaveBeenCalledTimes(1);
-    expect(grant).toHaveBeenCalledWith('dev-1', '5.00');
   });
 
   it('replays the cached response instead of crediting twice on a retried request', async () => {

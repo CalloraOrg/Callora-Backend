@@ -1447,12 +1447,9 @@ describe('OpenAPI 3.1 Spec Served Route and Validation', () => {
 
 describe('Async rejection handling in GET /api/developers/apis', () => {
   test('returns 500 when apiRepository.listByDeveloper throws', async () => {
-    const throwingApiRepository: ApiRepository = {
-      ...new InMemoryApiRepository(),
-      async listByDeveloper() {
-        throw new Error('Database connection lost');
-      },
-    };
+    const throwingApiRepository: ApiRepository = Object.assign(new InMemoryApiRepository(), { async listByDeveloper() {
+      throw new Error('Database connection lost');
+    }, })
 
     const app = createApp({
       usageEventsRepository: usageEventsForApis(),
@@ -1472,12 +1469,9 @@ describe('Async rejection handling in GET /api/developers/apis', () => {
   });
 
   test('returns 500 when usageEventsRepository.aggregateByDeveloper throws', async () => {
-    const throwingUsageRepository: UsageEventsRepository = {
-      ...new InMemoryUsageEventsRepository(),
-      async aggregateByDeveloper() {
-        throw new Error('Query timeout');
-      },
-    };
+    const throwingUsageRepository: UsageEventsRepository = Object.assign(new InMemoryUsageEventsRepository(), { async aggregateByDeveloper() {
+      throw new Error('Query timeout');
+    }, })
 
     const app = createApp({
       usageEventsRepository: throwingUsageRepository,
@@ -1496,12 +1490,9 @@ describe('Async rejection handling in GET /api/developers/apis', () => {
   });
 
   test('does not emit unhandledRejection event when repository throws', async () => {
-    const throwingApiRepository: ApiRepository = {
-      ...new InMemoryApiRepository(),
-      async listByDeveloper() {
-        throw new Error('Repository error');
-      },
-    };
+    const throwingApiRepository: ApiRepository = Object.assign(new InMemoryApiRepository(), { async listByDeveloper() {
+      throw new Error('Repository error');
+    }, })
 
     const app = createApp({
       usageEventsRepository: usageEventsForApis(),
@@ -1533,12 +1524,9 @@ describe('Async rejection handling in GET /api/developers/apis', () => {
 
 describe('Async rejection handling in GET /api/developers/analytics', () => {
   test('returns 500 when usageEventsRepository.developerOwnsApi throws', async () => {
-    const throwingUsageRepository: UsageEventsRepository = {
-      ...new InMemoryUsageEventsRepository(),
-      async developerOwnsApi() {
-        throw new Error('Permissions service unavailable');
-      },
-    };
+    const throwingUsageRepository: UsageEventsRepository = Object.assign(new InMemoryUsageEventsRepository(), { async developerOwnsApi() {
+      throw new Error('Permissions service unavailable');
+    }, })
 
     const app = createApp({
       usageEventsRepository: throwingUsageRepository,
@@ -1556,12 +1544,9 @@ describe('Async rejection handling in GET /api/developers/analytics', () => {
   });
 
   test('returns 500 when usageEventsRepository.findByDeveloper throws', async () => {
-    const throwingUsageRepository: UsageEventsRepository = {
-      ...new InMemoryUsageEventsRepository(),
-      async findByDeveloper() {
-        throw new Error('Database read failed');
-      },
-    };
+    const throwingUsageRepository: UsageEventsRepository = Object.assign(new InMemoryUsageEventsRepository(), { async findByDeveloper() {
+      throw new Error('Database read failed');
+    }, })
 
     const app = createApp({
       usageEventsRepository: throwingUsageRepository,
@@ -1579,12 +1564,9 @@ describe('Async rejection handling in GET /api/developers/analytics', () => {
   });
 
   test('does not emit unhandledRejection event when repository throws', async () => {
-    const throwingUsageRepository: UsageEventsRepository = {
-      ...new InMemoryUsageEventsRepository(),
-      async findByDeveloper() {
-        throw new Error('Repository unavailable');
-      },
-    };
+    const throwingUsageRepository: UsageEventsRepository = Object.assign(new InMemoryUsageEventsRepository(), { async findByDeveloper() {
+      throw new Error('Repository unavailable');
+    }, })
 
     const app = createApp({
       usageEventsRepository: throwingUsageRepository,
@@ -1613,12 +1595,9 @@ describe('Async rejection handling in GET /api/developers/analytics', () => {
   });
 
   test('returns proper error envelope with requestId on async errors', async () => {
-    const throwingUsageRepository: UsageEventsRepository = {
-      ...new InMemoryUsageEventsRepository(),
-      async findByDeveloper() {
-        throw new Error('Query execution error');
-      },
-    };
+    const throwingUsageRepository: UsageEventsRepository = Object.assign(new InMemoryUsageEventsRepository(), { async findByDeveloper() {
+      throw new Error('Query execution error');
+    }, })
 
     const app = createApp({
       usageEventsRepository: throwingUsageRepository,

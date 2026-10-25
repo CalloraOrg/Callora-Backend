@@ -24,7 +24,7 @@ jest.mock('better-sqlite3', () => {
   };
 });
 
-jest.mock('../../config/env', () => ({
+jest.mock('../../../config/env.js', () => ({
   env: {
     PORT: 3000,
     NODE_ENV: 'test',
@@ -70,7 +70,8 @@ import type {
   AuditLogRepository,
 } from '../../../repositories/auditLogRepository.js';
 import type { CreditsRepository } from '../../../repositories/creditsRepository.js';
-import type { ApiRepository, Api } from '../../../repositories/apiRepository.js';
+import { InMemoryApiRepository } from '../../../repositories/apiRepository.js';
+import type { Api } from '../../../db/schema.js';
 import type {
   UsageAdminStore,
   UsageAggregateSnapshot,
@@ -157,28 +158,20 @@ class MockCreditsRepo implements CreditsRepository {
   }
 }
 
-class MockApiRepo implements ApiRepository {
-  deleteResults = new Map<number, boolean>();
-  restoreResults = new Map<number, Api | null>();
-
-  create() { throw new Error('not implemented'); }
-  createWithEndpoints() { throw new Error('not implemented'); }
-  update() { throw new Error('not implemented'); }
-  findById() { throw new Error('not implemented'); }
-  listByDeveloper() { throw new Error('not implemented'); }
-  listAll() { throw new Error('not implemented'); }
-  listActive() { throw new Error('not implemented'); }
-
-  delete(id: number): Promise<boolean> {
-    return Promise.resolve(this.deleteResults.get(id) ?? true);
-  }
-  restore(id: number): Promise<Api | null> {
-    return Promise.resolve(
-      this.restoreResults.has(id)
-        ? this.restoreResults.get(id)!
-        : ({ id, name: 'x', description: null, base_url: '', category: '', status: 'active', developer_id: 1, logo_url: null, created_at: new Date(0), updated_at: new Date(0), deleted_at: null } as unknown as Api),
-    );
-  }
+function apiFixture(id: number, deleted = false): Api {
+  return {
+    id,
+    name: `API ${id}`,
+    description: null,
+    base_url: 'https://example.test',
+    category: null,
+    status: 'active',
+    developer_id: 1,
+    logo_url: null,
+    created_at: new Date(0),
+    updated_at: new Date(0),
+    deleted_at: deleted ? new Date(0) : null,
+  };
 }
 
 class MockUsageStore implements UsageAdminStore {
@@ -231,6 +224,11 @@ const baseEntry = (overrides: Partial<AuditLogEntry> = {}): AuditLogEntry => ({
   bodyHash: null,
   details: null,
   createdAt: '2026-06-28T10:00:00.000Z',
+  sequenceNo: 1,
+  previousHash: 'GENESIS',
+  integrityHash: 'a'.repeat(64),
+  target: null,
+  outcome: 'success',
   ...overrides,
 });
 
@@ -302,9 +300,9 @@ describe('POST /api/admin/audit/replay — authorization', () => {
       totalEvents: 1,
       settledEvents: 0,
       unsettledEvents: 1,
-      totalAmountUsdc: 0,
-      settledAmountUsdc: 0,
-      unsettledAmountUsdc: 0,
+      totalAmountUsdc: 0n,
+      settledAmountUsdc: 0n,
+      unsettledAmountUsdc: 0n,
       apiCount: 0,
       endpointCount: 0,
       firstEventAt: null,
@@ -587,9 +585,9 @@ describe('POST /api/admin/audit/replay — successful replay', () => {
       totalEvents: 10,
       settledEvents: 0,
       unsettledEvents: 10,
-      totalAmountUsdc: 50,
-      settledAmountUsdc: 0,
-      unsettledAmountUsdc: 50,
+      totalAmountUsdc: 50n,
+      settledAmountUsdc: 0n,
+      unsettledAmountUsdc: 50n,
       apiCount: 2,
       endpointCount: 5,
       firstEventAt: '2026-01-01T00:00:00.000Z',
@@ -764,8 +762,7 @@ describe('POST /api/admin/audit/replay — successful replay', () => {
       event: 'SOFT_DELETE_API',
       details: { apiId: 42 },
     }));
-    const apiRepo = new MockApiRepo();
-    apiRepo.deleteResults.set(42, true);
+    const apiRepo = new InMemoryApiRepository([apiFixture(42)]);
 
     const app = buildApp({ auditLogRepository: auditRepo, apiRepository: apiRepo });
 
@@ -785,8 +782,7 @@ describe('POST /api/admin/audit/replay — successful replay', () => {
       event: 'SOFT_DELETE_API',
       details: { apiId: 99 },
     }));
-    const apiRepo = new MockApiRepo();
-    apiRepo.deleteResults.set(99, false);
+    const apiRepo = new InMemoryApiRepository([apiFixture(99, true)]);
 
     const app = buildApp({ auditLogRepository: auditRepo, apiRepository: apiRepo });
 
@@ -806,7 +802,7 @@ describe('POST /api/admin/audit/replay — successful replay', () => {
       event: 'RESTORE_API',
       details: { apiId: 7 },
     }));
-    const apiRepo = new MockApiRepo();
+    const apiRepo = new InMemoryApiRepository([apiFixture(7, true)]);
 
     const app = buildApp({ auditLogRepository: auditRepo, apiRepository: apiRepo });
 
@@ -826,7 +822,7 @@ describe('POST /api/admin/audit/replay — successful replay', () => {
       event: 'SOFT_DELETE_API',
       details: { apiId: 10 },
     }));
-    const apiRepo = new MockApiRepo();
+    const apiRepo = new InMemoryApiRepository([apiFixture(10)]);
 
     const app = buildApp({ auditLogRepository: auditRepo, apiRepository: apiRepo });
 
@@ -891,7 +887,7 @@ describe('POST /api/admin/audit/replay — response envelope', () => {
       event: 'RESTORE_API',
       details: { apiId: 1 },
     }));
-    const apiRepo = new MockApiRepo();
+    const apiRepo = new InMemoryApiRepository([apiFixture(1, true)]);
 
     const app = buildApp({ auditLogRepository: auditRepo, apiRepository: apiRepo });
 

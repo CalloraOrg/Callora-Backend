@@ -28,7 +28,7 @@ import disputesRouter from "./billing/disputes.js";
 import refundRouter from "./billing/refund.js";
 import { createFeeAbstractionRouter } from "./billing/feeAbstraction.js";
 import { createBillingForecastRouter } from "./billing/forecast.js";
-import { etagMiddleware } from "../middleware/etag.js";
+import { etagMiddleware, generateETag } from "../middleware/etag.js";
 import { createTimeoutMiddleware } from "../middleware/timeout.js";
 import { config } from "../config/index.js";
 import { logger } from "../logger.js";
@@ -134,7 +134,6 @@ function sendSimulationFailure(
 router.get(
   "/",
   requireAuth,
-  etagMiddleware,
   async (
     req: Request,
     res: Response<unknown, AuthenticatedLocals>,
@@ -174,30 +173,30 @@ router.get(
         indexHint: "idx_usage_events_user_created",
       });
 
-      res.status(200).json(
-        successEnvelope(
-          {
-            data: charges.map((charge) => ({
-              id: charge.id,
-              userId: charge.userId,
-              apiId: charge.apiId,
-              endpointId: charge.endpointId,
-              apiKeyId: charge.apiKeyId,
-              requestId: charge.requestId,
-              amountUsdc: charge.amountUsdc,
-              stellarTxHash: charge.stellarTxHash,
-              status: charge.status,
-              createdAt: charge.createdAt.toISOString(),
-            })),
-            meta: {
-              limit,
-              nextCursor,
-              hasMore,
-            },
-          },
-          requestId,
-        ),
-      );
+      const page = {
+        data: charges.map((charge) => ({
+          id: charge.id,
+          userId: charge.userId,
+          apiId: charge.apiId,
+          endpointId: charge.endpointId,
+          apiKeyId: charge.apiKeyId,
+          requestId: charge.requestId,
+          amountUsdc: charge.amountUsdc,
+          stellarTxHash: charge.stellarTxHash,
+          status: charge.status,
+          createdAt: charge.createdAt.toISOString(),
+        })),
+        meta: {
+          limit,
+          nextCursor,
+          hasMore,
+        },
+      };
+      // Weak validator: covers only stable billing rows and pagination metadata;
+      // per-response `timestamp` and per-request `requestId` are excluded.
+      // Express's native freshness check answers If-None-Match with 304.
+      res.setHeader("ETag", `W/${generateETag(JSON.stringify(page))}`);
+      res.status(200).json(successEnvelope(page, requestId));
     } catch (error) {
       next(error);
     }
@@ -324,7 +323,7 @@ router.get(
 
       const requestId = requireString(req.params.requestId, "requestId");
       const billingService = getBillingService(req);
-      const result = await billingService.getByRequestId(requestId);
+      const result = await billingService.getByRequestId(requestId, user.id);
 
       if (!result) {
         next(

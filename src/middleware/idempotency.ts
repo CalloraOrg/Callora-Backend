@@ -1,10 +1,13 @@
 import type { NextFunction, Request, Response, RequestHandler } from 'express';
 import type { Pool } from 'pg';
 import { createHash } from 'crypto';
+import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 import { config } from '../config/index.js';
 import { pool } from '../db.js';
-import { errorEnvelope } from '../lib/envelope.js';
+import { buildErrorEnvelope } from './envelope.js';
 import { logger } from '../logger.js';
+import type { ValidationErrorDetail } from './validate.js';
+import { safeValidationDetails } from '../errors/errorEnvelopePolicy.js';
 
 export interface IdempotencyConfig {
   keyFromHeader?: string;
@@ -18,6 +21,7 @@ export interface IdempotencyConfig {
   allowBodyKey?: boolean;
   maxKeyLength?: number;
   keyPattern?: RegExp;
+  cacheableStatus?: (status: number) => boolean;
 }
 
 /**
@@ -30,19 +34,100 @@ export const INVALID_IDEMPOTENCY_KEY = 'INVALID_IDEMPOTENCY_KEY' as const;
 
 export interface IdempotencyLease {
   renew(): Promise<void>;
+  /** Principal scope the key is namespaced under: user id, admin actor, or 'anonymous'. */
+  scope: string;
+  /** Trimmed Idempotency-Key header value. */
+  idempotencyKey: string;
+  /** Request fingerprint from calculateRequestHash; the value replay compares. */
+  requestHash: string;
 }
+
+/**
+ * Envelope stored in response_body for rows written by this middleware. `body`
+ * is base64 so binary responses replay byte-for-byte. `headers`, `bytes` and
+ * `sha256` are read-only compatibility fields: `headers` on rows written before
+ * response_headers existed, and `bytes`/`sha256`/absent `body` on hash-only rows.
+ */
 interface CachedResponse {
-  headers: Record<string, string>;
-  bytes: number;
-  sha256: string;
   body?: string;
+  headers?: Record<string, unknown>;
+  bytes?: number;
+  sha256?: string;
+}
+interface StoredRecord {
+  request_hash: string;
+  status: string;
+  response_status: number;
+  response_body: string;
+  response_headers: Record<string, unknown> | null;
 }
 const RESPONSE_PREFIX = 'idempotency-response-v1\n';
-const MAX_REPLAY_BYTES = 256 * 1024;
 
 const DEFAULT_IDEMPOTENCY_METHODS = ['POST', 'PATCH'];
 const DEFAULT_KEY_MAX_LENGTH = 255;
 const DEFAULT_KEY_PATTERN = /^[A-Za-z0-9._:-]+$/;
+/** Encoding is required to interpret captured bytes; cookies and unrelated headers are never stored. */
+const REPLAYABLE_RESPONSE_HEADERS = ['content-type', 'content-encoding', 'location', 'etag', 'retry-after', 'x-request-id'] as const;
+type ReplayableHeader = typeof REPLAYABLE_RESPONSE_HEADERS[number];
+type CachedResponseHeaders = Partial<Record<ReplayableHeader, string | number>>;
+
+/**
+ * Deterministic cache policy. Transient outcomes (408, 425, 429, 5xx and the
+ * RECONCILIATION_REQUIRED / IDEMPOTENCY_IN_PROGRESS body codes, in either
+ * envelope) are never cached, even with a custom status predicate.
+ */
+export function isCacheableIdempotencyResponse(
+  status: number,
+  body: unknown,
+  cacheableStatus?: (status: number) => boolean
+): boolean {
+  const payload = body !== null && typeof body === 'object'
+    ? body as { code?: unknown; error?: { code?: unknown } }
+    : undefined;
+  if (
+    status >= 500 || status === 408 || status === 425 || status === 429 ||
+    payload?.code === 'RECONCILIATION_REQUIRED' ||
+    payload?.code === 'IDEMPOTENCY_IN_PROGRESS' ||
+    payload?.error?.code === 'RECONCILIATION_REQUIRED' ||
+    payload?.error?.code === 'IDEMPOTENCY_IN_PROGRESS'
+  ) {
+    return false;
+  }
+  return cacheableStatus ? cacheableStatus(status) :
+    (status >= 200 && status < 300) ||
+    status === 400 || status === 401 || status === 403 || status === 404 ||
+    status === 409 || status === 410 || status === 422;
+}
+
+function allowlistedHeaders(read: (name: ReplayableHeader) => unknown): CachedResponseHeaders {
+  const headers: CachedResponseHeaders = {};
+  for (const name of REPLAYABLE_RESPONSE_HEADERS) {
+    const value = read(name);
+    if (typeof value === 'string' || typeof value === 'number') headers[name] = value;
+  }
+  return headers;
+}
+
+function parseJsonBody(captured: Buffer | undefined, bytes: number, contentEncoding: unknown, maxBodyBytes: number): unknown {
+  if (!captured || bytes === 0) return undefined;
+  let body = captured;
+  const encoding = typeof contentEncoding === 'string'
+    ? contentEncoding.trim().toLowerCase() : contentEncoding === undefined ? '' : null;
+  if (encoding !== '' && encoding !== 'identity') {
+    const decode = encoding === 'gzip' ? gunzipSync
+      : encoding === 'deflate' ? inflateSync
+      : encoding === 'br' ? brotliDecompressSync : undefined;
+    if (!decode) throw new Error('Unsupported idempotency response encoding');
+    // Bound decoded inspection too: a small compressed reply must not allocate an unbounded policy body.
+    body = decode(captured.subarray(0, bytes), { maxOutputLength: maxBodyBytes });
+  }
+  const text = body === captured ? body.toString('utf8', 0, bytes) : body.toString('utf8');
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
 
 function currentRequestId(req: Request): string {
   return req.id || 'unknown';
@@ -58,9 +143,9 @@ function sendIdempotencyError(
   statusCode: number,
   code: string,
   message: string,
-  details?: unknown
+  details?: ValidationErrorDetail[]
 ): void {
-  res.status(statusCode).json(errorEnvelope(code, message, currentRequestId(req), details));
+  res.status(statusCode).json(buildErrorEnvelope(code, message, currentRequestId(req), details));
 }
 
 /**
@@ -134,8 +219,10 @@ function getRawIdempotencyKey(req: Request, opts?: IdempotencyConfig): unknown {
 }
 
 /**
- * Idempotency middleware. It records the first non-5xx response for a key and
- * replays it for matching retries while rejecting mismatched payload reuse.
+ * Idempotency middleware. It holds a lease while the operation runs, records
+ * a cacheable response for the key and replays it for matching retries while
+ * rejecting mismatched payload reuse. Non-cacheable outcomes release the lease
+ * so the next retry executes.
  */
 export async function idempotencyMiddleware(
   req: Request,
@@ -177,11 +264,11 @@ export async function idempotencyMiddleware(
       path: req.originalUrl ?? req.path,
       keyLength: idempotencyKey.length,
     });
-    sendIdempotencyError(req, res, 400, INVALID_IDEMPOTENCY_KEY, 'Invalid Idempotency-Key header', {
-      header: 'Idempotency-Key',
-      maxLength: maxKeyLength,
-      allowedCharacters: 'A-Z, a-z, 0-9, dot, underscore, colon, and hyphen',
-    });
+    sendIdempotencyError(req, res, 400, INVALID_IDEMPOTENCY_KEY, 'Invalid Idempotency-Key header', [{
+      field: 'Idempotency-Key',
+      message: `Use at most ${maxKeyLength} characters from A-Z, a-z, 0-9, dot, underscore, colon, and hyphen`,
+      code: INVALID_IDEMPOTENCY_KEY,
+    }]);
     return;
   }
 
@@ -195,24 +282,26 @@ export async function idempotencyMiddleware(
 
   try {
     const leaseInterval = `${config.idempotency.leaseSeconds} seconds`;
+    const maxBodyBytes = config.idempotency.maxBodyBytes;
     const select = () => db.query(
-      `SELECT request_hash, status, response_status, response_body
+      `SELECT request_hash, status, response_status, response_body, response_headers
        FROM idempotency_store
        WHERE scope = $1 AND idempotency_key = $2 AND expires_at > NOW()::timestamp`,
       [scope, idempotencyKey]
     );
-    const handleExistingRecord = (record: {
-      request_hash: string; status: string; response_status: number; response_body: string;
-    }): boolean => {
+    const handleExistingRecord = (record: StoredRecord): boolean => {
       if (record.request_hash !== requestHash) {
         logger.warn('[idempotency] key reuse with mismatched payload', { requestId, correlationId, idempotencyKey });
-        sendIdempotencyError(req, res, 409, opts?.conflictErrorCode ?? IDEMPOTENCY_KEY_REUSE_MISMATCH,
-          'Idempotency key has already been used with a different request payload. Use a new idempotency key for a different request.', {
-            idempotencyKey,
-            incomingPayloadFingerprint: requestHash,
-            storedPayloadFingerprint: record.request_hash,
-            incomingFields: Object.keys(typeof req.body === 'object' && req.body !== null ? req.body : {}).sort(),
-          });
+        const conflictCode = opts?.conflictErrorCode ?? IDEMPOTENCY_KEY_REUSE_MISMATCH;
+        sendIdempotencyError(req, res, 409, conflictCode,
+          'Idempotency key has already been used with a different request payload. Use a new idempotency key for a different request.',
+          safeValidationDetails([
+            { field: 'idempotencyKey', message: idempotencyKey, code: conflictCode },
+            { field: 'incomingPayloadFingerprint', message: requestHash, code: conflictCode },
+            { field: 'storedPayloadFingerprint', message: record.request_hash, code: conflictCode },
+            ...Object.keys(typeof req.body === 'object' && req.body !== null ? req.body : {}).sort()
+              .map((name) => ({ field: 'incomingFields', message: name, code: conflictCode })),
+          ]));
         return true;
       }
       if (record.status !== 'completed') return false;
@@ -225,12 +314,25 @@ export async function idempotencyMiddleware(
       }
       const cached = JSON.parse(record.response_body.slice(RESPONSE_PREFIX.length)) as CachedResponse;
       if (cached.body === undefined) {
+        // Hash-only row left by the superseded 1491 retention path. Its outcome
+        // was never stored, so it must not be re-executed before expiry.
+        const legacyDetails = safeValidationDetails([
+          ...(cached.bytes === undefined ? [] : [{ field: 'bytes', message: String(cached.bytes), code: 'IDEMPOTENCY_RESPONSE_TOO_LARGE' }]),
+          ...(cached.sha256 === undefined ? [] : [{ field: 'sha256', message: cached.sha256, code: 'IDEMPOTENCY_RESPONSE_TOO_LARGE' }]),
+        ]);
         sendIdempotencyError(req, res, 409, 'IDEMPOTENCY_RESPONSE_TOO_LARGE',
           'The original response exceeded the replay limit. Fetch the resource using its identifier instead of repeating the operation.',
-          { sha256: cached.sha256, bytes: cached.bytes });
+          legacyDetails);
         return true;
       }
-      for (const [name, value] of Object.entries(cached.headers)) res.setHeader(name, value);
+      // NULL response_headers marks a row written before the header migration;
+      // its headers, if any, live in the envelope.
+      const stored = record.response_headers ?? cached.headers;
+      const headers = allowlistedHeaders(name => stored?.[name]);
+      for (const name of REPLAYABLE_RESPONSE_HEADERS) {
+        const value = headers[name];
+        if (value !== undefined) res.setHeader(name, value);
+      }
       res.status(record.response_status).end(Buffer.from(cached.body, 'base64'));
       return true;
     };
@@ -253,7 +355,7 @@ export async function idempotencyMiddleware(
          VALUES ($1, $2, $3, 'started', NOW()::timestamp + $4::interval, NOW()::timestamp, NOW()::timestamp + $5::interval)
          ON CONFLICT (scope, idempotency_key) DO UPDATE
          SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status,
-             response_status = NULL, response_body = NULL, expires_at = EXCLUDED.expires_at,
+             response_status = NULL, response_body = NULL, response_headers = NULL, expires_at = EXCLUDED.expires_at,
              created_at = EXCLUDED.created_at, lease_expires_at = EXCLUDED.lease_expires_at
          WHERE idempotency_store.expires_at <= NOW()::timestamp
          RETURNING to_char(lease_expires_at, 'YYYY-MM-DD HH24:MI:SS.US') AS lease_token`,
@@ -297,21 +399,21 @@ export async function idempotencyMiddleware(
         if (!renewed.rows[0]) throw new Error('Idempotency lease ownership lost');
         leaseToken = renewed.rows[0].lease_token;
       }),
+      scope,
+      idempotencyKey,
+      requestHash,
     } satisfies IdempotencyLease;
 
-    // One bounded buffer also avoids per-chunk overhead for tiny writes.
+    // ponytail: one cap-sized buffer per request that writes a body; grow lazily if large caps matter.
     let captured: Buffer | undefined;
     let bytes = 0;
-    const hash = createHash('sha256');
     const capture = (chunk: unknown, encoding?: unknown) => {
       if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array)) return;
       const charset = typeof encoding === 'string' ? encoding as BufferEncoding : 'utf8';
       const offset = bytes;
       bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk, charset) : chunk.length;
-      if (typeof chunk === 'string') hash.update(chunk, charset);
-      else hash.update(chunk);
-      if (bytes <= MAX_REPLAY_BYTES) {
-        captured ??= Buffer.allocUnsafe(MAX_REPLAY_BYTES);
+      if (bytes <= maxBodyBytes) {
+        captured ??= Buffer.allocUnsafe(maxBodyBytes);
         if (typeof chunk === 'string') captured.write(chunk, offset, charset);
         else captured.set(chunk, offset);
       } else captured = undefined;
@@ -333,19 +435,33 @@ export async function idempotencyMiddleware(
       finished = true;
       void serialize(async () => {
         try {
-          if (res.statusCode >= 500) { await release(); return; }
-          const headers: Record<string, string> = {};
-          for (const name of ['content-type', 'content-encoding']) {
-            const value = res.getHeader(name);
-            if (typeof value === 'string') headers[name] = value;
+          if (bytes > maxBodyBytes) {
+            logger.warn('[idempotency] response exceeds cache body limit', {
+              route: `${req.baseUrl ?? ''}${req.route?.path ?? req.path}`,
+              bodyBytes: bytes,
+              maxBodyBytes,
+            });
+            await release();
+            return;
           }
-          const cached: CachedResponse = { headers, bytes, sha256: hash.digest('hex') };
-          if (bytes <= MAX_REPLAY_BYTES) cached.body = captured ? captured.toString('base64', 0, bytes) : '';
+          const body = parseJsonBody(captured, bytes, res.getHeader('content-encoding'), maxBodyBytes);
+          if (!isCacheableIdempotencyResponse(res.statusCode, body, opts?.cacheableStatus)) {
+            await release();
+            return;
+          }
+          const envelope: CachedResponse = { body: captured ? captured.toString('base64', 0, bytes) : '' };
           await db.query(
-            `UPDATE idempotency_store SET status = 'completed', response_status = $1, response_body = $2
-             WHERE scope = $3 AND idempotency_key = $4 AND status = 'started'
-               AND lease_expires_at = $5::timestamp`,
-            [res.statusCode, RESPONSE_PREFIX + JSON.stringify(cached), scope, idempotencyKey, leaseToken]
+            `UPDATE idempotency_store SET status = 'completed', response_status = $1, response_body = $2, response_headers = $3
+             WHERE scope = $4 AND idempotency_key = $5 AND status = 'started'
+               AND lease_expires_at = $6::timestamp`,
+            [
+              res.statusCode,
+              RESPONSE_PREFIX + JSON.stringify(envelope),
+              JSON.stringify(allowlistedHeaders(name => res.getHeader(name))),
+              scope,
+              idempotencyKey,
+              leaseToken,
+            ]
           );
         } catch (err) {
           logFailure(err);

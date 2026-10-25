@@ -11,6 +11,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import type { Server } from 'node:http';
+import type { Application } from 'express';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
 import { resetAllMetrics } from '../../src/metrics.js';
@@ -41,12 +44,12 @@ jest.mock('better-sqlite3', () => {
 });
 
 describe('GET /api/metrics - Integration', () => {
-  let app: ReturnType<typeof createApp>;
+  let app: Application;
 
   // #1266: the endpoint is gated whenever METRICS_API_KEY is set, so
   // scrapes in this suite authenticate with the currently configured key.
-  const metrics = () =>
-    request(app).get('/api/metrics').set('Authorization', `Bearer ${process.env.METRICS_API_KEY}`);
+  const metrics = (target: Application | Server = app) =>
+    request(target).get('/api/metrics').set('Authorization', `Bearer ${process.env.METRICS_API_KEY}`);
 
   beforeEach(() => {
     resetAllMetrics();
@@ -81,12 +84,19 @@ describe('GET /api/metrics - Integration', () => {
   });
 
   it('does not error under concurrent requests', async () => {
-    const requests = Array.from({ length: 10 }, () => metrics());
-    const results = await Promise.all(requests);
-    for (const res of results) {
-      assert.equal(res.status, 200);
-      assert.equal(res.headers['content-type'], 'text/plain; version=0.0.4; charset=utf-8');
-      assert.match(res.text, /# HELP http_requests_total/);
+    const server = app.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    try {
+      const results = await Promise.all(Array.from({ length: 10 }, () => metrics(server)));
+      for (const res of results) {
+        assert.equal(res.status, 200);
+        assert.equal(res.headers['content-type'], 'text/plain; version=0.0.4; charset=utf-8');
+        assert.match(res.text, /# HELP http_requests_total/);
+      }
+    } finally {
+      const closed = once(server, 'close');
+      server.close();
+      await closed;
     }
   });
 

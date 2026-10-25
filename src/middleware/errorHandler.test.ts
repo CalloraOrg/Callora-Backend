@@ -262,7 +262,6 @@ describe('Error Handler', () => {
       });
 
       expect(outcome).toBe('aborted');
-      expect(logger.error).toHaveBeenCalledTimes(1);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

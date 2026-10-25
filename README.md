@@ -73,6 +73,7 @@ Configuration is validated with Zod at startup (`src/config/env.ts`); the server
 | `ADMIN_API_KEY` | yes | Key for `/api/admin/*` (`x-admin-api-key` header) |
 | `METRICS_API_KEY` | yes | Key for `/api/metrics` |
 | `UPSTREAM_URL`, `UPSTREAM_HOST_ALLOWLIST` | prod | Default upstream and allowed upstream hosts for the proxy (SSRF guard) |
+| `SOROBAN_BILLING_CONTRACT_ID` | for billing | Billing contract; falls back to the selected network's `STELLAR_*_VAULT_CONTRACT_ID`. Billing is unavailable when neither is configured |
 | `CORS_ALLOWED_ORIGINS` | no | Comma separated browser origins |
 | `DEMO_MODE` | no | `true` = ephemeral SQLite + seeded catalog (see below) |
 | `SQLITE_PATH` | no | SQLite file path (default `./database.db`; `/tmp/callora.db` on Vercel) |

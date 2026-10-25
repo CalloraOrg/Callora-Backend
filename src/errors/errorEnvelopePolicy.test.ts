@@ -103,4 +103,20 @@ describe('error envelope policy', () => {
     expect(result?.[0].message).toHaveLength(500);
     expect(result?.[0].code).toHaveLength(100);
   });
+
+  it('keeps the accepted feature detail and drops any other object member', () => {
+    expect(normalizeError({
+      statusCode: 503,
+      code: 'DEMO_MODE_UNSUPPORTED',
+      message: 'This feature is unavailable in demo mode.',
+      details: { feature: 'billing', secret: 'sk_live_secret', stack: 'at handler' },
+      trusted: true,
+    })).toEqual({
+      statusCode: 503,
+      code: 'DEMO_MODE_UNSUPPORTED',
+      message: 'This feature is unavailable in demo mode.',
+      details: { feature: 'billing' },
+    });
+    expect(normalizeError({ statusCode: 503, code: 'DEMO_MODE_UNSUPPORTED', details: { secret: 'x' }, trusted: true }).details).toBeUndefined();
+  });
 });

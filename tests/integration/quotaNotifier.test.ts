@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { GenericContainer, StartedTestContainer } from 'testcontainers';
 import pkg from 'pg';
 import {
@@ -12,6 +13,12 @@ import { resetWebhookDispatcherForTests } from '../../src/webhooks/webhook.dispa
 
 const { Pool } = pkg;
 
+// Native mode: CALLORA_TEST_DISPOSABLE_DATABASE_URL points at a disposable PostgreSQL database.
+// This suite creates and drops only its own schema there; both pools are pinned to it with
+// search_path. Unset: Docker container.
+const disposableDatabaseUrl = process.env.CALLORA_TEST_DISPOSABLE_DATABASE_URL;
+const schema = `quota_notifier_${randomUUID().replace(/-/g, '')}`;
+
 jest.mock('dns/promises', () => ({
   __esModule: true,
   default: {
@@ -24,22 +31,33 @@ describe('Quota notifier PostgreSQL concurrency', () => {
   let container: StartedTestContainer;
   let firstPool: InstanceType<typeof Pool> | undefined;
   let secondPool: InstanceType<typeof Pool> | undefined;
+  let adminPool: InstanceType<typeof Pool> | undefined;
+  let poolOptions: { connectionString: string; options?: string };
   let originalFetch: typeof global.fetch;
 
   beforeAll(async () => {
-    container = await new GenericContainer('postgres:16-alpine')
-      .withExposedPorts(5432)
-      .withEnvironment({
-        POSTGRES_USER: 'postgres',
-        POSTGRES_PASSWORD: 'postgres',
-        POSTGRES_DB: 'callora_test',
-      })
-      .start();
+    let connectionString: string;
+    if (disposableDatabaseUrl) {
+      connectionString = disposableDatabaseUrl;
+      adminPool = new Pool({ connectionString });
+      await adminPool.query(`CREATE SCHEMA ${schema}`);
+      poolOptions = { connectionString, options: `-c search_path=${schema}` };
+    } else {
+      container = await new GenericContainer('postgres:16-alpine')
+        .withExposedPorts(5432)
+        .withEnvironment({
+          POSTGRES_USER: 'postgres',
+          POSTGRES_PASSWORD: 'postgres',
+          POSTGRES_DB: 'callora_test',
+        })
+        .start();
 
-    const connectionString =
-      `postgres://postgres:postgres@${container.getHost()}:${container.getMappedPort(5432)}/callora_test`;
-    firstPool = new Pool({ connectionString });
-    secondPool = new Pool({ connectionString });
+      connectionString =
+        `postgres://postgres:postgres@${container.getHost()}:${container.getMappedPort(5432)}/callora_test`;
+      poolOptions = { connectionString };
+    }
+    firstPool = new Pool(poolOptions);
+    secondPool = new Pool(poolOptions);
 
     await firstPool.query(`
       CREATE TABLE quota_notifications_sent (
@@ -53,8 +71,13 @@ describe('Quota notifier PostgreSQL concurrency', () => {
   }, 60000);
 
   afterAll(async () => {
-    await Promise.all([firstPool?.end(), secondPool?.end()]);
-    await container?.stop();
+    try {
+      await Promise.all([firstPool?.end(), secondPool?.end()]);
+      await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    } finally {
+      await adminPool?.end();
+      await container?.stop();
+    }
   });
 
   beforeEach(() => {

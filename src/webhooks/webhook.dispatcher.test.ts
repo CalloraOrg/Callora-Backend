@@ -502,9 +502,9 @@ describe('Webhook Dispatcher', () => {
             expect(serialized).not.toContain(secretKey);
             expect(serialized).not.toContain(confidentialToken);
             expect(serialized).not.toContain('card_cvv_value_999');
-            expect((entry as Record<string, unknown>).data).toBeUndefined();
-            expect((entry as Record<string, unknown>).payload).toBeUndefined();
-            expect((entry as Record<string, unknown>).secret).toBeUndefined();
+            expect(entry).not.toHaveProperty('data');
+            expect(entry).not.toHaveProperty('payload');
+            expect(entry).not.toHaveProperty('secret');
         });
 
         it('respects maxRetries of 0 (no retry attempts)', async () => {

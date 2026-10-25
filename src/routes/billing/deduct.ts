@@ -4,6 +4,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   BadGatewayError,
   BadRequestError,
+  ForbiddenError,
   GatewayTimeoutError,
   NotFoundError,
   PaymentRequiredError,
@@ -128,6 +129,11 @@ router.post(
       )
         ? requireString(body.developerId, "developerId")
         : user.id;
+      // Payer is the authenticated account; body developerId may only name that same account.
+      if (developerId !== user.id) {
+        next(new ForbiddenError("Cannot bill another account", "FORBIDDEN"));
+        return;
+      }
 
       const billingService = getBillingService(req);
       // Renew around the potentially slow Soroban deduction. Ownership loss
@@ -237,7 +243,7 @@ router.get(
 
       const requestId = requireString(req.params.requestId, "requestId");
       const billingService = getBillingService(req);
-      const result = await billingService.getByRequestId(requestId);
+      const result = await billingService.getByRequestId(requestId, user.id);
 
       if (!result) {
         next(

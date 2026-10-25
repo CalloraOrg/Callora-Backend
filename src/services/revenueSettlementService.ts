@@ -10,7 +10,7 @@ import {
   isTransientNetworkError,
   withRetry,
 } from '../lib/retry.js';
-import { parseUsdcToUnits, formatUnitsToUsdcFixed } from '../lib/usdcUnits.js';
+import { usdcNumberToUnits, formatUnitsToUsdcFixed } from '../lib/usdcUnits.js';
 import { env } from '../config/env.js';
 
 const TX_FAILED_TOO_EARLY = 'tx_failed_too_early';
@@ -94,9 +94,9 @@ export class RevenueSettlementService {
       return { processed: 0, settledAmount: 0n, errors: 0 };
     }
 
-    // Convert minPayoutUsdc option (a float like 5.0) to bigint contract units.
+    // Convert minPayoutUsdc (a JS number threshold) to bigint contract units at the boundary.
     const rawMinPayout = this.options.minPayoutUsdc ?? 5.0;
-    const minPayout = parseUsdcToUnits(rawMinPayout.toFixed(7));
+    const minPayout = usdcNumberToUnits(rawMinPayout);
     const maxEvents = this.options.maxEventsPerBatch ?? 1000;
 
     // Group events by developerId

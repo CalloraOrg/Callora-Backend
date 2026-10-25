@@ -28,11 +28,7 @@ jest.mock('../logger.js', () => ({
 
 import { defaultCreditsRepository } from '../repositories/creditsRepository.js';
 
-const mockCreditsRepository = defaultCreditsRepository as {
-  findByUserId: jest.Mock;
-  getOrCreateByUserId: jest.Mock;
-  updateBalance: jest.Mock;
-};
+const mockCreditsRepository = jest.mocked(defaultCreditsRepository);
 
 describe('GET /api/billing/credits', () => {
   let app: Application;

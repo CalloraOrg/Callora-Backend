@@ -14,9 +14,6 @@ import { correlationMiddleware } from '../middleware/correlation.js';
 import { rateLimitAccessLogMiddleware } from '../middleware/rateLimitAccessLog.js';
 import { createRateLimitHealthRouter, type RateLimitHealthDeps } from './rate-limit/health.js';
 
-export interface RateLimitRouterDeps extends Partial<RateLimitHealthDeps> {
-  // Extends the health deps; no additional fields needed at this level.
-}
 
 /**
  * Creates the /api/rate-limit router group.
@@ -29,7 +26,7 @@ export interface RateLimitRouterDeps extends Partial<RateLimitHealthDeps> {
  *
  * @param deps - Dependencies forwarded to sub-routers.
  */
-export function createRateLimitRouter(deps: RateLimitRouterDeps = {}): Router {
+export function createRateLimitRouter(deps: Partial<RateLimitHealthDeps> = {}): Router {
   const router = Router();
 
   // Correlation-id middleware — sets X-Correlation-Id response header

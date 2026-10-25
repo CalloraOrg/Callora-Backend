@@ -52,6 +52,37 @@ STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID=CB...MAINNET_SETTLEMENT
 - Remote Stellar endpoints must use `https://`; plain `http://` is only allowed for localhost-based development endpoints.
 - Stellar endpoint URLs must not include embedded credentials, query strings, or URL fragments.
 
+## StrKey Validation
+
+Contract ids, account keys and secret keys are validated at startup using Stellar StrKey checksum rules. Invalid values fail the environment parse before the server listens.
+
+| Variable class | Expected format | Example prefix |
+| --- | --- | --- |
+| Contract id | StrKey contract (C...) | `CBJZLUKQX.XDYQ` |
+| Public account key | StrKey Ed25519 public key (G...) | `GAAAA...` |
+| Secret key | StrKey Ed25519 secret seed (S...) | `SAAAA...` |
+
+Validated variables:
+- `STELLAR_TESTNET_VAULT_CONTRACT_ID`, `STELLAR_TESTNET_SETTLEMENT_CONTRACT_ID`, `STELLAR_MAINNET_VAULT_CONTRACT_ID`, `STELLAR_MAINNET_SETTLEMENT_CONTRACT_ID`, and the `SOROBAN_TESTNET_VAULT_CONTRACT_ID` / `SOROBAN_TESTNET_SETTLEMENT_CONTRACT_ID` aliases
+- `SOROBAN_BILLING_CONTRACT_ID` (Contract id)
+- `SOROBAN_BILLING_SOURCE_ACCOUNT` (G-address)
+- `SOROBAN_BILLING_BACKEND_SECRET_KEY` (S-seed)
+
+Validation error messages never include the value of a secret key; they report the variable name and the failing rule only.
+
+## Soroban Billing Network Settings
+
+`SOROBAN_BILLING_NETWORK_PASSPHRASE` and `SOROBAN_BILLING_RPC_URL` are optional.
+
+- When unset, they are derived from the active network (`config.stellar.networkPassphrase` and the active network RPC URL).
+- When set, the passphrase must match the active network or validation fails with a clear mismatch message.
+- The billing RPC URL falls back to the active network RPC URL. The `http://localhost:8000` fallback is only available in `development` and `test`; in production an RPC URL is required.
+
+## Consistency Checks
+
+- If both `SOROBAN_BILLING_CONTRACT_ID` and the active `*_VAULT_CONTRACT_ID` are set, they must be equal. If they differ, the billing id is treated as an explicit override and a warning is logged once at startup.
+- When `SOROBAN_BILLING_SOURCE_ACCOUNT` and `SOROBAN_BILLING_BACKEND_SECRET_KEY` are both set, the public key derived from the secret must equal the source account.
+- Production with the testnet passphrase requires an explicit `ALLOW_TESTNET_IN_PRODUCTION=true`. The demo deployment sets it deliberately.
 ## Network Match Rules for Deposit Preparation
 
 The deposit flow enforces the active network at the controller layer. `DepositController` compares the `Network` field of the incoming `Post /api/vault/deposit/prepare` body against `config.stellar.network and rejects any mismatch before touching Horizon or Soroban.

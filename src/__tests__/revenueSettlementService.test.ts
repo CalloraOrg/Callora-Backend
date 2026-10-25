@@ -9,7 +9,6 @@ import type { ApiRegistry, UsageEvent, UsageStore } from '../types/gateway.js';
 
 // 1 USDC = 10_000_000 contract units
 const USDC = (n: number): bigint => BigInt(Math.round(n * 10_000_000));
-
 jest.mock('../events/event.emitter.js', () => ({
   calloraEvents: {
     emit: jest.fn(),
@@ -17,6 +16,24 @@ jest.mock('../events/event.emitter.js', () => ({
 }));
 
 const mockedEmit = jest.mocked(calloraEvents.emit);
+
+function recordUsageEvent(
+  store: UsageStore,
+  event: { id: string; requestId: string; apiId: string; amountUsdc: bigint },
+): void {
+  const recorded: UsageEvent = {
+    id: event.id,
+    requestId: event.requestId,
+    apiKeyId: `key-${event.id}`,
+    apiId: event.apiId,
+    endpointId: `${event.apiId}-endpoint`,
+    userId: 'consumer-1',
+    amountUsdc: event.amountUsdc,
+    timestamp: new Date().toISOString(),
+    statusCode: 200,
+  };
+  store.record(recorded);
+}
 
 describe('RevenueSettlementService', () => {
   let usageStore: InMemoryUsageStore;
@@ -350,11 +367,11 @@ describe('RevenueSettlementService', () => {
 
     await service.runBatch();
 
-    const emitCall = mockedEmit.mock.calls[0];
-    expect(emitCall[0]).toBe('settlement_completed');
-    const payload = emitCall[2] as Record<string, unknown>;
-    expect(typeof payload.amount).toBe('string');
-    expect(payload.amount).toBe('7.0000001');
+    expect(mockedEmit).toHaveBeenCalledWith(
+      'settlement_completed',
+      'dev_1',
+      expect.objectContaining({ amount: '7.0000001' }),
+    );
   });
 
   it('reconciles pending settlements to completed when Horizon confirms the transaction', async () => {
@@ -521,21 +538,3 @@ describe('RevenueSettlementService', () => {
     setTimeoutSpy.mockRestore();
   });
 });
-
-function recordUsageEvent(
-  usageStore: UsageStore,
-  overrides: Pick<UsageEvent, 'id' | 'requestId' | 'apiId' | 'amountUsdc'>
-): void {
-  usageStore.record({
-    id: overrides.id,
-    requestId: overrides.requestId,
-    apiKey: 'key_1',
-    apiKeyId: 'key_1',
-    apiId: overrides.apiId,
-    endpointId: 'endpoint_1',
-    userId: 'caller_1',
-    amountUsdc: overrides.amountUsdc,
-    statusCode: 200,
-    timestamp: new Date().toISOString(),
-  });
-}

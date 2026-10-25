@@ -1,7 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { isAppError, isSimulationFailedError } from '../errors/index.js';
 import { logger } from '../logger.js';
-import type { ValidationErrorDetail } from './validate.js';
 import { ValidationError } from './validate.js';
 import { buildErrorEnvelope } from './envelope.js';
 import type { ErrorEnvelope } from '../types/ResponseEnvelope.js';
@@ -9,17 +8,13 @@ import { normalizeError } from '../errors/errorEnvelopePolicy.js';
 
 const isProduction = process.env.NODE_ENV === "production";
 
-function extractValidationDetails(err: unknown): ValidationErrorDetail[] | undefined {
+function extractErrorDetails(err: unknown): unknown {
   if (err instanceof ValidationError) {
     return err.details;
   }
 
-  if (
-    !!err &&
-    typeof err === "object" &&
-    Array.isArray((err as { details?: unknown[] }).details)
-  ) {
-    return (err as { details: ValidationErrorDetail[] }).details;
+  if (typeof err === "object" && err !== null && "details" in err) {
+    return err.details;
   }
 
   return undefined;
@@ -93,7 +88,7 @@ export function errorHandler(
     statusCode,
     code: isAppError(err) ? err.code : undefined,
     message: rawMessage,
-    details: extractValidationDetails(err),
+    details: extractErrorDetails(err),
     simulationDetails,
     trusted: isAppError(err),
     development: process.env.NODE_ENV === 'development',
