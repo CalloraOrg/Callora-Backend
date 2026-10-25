@@ -28,6 +28,7 @@ import disputesRouter from "./billing/disputes.js";
 import refundRouter from "./billing/refund.js";
 import { createFeeAbstractionRouter } from "./billing/feeAbstraction.js";
 import { createBillingForecastRouter } from "./billing/forecast.js";
+import { createBillingPortalRouter } from "./billing/portal.js";
 import { etagMiddleware } from "../middleware/etag.js";
 import { createTimeoutMiddleware } from "../middleware/timeout.js";
 import { config } from "../config/index.js";
@@ -41,6 +42,8 @@ import {
 import type { UsageEventsRepository } from "../repositories/usageEventsRepository.js";
 
 const router = Router();
+
+router.use("/portal", createBillingPortalRouter());
 
 router.use(billingAccessLogMiddleware);
 router.use(createTimeoutMiddleware({ timeoutMs: config.billingTimeoutMs }));

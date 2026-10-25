@@ -331,5 +331,66 @@ describe('perDevConcurrency middleware', () => {
       const results = await Promise.all(reqs);
       results.forEach((r) => expect(r.status).toBe(200));
     });
+    test('tryAcquire returns null and rejects when at limit', async () => {
+      const semaphore = new DeveloperSemaphore(1, 1000);
+      const rel1 = semaphore.tryAcquire('dev-test');
+      expect(rel1).not.toBeNull();
+      const rel2 = semaphore.tryAcquire('dev-test');
+      expect(rel2).toBeNull();
+      rel1!();
+      expect(semaphore.getActiveSlotCount('dev-test')).toBe(0);
+      // Double release should be idempotent
+      rel1!();
+      expect(semaphore.getActiveSlotCount('dev-test')).toBe(0);
+    });
+
+    test('finish followed by close does not double release', async () => {
+      const semaphore = new DeveloperSemaphore(1, 1000);
+      const mw = createPerDevConcurrencyMiddleware({ semaphore, maxConcurrent: 1 });
+      const req = {
+        headers: { 'x-user-id': 'dev-idempotent' },
+      } as any;
+      const listeners: Record<string, Function[]> = {};
+      const res = {
+        status: () => res,
+        json: () => res,
+        once: (event: string, fn: Function) => {
+          listeners[event] = listeners[event] || [];
+          listeners[event].push(fn);
+        },
+        removeListener: (event: string, fn: Function) => {
+          if (listeners[event]) {
+            listeners[event] = listeners[event].filter(l => l !== fn);
+          }
+        },
+      } as any;
+
+      let nextCalled = false;
+      await mw(req, res, () => { nextCalled = true; });
+      expect(nextCalled).toBe(true);
+      expect(semaphore.getActiveSlotCount('dev-idempotent')).toBe(1);
+
+      // Emit finish
+      listeners['finish']?.forEach(fn => fn());
+      expect(semaphore.getActiveSlotCount('dev-idempotent')).toBe(0);
+
+      // Emit close
+      listeners['close']?.forEach(fn => fn());
+      expect(semaphore.getActiveSlotCount('dev-idempotent')).toBe(0);
+    });
+
+    test('releases slot when handler throws or error occurs', async () => {
+      const semaphore = new DeveloperSemaphore(1, 1000);
+      const app = express();
+      const mw = createPerDevConcurrencyMiddleware({ semaphore, maxConcurrent: 1 });
+      app.get('/throw', mw, () => {
+        throw new Error('Handler error');
+      });
+      app.use(errorHandler);
+
+      const res = await request(app).get('/throw').set('x-user-id', 'dev-throw');
+      expect(res.status).toBe(500);
+      expect(semaphore.getActiveSlotCount('dev-throw')).toBe(0);
+    });
   });
 });

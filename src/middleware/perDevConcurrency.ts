@@ -64,9 +64,9 @@ export function createPerDevConcurrencyMiddleware(
       return;
     }
 
-    const active = semaphore.getCurrentActiveSlotCounts()[userId] ?? 0;
+    const release = semaphore.tryAcquire(userId);
 
-    if (active >= maxConcurrent) {
+    if (!release) {
       const requestId: string = (req as Request & { id?: string }).id ?? 'unknown';
       res.status(429).json({
         code: 'TOO_MANY_REQUESTS',
@@ -76,36 +76,21 @@ export function createPerDevConcurrencyMiddleware(
       return;
     }
 
-    // Acquire a slot — this is non-blocking when capacity is available
-    // because withSlot uses FIFO queuing only when all slots are occupied.
-    semaphore
-      .withSlot(userId, () => {
-        return new Promise<void>((resolve) => {
-          const releaseSlot = () => {
-            res.removeListener('finish', releaseSlot);
-            res.removeListener('close', releaseSlot);
-            resolve();
-          };
+    let released = false;
+    const releaseOnce = () => {
+      if (released) return;
+      released = true;
+      res.removeListener('finish', releaseOnce);
+      res.removeListener('close', releaseOnce);
+      release();
+    };
 
-          // Guard against synchronous response handlers where `res.end()` has
-          // already been called by the time this microtask runs and the
-          // 'finish' event has already been emitted. Also handles the case
-          // where the connection was already destroyed.
-          if (res.writableEnded || res.destroyed) {
-            resolve();
-            return;
-          }
-
-          res.once('finish', releaseSlot);
-          res.once('close', releaseSlot);
-        });
-      })
-      .catch((err) => {
-        // Slot-acquisition failures should not crash the process (the response
-        // is already in flight), but they MUST be logged for operators to
-        // detect semaphore leaks.
-        logger.error('[perDevConcurrency] slot error:', err);
-      });
+    if (res.writableEnded || res.destroyed) {
+      releaseOnce();
+    } else {
+      res.once('finish', releaseOnce);
+      res.once('close', releaseOnce);
+    }
 
     next();
   });

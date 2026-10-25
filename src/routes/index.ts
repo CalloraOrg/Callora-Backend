@@ -4,7 +4,6 @@ import { readFileSync } from "fs";
 import path from "path";
 
 import billingRouter from "./billing.js";
-import { createBillingPortalRouter } from "./billing/portal.js";
 import healthRouter from "./health.js";
 import refundsRouter from "./refunds.js";
 import { createApisRouter, type ApisRouterDeps } from "./apis.js";
@@ -267,14 +266,8 @@ export function createApiRouter(deps: ApiRouterDeps = {}): Router {
 
   if (billingMiddlewares.length > 0) {
     router.use("/billing", ...billingMiddlewares, billingRouter);
-    router.use(
-      "/billing/portal",
-      ...billingMiddlewares,
-      createBillingPortalRouter(),
-    );
   } else {
     router.use("/billing", billingRouter);
-    router.use("/billing/portal", createBillingPortalRouter());
   }
 
 

@@ -65,6 +65,29 @@ export class DeveloperSemaphore {
     return this.maxConcurrencyPerDeveloper;
   }
 
+  /**
+   * Synchronously attempts to acquire a slot for a developer.
+   * If capacity is available and no requests are queued, increments activeCount
+   * and returns an idempotent release function.
+   * If capacity is not available or a queue exists, returns null.
+   */
+  tryAcquire(developerId: string): (() => void) | null {
+    const state = this.getOrCreateState(developerId);
+    if (state.queue.length === 0 && state.activeCount < this.maxConcurrencyPerDeveloper) {
+      this.clearEvictionTimer(state);
+      state.activeCount += 1;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        this.releaseSlot(developerId);
+      };
+    }
+    return null;
+  }
+
   private acquireSlot(developerId: string): Promise<() => void> {
     const state = this.getOrCreateState(developerId);
 

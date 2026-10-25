@@ -6,7 +6,7 @@ The unit of measurement is **concurrency** (requests in flight right now), not r
 
 ## How counts are collected
 
-`createPerDevConcurrencyMiddleware` ([src/middleware/perDevConcurrency.ts](../src/middleware/perDevConcurrency.ts)) runs on the billing route before any billing logic.  For each authenticated request it acquires a slot on the shared `DeveloperSemaphore` and holds it until the response emits `finish` or `close`.  Client disconnects therefore release the slot just like normal completions.
+`createPerDevConcurrencyMiddleware` ([src/middleware/perDevConcurrency.ts](../src/middleware/perDevConcurrency.ts)) runs on the billing route before any billing logic.  For each authenticated request it attempts to synchronously acquire a slot on the shared `DeveloperSemaphore` via `tryAcquire(userId)`. If available, the slot is held until the response emits `finish` or `close` (released exactly once).  Client disconnects therefore release the slot just like normal completions.
 
 Requests are bucketed by the **developer's user ID**, so counts map directly to the developer shown in the admin dashboard.
 
