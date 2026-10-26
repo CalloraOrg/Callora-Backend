@@ -46,6 +46,13 @@ export { parseUsdcToContractUnits, formatContractUnitsToUsdc };
 const DEFAULT_RETRY_DELAYS_MS = [150, 500, 1_000];
 
 /**
+ * Postgres sequence backing `usage_events.onchain_request_id` (migration
+ * 0033). Values start at 1 and are never 0 — 0 is the vault contract's
+ * documented "no idempotency" sentinel and must never be sent on-chain.
+ */
+const ONCHAIN_REQUEST_ID_SQL = "nextval('usage_events_onchain_request_id_seq')";
+
+/**
  * Per-user FIFO concurrency gate for billing deductions.
  *
  * The Soroban balance pre-check and the subsequent deduction are not atomic
@@ -112,10 +119,21 @@ export interface SorobanDeductResult {
 
 export interface SorobanClient {
   getBalance(userId: string): Promise<SorobanBalanceResult>;
+  /**
+   * Charge `amount` (contract units) against the user's vault.
+   *
+   * `onchainRequestId` is the row-scoped `usage_events.onchain_request_id`
+   * (a u64 allocated from a Postgres sequence when the Phase 1 row was
+   * inserted). It is passed on every retry of the same row so the vault's
+   * replay protection guarantees the deduction can only ever land once.
+   * Clients derive a deterministic non-zero u64 from `idempotencyKey` when it
+   * is omitted; zero (the vault's "no idempotency" sentinel) is never sent.
+   */
   deductBalance(
     userId: string,
     amount: string,
     idempotencyKey?: string,
+    onchainRequestId?: string,
   ): Promise<SorobanDeductResult>;
   deductBalanceBatch?(
     userId: string,
@@ -277,6 +295,11 @@ interface Phase1Result {
   usageEventId?: string;
   stellarTxHash?: string;
   deductionStatus?: DeductionStatus;
+  /**
+   * u64 allocated from the Postgres sequence for this row. Reused for every
+   * retry of the same row so the vault's replay protection holds.
+   */
+  onchainRequestId?: string;
 }
 
 interface ExistingUsageEventRow {
@@ -289,6 +312,7 @@ interface ExistingUsageEventRow {
 interface BulkInsertedUsageEvent {
   requestId: string;
   usageEventId: string;
+  onchainRequestId?: string;
 }
 
 interface BulkPhase1Result {
@@ -325,15 +349,17 @@ async function runPhase1(
 
     if (status === "voided") {
       // Re-arm the row inside the Phase 1 lock!
-      await client.query(
+      const rearmResult = await client.query<{ onchain_request_id: string | null }>(
         `UPDATE usage_events
             SET deduction_status = 'pending',
                 stellar_tx_hash = NULL,
                 resolved_at = NULL,
                 resolution_reason = NULL,
                 amount_usdc = $1,
+                onchain_request_id = COALESCE(onchain_request_id, ${ONCHAIN_REQUEST_ID_SQL}),
                 created_at = NOW()
-          WHERE id = $2`,
+          WHERE id = $2
+      RETURNING onchain_request_id`,
         [request.amountUsdc, row.id],
       );
       await client.query("COMMIT");
@@ -341,6 +367,8 @@ async function runPhase1(
         alreadyExists: false,
         usageEventId: row.id.toString(),
         deductionStatus: "pending",
+        onchainRequestId:
+          rearmResult.rows[0]?.onchain_request_id?.toString() ?? undefined,
       };
     }
 
@@ -362,11 +390,17 @@ async function runPhase1(
 
   // INSERT the event with stellar_tx_hash = NULL and deduction_status = 'pending'.
   // Committed immediately so the record survives even if Phase 2 fails.
-  const insertResult = await client.query<{ id: string }>(
+  // onchain_request_id is allocated from the Postgres sequence in the same
+  // statement, so the row is born with the u64 that every retry of this row
+  // will re-send to the vault.
+  const insertResult = await client.query<{
+    id: string;
+    onchain_request_id: string | number;
+  }>(
     `INSERT INTO usage_events
-       (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at, deduction_status)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'pending')
-     RETURNING id`,
+       (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, onchain_request_id, created_at, deduction_status)
+     VALUES ($1, $2, $3, $4, $5, $6, ${ONCHAIN_REQUEST_ID_SQL}, NOW(), 'pending')
+     RETURNING id, onchain_request_id`,
     [
       request.userId,
       request.apiId,
@@ -383,6 +417,7 @@ async function runPhase1(
     alreadyExists: false,
     usageEventId: insertResult.rows[0].id.toString(),
     deductionStatus: "pending",
+    onchainRequestId: insertResult.rows[0]?.onchain_request_id?.toString(),
   };
 }
 
@@ -478,15 +513,17 @@ async function runPhase1Bulk(
         (existingRow.stellar_tx_hash ? "confirmed" : "pending");
 
       if (status === "voided") {
-        await client.query(
+        const rearmResult = await client.query<{ onchain_request_id: string | null }>(
           `UPDATE usage_events
               SET deduction_status = 'pending',
                   stellar_tx_hash = NULL,
                   resolved_at = NULL,
                   resolution_reason = NULL,
                   amount_usdc = $1,
+                  onchain_request_id = COALESCE(onchain_request_id, ${ONCHAIN_REQUEST_ID_SQL}),
                   created_at = NOW()
-            WHERE id = $2`,
+            WHERE id = $2
+        RETURNING onchain_request_id`,
           [request.amountUsdc, existingRow.id],
         );
         existingRow.stellar_tx_hash = null;
@@ -494,6 +531,8 @@ async function runPhase1Bulk(
         inserted.push({
           requestId: request.requestId,
           usageEventId: existingRow.id,
+          onchainRequestId:
+            rearmResult.rows[0]?.onchain_request_id?.toString() ?? undefined,
         });
       }
       continue;
@@ -504,11 +543,14 @@ async function runPhase1Bulk(
       throw new Error(`Missing amount for request ${request.requestId}`);
     }
 
-    const insertResult = await client.query<{ id: string }>(
+    const insertResult = await client.query<{
+      id: string;
+      onchain_request_id: string | number;
+    }>(
       `INSERT INTO usage_events
-         (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, created_at, deduction_status)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'pending')
-       RETURNING id`,
+         (user_id, api_id, endpoint_id, api_key_id, amount_usdc, request_id, onchain_request_id, created_at, deduction_status)
+       VALUES ($1, $2, $3, $4, $5, $6, ${ONCHAIN_REQUEST_ID_SQL}, NOW(), 'pending')
+       RETURNING id, onchain_request_id`,
       [
         request.userId,
         request.apiId,
@@ -530,6 +572,7 @@ async function runPhase1Bulk(
     inserted.push({
       requestId: request.requestId,
       usageEventId: insertedRow.id,
+      onchainRequestId: insertResult.rows[0]?.onchain_request_id?.toString(),
     });
   }
 
@@ -748,6 +791,7 @@ export class BillingService {
         request.userId,
         amountInContractUnits.toString(),
         request.idempotencyKey ?? request.requestId,
+        phase1.onchainRequestId,
       );
     } catch (error) {
       const category = getSorobanErrorCategory(error);
@@ -997,6 +1041,9 @@ export class BillingService {
         })),
         totalInsertedAmount.toString(),
         bulkKey,
+        // The aggregate deduction reuses the first inserted row's u64 so
+        // retries of the batch cannot double charge.
+        phase1.inserted[0]?.onchainRequestId,
       );
     } catch (error) {
       const category = getSorobanErrorCategory(error);
@@ -1138,6 +1185,7 @@ export class BillingService {
     userId: string,
     amount: string,
     idempotencyKey?: string,
+    onchainRequestId?: string,
   ): Promise<SorobanDeductResult> {
     let lastError: unknown;
 
@@ -1147,6 +1195,7 @@ export class BillingService {
           userId,
           amount,
           idempotencyKey,
+          onchainRequestId,
         );
       } catch (error) {
         lastError = error;
@@ -1181,9 +1230,15 @@ export class BillingService {
     items: Array<{ amount: string; requestId: string }>,
     aggregateAmount: string,
     idempotencyKey: string,
+    onchainRequestId?: string,
   ): Promise<SorobanDeductResult> {
     if (!this.sorobanClient.deductBalanceBatch) {
-      return this.executeDeductWithRetry(userId, aggregateAmount, idempotencyKey);
+      return this.executeDeductWithRetry(
+        userId,
+        aggregateAmount,
+        idempotencyKey,
+        onchainRequestId,
+      );
     }
 
     let lastError: unknown;

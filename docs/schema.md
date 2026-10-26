@@ -140,6 +140,7 @@ Tracks every proxied API invocation and Soroban billing deduction. Hash-partitio
 | `developer_id`    | VARCHAR(255)   | NOT NULL DEFAULT ''                      | API owner and hash partition key                                                         |
 | `amount_usdc`     | NUMERIC(30, 0) | NOT NULL, `CHECK (amount_usdc > 0)`      | **Integer contract units** ("stroops", 7 decimals). 1 USDC = 10,000,000 contract units.  |
 | `request_id`      | VARCHAR(255)   | Part of UNIQUE `(request_id, developer_id)` | Idempotency correlation ID                                                            |
+| `onchain_request_id` | BIGINT      | NULLABLE, nextval(`usage_events_onchain_request_id_seq`) at insert | u64 sent as the vault `deduct` `request_id`. Allocated from a Postgres sequence when the Phase 1 row is inserted and reused for every retry of that row, so the vault's replay protection makes double charging impossible. Never 0 (the vault's "no idempotency" sentinel). See `docs/sdk/billing-deduct.md`. |
 | `stellar_tx_hash` | VARCHAR(64)    | NULLABLE                                 | On-chain Soroban deduction transaction hash                                              |
 | `created_at`      | TIMESTAMP      | NOT NULL DEFAULT NOW()                   | Creation timestamp                                                                       |
 

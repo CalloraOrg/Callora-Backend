@@ -67,7 +67,6 @@ import {
 interface AppDependencies extends SorobanBillingDependencies {
   usageEventsRepository?: UsageEventsRepository;
   healthCheckConfig?: HealthCheckConfig;
-  vaultRepository?: VaultRepository;
   vaultReader?: VaultStateReader;
   apiRepository?: ApiRepository;
   developerRepository?: DeveloperRepository;
@@ -97,11 +96,16 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   });
   // Set database pool in locals for billing routes
   app.locals.dbPool = pool;
-  app.locals.billingService = createSorobanBillingService(pool, dependencies);
   const usageEventsRepository =
     dependencies?.usageEventsRepository ?? new InMemoryUsageEventsRepository();
-  const vaultRepository =
+  // Resolve the vault repository first: the billing service uses it to map a
+  // user to their vault contract id when building vault deduct calls.
+  const vaultRepository: VaultRepository =
     dependencies?.vaultRepository ?? new InMemoryVaultRepository();
+  app.locals.billingService = createSorobanBillingService(pool, {
+    ...dependencies,
+    vaultRepository,
+  });
   const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
   const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
   const { reportExporterService, scheduledExportsService } = createAppExports(usageEventsRepository);
