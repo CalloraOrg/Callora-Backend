@@ -1,54 +1,20 @@
-import {
-  extractSimulationDetails,
-  type SimulationDetails,
-} from '../lib/simulationDiagnostics.js';
-import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
-import { env } from '../config/env.js';
-import { getOrCreateRequestId } from '../utils/asyncContext.js';
+import type { SimulationDetails } from '../lib/simulationDiagnostics.js';
 
-export interface SorobanBillingInvocationArg {
-  type: 'string' | 'i128';
-  value: string;
-}
-
-export interface SorobanBillingInvocation {
-  contractId: string;
-  function: string;
-  args: SorobanBillingInvocationArg[];
-}
-
-export interface SorobanBillingRpcRequest {
-  jsonrpc: '2.0';
-  id: string;
-  method: 'simulateTransaction';
-  params: {
-    invocation: SorobanBillingInvocation;
-    sourceAccount?: string;
-    networkPassphrase?: string;
-  };
-}
-
-export interface SorobanBillingClientOptions {
-  rpcUrl: string;
-  contractId: string;
-  sourceAccount?: string;
-  networkPassphrase?: string;
-  requestTimeoutMs?: number;
-  fetchImpl?: typeof fetch;
-  requestIdFactory?: () => string;
-  balanceFunctionName?: string;
-  deductFunctionName?: string;
-}
-
-export interface SorobanBalanceResponse {
-  balance: string;
-}
-
-export interface SorobanDeductResponse {
-  txHash: string;
-}
-
-const DEFAULT_TIMEOUT_MS = 5_000;
+/**
+ * Shared Soroban billing error types.
+ *
+ * The simulate-only JSON-RPC client that used to live here posted a made-up
+ * `simulateTransaction` payload the real Soroban RPC does not accept, never
+ * submitted anything, and invented a transaction hash from a simulation
+ * response. It was removed in favour of `SorobanVaultBillingClient`
+ * (src/services/sorobanVaultBillingClient.ts), which builds, signs, submits
+ * and confirms real `vault.deduct(caller, amount, request_id)` transactions
+ * with `@stellar/stellar-sdk`.
+ *
+ * `SorobanRpcError` and its stable categories are shared by the new client,
+ * the billing routes and `BillingService`, so they stay here to avoid churn in
+ * existing imports.
+ */
 
 /**
  * Stable error categories for Soroban RPC failures.
@@ -80,7 +46,12 @@ export class SorobanRpcError extends Error {
   }
 }
 
-function classifyError(message: string): SorobanRpcErrorCategory {
+/**
+ * Best-effort category guess from a plain error message. Used when a failure
+ * did not come back as a typed `SorobanRpcError` (transport failures, raw
+ * RPC/assemble errors).
+ */
+export function classifySorobanRpcError(message: string): SorobanRpcErrorCategory {
   const lower = message.toLowerCase();
   if (lower.includes('insufficient balance') || lower.includes('insufficient funds')) {
     return 'INSUFFICIENT_BALANCE';
@@ -94,7 +65,11 @@ function classifyError(message: string): SorobanRpcErrorCategory {
   return 'NETWORK_ERROR';
 }
 
-function extractErrorMessage(error: unknown, depth = 0): string | undefined {
+/**
+ * Pull a human-readable message out of an unknown thrown value without
+ * dumping the whole object (which may carry XDR, keys or addresses).
+ */
+export function extractErrorMessage(error: unknown, depth = 0): string | undefined {
   if (depth > 4 || error === null || error === undefined) {
     return undefined;
   }
@@ -135,236 +110,9 @@ function extractErrorMessage(error: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
-function normalizeSorobanBillingError(
+export function normalizeSorobanBillingError(
   error: unknown,
   fallback = 'Unknown Soroban error'
 ): string {
   return extractErrorMessage(error)?.replace(/\s+/g, ' ').trim() ?? fallback;
-}
-
-export function buildSorobanBalanceInvocation(
-  contractId: string,
-  userId: string,
-  functionName = 'balance'
-): SorobanBillingInvocation {
-  return {
-    contractId,
-    function: functionName,
-    args: [{ type: 'string', value: userId }],
-  };
-}
-
-export function buildSorobanDeductInvocation(
-  contractId: string,
-  userId: string,
-  amount: string,
-  idempotencyKey?: string,
-  functionName = 'deduct'
-): SorobanBillingInvocation {
-  const args: SorobanBillingInvocationArg[] = [
-    { type: 'string', value: userId },
-    { type: 'i128', value: amount },
-  ];
-
-  if (idempotencyKey) {
-    args.push({ type: 'string', value: idempotencyKey });
-  }
-
-  return {
-    contractId,
-    function: functionName,
-    args,
-  };
-}
-
-function extractRpcResult(payload: Record<string, unknown>): Record<string, unknown> | undefined {
-  const result = payload.result;
-  return result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
-}
-
-function extractFirstValue(result: Record<string, unknown>): unknown {
-  if (Array.isArray(result.results) && result.results.length > 0) {
-    const first = result.results[0];
-    if (first && typeof first === 'object') {
-      const record = first as Record<string, unknown>;
-      if ('xdr' in record) return record.xdr;
-      if ('value' in record) return record.value;
-      if ('result' in record) return record.result;
-    }
-  }
-
-  if ('value' in result) return result.value;
-  if ('result' in result) return result.result;
-  if ('balance' in result) return result.balance;
-  return undefined;
-}
-
-function normalizeBalanceValue(value: unknown): string {
-  if (typeof value === 'string' && value.trim() !== '') {
-    return value.trim();
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return String(Math.trunc(value));
-  }
-
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    for (const key of ['balance', 'i128', 'u128', 'value']) {
-      const candidate = record[key];
-      if (typeof candidate === 'string' && candidate.trim() !== '') {
-        return candidate.trim();
-      }
-      if (typeof candidate === 'number' && Number.isFinite(candidate)) {
-        return String(Math.trunc(candidate));
-      }
-    }
-  }
-
-  throw new Error('Missing balance value in Soroban RPC response');
-}
-
-function normalizeTxHash(result: Record<string, unknown>): string {
-  const candidate = result.transactionHash ?? result.txHash ?? result.hash;
-  if (typeof candidate === 'string' && candidate.trim() !== '') {
-    return candidate;
-  }
-  throw new Error('Missing transaction hash in Soroban RPC response');
-}
-
-function extractSimulationError(payload: Record<string, unknown>): unknown {
-  if (payload.error) {
-    return payload.error;
-  }
-
-  const result = extractRpcResult(payload);
-  if (!result) {
-    return undefined;
-  }
-
-  if (result.error) {
-    return result.error;
-  }
-
-  if (Array.isArray(result.results) && result.results.length > 0) {
-    const first = result.results[0];
-    if (first && typeof first === 'object' && 'error' in (first as Record<string, unknown>)) {
-      return (first as Record<string, unknown>).error;
-    }
-  }
-
-  return undefined;
-}
-
-export class SorobanRpcBillingClient {
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(private readonly options: SorobanBillingClientOptions) {
-    this.fetchImpl = options.fetchImpl ?? (env.SOROBAN_CHAOS ? withSorobanLatencyWrapper(fetch) : fetch);
-  }
-
-  async getBalance(userId: string): Promise<SorobanBalanceResponse> {
-    const result = await this.invoke(
-      buildSorobanBalanceInvocation(
-        this.options.contractId,
-        userId,
-        this.options.balanceFunctionName ?? 'balance'
-      )
-    );
-
-    return {
-      balance: normalizeBalanceValue(extractFirstValue(result)),
-    };
-  }
-
-  async deductBalance(
-    userId: string,
-    amount: string,
-    idempotencyKey?: string
-  ): Promise<SorobanDeductResponse> {
-    const result = await this.invoke(
-      buildSorobanDeductInvocation(
-        this.options.contractId,
-        userId,
-        amount,
-        idempotencyKey,
-        this.options.deductFunctionName ?? 'deduct'
-      )
-    );
-
-    return {
-      txHash: normalizeTxHash(result),
-    };
-  }
-
-  private async invoke(invocation: SorobanBillingInvocation): Promise<Record<string, unknown>> {
-    const requestId = this.options.requestIdFactory?.() ??
-      getOrCreateRequestId(() => `billing-${Date.now()}`);
-    const requestBody: SorobanBillingRpcRequest = {
-      jsonrpc: '2.0',
-      id: requestId,
-      method: 'simulateTransaction',
-      params: {
-        invocation,
-        sourceAccount: this.options.sourceAccount,
-        networkPassphrase: this.options.networkPassphrase,
-      },
-    };
-
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      this.options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS
-    );
-
-    try {
-      const response = await this.fetchImpl(this.options.rpcUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-request-id': requestId,
-        },
-        body: JSON.stringify(requestBody),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const message = `Soroban RPC request failed: HTTP ${response.status}`;
-        throw new SorobanRpcError(message, 'NETWORK_ERROR');
-      }
-
-      const payload = await response.json() as Record<string, unknown>;
-      const simulationError = extractSimulationError(payload);
-      if (simulationError) {
-        const message = normalizeSorobanBillingError(simulationError, 'Simulation failed');
-        throw new SorobanRpcError(
-          message,
-          classifyError(message),
-          extractSimulationDetails(payload)
-        );
-      }
-
-      const result = extractRpcResult(payload);
-      if (!result) {
-        throw new SorobanRpcError('Missing result in Soroban RPC response', 'NETWORK_ERROR');
-      }
-
-      return result;
-    } catch (error) {
-      // Re-throw SorobanRpcError as-is so the category is preserved
-      if (error instanceof SorobanRpcError) {
-        throw error;
-      }
-      const message = normalizeSorobanBillingError(error, 'Soroban RPC request failed');
-      throw new SorobanRpcError(message, classifyError(message));
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-}
-
-export function createSorobanRpcBillingClient(
-  options: SorobanBillingClientOptions
-): SorobanRpcBillingClient {
-  return new SorobanRpcBillingClient(options);
 }

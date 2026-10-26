@@ -158,3 +158,38 @@ This event can trigger downstream webhook deliveries if the developer has subscr
 | `FEE_BUMPER_SECRET_KEY` | **Yes** | Stellar secret key (`S...`) for the platform fee account |
 | `STELLAR_BASE_FEE` | No (default `100`) | Base fee per operation in stroops |
 | `STELLAR_NETWORK` | No (default `testnet`) | Active network: `testnet` or `mainnet` |
+
+---
+
+## Soroban billing (vault deduct) configuration
+
+Fee abstraction covers classic Stellar fee bumps; the billing deduction itself
+runs on Soroban through `SorobanVaultBillingClient`, which builds, signs,
+submits and confirms real `vault.deduct(caller, amount, request_id)`
+transactions. These keys are required for that flow:
+
+| Variable | Required | Description |
+|---|---|---|
+| `SOROBAN_BILLING_BACKEND_SECRET_KEY` | **Yes** | Stellar secret (`S...`) of the vault's `authorized_caller`; signs every deduct. When unset, the billing service logs a config warning and stays disabled (no partial client). |
+| `SOROBAN_BILLING_SOURCE_ACCOUNT` | **Yes** (validated) | Public key derived from the secret above; must also equal the vault's `authorized_caller`. |
+| `SOROBAN_BILLING_CONTRACT_ID` | **Yes** (required in production) | Default vault contract id; per-user vaults from `VaultRepository` take precedence. |
+| `SOROBAN_BILLING_RPC_URL` | Recommended | Soroban RPC endpoint (falls back to `SOROBAN_RPC_URL`, then `http://localhost:8000` outside production). |
+| `SOROBAN_BILLING_NETWORK_PASSPHRASE` | Recommended | Must match the active `STELLAR_NETWORK`. |
+| `SOROBAN_BILLING_RPC_TIMEOUT_MS` | No (default `5000`) | Total RPC + polling budget for one deduct call; polling always finishes within `SOROBAN_BILLING_RPC_TIMEOUT_MS × attempts`. |
+| `SOROBAN_BILLING_BALANCE_FN` / `SOROBAN_BILLING_DEDUCT_FN` | No (defaults `balance` / `deduct`) | Vault entrypoints. |
+
+Deployed testnet values (from `Callora-Contracts` `docs/DEPLOYMENTS.md`):
+
+```bash
+SOROBAN_BILLING_RPC_URL=https://soroban-testnet.stellar.org
+SOROBAN_BILLING_CONTRACT_ID=CBJZLUKQBWDMZPKNJAVONZ7GCCWADSETRXWOPN5Z3XWAUNI4F2R7XDYQ
+SOROBAN_BILLING_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
+SOROBAN_BILLING_SOURCE_ACCOUNT=GDXDZNSTNORCX4373EGGYS4Q3U3XVZMBSIMMRHG5S5GCCF7JHC7QZWAZ
+SOROBAN_BILLING_BACKEND_SECRET_KEY=<secret deriving the account above>
+```
+
+The testnet vault is initialised with `authorized_caller =
+GDXDZNSTNORCX4373EGGYS4Q3U3XVZMBSIMMRHG5S5GCCF7JHC7QZWAZ` and
+`max_deduct = 1000000000`. The on-chain `request_id` is the row-scoped
+`usage_events.onchain_request_id` (Postgres sequence, never 0) — see
+`docs/sdk/billing-deduct.md` for the idempotency contract.
