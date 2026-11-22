@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import { DeliveryConflictError, InMemoryDurableDeliveryStore, enqueueDurableDelivery } from './durableDelivery.js'
 
 const makeInput = (n: number, overrides: Record<string, unknown> = {}) => ({

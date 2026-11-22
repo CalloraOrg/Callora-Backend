@@ -105,6 +105,12 @@ This section is generated from `docs/error-codes.yaml`. Run `npm run error-codes
 | `EXPORT_SCHEDULE_NOT_FOUND` | Export schedules |
 | `MISSING_AUTH_FIELDS` | Auth |
 | `AUTH_NOT_IMPLEMENTED` | Auth |
+| `INVALID_WALLET_ADDRESS` | Auth |
+| `INVALID_WALLET_SIGNATURE` | Auth |
+| `INVALID_WALLET_NONCE` | Auth |
+| `EXPIRED_WALLET_NONCE` | Auth |
+| `REUSED_WALLET_NONCE` | Auth |
+| `TAMPERED_WALLET_MESSAGE` | Auth |
 | `COMPONENT_NOT_CONFIGURED` | Health / dependency probes |
 | `INVALID_ENTRY_ID` | Audit, logs and quotas |
 | `AUDIT_ENTRY_NOT_FOUND` | Audit, logs and quotas |

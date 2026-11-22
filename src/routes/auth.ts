@@ -53,6 +53,7 @@ import { Router } from 'express';
 import { AuthController } from '../controllers/authController.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { bodyValidator } from '../middleware/validate.js';
+import { walletLoginSchema } from '../validators/auth.js';
 import { z } from 'zod';
 
 /**
@@ -91,6 +92,16 @@ export interface CreateAuthRouterOptions {
  */
 export function createAuthRouter({ authController }: CreateAuthRouterOptions): Router {
   const router = Router();
+
+  // ─── GET /api/auth/wallet/nonce ───────────────────────────────────────────
+  router.get('/wallet/nonce', (req, res, next) => authController.getWalletNonce(req, res, next));
+
+  // ─── POST /api/auth/wallet ────────────────────────────────────────────────
+  router.post(
+    '/wallet',
+    bodyValidator(walletLoginSchema),
+    (req, res, next) => authController.walletLogin(req, res, next),
+  );
 
   // ─── POST /api/auth/refresh ───────────────────────────────────────────────
   // Exchange a valid refresh token for a new short-lived access token.
