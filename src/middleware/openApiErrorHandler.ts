@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { ValidationErrorDetail } from './validate.js';
 import { buildErrorEnvelope } from './envelope.js';
 import { publicCodeForStatus } from '../errors/errorEnvelopePolicy.js';
+import { isAppError } from '../errors/index.js';
 
 export interface OpenApiError extends Error {
   status?: number;
@@ -77,6 +78,13 @@ export function openApiErrorHandler(
   res: Response,
   next: NextFunction,
 ): void {
+  // Application errors already carry a public code and validation details.
+  // Let the main error handler build their envelope instead of flattening them
+  // to a status-derived code here.
+  if (isAppError(err)) {
+    return next(err);
+  }
+
   const status = typeof err.status === 'number' ? err.status : err.statusCode;
   if (!status) {
     return next(err);

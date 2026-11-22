@@ -7,6 +7,23 @@ import { requestIdMiddleware } from '../middleware/requestId.js';
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { Api, Developer } from '../db/schema.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+const originalJwtSecret = process.env.JWT_SECRET;
+
+beforeAll(() => {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+});
+
+afterAll(() => {
+  if (originalJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = originalJwtSecret;
+  }
+});
+
+const bearer = (userId: string): string => `Bearer ${signTestToken({ userId })}`;
 
 const developerProfile: Developer = {
   id: 11,
@@ -121,7 +138,7 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app)
       .post('/api/apis/101/keys')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({
         scopes: ['read'],
         rateLimitPerMinute: 120,
@@ -145,7 +162,7 @@ describe('API key lifecycle routes', () => {
 
     const listResponse = await request(app)
       .get('/api/apis/101/keys')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(listResponse.status).toBe(200);
     expect(listResponse.body.keys).toHaveLength(1);
@@ -162,7 +179,7 @@ describe('API key lifecycle routes', () => {
 
   it('lists keys with masked values and revoked status', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['read', 'write'],
@@ -176,7 +193,7 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app)
       .get('/api/apis/101/keys')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(response.status).toBe(200);
     expect(response.body.keys).toEqual([
@@ -192,7 +209,7 @@ describe('API key lifecycle routes', () => {
 
   it('revokes an API key and revoked keys are no longer verifiable', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],
@@ -201,13 +218,13 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app)
       .delete(`/api/keys/${created.id}`)
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(response.status).toBe(204);
 
     const [record] = apiKeyRepository.list({ userId: 'dev-1', apiId: '101' });
     expect(record.revoked).toBe(true);
-    expect(apiKeyRepository.verify(created.key)).toBeNull();
+    await expect(apiKeyRepository.verify(created.key)).resolves.toBeNull();
   });
 
   it('returns 403 when attempting to create or list keys for an API the developer does not own', async () => {
@@ -215,18 +232,18 @@ describe('API key lifecycle routes', () => {
 
     const createResponse = await request(app)
       .post('/api/apis/202/keys')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({});
 
     expect(createResponse.status).toBe(403);
-    expect(createResponse.body.code).toBe('API_ACCESS_FORBIDDEN');
+    expect(createResponse.body.error.code).toBe('API_ACCESS_FORBIDDEN');
 
     const listResponse = await request(app)
       .get('/api/apis/202/keys')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(listResponse.status).toBe(403);
-    expect(listResponse.body.code).toBe('API_ACCESS_FORBIDDEN');
+    expect(listResponse.body.error.code).toBe('API_ACCESS_FORBIDDEN');
   });
 
   it('returns 404 when revoking a missing key', async () => {
@@ -234,10 +251,10 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app)
       .delete('/api/keys/missing-key')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(response.status).toBe(404);
-    expect(response.body.code).toBe('API_KEY_NOT_FOUND');
+    expect(response.body.error.code).toBe('API_KEY_NOT_FOUND');
   });
 
   it('returns 400 validation details for invalid create payloads', async () => {
@@ -245,15 +262,15 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app)
       .post('/api/apis/101/keys')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({
         scopes: [''],
         rateLimitPerMinute: 0,
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.code).toBe('VALIDATION_ERROR');
-    expect(response.body.details).toEqual(expect.arrayContaining([
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    expect(response.body.error.details).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'body.scopes[0]' }),
       expect.objectContaining({ field: 'body.rateLimitPerMinute' }),
     ]));
@@ -264,7 +281,7 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app).get('/api/apis/101/keys');
     expect(response.status).toBe(401);
-    expect(response.body.code).toBe('UNAUTHORIZED');
+    expect(response.body.error.code).toBe('UNAUTHORIZED');
   });
 
   it('adds revoked key to in-memory revocation list', async () => {
@@ -274,7 +291,7 @@ describe('API key lifecycle routes', () => {
     resetTokenRevocationService();
     const tokenRevocation = getTokenRevocationService({ defaultTtlMs: 60000 });
     
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],
@@ -289,7 +306,7 @@ describe('API key lifecycle routes', () => {
 
     const response = await request(app)
       .delete(`/api/keys/${created.id}`)
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(response.status).toBe(204);
     // Key should now be in revocation list

@@ -22,6 +22,20 @@ import { InMemoryApiRepository } from '../repositories/apiRepository.js';
 import { createApisRouter } from './apis.js';
 import { ListingsCache } from '../lib/listingsCache.js';
 
+const originalAllowMissingOrigin = process.env.CORS_ALLOW_MISSING_ORIGIN;
+
+beforeAll(() => {
+  process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
+});
+
+afterAll(() => {
+  if (originalAllowMissingOrigin === undefined) {
+    delete process.env.CORS_ALLOW_MISSING_ORIGIN;
+  } else {
+    process.env.CORS_ALLOW_MISSING_ORIGIN = originalAllowMissingOrigin;
+  }
+});
+
 // ── Shared test data ─────────────────────────────────────────────────────────
 
 const ACTIVE_API = {
@@ -61,6 +75,8 @@ function buildApp(overrideApis = [ACTIVE_API], endpointsMap = ENDPOINTS_MAP) {
   const cache = new ListingsCache({ ttlMs: 30_000 });
 
   const app = express();
+  // Assertions cover the router's strong ETags, not Express's default weak ETag.
+  app.disable('etag');
   app.use(
     '/api/apis',
     createApisRouter({ apiRepository: repo, cache }),
@@ -257,8 +273,8 @@ describe('GET /api/apis — ETag caching', () => {
     app.use('/api/apis', createApisRouter({ apiRepository: repo, cache }));
     app.use(errorHandler);
 
-    const page1 = await request(app).get('/api/apis?limit=1&offset=0');
-    const page2 = await request(app).get('/api/apis?limit=1&offset=1');
+    const page1 = await request(app).get('/api/apis?limit=1');
+    const page2 = await request(app).get('/api/apis?limit=2');
 
     expect(page1.status).toBe(200);
     expect(page2.status).toBe(200);

@@ -14,6 +14,30 @@ import type { Api, Developer } from '../db/schema.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { AuditService } from '../services/auditService.js';
 import { createApisRouter } from './apis.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+const originalJwtSecret = process.env.JWT_SECRET;
+const originalAllowMissingOrigin = process.env.CORS_ALLOW_MISSING_ORIGIN;
+
+beforeAll(() => {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+  process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
+});
+
+afterAll(() => {
+  if (originalJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = originalJwtSecret;
+  }
+  if (originalAllowMissingOrigin === undefined) {
+    delete process.env.CORS_ALLOW_MISSING_ORIGIN;
+  } else {
+    process.env.CORS_ALLOW_MISSING_ORIGIN = originalAllowMissingOrigin;
+  }
+});
+
+const bearer = (userId: string): string => `Bearer ${signTestToken({ userId })}`;
 
 const developerProfile: Developer = {
   id: 11,
@@ -55,7 +79,7 @@ describe('/api/apis audit logging (issue #777)', () => {
     const record = jest.fn().mockResolvedValue(undefined);
     const app = buildApp({ record });
 
-    const res = await request(app).post('/api/apis').set('x-user-id', 'dev-1').send(createBody);
+    const res = await request(app).post('/api/apis').set('Authorization', bearer('dev-1')).send(createBody);
 
     expect(res.status).toBe(201);
     expect(record).toHaveBeenCalledTimes(1);
@@ -89,7 +113,7 @@ describe('/api/apis audit logging (issue #777)', () => {
 
     const res = await request(app)
       .post('/api/apis/101/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ endpoints: [{ path: '/new', method: 'POST', price_per_call_usdc: '0.02' }] });
 
     expect(res.status).toBe(201);
@@ -102,7 +126,7 @@ describe('/api/apis audit logging (issue #777)', () => {
     const record = jest.fn().mockRejectedValue(new Error('db down'));
     const app = buildApp({ record });
 
-    const res = await request(app).post('/api/apis').set('x-user-id', 'dev-1').send(createBody);
+    const res = await request(app).post('/api/apis').set('Authorization', bearer('dev-1')).send(createBody);
 
     expect(res.status).toBe(201);
     expect(record).toHaveBeenCalledTimes(1);
