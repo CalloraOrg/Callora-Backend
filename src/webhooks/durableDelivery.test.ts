@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import { DeliveryConflictError, InMemoryDurableDeliveryStore, enqueueDurableDelivery } from './durableDelivery.js'
 
 const input = (overrides: Record<string, unknown> = {}) => ({ tenantId: 'tenant-a', eventKey: 'event-1', destination: 'https://example.test/hook', body: JSON.stringify({ event: 'invoice.paid', amount: 100 }), ...overrides })

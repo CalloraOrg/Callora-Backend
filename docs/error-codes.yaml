@@ -400,6 +400,30 @@ error_codes:
     section: Auth
     description: The authentication method is not yet implemented
 
+  - code: INVALID_WALLET_ADDRESS
+    section: Auth
+    description: The Stellar wallet address is missing, malformed, or not a valid ed25519 public key
+
+  - code: INVALID_WALLET_SIGNATURE
+    section: Auth
+    description: The wallet signature verification failed or signature is invalid
+
+  - code: INVALID_WALLET_NONCE
+    section: Auth
+    description: The wallet authentication nonce is missing or not recognized
+
+  - code: EXPIRED_WALLET_NONCE
+    section: Auth
+    description: The wallet authentication nonce has expired
+
+  - code: REUSED_WALLET_NONCE
+    section: Auth
+    description: The wallet authentication nonce has already been consumed
+
+  - code: TAMPERED_WALLET_MESSAGE
+    section: Auth
+    description: The signed message does not match the server-issued challenge
+
   - code: COMPONENT_NOT_CONFIGURED
     section: Health / dependency probes
     description: A required system component is not configured
