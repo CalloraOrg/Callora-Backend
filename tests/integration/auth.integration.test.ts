@@ -1,7 +1,7 @@
 /**
  * End-to-end integration test for /api/auth endpoints (issue #929 b#064)
  *
- * This test suite uses testcontainers to spin up a real PostgreSQL database
+ * This test suite uses pg-mem with the real refresh-token repository
  * and exercises the auth endpoints (wallet login, token refresh, revoke)
  * against the real Express application with actual middleware (auth, validation,
  * idempotency, timeout, error handling).
@@ -12,7 +12,7 @@
  * - Correlation IDs are verified to ensure request tracing works end-to-end
  *
  * Isolation strategy:
- * - Fresh database container per test suite (beforeAll/afterAll)
+ * - Fresh in-memory database per test suite (beforeAll/afterAll)
  * - Data reset between tests via explicit cleanup
  * - Tests are independent and can run in any order
  */
@@ -20,8 +20,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import request from 'supertest';
 import express from 'express';
-import { Pool } from 'pg';
-import { GenericContainer, Wait } from 'testcontainers';
+import type { Pool } from 'pg';
+import { readFileSync } from 'node:fs';
+import { createAuthTestDb } from '../helpers/authDb.js';
 
 // Auth infrastructure
 import { createAuthRoutes } from '../../src/routes/authRoutes.js';
@@ -40,11 +41,7 @@ const TEST_JWT_SECRET = 'test-secret-key-for-auth-e2e-integration-tests';
 const TEST_JWT_ACCESS_EXPIRY = '15m' as const;
 const TEST_JWT_REFRESH_EXPIRY = '7d' as const;
 
-interface TestContext {
-  container: any;
-  pool: Pool;
-  connectionString: string;
-}
+type TestContext = Awaited<ReturnType<typeof createAuthTestDb>>;
 
 interface TestUser {
   userId: string;
@@ -54,76 +51,11 @@ interface TestUser {
 
 let testContext: TestContext | null = null;
 
-/**
- * Helper: Execute SQL statements against the test database.
- * Splits on semicolons to run multi-statement SQL.
- */
-async function runSql(pool: Pool, sql: string): Promise<void> {
-  const statements = sql
-    .split(';')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
-  for (const statement of statements) {
-    try {
-      await pool.query(statement);
-    } catch (error: any) {
-      // Ignore "already exists" errors for CREATE statements
-      if (error?.message?.includes('already exists')) {
-        continue;
-      }
-      throw error;
-    }
-  }
-}
-
-/**
- * Helper: Create all required database tables in the test PostgreSQL container.
- */
+/** Load the production refresh-token schema, including UUID IDs and families. */
 async function createTestSchema(pool: Pool): Promise<void> {
-  // Users table (simplified version of what the app expects)
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      wallet_address TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-    )
-  `);
-
-  // Idempotency store for the idempotency middleware
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS idempotency_store (
-      idempotency_key VARCHAR(255) PRIMARY KEY,
-      request_hash VARCHAR(64) NOT NULL,
-      status VARCHAR(50) NOT NULL,
-      response_status INTEGER,
-      response_body TEXT,
-      expires_at TIMESTAMP NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  // Refresh tokens table (matching the production schema)
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS refresh_tokens (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      token_hash VARCHAR(64) NOT NULL UNIQUE,
-      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      last_used_at TIMESTAMP WITH TIME ZONE,
-      is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
-      family_id UUID NOT NULL
-    )
-  `);
-
-  // Indexes for refresh_tokens performance
-  await runSql(pool, `
-    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)
-  `);
-  await runSql(pool, `
-    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash)
-  `);
+  for (const migration of ['add_refresh_tokens.sql', 'add_refresh_token_family.sql']) {
+    await pool.query(readFileSync(`migrations/${migration}`, 'utf8'));
+  }
 }
 
 /**
@@ -143,40 +75,14 @@ async function createTestUser(pool: Pool, walletAddress: string): Promise<string
 // Test Suite
 // ============================================================================
 
-describe('Auth Integration Tests (End-to-End with Real PostgreSQL)', () => {
+describe('Auth Integration Tests (End-to-End with pg-mem)', () => {
   let app: express.Express;
   let testUser: TestUser;
 
-  /**
-   * Setup: Start PostgreSQL container, run migrations, seed test data
-   */
+  const originalJwtSecret = process.env.JWT_SECRET;
+
   beforeAll(async () => {
-    const container = new GenericContainer('postgres:16-alpine')
-      .withEnvironment({
-        POSTGRES_DB: 'callora_auth_test',
-        POSTGRES_USER: 'testuser',
-        POSTGRES_PASSWORD: 'testpassword',
-      })
-      .withExposedPorts(5432)
-      .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/));
-
-    const startedContainer = await container.start();
-    const host = startedContainer.getHost();
-    const port = startedContainer.getMappedPort(5432);
-
-    const pool = new Pool({
-      host,
-      port,
-      database: 'callora_auth_test',
-      user: 'testuser',
-      password: 'testpassword',
-    });
-
-    testContext = {
-      container: startedContainer,
-      pool,
-      connectionString: `postgresql://testuser:testpassword@${host}:${port}/callora_auth_test`,
-    };
+    testContext = await createAuthTestDb();
 
     // Create schema
     await createTestSchema(testContext.pool);
@@ -191,20 +97,23 @@ describe('Auth Integration Tests (End-to-End with Real PostgreSQL)', () => {
 
     // Set environment for auth middleware
     process.env.JWT_SECRET = TEST_JWT_SECRET;
-
-    // Build the Express app with auth routes
-    app = buildAuthApp(testContext.pool);
-  }, 60000); // Allow 60s for container startup
+  });
 
   /**
-   * Cleanup: Stop container and close connections
+   * Cleanup: Close connections and restore the middleware secret
    */
   afterAll(async () => {
     if (testContext) {
-      await testContext.pool.end();
-      await testContext.container.stop();
+      await testContext.end();
     }
-    delete process.env.JWT_SECRET;
+    if (originalJwtSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = originalJwtSecret;
+  });
+
+  beforeEach(() => {
+    // Each app has a fresh login throttle so validation cases do not consume
+    // another test's rate-limit bucket.
+    app = buildAuthApp(testContext!.pool);
   });
 
   /**
@@ -213,6 +122,7 @@ describe('Auth Integration Tests (End-to-End with Real PostgreSQL)', () => {
   afterEach(async () => {
     if (testContext) {
       await testContext.pool.query('DELETE FROM refresh_tokens', []);
+      await testContext.pool.query('DELETE FROM idempotency_store', []);
     }
   });
 
@@ -285,7 +195,9 @@ describe('Auth Integration Tests (End-to-End with Real PostgreSQL)', () => {
 
       // Request reaches the controller (which returns not-implemented)
       // but should NOT be rejected by the idempotency middleware itself
-      expect([400, 401, 200]).toContain(response.status);
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('UNAUTHORIZED');
+      expect(response.body.error.message).toBe('Wallet login not fully implemented');
     });
 
     it('should reject an invalid Idempotency-Key header (too long)', async () => {
@@ -533,11 +445,11 @@ describe('Auth Integration Tests (End-to-End with Real PostgreSQL)', () => {
         await repository.createRefreshToken(stored);
       }
 
-      // Revoke all via x-user-id header (bypasses JWT)
+      // Authenticate through the real JWT middleware.
       const response = await request(app)
         .post('/auth/revoke-all')
         .set('Content-Type', 'application/json')
-        .set('x-user-id', testUser.dbUserId);
+        .set('Authorization', `Bearer ${refreshTokenService.createTokenPair(testUser.dbUserId).accessToken}`);
 
       expect(response.status).toBe(200);
     });
@@ -572,13 +484,13 @@ describe('Auth Integration Tests (End-to-End with Real PostgreSQL)', () => {
 
       const response = await request(app)
         .get('/auth/tokens')
-        .set('x-user-id', testUser.dbUserId);
+        .set('Authorization', `Bearer ${refreshTokenService.createTokenPair(testUser.dbUserId).accessToken}`);
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('data');
       expect(response.body.data).toHaveProperty('activeRefreshTokens');
       expect(response.body.data).toHaveProperty('maxAllowedTokens');
-      expect(response.body.data.activeRefreshTokens).toBeGreaterThanOrEqual(1);
+      expect(response.body.data.activeRefreshTokens).toBe(1);
     });
   });
 
@@ -621,6 +533,8 @@ describe('Auth Integration Tests (End-to-End with Real PostgreSQL)', () => {
  */
 function buildAuthApp(pool: Pool): express.Express {
   const app = express();
+
+  app.locals.dbPool = pool;
 
   // Global middleware (same order as production app.ts)
   app.use(requestIdMiddleware);
