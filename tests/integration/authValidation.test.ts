@@ -246,7 +246,11 @@ describe('bodyValidator middleware — auth schemas', () => {
       const details = res.body.error?.details ?? [];
       const tokenField = details.find((d: any) => d.field?.includes('refreshToken'));
       expect(tokenField).toBeDefined();
-      expect(tokenField.message).toMatch(/required/i);
+      expect(tokenField).toEqual({
+        field: 'body.refreshToken',
+        code: 'INVALID_TYPE',
+        message: 'Invalid input: expected string, received undefined',
+      });
     });
 
     it('returns 400 when refreshToken is an empty string', async () => {
@@ -281,7 +285,11 @@ describe('POST /auth/wallet — Zod validation (integration)', () => {
     const details = res.body.error?.details ?? [];
     const walletErr = details.find((d: any) => d.field?.includes('walletAddress'));
     expect(walletErr).toBeDefined();
-    expect(walletErr.message).toBe('Wallet address is required');
+    expect(walletErr).toEqual({
+      field: 'body.walletAddress',
+      code: 'INVALID_TYPE',
+      message: 'Invalid input: expected string, received undefined',
+    });
   });
 
   it('returns 400 when signature is missing', async () => {
@@ -344,7 +352,11 @@ describe('POST /auth/refresh — Zod validation (integration)', () => {
     const details: any[] = res.body.error?.details ?? [];
     const tokenErr = details.find((d) => d.field?.includes('refreshToken'));
     expect(tokenErr).toBeDefined();
-    expect(tokenErr.message).toBe('Refresh token is required');
+    expect(tokenErr).toEqual({
+      field: 'body.refreshToken',
+      code: 'INVALID_TYPE',
+      message: 'Invalid input: expected string, received undefined',
+    });
   });
 
   it('returns 400 when refreshToken is an empty string', async () => {
@@ -381,8 +393,11 @@ describe('POST /auth/revoke — Zod validation (integration)', () => {
   it('passes validation with a non-empty refreshToken', async () => {
     const res = await request(app)
       .post('/auth/revoke')
-      .send({ refreshToken: 'some-token-value' });
-    // Controller returns 200 (token not found — still success to prevent enumeration)
+      .send({ refreshToken: new RefreshTokenService({
+        jwtSecret: TEST_JWT_SECRET, accessTokenExpiry: '15m', refreshTokenExpiry: '7d',
+      })
+        .createTokenPair('validation-user').refreshToken });
+    // A valid signed token reaches the repository (token not found — still success to prevent enumeration)
     expect(res.status).toBe(200);
   });
 });

@@ -31,7 +31,8 @@ export class RefreshTokenService {
    * Generate a cryptographically secure random token ID
    */
   private generateTokenId(): string {
-    return crypto.randomBytes(32).toString('hex');
+    // The ID is persisted in refresh_tokens.id, a UUID column.
+    return crypto.randomUUID();
   }
 
   /**
