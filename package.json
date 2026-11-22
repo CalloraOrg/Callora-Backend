@@ -13,7 +13,6 @@
     "db:studio": "drizzle-kit studio",
     "seed:dev": "tsx scripts/seed-dev.ts",
     "typecheck": "tsc --noEmit",
-    "validate:issue-9": "node scripts/validate-issue-9.mjs",
     "validate:openapi": "node scripts/validate-openapi-contract.mjs",
     "db:check-migrations": "npx tsx scripts/check-migrations.ts",
     "error-codes:generate": "node scripts/generate-error-codes.mjs",

@@ -1,7 +1,7 @@
 // Test script to verify database schema and migration
 import { sql } from 'drizzle-orm';
-import { logger } from './logger.js';
-import { db, schema, initializeDb } from './db/index.js';
+import { logger } from '../src/logger.js';
+import { db, schema, initializeDb } from '../src/db/index.js';
 
 /**
  * Reliable reset for SQLite state
