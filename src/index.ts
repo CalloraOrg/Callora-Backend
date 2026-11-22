@@ -6,8 +6,11 @@ import { initializeDb, closeDb } from "./db/index.js";
 import { closePgPool, pool } from "./db.js";
 import { closeDbPool } from "./config/health.js";
 import { disconnectPrisma } from "./lib/prisma.js";
-import { createGracefulShutdownHandler } from "./lifecycle/shutdown.js";
+import { createGracefulShutdownHandler, type DrainableSubsystem } from "./lifecycle/shutdown.js";
+import { startRevenueLedgerIndexerJob } from "./lifecycle/jobs.js";
 import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
+import { createRevenueLedgerIndexerJob } from "./services/revenueLedgerIndexer.js";
+import { PgUsageEventsRepository } from "./repositories/usageEventsRepository.pg.js";
 
 // Re-exported for backward compatibility with existing consumers/tests.
 export {
@@ -45,12 +48,24 @@ async function startServer(): Promise<void> {
       socket.once("close", () => activeConnections.delete(socket));
     });
 
-    // Create and start the idempotency sweeper job (if enabled)
-    let sweeperJob = null;
-    const subsystems = [];
+    // Create and start the background jobs (if enabled)
+    const shutdownSubsystems: DrainableSubsystem[] = [];
+
+    const revenueLedgerIndexer = startRevenueLedgerIndexerJob({
+      settings: config.revenueLedgerIndexer,
+      demoMode: config.demoMode,
+      createJob: () =>
+        createRevenueLedgerIndexerJob(new PgUsageEventsRepository(), {
+          intervalMs: config.revenueLedgerIndexer.intervalMs,
+          batchSize: config.revenueLedgerIndexer.batchSize,
+        }),
+    });
+    if (revenueLedgerIndexer) {
+      shutdownSubsystems.push(revenueLedgerIndexer.subsystem);
+    }
 
     if (config.idempotencySweeper.enabled) {
-      sweeperJob = createIdempotencySweeperJob(pool, {
+      const sweeperJob = createIdempotencySweeperJob(pool, {
         intervalMs: config.idempotencySweeper.intervalMs,
         batchSize: config.idempotencySweeper.batchSize,
         timeBudgetMs: config.idempotencySweeper.timeBudgetMs,
@@ -61,12 +76,12 @@ async function startServer(): Promise<void> {
       );
 
       // Register sweeper as a graceful subsystem
-      subsystems.push({
+      shutdownSubsystems.push({
         name: "idempotency-sweeper",
         beginShutdown: () => {
-          sweeperJob!.beginShutdown();
+          sweeperJob.beginShutdown();
         },
-        awaitIdle: () => sweeperJob!.awaitIdle(),
+        awaitIdle: () => sweeperJob.awaitIdle(),
       });
     }
 
@@ -77,7 +92,7 @@ async function startServer(): Promise<void> {
         await closeDb();
         await Promise.allSettled([closePgPool(), disconnectPrisma(), closeDbPool()]);
       },
-      subsystems,
+      subsystems: shutdownSubsystems,
       timeoutMs: 30_000,
     });
 

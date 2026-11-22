@@ -75,6 +75,10 @@ export const integrationEnvironmentFields = {
     .int()
     .positive()
     .default(86_400_000),
+  REVENUE_LEDGER_INDEXER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v !== "false")),
   REVENUE_LEDGER_INDEXER_INTERVAL_MS: z.coerce
     .number()
     .int()
