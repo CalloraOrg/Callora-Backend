@@ -125,6 +125,7 @@ client ---> | request-id, envelope, helmet, CORS, rate limit, OpenAPI request va
 - `src/routes`, `src/controllers`, `src/services`, `src/repositories` - layered request handling.
 - `src/db` (Drizzle + SQLite catalog/developer layer) and `src/db.ts` (PostgreSQL pool for metering/billing).
 - `src/workers` - background jobs (anomaly detection, SLO alerts, invoices, reconciliation).
+- Settlement status sync: set `SETTLEMENT_STATUS_SYNC_ENABLED=true` (non-demo mode) to run the periodic Soroban settlement status-sync loop from `src/index.ts`, guarded by the PostgreSQL advisory lock key `callora:settlement-status-sync` so only one instance reconciles pending settlements at a time.
 - `migrations/` - SQL migrations (checked by `scripts/check-migrations.ts` in CI); `prisma/` - Prisma schema for invoices.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the route map and design notes.
