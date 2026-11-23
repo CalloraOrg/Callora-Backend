@@ -51,6 +51,7 @@ import { createAuthRouter } from './auth.js';
 import { AuthController } from '../controllers/authController.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -295,18 +296,23 @@ describe('POST /api/auth/refresh — input validation', () => {
     const res = await request(app).post('/api/auth/refresh').send({});
     expect(res.status).toBe(400);
     // Standard error envelope
-    expect(res.body).toHaveProperty('code');
-    expect(res.body).toHaveProperty('message');
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
+    expect(res.body.error).toHaveProperty('message');
     expect(res.body).toHaveProperty('requestId');
+    expect(res.body).toHaveProperty('timestamp');
     // Zod validation details array
-    expect(Array.isArray(res.body.details)).toBe(true);
-    expect(res.body.details.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
   });
 
   it('returns 400 when refreshToken is an empty string', async () => {
     const res = await request(app).post('/api/auth/refresh').send({ refreshToken: '' });
     expect(res.status).toBe(400);
-    expect(Array.isArray(res.body.details)).toBe(true);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
   });
 
   it('does not invoke the controller when validation fails', async () => {
@@ -335,9 +341,13 @@ describe('POST /api/auth/revoke — input validation', () => {
   it('returns 400 when refreshToken is missing', async () => {
     const res = await request(app).post('/api/auth/revoke').send({});
     expect(res.status).toBe(400);
-    expect(res.body).toHaveProperty('code');
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
+    expect(res.body.error).toHaveProperty('message');
     expect(res.body).toHaveProperty('requestId');
-    expect(Array.isArray(res.body.details)).toBe(true);
+    expect(res.body).toHaveProperty('timestamp');
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
   });
 
   it('does not invoke the controller when validation fails', async () => {
@@ -357,6 +367,19 @@ describe('POST /api/auth/revoke — input validation', () => {
 describe('POST /api/auth/revoke-all — authentication guard', () => {
   let ctrl: jest.Mocked<AuthController>;
   let app: express.Express;
+  const prevJwtSecret = process.env.JWT_SECRET;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterAll(() => {
+    if (prevJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = prevJwtSecret;
+    }
+  });
 
   beforeEach(() => {
     ctrl = makeController();
@@ -366,8 +389,11 @@ describe('POST /api/auth/revoke-all — authentication guard', () => {
   it('returns 401 when no credentials are supplied', async () => {
     const res = await request(app).post('/api/auth/revoke-all').send({});
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty('code');
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toHaveProperty('code', 'UNAUTHORIZED');
+    expect(res.body.error).toHaveProperty('message');
     expect(res.body).toHaveProperty('requestId');
+    expect(res.body).toHaveProperty('timestamp');
   });
 
   it('does not invoke the controller without authentication', async () => {
@@ -375,10 +401,11 @@ describe('POST /api/auth/revoke-all — authentication guard', () => {
     expect(ctrl.revokeAllTokens).not.toHaveBeenCalled();
   });
 
-  it('invokes authController.revokeAllTokens when x-user-id is provided', async () => {
+  it('invokes authController.revokeAllTokens when a valid Bearer JWT is provided', async () => {
+    const token = signTestToken({ userId: 'user-123' });
     const res = await request(app)
       .post('/api/auth/revoke-all')
-      .set('x-user-id', 'user-123')
+      .set('Authorization', `Bearer ${token}`)
       .send({});
     expect(ctrl.revokeAllTokens).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(200);
@@ -388,6 +415,19 @@ describe('POST /api/auth/revoke-all — authentication guard', () => {
 describe('GET /api/auth/tokens — authentication guard', () => {
   let ctrl: jest.Mocked<AuthController>;
   let app: express.Express;
+  const prevJwtSecret = process.env.JWT_SECRET;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterAll(() => {
+    if (prevJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = prevJwtSecret;
+    }
+  });
 
   beforeEach(() => {
     ctrl = makeController();
@@ -397,8 +437,11 @@ describe('GET /api/auth/tokens — authentication guard', () => {
   it('returns 401 when no credentials are supplied', async () => {
     const res = await request(app).get('/api/auth/tokens');
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty('code');
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toHaveProperty('code', 'UNAUTHORIZED');
+    expect(res.body.error).toHaveProperty('message');
     expect(res.body).toHaveProperty('requestId');
+    expect(res.body).toHaveProperty('timestamp');
   });
 
   it('does not invoke the controller without authentication', async () => {
@@ -406,10 +449,11 @@ describe('GET /api/auth/tokens — authentication guard', () => {
     expect(ctrl.getTokenInfo).not.toHaveBeenCalled();
   });
 
-  it('invokes authController.getTokenInfo when x-user-id is provided', async () => {
+  it('invokes authController.getTokenInfo when a valid Bearer JWT is provided', async () => {
+    const token = signTestToken({ userId: 'user-123' });
     const res = await request(app)
       .get('/api/auth/tokens')
-      .set('x-user-id', 'user-123');
+      .set('Authorization', `Bearer ${token}`);
     expect(ctrl.getTokenInfo).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(200);
   });

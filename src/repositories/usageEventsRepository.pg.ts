@@ -622,13 +622,27 @@ export class PgUsageEventsRepository implements UsageEventsPgRepository {
           ue.stellar_tx_hash,
           ${statusSelect} AS deduction_status
         FROM usage_events ue
-        LEFT JOIN revenue_ledger rl
-          ON rl.usage_event_id = ue.id
-        LEFT JOIN revenue_ledger_skips rs ON rs.usage_event_id = ue.id
-        WHERE (ue.id > $1 OR (rs.usage_event_id IS NOT NULL AND rs.permanent = FALSE AND rs.next_retry_at <= NOW()))
-          AND rl.usage_event_id IS NULL
+        WHERE (
+            ue.id > $1
+            OR ue.id IN (
+              SELECT rs.usage_event_id
+              FROM revenue_ledger_skips rs
+              WHERE rs.permanent = FALSE
+                AND rs.next_retry_at <= NOW()
+            )
+          )
+          AND ue.id NOT IN (
+            SELECT rl.usage_event_id
+            FROM revenue_ledger rl
+            WHERE rl.usage_event_id IS NOT NULL
+          )
           AND ${statusPredicate}
-          AND (rs.usage_event_id IS NULL OR rs.permanent = FALSE AND rs.next_retry_at <= NOW())
+          AND ue.id NOT IN (
+            SELECT rs.usage_event_id
+            FROM revenue_ledger_skips rs
+            WHERE rs.permanent = TRUE
+               OR rs.next_retry_at > NOW()
+          )
         ORDER BY ue.id ASC
         LIMIT $2
       `,

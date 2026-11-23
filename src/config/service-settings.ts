@@ -75,6 +75,7 @@ export const serviceSettings = {
   },
 
   monthlyInvoiceJob: {
+    enabled: env.MONTHLY_INVOICE_JOB_ENABLED ?? env.NODE_ENV !== "test",
     intervalMs: env.MONTHLY_INVOICE_JOB_INTERVAL_MS,
   },
 
