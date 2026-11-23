@@ -126,8 +126,15 @@ describe('createWebhookKeysRouter — POST /rotate-key', () => {
   let notifyAdmin: jest.Mock;
 
   beforeEach(() => {
+    process.env.ADMIN_API_KEY = ADMIN_KEY;
+    process.env.JWT_SECRET = JWT_SECRET;
     store = new InMemoryWebhookKeyStore();
     notifyAdmin = jest.fn().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    delete process.env.ADMIN_API_KEY;
+    delete process.env.JWT_SECRET;
   });
 
   // -------------------------------------------------------------------------
