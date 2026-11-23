@@ -24,6 +24,7 @@
 import express from 'express';
 import request from 'supertest';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import { createWebhookKeysRouter } from './webhookKeys.js';
 import {
   InMemoryWebhookKeyStore,
@@ -469,7 +470,6 @@ describe('createWebhookKeysRouter — POST /rotate-key', () => {
 
     it('rejects a JWT without the admin role with 401', async () => {
       const app = buildApp({ store, notifyAdmin, graceWindowMs: GRACE_MS });
-      const jwt = require('jsonwebtoken') as typeof import('jsonwebtoken');
       const token = jwt.sign({ role: 'developer', sub: 'user-1' }, JWT_SECRET, {
         expiresIn: '1h',
       });
@@ -486,7 +486,6 @@ describe('createWebhookKeysRouter — POST /rotate-key', () => {
     it('accepts an admin JWT and attributes the rotation to its subject', async () => {
       process.env.JWT_SECRET = JWT_SECRET;
       const app = buildApp({ store, notifyAdmin, graceWindowMs: GRACE_MS });
-      const jwt = require('jsonwebtoken') as typeof import('jsonwebtoken');
       const token = jwt.sign({ role: 'admin', sub: 'admin-1' }, JWT_SECRET, {
         expiresIn: '1h',
       });

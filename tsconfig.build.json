@@ -8,8 +8,7 @@
     ]
   },
   "include": [
-    "src",
-    "tests/chaos/sorobanLatency.ts"
+    "src"
   ],
   "exclude": [
     "node_modules",

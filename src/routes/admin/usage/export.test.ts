@@ -6,12 +6,32 @@ import adminRouter from '../../admin.js';
 import { createAdminUsageExportRouter } from './export.js';
 import { errorHandler } from '../../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../../middleware/requestId.js';
+import {
+  adminHeaders,
+  expectErrorEnvelope,
+  expectValidationError,
+  nonAdminHeaders,
+  restoreAdminAuthEnv,
+  setupAdminAuthEnv,
+  type SavedAuthEnv,
+} from './testHelpers.js';
 
-jest.mock('../../../middleware/adminAuth', () => ({
-  adminAuth: jest.fn((_req: Request, _res: Response, next: NextFunction) => {
-    _res.locals = { ..._res.locals, adminActor: 'test-admin' };
-    next();
-  }),
+const mockQuery = jest.fn();
+const mockPool = { query: mockQuery } as unknown as Pool;
+
+jest.mock('../../../db/index.js', () => ({
+  db: {},
+  sqlite: {
+    transaction: jest.fn(() => jest.fn()),
+    prepare: jest.fn(() => ({ get: jest.fn(), run: jest.fn(), all: jest.fn() })),
+  },
+  schema: jest.requireActual('../../../db/schema.js'),
+}));
+
+jest.mock('../../../db.js', () => ({
+  pool: {
+    query: (...args: unknown[]) => mockQuery(...args),
+  },
 }));
 
 jest.mock('../../../middleware/ipAllowlist', () => ({
@@ -30,9 +50,6 @@ jest.mock('../../../logger', () => {
     },
   };
 });
-
-const mockQuery = jest.fn();
-const mockPool = { query: mockQuery } as unknown as Pool;
 
 function createTestApp(deps: { pool?: Pool; noPool?: boolean } = {}): express.Express {
   const app = express();
@@ -70,16 +87,42 @@ const MOCK_ROWS = [
 ];
 
 describe('GET /api/admin/usage/export', () => {
+  let savedAuthEnv: SavedAuthEnv;
+
+  beforeAll(() => {
+    savedAuthEnv = setupAdminAuthEnv();
+  });
+
+  afterAll(() => {
+    restoreAdminAuthEnv(savedAuthEnv);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockQuery.mockReset();
+  });
+
+  describe('authentication', () => {
+    it('returns 401 when no admin credentials are provided', async () => {
+      const res = await request(createTestApp()).get('/api/admin/usage/export');
+      expectErrorEnvelope(res, 401, 'UNAUTHORIZED');
+    });
+
+    it('returns 401 for a non-admin JWT', async () => {
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/export')
+        .set(nonAdminHeaders());
+      expectErrorEnvelope(res, 401, 'UNAUTHORIZED');
+    });
   });
 
   it('streams CSV export with correct headers', async () => {
     mockQuery.mockResolvedValueOnce(asResult(MOCK_ROWS));
     const app = createTestApp();
 
-    const res = await request(app).get('/api/admin/usage/export');
+    const res = await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders());
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/^text\/csv/);
@@ -96,7 +139,9 @@ describe('GET /api/admin/usage/export', () => {
     app.use('/api/admin', adminRouter);
     app.use(errorHandler);
 
-    const res = await request(app).get('/api/admin/usage/export');
+    const res = await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders());
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/^text\/csv/);
@@ -106,7 +151,10 @@ describe('GET /api/admin/usage/export', () => {
     mockQuery.mockResolvedValueOnce(asResult(MOCK_ROWS));
     const app = createTestApp();
 
-    const res = await request(app).get('/api/admin/usage/export').query({ format: 'json' });
+    const res = await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders())
+      .query({ format: 'json' });
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/^application\/json/);
@@ -120,7 +168,10 @@ describe('GET /api/admin/usage/export', () => {
     mockQuery.mockResolvedValueOnce(asResult(MOCK_ROWS));
     const app = createTestApp();
 
-    await request(app).get('/api/admin/usage/export').query({ developerId: 'dev-1' });
+    await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders())
+      .query({ developerId: 'dev-1' });
 
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain('developer_id');
@@ -131,7 +182,10 @@ describe('GET /api/admin/usage/export', () => {
     mockQuery.mockResolvedValueOnce(asResult(MOCK_ROWS));
     const app = createTestApp();
 
-    await request(app).get('/api/admin/usage/export').query({ apiId: 'api-1' });
+    await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders())
+      .query({ apiId: 'api-1' });
 
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toContain('api_id');
@@ -143,6 +197,7 @@ describe('GET /api/admin/usage/export', () => {
 
     await request(app)
       .get('/api/admin/usage/export')
+      .set(adminHeaders())
       .query({ from: '2026-01-01T00:00:00.000Z', to: '2026-01-31T00:00:00.000Z' });
 
     const [, params] = mockQuery.mock.calls[0];
@@ -165,7 +220,9 @@ describe('GET /api/admin/usage/export', () => {
     mockQuery.mockResolvedValueOnce(asResult(manyRows.slice(500, 501)));
 
     const app = createTestApp();
-    const res = await request(app).get('/api/admin/usage/export');
+    const res = await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders());
 
     expect(res.status).toBe(200);
     expect(mockQuery).toHaveBeenCalledTimes(2);
@@ -174,48 +231,66 @@ describe('GET /api/admin/usage/export', () => {
 
   describe('input validation', () => {
     it('returns 400 for an invalid "from" date', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/export').query({ from: 'nope' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('BAD_REQUEST');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/export')
+        .set(adminHeaders())
+        .query({ from: 'nope' });
+      expectValidationError(res, 'query.from', 'ISO-8601');
     });
 
     it('returns 400 for an invalid "to" date', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/export').query({ to: 'nope' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('BAD_REQUEST');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/export')
+        .set(adminHeaders())
+        .query({ to: 'nope' });
+      expectValidationError(res, 'query.to', 'ISO-8601');
     });
 
     it('returns 400 when from is after to', async () => {
       const res = await request(createTestApp())
         .get('/api/admin/usage/export')
+        .set(adminHeaders())
         .query({ from: '2026-03-31T00:00:00.000Z', to: '2026-03-01T00:00:00.000Z' });
-      expect(res.status).toBe(400);
-      expect(res.body.message).toBe('from must be before or equal to to');
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'from must be before or equal to to');
     });
 
     it('returns 400 for multiple developerId values', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/export?developerId=a&developerId=b');
-      expect(res.status).toBe(400);
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/export?developerId=a&developerId=b')
+        .set(adminHeaders());
+      expectValidationError(res, 'query.developerId');
     });
 
     it('returns 400 for multiple apiId values', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/export?apiId=a&apiId=b');
-      expect(res.status).toBe(400);
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/export?apiId=a&apiId=b')
+        .set(adminHeaders());
+      expectValidationError(res, 'query.apiId');
+    });
+
+    it('returns 400 for an unsupported format', async () => {
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/export')
+        .set(adminHeaders())
+        .query({ format: 'xml' });
+      expectValidationError(res, 'query.format');
     });
   });
 
   it('returns 500 when database pool is unavailable', async () => {
     const app = createTestApp({ noPool: true });
-    const res = await request(app).get('/api/admin/usage/export');
-    expect(res.status).toBe(500);
-    expect(res.body.code).toBe('INTERNAL_SERVER_ERROR');
+    const res = await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders());
+    expectErrorEnvelope(res, 500, 'INTERNAL_SERVER_ERROR');
   });
 
   it('returns 500 when query fails before headers', async () => {
     mockQuery.mockRejectedValueOnce(new Error('db down'));
     const app = createTestApp();
-    const res = await request(app).get('/api/admin/usage/export');
-    expect(res.status).toBe(500);
-    expect(res.body.code).toBe('INTERNAL_SERVER_ERROR');
+    const res = await request(app)
+      .get('/api/admin/usage/export')
+      .set(adminHeaders());
+    expectErrorEnvelope(res, 500, 'INTERNAL_SERVER_ERROR');
   });
 });

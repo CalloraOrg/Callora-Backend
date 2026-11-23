@@ -313,21 +313,28 @@ describe("InMemoryApiRepository", () => {
       assert.equal(result, null);
     });
 
-    test("ensures orphan-free deletion: endpoints are removed when API is deleted", async () => {
+    test("soft-deletes API while preserving endpoints for restore", async () => {
       const endpointsMap = new Map<number, ApiEndpointInfo[]>();
       endpointsMap.set(1, SAMPLE_ENDPOINTS);
       const repo = new InMemoryApiRepository([SAMPLE_API], endpointsMap);
 
-      // Verify endpoints exist before deletion
+      // Verify endpoints exist before soft-deletion
       const endpointsBefore = await repo.getEndpoints(1);
       assert.equal(endpointsBefore.length, 2);
 
-      // Delete the API
+      // Soft-delete the API
       await repo.delete(1);
 
-      // Verify endpoints are gone (no orphans)
+      // API is hidden from active lookups, while endpoints remain intact for restore
+      assert.equal(await repo.findById(1), null);
       const endpointsAfter = await repo.getEndpoints(1);
-      assert.deepStrictEqual(endpointsAfter, []);
+      assert.deepStrictEqual(endpointsAfter, SAMPLE_ENDPOINTS);
+
+      // Restoring the API brings it back with its endpoints intact
+      const restored = await repo.restore(1);
+      assert.ok(restored);
+      assert.equal(restored.deleted_at, null);
+      assert.deepStrictEqual(await repo.getEndpoints(1), SAMPLE_ENDPOINTS);
     });
 
     test("does not affect other APIs when one is deleted", async () => {

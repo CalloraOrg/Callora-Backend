@@ -93,7 +93,7 @@ export class ListingsCache<T = unknown> {
     const entry = this.store.get(key);
     if (!entry) return undefined;
 
-    if (Date.now() > entry.expiresAt) {
+    if (Date.now() >= entry.expiresAt) {
       // Lazy eviction — remove stale entry and report a miss.
       this.store.delete(key);
       return undefined;

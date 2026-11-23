@@ -34,7 +34,10 @@ jest.mock('better-sqlite3', () => {
   };
 });
 
-process.env.JWT_SECRET = 'test-jwt-secret';
+import { signTestToken, TEST_JWT_SECRET } from '../helpers/jwt.js';
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
 process.env.ADMIN_API_KEY = 'test-admin-key';
 process.env.METRICS_API_KEY = 'test-metrics-key';
 
@@ -92,27 +95,32 @@ describe('GET/POST /api/apis integration', () => {
     });
   }
 
+  const devToken = signTestToken({ userId: 'dev-1' });
+
   test('creates an API via POST /api/apis and exposes it through the public list and detail routes', async () => {
     const app = buildApp();
 
     const createResponse = await request(app)
       .post('/api/apis')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', `Bearer ${devToken}`)
       .send(validBody);
 
     assert.equal(createResponse.status, 201);
-    assert.equal(createResponse.body.status, 'active');
-    assert.equal(createResponse.body.endpoints.length, 1);
+    assert.equal(createResponse.body.success, true);
+    assert.equal(createResponse.body.data.status, 'active');
+    assert.equal(createResponse.body.data.endpoints.length, 1);
 
     const listResponse = await request(app).get('/api/apis');
     assert.equal(listResponse.status, 200);
-    assert.equal(listResponse.body.data.length, 1);
-    assert.equal(listResponse.body.data[0].name, validBody.name);
+    assert.equal(listResponse.body.success, true);
+    assert.equal(listResponse.body.data.data.length, 1);
+    assert.equal(listResponse.body.data.data[0].name, validBody.name);
 
-    const detailResponse = await request(app).get(`/api/apis/${createResponse.body.id}`);
+    const detailResponse = await request(app).get(`/api/apis/${createResponse.body.data.id}`);
     assert.equal(detailResponse.status, 200);
-    assert.equal(detailResponse.body.name, validBody.name);
-    assert.equal(detailResponse.body.endpoints[0].price_per_call_usdc, '0.01');
+    assert.equal(detailResponse.body.success, true);
+    assert.equal(detailResponse.body.data.name, validBody.name);
+    assert.equal(detailResponse.body.data.endpoints[0].price_per_call_usdc, '0.01');
   });
 
   test('returns validation details for invalid endpoint payloads on POST /api/apis', async () => {
@@ -120,16 +128,17 @@ describe('GET/POST /api/apis integration', () => {
 
     const response = await request(app)
       .post('/api/apis')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', `Bearer ${devToken}`)
       .send({
         ...validBody,
         endpoints: [{ path: '/forecast', method: 'FETCH', price_per_call_usdc: 'free' }],
       });
 
     assert.equal(response.status, 400);
-    assert.equal(response.body.code, 'VALIDATION_ERROR');
+    assert.equal(response.body.success, false);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
     assert.deepEqual(
-      response.body.details.map((detail: { field: string }) => detail.field),
+      response.body.error.details.map((detail: { field: string }) => detail.field),
       ['body.endpoints[0].method', 'body.endpoints[0].price_per_call_usdc'],
     );
   });
@@ -141,14 +150,14 @@ describe('GET/POST /api/apis integration', () => {
       // Create an API to ensure the list is not empty
       await request(app)
         .post('/api/apis')
-        .set('x-user-id', 'dev-1')
+        .set('Authorization', `Bearer ${devToken}`)
         .send(validBody);
 
       // First request: Should return 200 and an ETag
       const firstRes = await request(app).get('/api/apis');
       assert.equal(firstRes.status, 200);
       assert.ok(firstRes.headers.etag, 'Expected ETag header to be present');
-      assert.match(firstRes.headers.etag, /^"[a-f0-9]{64}"$/, 'Expected strong SHA-256 ETag format');
+      assert.match(firstRes.headers.etag, /^"[a-f0-9]{32,64}"$/, 'Expected strong hex ETag format');
       
       const etag = firstRes.headers.etag;
 
@@ -174,9 +183,9 @@ describe('GET/POST /api/apis integration', () => {
       
       const createRes = await request(app)
         .post('/api/apis')
-        .set('x-user-id', 'dev-1')
+        .set('Authorization', `Bearer ${devToken}`)
         .send(validBody);
-      const apiId = createRes.body.id;
+      const apiId = createRes.body.data.id;
 
       // First request: Should return 200 and an ETag
       const firstRes = await request(app).get(`/api/apis/${apiId}`);

@@ -14,9 +14,7 @@ import { correlationMiddleware } from '../middleware/correlation.js';
 import { rateLimitAccessLogMiddleware } from '../middleware/rateLimitAccessLog.js';
 import { createRateLimitHealthRouter, type RateLimitHealthDeps } from './rate-limit/health.js';
 
-export interface RateLimitRouterDeps extends Partial<RateLimitHealthDeps> {
-  // Extends the health deps; no additional fields needed at this level.
-}
+export type RateLimitRouterDeps = Partial<RateLimitHealthDeps>;
 
 /**
  * Creates the /api/rate-limit router group.

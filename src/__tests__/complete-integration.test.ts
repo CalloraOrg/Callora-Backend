@@ -13,6 +13,7 @@ import type { ApiKey, ApiRegistryEntry, ApiRegistry } from '../types/gateway.js'
 import { runClientUsageExample } from '../../examples/client-usage.js';
 import { runBillingApiIntegrationExample } from '../../examples/billing-api-integration.js';
 import { runCompleteIntegrationExample } from '../../examples/complete-integration.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -28,9 +29,9 @@ class SimpleRegistry implements ApiRegistry {
   }
 }
 
-function buildStack(overrides?: { initialCredits?: number; minPayoutUsdc?: number }) {
+function buildStack(overrides?: { initialCredits?: number; minPayoutUsdc?: string }) {
   const credits = overrides?.initialCredits ?? 100;
-  const minPayout = overrides?.minPayoutUsdc ?? 1;
+  const minPayout = overrides?.minPayoutUsdc ?? '1';
 
   const vaultRepo = new InMemoryVaultRepository();
   const billing = new MockSorobanBilling({ consumer_bob: credits });
@@ -126,7 +127,7 @@ beforeEach(async () => {
     res.json({ status: 'ok', service: 'callora-backend' });
   });
 
-  app.post('/api/vault', async (req, res) => {
+  app.post('/api/vault', asyncHandler(async (req, res) => {
     const { userId, contractId, network } = req.body;
     if (!userId || !contractId || !network) {
       res.status(400).json({ error: 'userId, contractId, and network are required' });
@@ -145,9 +146,9 @@ beforeEach(async () => {
       const message = err instanceof Error ? err.message : 'Unknown error';
       res.status(409).json({ error: message });
     }
-  });
+  }));
 
-  app.get('/api/vault/balance', async (req, res) => {
+  app.get('/api/vault/balance', asyncHandler(async (req, res) => {
     const userId = req.query.userId as string;
     const network = (req.query.network as string) ?? 'testnet';
     if (!userId) {
@@ -165,9 +166,9 @@ beforeEach(async () => {
       network: vault.network,
       lastSyncedAt: vault.lastSyncedAt?.toISOString() ?? null,
     });
-  });
+  }));
 
-  app.post('/api/vault/fund', async (req, res) => {
+  app.post('/api/vault/fund', asyncHandler(async (req, res) => {
     const { userId, network, amountStroops } = req.body;
     if (!userId || amountStroops === undefined) {
       res.status(400).json({ error: 'userId and amountStroops are required' });
@@ -185,7 +186,7 @@ beforeEach(async () => {
       balanceSnapshot: updated.balanceSnapshot.toString(),
       lastSyncedAt: updated.lastSyncedAt?.toISOString() ?? null,
     });
-  });
+  }));
 
   const gatewayRouter = createGatewayRouter({
     billing: stack.billing,
@@ -200,10 +201,10 @@ beforeEach(async () => {
     res.json({ count: stack.usageStore.getEvents().length, events: stack.usageStore.getEvents() });
   });
 
-  app.post('/api/settlement/run', async (_req, res) => {
+  app.post('/api/settlement/run', asyncHandler(async (_req, res) => {
     const result = await stack.settlement.runBatch();
     res.json(result);
-  });
+  }));
 
   gatewayServer = await new Promise<Server>((resolve) => {
     const srv = app.listen(0, () => resolve(srv));
@@ -354,7 +355,7 @@ describe('Complete Integration — Vault + Billing + Gateway + Settlement', () =
   it('settlement skips when below minimum payout threshold', async () => {
     // Only 1 event (1 credit), but threshold is 1 — meets threshold
     // Use a higher threshold to test skipping
-    stack = buildStack({ minPayoutUsdc: 100 });
+    stack = buildStack({ minPayoutUsdc: '100' });
     stack.apiRegistry.register({
       id: API_ID,
       slug: 'weather',

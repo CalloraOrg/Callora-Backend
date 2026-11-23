@@ -59,6 +59,10 @@ export const integrationEnvironmentFields = {
     .default(false),
   HORIZON_URL: z.string().url().optional(),
   HORIZON_TIMEOUT: z.coerce.number().default(2_000),
+  SETTLEMENT_STATUS_SYNC_ENABLED: z
+    .string()
+    .transform((v) => v === "true")
+    .default(false),
   SETTLEMENT_STATUS_SYNC_INTERVAL_MS: z.coerce
     .number()
     .int()
