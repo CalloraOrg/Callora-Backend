@@ -7,7 +7,7 @@ import {
   isTransientNetworkError,
   type RetryOptions,
 } from '../lib/retry.js';
-import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
+import { withSorobanLatencyWrapper } from '../lib/sorobanLatencyChaos.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
 
 export interface PayoutResult {

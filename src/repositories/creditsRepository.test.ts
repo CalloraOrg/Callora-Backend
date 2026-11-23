@@ -1,4 +1,5 @@
 jest.mock('../db/index.js', () => {
+  const Database = jest.requireActual<typeof import('better-sqlite3')>('better-sqlite3');
   let sqlite: any;
   try {
     const Database = require('better-sqlite3');

@@ -84,8 +84,9 @@ describe('GET /api/invoices cursor pagination', () => {
   });
 
   it('queries using cursor when provided', async () => {
+    const validUuid = '22222222-2222-4222-8222-222222222222';
     const cursorData = {
-      id: 'uuid-2',
+      id: validUuid,
       created_at: '2026-07-28T09:00:00.000Z'
     };
     const cursorBase64 = Buffer.from(JSON.stringify(cursorData)).toString('base64');
@@ -95,14 +96,14 @@ describe('GET /api/invoices cursor pagination', () => {
 
     expect(res.status).toBe(200);
     expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({
-      cursor: { id: 'uuid-2' } // Should pass only id to prisma cursor
+      cursor: { id: validUuid } // Should pass only id to prisma cursor
     }));
   });
 
   it('rejects invalid cursor format (not base64 json)', async () => {
     const res = await request(app).get(`/api/invoices?limit=10&cursor=invalid_base64`);
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('Invalid cursor format');
+    expect(res.body.error.message).toContain('Invalid cursor format');
     expect(findManyMock).not.toHaveBeenCalled();
   });
 
@@ -112,13 +113,13 @@ describe('GET /api/invoices cursor pagination', () => {
 
     const res = await request(app).get(`/api/invoices?cursor=${cursorBase64}`);
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('Invalid cursor format');
+    expect(res.body.error.message).toContain('Invalid cursor format');
   });
 
   it('rejects invalid limit parameter', async () => {
     const res = await request(app).get('/api/invoices?limit=500');
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('limit must be between 1 and 100');
+    expect(res.body.error.message).toContain('limit must be between 1 and 100');
   });
 
   it('handles database errors gracefully', async () => {

@@ -30,6 +30,7 @@ import countsRouter, { quotasDrainTracker } from './counts.js';
 import * as quotaService from '../../services/quotaService.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { createInFlightDrainTracker } from '../../lifecycle/shutdown.js';
+import { asyncHandler } from '../../utils/asyncHandler.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -89,10 +90,10 @@ describe('quotasDrainTracker — drain behaviour', () => {
 
     const app = express();
     app.use(tracker.middleware);
-    app.get('/test', async (_req: Request, res: Response) => {
+    app.get('/test', asyncHandler(async (_req: Request, res: Response) => {
       await requestHeld;
       res.status(200).json({ ok: true });
-    });
+    }));
 
     // Start a request but do not await it yet
     const responsePromise = request(app).get('/test');

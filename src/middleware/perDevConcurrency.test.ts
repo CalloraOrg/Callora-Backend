@@ -47,6 +47,10 @@ function buildSlowApp(maxConcurrent = 1, delayMs = 100) {
  * Use this to start a request concurrently with others; await the returned
  * promise later to get the response.
  */
+function authHeader(userId: string): string {
+  return `Bearer ${signTestToken({ userId, walletAddress: 'GDTEST1' })}`;
+}
+
 function fireRequest(
   app: express.Express,
   path: string,
@@ -55,7 +59,7 @@ function fireRequest(
   return new Promise<request.Response>((resolve, reject) => {
     request(app)
       .get(path)
-      .set('x-user-id', userId)
+      .set('Authorization', authHeader(userId))
       .end((err, res) => {
         if (err) {
           reject(err);
@@ -106,7 +110,7 @@ describe('perDevConcurrency middleware', () => {
       // Second request should be rejected
       const secondRes = await request(app)
         .get('/slow')
-        .set('x-user-id', 'dev-1');
+        .set('Authorization', authHeader('dev-1'));
 
       expect(secondRes.status).toBe(429);
       expect(secondRes.body.code).toBe('TOO_MANY_REQUESTS');
@@ -131,7 +135,7 @@ describe('perDevConcurrency middleware', () => {
       // A fourth request should be rejected
       const extraRes = await request(app)
         .get('/slow')
-        .set('x-user-id', 'dev-multi');
+        .set('Authorization', authHeader('dev-multi'));
 
       expect(extraRes.status).toBe(429);
 
@@ -154,7 +158,7 @@ describe('perDevConcurrency middleware', () => {
       await new Promise((r) => setTimeout(r, 30));
 
       // dev-a should be rejected (its slot is still occupied by the first request)
-      const resA2 = await request(app).get('/slow').set('x-user-id', 'dev-a');
+      const resA2 = await request(app).get('/slow').set('Authorization', authHeader('dev-a'));
       expect(resA2.status).toBe(429);
 
       // dev-b should succeed (different developer, independent limit)
@@ -188,7 +192,7 @@ describe('perDevConcurrency middleware', () => {
       for (let i = 0; i < 5; i++) {
         const res = await request(app)
           .get('/protected')
-          .set('x-user-id', 'dev-sync');
+          .set('Authorization', authHeader('dev-sync'));
 
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);
@@ -201,14 +205,14 @@ describe('perDevConcurrency middleware', () => {
       // First request occupies the slot
       const firstRes = await request(app)
         .get('/slow')
-        .set('x-user-id', 'dev-release');
+        .set('Authorization', authHeader('dev-release'));
 
       expect(firstRes.status).toBe(200);
 
       // After first request completes, second should succeed
       const secondRes = await request(app)
         .get('/slow')
-        .set('x-user-id', 'dev-release');
+        .set('Authorization', authHeader('dev-release'));
 
       expect(secondRes.status).toBe(200);
     });
@@ -221,7 +225,7 @@ describe('perDevConcurrency middleware', () => {
       await new Promise<void>((resolve) => {
         const req = request(app)
           .get('/slow')
-          .set('x-user-id', 'dev-disconnect');
+          .set('Authorization', authHeader('dev-disconnect'));
 
         // We don't care about the result — we explicitly abort
         req.end(() => {});
@@ -239,7 +243,7 @@ describe('perDevConcurrency middleware', () => {
       // A new request should now be able to acquire the slot
       const secondRes = await request(app)
         .get('/slow')
-        .set('x-user-id', 'dev-disconnect');
+        .set('Authorization', authHeader('dev-disconnect'));
 
       expect(secondRes.status).toBe(200);
     });
@@ -264,7 +268,7 @@ describe('perDevConcurrency middleware', () => {
       const firstReqPromise = fireRequest(app, '/slow', 'dev-format');
       await new Promise((r) => setTimeout(r, 30));
 
-      const res = await request(app).get('/slow').set('x-user-id', 'dev-format');
+      const res = await request(app).get('/slow').set('Authorization', authHeader('dev-format'));
 
       expect(res.status).toBe(429);
       expect(res.body).toHaveProperty('code', 'TOO_MANY_REQUESTS');
@@ -295,7 +299,7 @@ describe('perDevConcurrency middleware', () => {
       for (let i = 0; i < 20; i++) {
         const res = await request(app)
           .get('/protected')
-          .set('x-user-id', 'dev-rapid');
+          .set('Authorization', authHeader('dev-rapid'));
 
         expect(res.status).toBe(200);
       }
@@ -306,7 +310,7 @@ describe('perDevConcurrency middleware', () => {
 
       const res = await request(app)
         .get('/protected')
-        .set('x-user-id', 'dev-zero');
+        .set('Authorization', authHeader('dev-zero'));
 
       // With maxConcurrent=0, the check `active >= maxConcurrent` is `0 >= 0`
       // which is true, so it should 429
@@ -325,7 +329,7 @@ describe('perDevConcurrency middleware', () => {
 
       const extraRes = await request(app)
         .get('/slow')
-        .set('x-user-id', 'dev-config');
+        .set('Authorization', authHeader('dev-config'));
 
       expect(extraRes.status).toBe(429);
       const results = await Promise.all(reqs);

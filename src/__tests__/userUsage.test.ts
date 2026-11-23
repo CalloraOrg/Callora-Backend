@@ -1,8 +1,42 @@
+import express from 'express';
 import request from 'supertest';
-import { createApp } from '../app.js';
+import { createUsageRouter } from '../routes/usage.js';
+import { errorHandler } from '../middleware/errorHandler.js';
 import { InMemoryUsageEventsRepository, type UsageEvent } from '../repositories/usageEventsRepository.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+function createApp(deps: { usageEventsRepository: InMemoryUsageEventsRepository }) {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/usage', createUsageRouter(deps));
+  app.use(errorHandler);
+  return app;
+}
 
 describe('GET /api/usage', () => {
+  let previousJwtSecret: string | undefined;
+  let validAuthHeader: string;
+
+  beforeAll(() => {
+    previousJwtSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+    validAuthHeader = `Bearer ${signTestToken({ userId: 'user123' })}`;
+  });
+
+  afterAll(() => {
+    if (previousJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = previousJwtSecret;
+    }
+  });
+  const now = new Date();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const event1Date = new Date(now.getTime() - 3 * dayMs);
+  const event2Date = new Date(now.getTime() - 2 * dayMs);
+  const event3Date = new Date(now.getTime() - 1 * dayMs);
+  const event4Date = new Date(now.getTime() - 3 * dayMs + 60 * 60 * 1000);
+
   const mockEvents: UsageEvent[] = [
     {
       id: 'event1',
@@ -10,7 +44,7 @@ describe('GET /api/usage', () => {
       apiId: 'api1',
       endpoint: '/api1/endpoint1',
       userId: 'user123',
-      occurredAt: new Date('2024-01-15T10:00:00Z'),
+      occurredAt: event1Date,
       revenue: BigInt('1000000'), // $0.01 in smallest unit
     },
     {
@@ -19,7 +53,7 @@ describe('GET /api/usage', () => {
       apiId: 'api1',
       endpoint: '/api1/endpoint2',
       userId: 'user123',
-      occurredAt: new Date('2024-01-16T12:00:00Z'),
+      occurredAt: event2Date,
       revenue: BigInt('2000000'), // $0.02 in smallest unit
     },
     {
@@ -28,7 +62,7 @@ describe('GET /api/usage', () => {
       apiId: 'api2',
       endpoint: '/api2/endpoint1',
       userId: 'user123',
-      occurredAt: new Date('2024-01-17T14:00:00Z'),
+      occurredAt: event3Date,
       revenue: BigInt('1500000'), // $0.015 in smallest unit
     },
     {
@@ -37,7 +71,7 @@ describe('GET /api/usage', () => {
       apiId: 'api1',
       endpoint: '/api1/endpoint1',
       userId: 'user456', // Different user
-      occurredAt: new Date('2024-01-15T11:00:00Z'),
+      occurredAt: event4Date,
       revenue: BigInt('1000000'), // $0.01 in smallest unit
     },
   ];
@@ -55,7 +89,7 @@ describe('GET /api/usage', () => {
       .get('/api/usage')
       .expect(401);
 
-    expect(response.body.error).toBe('Unauthorized');
+    expect(response.body.error?.message ?? response.body.error).toBe('Unauthorized');
   });
 
   it('returns usage events for authenticated user with default period', async () => {
@@ -63,7 +97,7 @@ describe('GET /api/usage', () => {
     
     const response = await request(app)
       .get('/api/usage')
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
     expect(response.body).toMatchObject({
@@ -106,13 +140,13 @@ describe('GET /api/usage', () => {
     const response = await request(app)
       .get('/api/usage')
       .query({
-        from: '2024-01-16T00:00:00Z',
-        to: '2024-01-16T23:59:59Z',
+        from: new Date(event2Date.getTime() - 60 * 1000).toISOString(),
+        to: new Date(event2Date.getTime() + 60 * 1000).toISOString(),
       })
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
-    // Should only return events from Jan 16th
+    // Should only return event2
     expect(response.body.events).toHaveLength(1);
     expect(response.body.events[0].id).toBe('event2');
     expect(response.body.stats.totalCalls).toBe(1);
@@ -125,7 +159,7 @@ describe('GET /api/usage', () => {
     const response = await request(app)
       .get('/api/usage')
       .query({ apiId: 'api1' })
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
     // Should only return events for api1
@@ -144,7 +178,7 @@ describe('GET /api/usage', () => {
     const response = await request(app)
       .get('/api/usage')
       .query({ limit: 2 })
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
     // Should return only 2 events
@@ -159,11 +193,11 @@ describe('GET /api/usage', () => {
     
     const response = await request(app)
       .get('/api/usage')
-      .query({ from: '2024-01-16T00:00:00Z' })
-      .set('Authorization', 'Bearer valid-token')
+      .query({ from: new Date(event2Date.getTime() - 60 * 1000).toISOString() })
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
-    // Should return events from Jan 16th onwards (2 events)
+    // Should return events from event2 onwards (2 events)
     expect(response.body.events).toHaveLength(2);
     expect(response.body.stats.totalCalls).toBe(2);
   });
@@ -173,11 +207,11 @@ describe('GET /api/usage', () => {
     
     const response = await request(app)
       .get('/api/usage')
-      .query({ to: '2024-01-16T23:59:59Z' })
-      .set('Authorization', 'Bearer valid-token')
+      .query({ to: new Date(event2Date.getTime() + 60 * 1000).toISOString() })
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
-    // Should return events up to Jan 16th (2 events)
+    // Should return events up to event2 (2 events)
     expect(response.body.events).toHaveLength(2);
     expect(response.body.stats.totalCalls).toBe(2);
   });
@@ -188,11 +222,10 @@ describe('GET /api/usage', () => {
     const response = await request(app)
       .get('/api/usage')
       .query({ from: 'invalid-date' })
-      .set('Authorization', 'Bearer valid-token')
-      .expect(200);
+      .set('Authorization', validAuthHeader)
+      .expect(400);
 
-    // Should use default period when date is invalid
-    expect(response.body.events).toHaveLength(3);
+    expect(response.body.error.code).toBe('BAD_REQUEST');
   });
 
   it('validates from is before to', async () => {
@@ -204,10 +237,11 @@ describe('GET /api/usage', () => {
         from: '2024-01-20T00:00:00Z',
         to: '2024-01-10T00:00:00Z',
       })
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(400);
 
-    expect(response.body.error).toBe('from must be before or equal to to');
+    expect(response.body.error.code).toBe('BAD_REQUEST');
+    expect(response.body.error.details[0].message).toContain("'from' date must be before or equal to 'to' date");
   });
 
   it('validates limit parameter', async () => {
@@ -216,10 +250,11 @@ describe('GET /api/usage', () => {
     const response = await request(app)
       .get('/api/usage')
       .query({ limit: 'invalid' })
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(400);
 
-    expect(response.body.error).toBe('limit must be a non-negative integer');
+    expect(response.body.error.code).toBe('BAD_REQUEST');
+    expect(response.body.error.details[0].path).toContain('limit');
   });
 
   it('returns empty result for user with no events', async () => {
@@ -227,7 +262,7 @@ describe('GET /api/usage', () => {
     
     const response = await request(app)
       .get('/api/usage')
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
     expect(response.body).toMatchObject({
@@ -249,7 +284,7 @@ describe('GET /api/usage', () => {
     
     const response = await request(app)
       .get('/api/usage')
-      .set('Authorization', 'Bearer valid-token')
+      .set('Authorization', validAuthHeader)
       .expect(200);
 
     const event = response.body.events[0];
