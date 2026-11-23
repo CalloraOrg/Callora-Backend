@@ -1,6 +1,58 @@
 import { newDb, DataType } from 'pg-mem';
+import { Pool } from 'pg';
+import { getRealPool, resetRealDb } from './pgReal.js';
 
-export function createTestDb() {
+export type TestDbMode = 'pg-mem' | 'real';
+
+export interface CreateTestDbOptions {
+  /**
+   * Override the `TEST_DB` environment variable (`"pg-mem"` or `"real"`).
+   */
+  mode?: TestDbMode;
+}
+
+/**
+ * Resolves whether `createTestDb` should use an in-memory `pg-mem` database
+ * (default) or a real PostgreSQL `pg.Pool` (`TEST_DB=real`).
+ */
+export function resolveTestDbMode(
+  options?: CreateTestDbOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): TestDbMode {
+  if (options?.mode) {
+    return options.mode;
+  }
+  return env.TEST_DB?.trim().toLowerCase() === 'real' ? 'real' : 'pg-mem';
+}
+
+/**
+ * Creates a test database handle.
+ *
+ * Defaults to an isolated in-memory `pg-mem` instance for fast local runs.
+ * Set `TEST_DB=real` (alongside a PostgreSQL `DATABASE_URL`) or pass
+ * `{ mode: 'real' }` to connect to a real PostgreSQL pool via `getRealPool()`.
+ */
+export function createTestDb(options?: CreateTestDbOptions) {
+  const mode = resolveTestDbMode(options);
+
+  if (mode === 'real') {
+    const pool = getRealPool();
+    if (!pool) {
+      throw new Error(
+        'TEST_DB=real requires DATABASE_URL to be set to a PostgreSQL connection string (postgres://... or postgresql://...).',
+      );
+    }
+
+    return {
+      db: null,
+      pool,
+      isReal: true as const,
+      async end() {
+        await pool.end();
+      },
+    };
+  }
+
   const db = newDb();
 
   // Use a unique counter per database instance to avoid collisions
@@ -60,6 +112,7 @@ export function createTestDb() {
   return {
     db,
     pool,
+    isReal: false as const,
     async end() {
       await pool.end();
     },
@@ -67,6 +120,11 @@ export function createTestDb() {
 }
 
 export async function resetTestDb(pool: any) {
+  if (pool instanceof Pool) {
+    await resetRealDb(pool);
+    return;
+  }
+
   try {
     // Clear tables in reverse order of dependencies or use CASCADE
     // Using TRUNCATE with CASCADE is the most reliable way in PostgreSQL

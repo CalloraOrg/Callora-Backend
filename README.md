@@ -78,6 +78,7 @@ Configuration is validated with Zod at startup (`src/config/env.ts`); the server
 | `SQLITE_PATH` | no | SQLite file path (default `./database.db`; `/tmp/callora.db` on Vercel) |
 | `CORS_ALLOW_MISSING_ORIGIN` | no | Allow requests without an `Origin` header (curl, server-to-server) |
 | `RATE_LIMIT_*`, `REST_RATE_LIMIT_*`, `GATEWAY_RATE_LIMIT_*` | no | Rate limiting (memory or Postgres store) |
+| `MONTHLY_INVOICE_JOB_ENABLED`, `MONTHLY_INVOICE_JOB_INTERVAL_MS` | no | Enable/configure the periodic monthly invoice worker (default: enabled outside `test`, skipped in demo mode, 24h interval) |
 
 ## API overview
 
@@ -186,3 +187,18 @@ For a real deployment use the Docker image with PostgreSQL instead.
 ## Contributing
 
 CI (`.github/workflows/ci.yml`) runs migration policy checks, lint, type-check, build and tests. Run `npm run typecheck && npm run build && npm test` before opening a PR. Error codes are generated from `docs/error-codes.yaml`; the OpenAPI contract in `docs/openapi.json` must stay in sync with the routes.
+
+### Testing with real PostgreSQL
+
+By default, `npm test` and `createTestDb()` (`tests/helpers/db.ts`) use an in-memory `pg-mem` instance so local runs need no external database.
+
+To run integration suites against a real PostgreSQL 16 instance (matching CI):
+
+```bash
+docker run --rm -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=callora_test -p 5432:5432 postgres:16
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/callora_test npm run test:integration
+```
+
+- `tests/integration/realPostgres.test.ts` runs automatically when `DATABASE_URL` points to PostgreSQL (`postgres://` or `postgresql://`) and skips cleanly when `DATABASE_URL` is absent.
+- Suites using `createTestDb()` default to `pg-mem`; set `TEST_DB=real` alongside `DATABASE_URL` to target the real PostgreSQL pool (`tests/helpers/pgReal.ts`).
+- `resetRealDb(pool)` truncates all `public` tables with `RESTART IDENTITY CASCADE` while preserving migration metadata (`schema_versions`).
