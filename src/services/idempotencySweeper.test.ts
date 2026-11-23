@@ -25,11 +25,11 @@ describe('idempotency sweeper', () => {
 
       // Mock sequence:
       // 1. BEGIN
-      // 2. pg_try_advisory_xact_lock -> acquired: true
+      // 2. SELECT pg_try_advisory_xact_lock($1) AS acquired -> true
       // 3. DELETE batch 1 -> 5000 rows
       // 4. DELETE batch 2 -> 3000 rows (< batchSize, so stop)
       // 5. COMMIT
-      // 6. pg_class query -> 3000 rows
+      // 6. pg_class reltuples -> 3000
       (mockClient.query as jest.Mock)
         .mockResolvedValueOnce({}) // BEGIN
         .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // pg_try_advisory_xact_lock
@@ -107,9 +107,7 @@ describe('idempotency sweeper', () => {
         connect: jest.fn().mockResolvedValue(mockClient),
       };
 
-      let callCount = 0;
       (mockClient.query as jest.Mock).mockImplementation(async (text: string) => {
-        callCount += 1;
         if (text === 'BEGIN') return {};
         if (text.includes('pg_try_advisory_xact_lock')) return { rows: [{ acquired: true }] };
         if (text.includes('DELETE FROM idempotency_store')) {
@@ -169,11 +167,14 @@ describe('idempotency sweeper', () => {
         connect: jest.fn().mockResolvedValue(mockClient),
       };
 
-      (mockClient.query as jest.Mock)
-        .mockResolvedValue({ rows: [{ acquired: true }] })
-        .mockResolvedValue({ rowCount: 0 })
-        .mockResolvedValue({})
-        .mockResolvedValue({ rows: [{ estimate: 100 }] });
+      (mockClient.query as jest.Mock).mockImplementation(async (text: string) => {
+        if (text === 'BEGIN') return {};
+        if (text.includes('pg_try_advisory_xact_lock')) return { rows: [{ acquired: true }] };
+        if (text.includes('DELETE FROM idempotency_store')) return { rowCount: 0 };
+        if (text === 'COMMIT') return {};
+        if (text.includes('pg_class')) return { rows: [{ estimate: 100 }] };
+        return {};
+      });
 
       const job = createIdempotencySweeperJob(mockPool as any, {
         intervalMs: 1000,
