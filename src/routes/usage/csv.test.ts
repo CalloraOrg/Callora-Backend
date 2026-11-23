@@ -9,6 +9,7 @@ import {
 } from '../../repositories/usageEventsRepository.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../../tests/helpers/jwt.js';
 
 const USER_ID = 'user-1';
 
@@ -31,7 +32,8 @@ function createTestApp(repo: Pick<UsageEventsRepository, 'findByUser'>): express
   return app;
 }
 
-const auth = (req: request.Test): request.Test => req.set('x-user-id', USER_ID);
+const auth = (req: request.Test): request.Test =>
+  req.set('Authorization', `Bearer ${signTestToken({ userId: USER_ID })}`);
 
 // Wide range covering the fixed event timestamps used in the tests below.
 const WIDE_RANGE = { from: '2026-01-01T00:00:00.000Z', to: '2026-12-31T23:59:59.000Z' };
@@ -107,11 +109,25 @@ describe('writeChunk (backpressure handling)', () => {
 });
 
 describe('GET /api/usage/csv', () => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterAll(() => {
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
+    }
+  });
+
   it('returns 401 when the request is unauthenticated', async () => {
     const app = createTestApp(new InMemoryUsageEventsRepository());
     const res = await request(app).get('/api/usage/csv');
     expect(res.status).toBe(401);
-    expect(res.body.code).toBe('UNAUTHORIZED');
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
   });
 
   it('streams a CSV with header and rows for the authenticated user', async () => {
@@ -193,28 +209,28 @@ describe('GET /api/usage/csv', () => {
     const app = createTestApp(new InMemoryUsageEventsRepository());
     const res = await auth(request(app).get('/api/usage/csv').query({ from: 'not-a-date' }));
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe('Invalid "from" date');
+    expect(res.body.error.message).toBe('Invalid "from" date');
   });
 
   it('returns 400 when "from" is supplied as multiple values', async () => {
     const app = createTestApp(new InMemoryUsageEventsRepository());
     const res = await auth(request(app).get('/api/usage/csv?from=2026-01-01&from=2026-02-01'));
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe('Invalid "from" date');
+    expect(res.body.error.message).toBe('Invalid "from" date');
   });
 
   it('returns 400 for an invalid "to" date', async () => {
     const app = createTestApp(new InMemoryUsageEventsRepository());
     const res = await auth(request(app).get('/api/usage/csv').query({ to: 'not-a-date' }));
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe('Invalid "to" date');
+    expect(res.body.error.message).toBe('Invalid "to" date');
   });
 
   it('returns 400 when apiId is supplied as multiple values', async () => {
     const app = createTestApp(new InMemoryUsageEventsRepository());
     const res = await auth(request(app).get('/api/usage/csv?apiId=a&apiId=b'));
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe('apiId must be a single string value');
+    expect(res.body.error.message).toBe('apiId must be a single string value');
   });
 
   it('returns 400 when from is after to', async () => {
@@ -225,7 +241,7 @@ describe('GET /api/usage/csv', () => {
         .query({ from: '2026-03-31T00:00:00.000Z', to: '2026-03-01T00:00:00.000Z' }),
     );
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe('from must be before or equal to to');
+    expect(res.body.error.message).toBe('from must be before or equal to to');
   });
 
   it('pages through the repository in batches for large exports', async () => {
@@ -256,7 +272,7 @@ describe('GET /api/usage/csv', () => {
     const res = await auth(request(app).get('/api/usage/csv'));
 
     expect(res.status).toBe(500);
-    expect(res.body.code).toBe('INTERNAL_SERVER_ERROR');
+    expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
   });
 
   it('aborts the connection when a query fails mid-stream', async () => {
