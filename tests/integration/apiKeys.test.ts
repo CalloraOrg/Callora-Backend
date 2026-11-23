@@ -200,9 +200,15 @@ describe('API Key flows', () => {
 
   describe('Permission errors', () => {
     it('cannot create key for another user (simulate)', async () => {
+      const otherUserId = '00000000-0000-0000-0000-000000000099';
+      await db.pool.query(
+        `INSERT INTO users (id, wallet_address) VALUES ($1, $2)`,
+        [otherUserId, 'GDOTHER']
+      );
+
       // Simulate by using a different token
       const otherToken = signTestToken({
-        userId: '00000000-0000-0000-0000-000000000099',
+        userId: otherUserId,
         walletAddress: 'GDOTHER',
       });
       const res = await request(app)
