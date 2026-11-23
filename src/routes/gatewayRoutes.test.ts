@@ -50,8 +50,8 @@ describe("gateway route - rate limiting", () => {
     expect(res.status).toBe(429);
     // Retry-After header is in seconds, rounded up
     expect(res.headers["retry-after"]).toBe(String(Math.ceil(windowMs / 1000)));
-    expect(res.body).toHaveProperty("code", "TOO_MANY_REQUESTS");
-    expect(res.body).toHaveProperty("message", "Too Many Requests");
+    expect(res.body.error).toHaveProperty("code", "TOO_MANY_REQUESTS");
+    expect(res.body.error).toHaveProperty("message", "Too Many Requests");
     expect(res.body).toHaveProperty("requestId");
   });
 });
@@ -195,8 +195,8 @@ describe("gateway route - body size limits", () => {
 
     expect(res.status).toBe(413);
     expect(res.headers["content-type"]).toMatch(/application\/json/);
-    expect(res.body).toHaveProperty("code", "REQUEST_BODY_TOO_LARGE");
-    expect(res.body).toHaveProperty("message", "Request body too large");
+    expect(res.body.error).toHaveProperty("code", "REQUEST_BODY_TOO_LARGE");
+    expect(res.body.error).toHaveProperty("message", "Request body too large");
   });
 });
 
@@ -303,9 +303,9 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
 
     // Must be 401, never 500.
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
+    expect(res.body.error).toHaveProperty("code", "UNAUTHORIZED");
     // Generic message — must not reveal whether the prefix was found.
-    expect(res.body.message).toMatch(/invalid API key/i);
+    expect(res.body.error.message).toMatch(/invalid API key/i);
   });
 
   test("returns 401 when prefix does not exist at all (no-prefix path)", async () => {
@@ -321,8 +321,8 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", "totally-unknown-key-xyz");
 
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
-    expect(res.body.message).toMatch(/invalid API key/i);
+    expect(res.body.error).toHaveProperty("code", "UNAUTHORIZED");
+    expect(res.body.error.message).toMatch(/invalid API key/i);
   });
 
   test("happy path — exact key match passes auth and reaches billing", async () => {
@@ -355,7 +355,7 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", validKey);
 
     expect(res.status).toBe(401);
-    expect(res.body).toHaveProperty("code", "UNAUTHORIZED");
+    expect(res.body.error).toHaveProperty("code", "UNAUTHORIZED");
   });
 
   test("returns 403 when key is revoked (prefix + hash match a revoked key)", async () => {
@@ -375,7 +375,7 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
       .set("x-api-key", validKey);
 
     expect(res.status).toBe(403);
-    expect(res.body).toHaveProperty("code", "FORBIDDEN");
+    expect(res.body.error).toHaveProperty("code", "FORBIDDEN");
   });
 
   test("returns 403 when key is in revocation list", async () => {
@@ -404,7 +404,7 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
         .set("x-api-key", validKey);
 
       expect(res.status).toBe(403);
-      expect(res.body).toHaveProperty("code", "FORBIDDEN");
+      expect(res.body.error).toHaveProperty("code", "FORBIDDEN");
     } finally {
       resetTokenRevocationService();
     }
@@ -431,8 +431,8 @@ describe("gateway route - API key prefix / hash mismatch (bug #421)", () => {
     expect(unknownRes.status).toBe(401);
 
     // Response codes must be identical — client must not be able to distinguish.
-    expect(mismatchRes.body.code).toBe(unknownRes.body.code);
-    expect(mismatchRes.body.message).toBe(unknownRes.body.message);
+    expect(mismatchRes.body.error.code).toBe(unknownRes.body.error.code);
+    expect(mismatchRes.body.error.message).toBe(unknownRes.body.error.message);
   });
 });
 
