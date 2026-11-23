@@ -80,10 +80,10 @@ describe('RevenueSettlementService', () => {
     expect(settlements[0]).toMatchObject({
       developerId: 'dev_1',
       amount: USDC(6),
-      status: 'completed',
+      status: 'pending',
       tx_hash: '0xmocktx_dev_1',
+      completed_at: null,
     });
-    expect(settlements[0]?.completed_at).toBeTruthy();
 
     expect(usageStore.getUnsettledEvents()).toHaveLength(0);
     expect(mockedEmit).toHaveBeenCalledTimes(1);
@@ -197,10 +197,10 @@ describe('RevenueSettlementService', () => {
     expect(result).toEqual({ processed: 1, settledAmount: USDC(7), errors: 1 });
     expect(settlementStore.getDeveloperSettlements('dev_1')).toHaveLength(0);
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]).toMatchObject({
-      status: 'completed',
+      status: 'pending',
       tx_hash: '0xmocktx_dev_2',
+      completed_at: null,
     });
-    expect(settlementStore.getDeveloperSettlements('dev_2')[0]?.completed_at).toBeTruthy();
     expect(usageStore.getUnsettledEvents().map((event) => event.id)).toEqual(['e1']);
 
     createSpy.mockRestore();
@@ -264,10 +264,10 @@ describe('RevenueSettlementService', () => {
       tx_hash: null,
     });
     expect(settlementStore.getDeveloperSettlements('dev_2')[0]).toMatchObject({
-      status: 'completed',
+      status: 'pending',
       tx_hash: '0xmocktx_dev_2',
+      completed_at: null,
     });
-    expect(settlementStore.getDeveloperSettlements('dev_2')[0]?.completed_at).toBeTruthy();
     expect(usageStore.getUnsettledEvents().map((event) => event.id)).toEqual(['e1']);
 
     updateStatusSpy.mockRestore();
