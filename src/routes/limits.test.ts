@@ -36,7 +36,7 @@ describe('/api/limits/check', () => {
 
     const res = await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'user-ok');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'user-ok' })}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ok' });
@@ -53,7 +53,7 @@ describe('/api/limits/check', () => {
 
     const res = await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'user-deny');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'user-deny' })}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -74,7 +74,7 @@ describe('/api/limits/check', () => {
 
     const res = await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'user-still-ok');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'user-still-ok' })}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ok' });
@@ -88,7 +88,7 @@ describe('/api/limits/check', () => {
     // Peek once
     await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'user-nc')
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'user-nc' })}`)
       .expect(200);
 
     // Budget should still be 2, so two actual requests through the rate limiter should pass
@@ -154,12 +154,12 @@ describe('/api/limits/check', () => {
 
     const resA = await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'user-a');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
     expect(resA.body.status).toBe('deny');
 
     const resB = await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'user-b');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'user-b' })}`);
     expect(resB.body.status).toBe('ok');
   });
 
@@ -173,7 +173,7 @@ describe('/api/limits/check', () => {
     // First call - should be deny (cached)
     const res1 = await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'cache-test');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'cache-test' })}`);
     expect(res1.body.status).toBe('deny');
 
     // Clear the limiter state
@@ -183,7 +183,7 @@ describe('/api/limits/check', () => {
     // Second call - should still be cached deny
     const res2 = await request(app)
       .get('/api/limits/check')
-      .set('x-user-id', 'cache-test');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'cache-test' })}`);
     expect(res2.body.status).toBe('deny');
   });
 });

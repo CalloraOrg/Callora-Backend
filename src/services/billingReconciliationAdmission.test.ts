@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from '@jest/globals'
 import { BillingConflictError, InMemoryBillingAdmissionStore, admitBillingEvent, providerEventFingerprint } from './billingReconciliationAdmission.js'
 
 const base = (overrides: Record<string, unknown> = {}) => ({

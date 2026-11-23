@@ -126,6 +126,7 @@ client ---> | request-id, envelope, helmet, CORS, rate limit, OpenAPI request va
 - `src/routes`, `src/controllers`, `src/services`, `src/repositories` - layered request handling.
 - `src/db` (Drizzle + SQLite catalog/developer layer) and `src/db.ts` (PostgreSQL pool for metering/billing).
 - `src/workers` - background jobs (anomaly detection, SLO alerts, invoices, reconciliation).
+- Settlement status sync: set `SETTLEMENT_STATUS_SYNC_ENABLED=true` (non-demo mode) to run the periodic Soroban settlement status-sync loop from `src/index.ts`, guarded by the PostgreSQL advisory lock key `callora:settlement-status-sync` so only one instance reconciles pending settlements at a time.
 - `migrations/` - SQL migrations (checked by `scripts/check-migrations.ts` in CI); `prisma/` - Prisma schema for invoices.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the route map and design notes.
@@ -187,3 +188,18 @@ For a real deployment use the Docker image with PostgreSQL instead.
 ## Contributing
 
 CI (`.github/workflows/ci.yml`) runs migration policy checks, lint, type-check, build and tests. Run `npm run typecheck && npm run build && npm test` before opening a PR. Error codes are generated from `docs/error-codes.yaml`; the OpenAPI contract in `docs/openapi.json` must stay in sync with the routes.
+
+### Testing with real PostgreSQL
+
+By default, `npm test` and `createTestDb()` (`tests/helpers/db.ts`) use an in-memory `pg-mem` instance so local runs need no external database.
+
+To run integration suites against a real PostgreSQL 16 instance (matching CI):
+
+```bash
+docker run --rm -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=callora_test -p 5432:5432 postgres:16
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/callora_test npm run test:integration
+```
+
+- `tests/integration/realPostgres.test.ts` runs automatically when `DATABASE_URL` points to PostgreSQL (`postgres://` or `postgresql://`) and skips cleanly when `DATABASE_URL` is absent.
+- Suites using `createTestDb()` default to `pg-mem`; set `TEST_DB=real` alongside `DATABASE_URL` to target the real PostgreSQL pool (`tests/helpers/pgReal.ts`).
+- `resetRealDb(pool)` truncates all `public` tables with `RESTART IDENTITY CASCADE` while preserving migration metadata (`schema_versions`).

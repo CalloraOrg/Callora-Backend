@@ -116,6 +116,18 @@ describe('ListingsCache', () => {
       jest.useRealTimers();
     });
 
+    it('expires an entry exactly at the TTL boundary', () => {
+      jest.useFakeTimers();
+      const cache = new ListingsCache({ ttlMs: 1_000 });
+      cache.set('k', 'value');
+
+      jest.advanceTimersByTime(1_000);
+
+      expect(cache.get('k')).toBeUndefined();
+      expect(cache.size).toBe(0);
+      jest.useRealTimers();
+    });
+
     it('evicts the expired entry from the store on read', () => {
       jest.useFakeTimers();
       const cache = new ListingsCache({ ttlMs: 500 });
@@ -252,6 +264,16 @@ describe('buildCacheKey', () => {
     expect(key).toContain('"category":"ai"');
     expect(key).toContain('"search":"gpt"');
   });
+
+  it('distinguishes cursor and status filters', () => {
+    const base = { limit: 10, offset: 0 };
+    expect(buildCacheKey({ ...base, cursor: 'cursor-a' })).not.toBe(
+      buildCacheKey({ ...base, cursor: 'cursor-b' }),
+    );
+    expect(buildCacheKey({ ...base, status: 'active' })).not.toBe(
+      buildCacheKey({ ...base, status: 'draft' }),
+    );
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -366,7 +388,7 @@ describe('GET /api/apis — cache integration', () => {
     expect(callCount).toBe(1);
   });
 
-  it('respects pagination params as part of the cache key', async () => {
+  it('respects cursor pagination as part of the cache key', async () => {
     let callCount = 0;
     const apis = Array.from({ length: 5 }, (_, i) =>
       makeApi({ id: i + 1, name: `API ${i + 1}` }),
@@ -381,12 +403,16 @@ describe('GET /api/apis — cache integration', () => {
     const cache = new ListingsCache({ ttlMs: 5_000 });
     const app = buildApp(repo, cache);
 
-    await request(app).get('/api/apis?limit=2&offset=0');
-    await request(app).get('/api/apis?limit=2&offset=2');
-    expect(callCount).toBe(2); // different pages → different cache keys
+    const firstPage = await request(app).get('/api/apis?limit=2');
+    const cursor = firstPage.body.meta.nextCursor as string;
+    expect(cursor).toBeDefined();
 
-    await request(app).get('/api/apis?limit=2&offset=0');
-    expect(callCount).toBe(2); // first page served from cache
+    await request(app).get(`/api/apis?limit=2&cursor=${encodeURIComponent(cursor)}`);
+    expect(callCount).toBe(2); // different cursors → different cache keys
+
+    await request(app).get('/api/apis?limit=2');
+    await request(app).get(`/api/apis?limit=2&cursor=${encodeURIComponent(cursor)}`);
+    expect(callCount).toBe(2); // both pages are served from cache
   });
 });
 
@@ -489,27 +515,6 @@ describe('Cache invalidation', () => {
 
     await request(app).get('/api/apis'); // miss after invalidation → DB call 2
     expect(callCount).toBe(2);
-  });
-
-  it('InMemoryApiRepository.create() invalidates the shared cache', async () => {
-    // Seed the shared singleton cache with a stale entry.
-    const key = buildCacheKey({ limit: 20, offset: 0 });
-    listingsCache.set(key, { data: ['stale'] });
-    expect(listingsCache.get(key)).toBeDefined();
-
-    const repo = new InMemoryApiRepository([]);
-    await repo.create({
-      developer_id: 1,
-      name: 'New API',
-      base_url: 'https://new.example.com',
-      status: 'active',
-    });
-
-    // The InMemoryApiRepository does not call listingsCache — only the
-    // defaultApiRepository (DB-backed) does.  This test verifies the
-    // invalidation contract at the cache level directly.
-    listingsCache.invalidateAll();
-    expect(listingsCache.get(key)).toBeUndefined();
   });
 
   it('new entry is visible after cache is invalidated and re-populated', async () => {

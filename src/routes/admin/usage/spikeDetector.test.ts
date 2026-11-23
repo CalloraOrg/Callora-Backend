@@ -5,13 +5,14 @@ import type { Pool, QueryResult } from 'pg';
 import { createSpikeDetectorRouter } from './spikeDetector.js';
 import { errorHandler } from '../../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../../middleware/requestId.js';
-
-jest.mock('../../../middleware/adminAuth', () => ({
-  adminAuth: jest.fn((_req: Request, _res: Response, next: NextFunction) => {
-    _res.locals = { ..._res.locals, adminActor: 'test-admin' };
-    next();
-  }),
-}));
+import {
+  adminHeaders,
+  expectErrorEnvelope,
+  nonAdminHeaders,
+  restoreAdminAuthEnv,
+  setupAdminAuthEnv,
+  type SavedAuthEnv,
+} from './testHelpers.js';
 
 jest.mock('../../../middleware/ipAllowlist', () => ({
   createAdminIpAllowlist: jest.fn(() => (_req: Request, _res: Response, next: NextFunction) => next()),
@@ -64,16 +65,42 @@ const SPIKE_ROWS = [
 const SPIKE_DAY = dayString(20);
 
 describe('GET /api/admin/usage/spike-detector', () => {
+  let savedAuthEnv: SavedAuthEnv;
+
+  beforeAll(() => {
+    savedAuthEnv = setupAdminAuthEnv();
+  });
+
+  afterAll(() => {
+    restoreAdminAuthEnv(savedAuthEnv);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockQuery.mockReset();
+  });
+
+  describe('authentication', () => {
+    it('returns 401 when no admin credentials are provided', async () => {
+      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector');
+      expectErrorEnvelope(res, 401, 'UNAUTHORIZED');
+    });
+
+    it('returns 401 for a non-admin JWT', async () => {
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector')
+        .set(nonAdminHeaders());
+      expectErrorEnvelope(res, 401, 'UNAUTHORIZED');
+    });
   });
 
   it('returns detected spikes with a summary', async () => {
     mockQuery.mockResolvedValueOnce(asResult(SPIKE_ROWS));
     const app = createTestApp();
 
-    const res = await request(app).get('/api/admin/usage/spike-detector');
+    const res = await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders());
 
     expect(res.status).toBe(200);
     expect(res.body.data.spikes).toHaveLength(1);
@@ -97,7 +124,9 @@ describe('GET /api/admin/usage/spike-detector', () => {
     mockQuery.mockResolvedValueOnce(asResult(SPIKE_ROWS));
     const app = createTestApp();
 
-    const res = await request(app).get('/api/admin/usage/spike-detector');
+    const res = await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders());
 
     expect(res.body.data.spikes[0].percentageChange).toBeGreaterThan(900);
   });
@@ -106,11 +135,13 @@ describe('GET /api/admin/usage/spike-detector', () => {
     mockQuery.mockResolvedValueOnce(asResult(SPIKE_ROWS));
     const app = createTestApp();
 
-    await request(app).get('/api/admin/usage/spike-detector');
+    await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders());
 
     expect(logger.audit).toHaveBeenCalledWith(
       'DETECT_USAGE_SPIKES',
-      'test-admin',
+      'admin-api-key',
       expect.objectContaining({ spikeCount: 1, seriesAnalyzed: 1 }),
     );
   });
@@ -123,7 +154,9 @@ describe('GET /api/admin/usage/spike-detector', () => {
     ]));
     const app = createTestApp();
 
-    const res = await request(app).get('/api/admin/usage/spike-detector');
+    const res = await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders());
 
     expect(res.status).toBe(200);
     expect(res.body.data.spikes).toEqual([]);
@@ -134,7 +167,10 @@ describe('GET /api/admin/usage/spike-detector', () => {
     mockQuery.mockResolvedValueOnce(asResult(SPIKE_ROWS));
     const app = createTestApp();
 
-    const res = await request(app).get('/api/admin/usage/spike-detector').query({ threshold: '10' });
+    const res = await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders())
+      .query({ threshold: '10' });
 
     expect(res.status).toBe(200);
     // The spike's z-score (~2) is below a threshold of 10.
@@ -146,7 +182,10 @@ describe('GET /api/admin/usage/spike-detector', () => {
     mockQuery.mockResolvedValueOnce(asResult(SPIKE_ROWS));
     const app = createTestApp();
 
-    await request(app).get('/api/admin/usage/spike-detector').query({ apiId: 'api-1' });
+    await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders())
+      .query({ apiId: 'api-1' });
 
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain('AND api_id = $3');
@@ -159,6 +198,7 @@ describe('GET /api/admin/usage/spike-detector', () => {
 
     await request(app)
       .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders())
       .query({ from: '2026-03-01T00:00:00.000Z', to: '2026-03-31T00:00:00.000Z' });
 
     const [, params] = mockQuery.mock.calls[0];
@@ -168,79 +208,98 @@ describe('GET /api/admin/usage/spike-detector', () => {
 
   describe('input validation', () => {
     it('returns 400 for an invalid "from" date', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector').query({ from: 'nope' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('BAD_REQUEST');
-      expect(res.body.message).toBe('Invalid "from" date');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector')
+        .set(adminHeaders())
+        .query({ from: 'nope' });
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'Invalid "from" date');
     });
 
     it('returns 400 when "from" is supplied as multiple values', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector?from=2026-01-01&from=2026-02-01');
-      expect(res.status).toBe(400);
-      expect(res.body.message).toBe('Invalid "from" date');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector?from=2026-01-01&from=2026-02-01')
+        .set(adminHeaders());
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'Invalid "from" date');
     });
 
     it('returns 400 when threshold is supplied as multiple values', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector?threshold=3&threshold=4');
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('BAD_REQUEST');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector?threshold=3&threshold=4')
+        .set(adminHeaders());
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'threshold must be a number between 1 and 10');
     });
 
     it('returns 400 for an invalid "to" date', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector').query({ to: 'nope' });
-      expect(res.status).toBe(400);
-      expect(res.body.message).toBe('Invalid "to" date');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector')
+        .set(adminHeaders())
+        .query({ to: 'nope' });
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'Invalid "to" date');
     });
 
     it('returns 400 when from is after to', async () => {
       const res = await request(createTestApp())
         .get('/api/admin/usage/spike-detector')
+        .set(adminHeaders())
         .query({ from: '2026-03-31T00:00:00.000Z', to: '2026-03-01T00:00:00.000Z' });
-      expect(res.status).toBe(400);
-      expect(res.body.message).toBe('from must be before or equal to to');
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'from must be before or equal to to');
     });
 
     it('returns 400 for an out-of-range threshold', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector').query({ threshold: '99' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('BAD_REQUEST');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector')
+        .set(adminHeaders())
+        .query({ threshold: '99' });
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'threshold must be a number between 1 and 10');
     });
 
     it('returns 400 for a non-numeric threshold', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector').query({ threshold: 'abc' });
-      expect(res.status).toBe(400);
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector')
+        .set(adminHeaders())
+        .query({ threshold: 'abc' });
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'threshold must be a number between 1 and 10');
     });
 
     it('returns 400 for a non-integer limit', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector').query({ limit: '1.5' });
-      expect(res.status).toBe(400);
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector')
+        .set(adminHeaders())
+        .query({ limit: '1.5' });
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'limit must be an integer between 1 and 1000');
     });
 
     it('returns 400 for an out-of-range limit', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector').query({ limit: '0' });
-      expect(res.status).toBe(400);
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector')
+        .set(adminHeaders())
+        .query({ limit: '0' });
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'limit must be an integer between 1 and 1000');
     });
 
     it('returns 400 when apiId is supplied as multiple values', async () => {
-      const res = await request(createTestApp()).get('/api/admin/usage/spike-detector?apiId=a&apiId=b');
-      expect(res.status).toBe(400);
-      expect(res.body.message).toBe('apiId must be a single string value');
+      const res = await request(createTestApp())
+        .get('/api/admin/usage/spike-detector?apiId=a&apiId=b')
+        .set(adminHeaders());
+      expectErrorEnvelope(res, 400, 'BAD_REQUEST', 'apiId must be a single string value');
     });
   });
 
   it('returns 500 when the database pool is unavailable', async () => {
     const app = createTestApp({ noPool: true });
-    const res = await request(app).get('/api/admin/usage/spike-detector');
-    expect(res.status).toBe(500);
-    expect(res.body.code).toBe('INTERNAL_SERVER_ERROR');
+    const res = await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders());
+    expectErrorEnvelope(res, 500, 'INTERNAL_SERVER_ERROR');
   });
 
   it('returns 500 when the aggregation query fails', async () => {
     mockQuery.mockRejectedValueOnce(new Error('db down'));
     const app = createTestApp();
-    const res = await request(app).get('/api/admin/usage/spike-detector');
-    expect(res.status).toBe(500);
-    expect(res.body.code).toBe('INTERNAL_SERVER_ERROR');
+    const res = await request(app)
+      .get('/api/admin/usage/spike-detector')
+      .set(adminHeaders());
+    expectErrorEnvelope(res, 500, 'INTERNAL_SERVER_ERROR');
     expect(logger.error).toHaveBeenCalled();
   });
 });

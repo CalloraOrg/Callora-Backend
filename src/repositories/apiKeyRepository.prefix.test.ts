@@ -193,26 +193,33 @@ describe('api_keys.prefix partial unique index (migration 0006)', () => {
 
   it('allows multiple revoked keys to share the same prefix', async () => {
     // Insert two keys with the same prefix, revoking each before inserting the next.
-    await pool.query(
+    const first = await pool.query(
       `INSERT INTO api_keys (api_id, key_hash, prefix)
-       VALUES ('api-1', 'hash-a', 'ck_live_prefix1')`,
+       VALUES ('api-1', 'hash-a', 'ck_live_prefix1')
+       RETURNING id`,
     );
     await pool.query(
-      `UPDATE api_keys SET revoked = TRUE WHERE prefix = 'ck_live_prefix1'`,
+      `UPDATE api_keys SET revoked = TRUE WHERE id = $1`,
+      [first.rows[0].id],
     );
 
-    await pool.query(
+    const second = await pool.query(
       `INSERT INTO api_keys (api_id, key_hash, prefix)
-       VALUES ('api-1', 'hash-b', 'ck_live_prefix1')`,
+       VALUES ('api-1', 'hash-b', 'ck_live_prefix1')
+       RETURNING id`,
     );
     await pool.query(
-      `UPDATE api_keys SET revoked = TRUE WHERE prefix = 'ck_live_prefix1'`,
+      `UPDATE api_keys SET revoked = TRUE WHERE id = $1`,
+      [second.rows[0].id],
     );
 
+    // Query without `prefix = ...` in the WHERE clause because pg-mem erroneously
+    // routes `prefix = ...` lookups through the partial index (WHERE revoked = FALSE)
+    // and misses revoked rows.
     const { rows } = await pool.query(
-      `SELECT id FROM api_keys WHERE prefix = 'ck_live_prefix1' AND revoked = TRUE`,
+      `SELECT id, prefix FROM api_keys WHERE revoked = TRUE`,
     );
-    expect(rows).toHaveLength(2);
+    expect(rows.filter((r: { prefix: string }) => r.prefix === 'ck_live_prefix1')).toHaveLength(2);
   });
 
   // ── Revoked key does not block a new active key ───────────────────────────
