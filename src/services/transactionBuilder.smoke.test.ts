@@ -31,6 +31,8 @@ const mockAddOperation = jest.fn();
 const mockAddMemo = jest.fn();
 const mockSetTimeout = jest.fn();
 const mockBuild = jest.fn();
+const mockSimulateTransaction = jest.fn();
+const mockAssembleTransaction = jest.fn();
 
 class MockAddress {
   constructor(private readonly value: string) {
@@ -91,6 +93,13 @@ class MockTransactionBuilder {
   }
 }
 
+class MockRpcServer {
+  constructor(_url: string, _options?: unknown) {}
+  simulateTransaction(tx: unknown) {
+    return mockSimulateTransaction(tx);
+  }
+}
+
 jest.mock('@stellar/stellar-sdk', () => ({
   Horizon: { Server: MockServer },
   TransactionBuilder: MockTransactionBuilder,
@@ -98,6 +107,17 @@ jest.mock('@stellar/stellar-sdk', () => ({
   Address: MockAddress,
   Memo: { text: mockMemoText },
   nativeToScVal: mockNativeToScVal,
+  rpc: {
+    Server: MockRpcServer,
+    Api: {
+      isSimulationSuccess: (result: { error?: unknown }) => !result.error,
+      isSimulationError: (result: { error?: unknown }) => Boolean(result.error),
+    },
+  },
+}));
+
+jest.mock('@stellar/stellar-sdk/rpc', () => ({
+  assembleTransaction: (...args: unknown[]) => mockAssembleTransaction(...args),
 }));
 
 jest.mock('../config/index.js', () => ({
@@ -109,11 +129,13 @@ jest.mock('../config/index.js', () => ({
       networks: {
         testnet: {
           horizonUrl: 'https://horizon-testnet.stellar.org',
+          sorobanRpcUrl: 'https://soroban-testnet.stellar.org:443',
           networkPassphrase: 'Test SDF Network ; September 2015',
           vaultContractId: 'CVAULTTEST',
         },
         mainnet: {
           horizonUrl: 'https://horizon.stellar.org',
+          sorobanRpcUrl: 'https://soroban-mainnet.stellar.org:443',
           networkPassphrase: 'Public Global Stellar Network ; September 2015',
           vaultContractId: 'CVAULTMAIN',
         },
@@ -173,6 +195,19 @@ describe('TransactionBuilderService — smoke tests (extended)', () => {
           `xdr:${options.fee}:${timeout}:${memo?.value ?? 'none'}:${String(operation.contract)}`,
       })
     );
+
+    mockSimulateTransaction.mockResolvedValue({
+      result: { retval: 'success', auth: [] },
+      events: [],
+      transactionData: { build: () => ({}) },
+      cost: { cpuInsns: '1000', memBytes: '1000' },
+      latestLedger: 12345678,
+      minResourceFee: '100000',
+    });
+
+    mockAssembleTransaction.mockImplementation((tx: unknown) => ({
+      build: () => tx,
+    }));
   });
 
   // ── Success paths ────────────────────────────────────────────────────────

@@ -13,9 +13,6 @@
  */
 
 import assert from 'node:assert/strict';
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from '../db/schema.js';
 
 // ---------------------------------------------------------------------------
 // In-process module replacement: swap `src/db/index.ts` with the in-memory db
@@ -25,9 +22,9 @@ import * as schema from '../db/schema.js';
 jest.mock('../db/index.js', () => {
   // Build the in-memory db once per test file.  Jest reuses this module mock
   // across all tests in the file, giving us a shared (but fresh-per-file) DB.
-  const Database = require('better-sqlite3');
-  const { drizzle } = require('drizzle-orm/better-sqlite3');
-  const schemaModule = require('../db/schema.js');
+  const Database = jest.requireActual<typeof import('better-sqlite3')>('better-sqlite3');
+  const { drizzle } = jest.requireActual<typeof import('drizzle-orm/better-sqlite3')>('drizzle-orm/better-sqlite3');
+  const schemaModule = jest.requireActual<typeof import('../db/schema.js')>('../db/schema.js');
 
   const sqlite = new Database(':memory:');
 

@@ -1,4 +1,4 @@
-import { newDb } from 'pg-mem';
+import { DataType, newDb } from 'pg-mem';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -23,12 +23,24 @@ describe('DatabaseRefreshTokenRepository', () => {
       impure: true,
     });
 
+    // Register Postgres native length(text/varchar) for token_hash CHECK constraint
+    db.public.registerFunction({
+      name: 'length',
+      args: [DataType.text],
+      returns: DataType.integer,
+      implementation: (val: string) => (val == null ? null : val.length),
+    });
+
     // Seed root foreign key dependency
     db.public.none(`CREATE TABLE users (id UUID PRIMARY KEY);`);
 
     // Load and execute production migrations in order
     const migrationsDir = path.join(process.cwd(), 'migrations');
-    const baseMigration = fs.readFileSync(path.join(migrationsDir, 'add_refresh_tokens.sql'), 'utf-8');
+    const baseMigration = fs
+      .readFileSync(path.join(migrationsDir, 'add_refresh_tokens.sql'), 'utf-8')
+      // pg-mem mishandles partial index lookups when querying is_revoked = true
+      // against an index defined with WHERE is_revoked = FALSE.
+      .replace(/WHERE is_revoked = FALSE;/gi, ';');
     const familyMigration = fs.readFileSync(path.join(migrationsDir, 'add_refresh_token_family.sql'), 'utf-8');
 
     db.public.none(baseMigration);
