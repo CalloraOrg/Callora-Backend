@@ -94,7 +94,8 @@ export function extractSimulationDetails(payload: unknown): SimulationDetails {
   const errorCode = normalizeErrorCode(findNested(errorRecord, ['code', 'errorCode', 'error_code']));
   const errorMessage =
     normalizeMessage(findNested(errorRecord, ['message', 'errorMessage', 'detail', 'details', 'title'])) ??
-    normalizeMessage(findNested(record, ['message', 'errorMessage', 'detail', 'details', 'title']));
+    normalizeMessage(findNested(record, ['message', 'errorMessage', 'detail', 'details', 'title'])) ??
+    normalizeMessage(findNested(record, ['error']));
 
   return {
     ...(errorCode !== undefined ? { errorCode } : {}),
