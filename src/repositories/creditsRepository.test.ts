@@ -1,6 +1,24 @@
 jest.mock('../db/index.js', () => {
-  const Database = require('better-sqlite3');
-  const sqlite = new Database(':memory:');
+  let sqlite: any;
+  try {
+    const Database = require('better-sqlite3');
+    sqlite = new Database(':memory:');
+  } catch {
+    const { DatabaseSync } = require('node:sqlite');
+    const memDb = new DatabaseSync(':memory:');
+    memDb.transaction = (fn: (...args: any[]) => any) => (...args: any[]) => {
+      memDb.exec('BEGIN');
+      try {
+        const res = fn(...args);
+        memDb.exec('COMMIT');
+        return res;
+      } catch (err) {
+        memDb.exec('ROLLBACK');
+        throw err;
+      }
+    };
+    sqlite = memDb;
+  }
   sqlite.exec(`
     CREATE TABLE credits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,10 +70,11 @@ describe('creditsRepository', () => {
     expect(row.balance_usdc).toBe('0.00001');
   });
 
-  it.each(['0', '-0.0000001'])('rejects a non-positive grant amount: %s', async (amount) => {
-    await expect(grant('invalid-user', amount)).rejects.toThrow(
-      'amountUsdc must be greater than zero',
-    );
+  it.each([
+    ['0', 'amountUsdc must be greater than zero'],
+    ['-0.0000001', 'amountUsdc must be a non-negative decimal with at most 7 decimal places'],
+  ])('rejects a non-positive grant amount: %s', async (amount, expectedMessage) => {
+    await expect(grant('invalid-user', amount)).rejects.toThrow(expectedMessage);
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM credits WHERE user_id = ?').get('invalid-user'))
       .toEqual({ count: 0 });
   });
