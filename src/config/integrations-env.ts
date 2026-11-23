@@ -75,10 +75,11 @@ export const integrationEnvironmentFields = {
     .int()
     .positive()
     .default(86_400_000),
+  // Tri-state: unset means "on outside tests" (see coreSettings).
   REVENUE_LEDGER_INDEXER_ENABLED: z
     .string()
     .optional()
-    .transform((v) => (v === undefined ? undefined : v !== "false")),
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   REVENUE_LEDGER_INDEXER_INTERVAL_MS: z.coerce
     .number()
     .int()

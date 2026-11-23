@@ -100,7 +100,6 @@ describe('POST /api/apis', () => {
         endpoints: [{ path: '/forecast', method: 'FETCH', price_per_call_usdc: 'free' }],
       });
 
-
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, 'VALIDATION_ERROR');
     assert.deepEqual(

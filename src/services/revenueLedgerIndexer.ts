@@ -210,9 +210,7 @@ export function createRevenueLedgerIndexerJob(
       }
     },
     async awaitIdle() {
-      // A failed tick is logged by tick(); draining must still resolve so the
-      // shutdown handler does not report an error for an already-handled run.
-      await (running ? running.catch(() => undefined) : indexer.awaitIdle());
+      await (running ?? indexer.awaitIdle());
     },
   };
 }

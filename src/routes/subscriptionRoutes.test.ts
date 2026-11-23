@@ -14,7 +14,8 @@ import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
 const originalJwtSecret = process.env.JWT_SECRET;
 
 beforeAll(() => {
-  process.env.JWT_SECRET = TEST_JWT_SECRET;});
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+});
 
 afterAll(() => {
   if (originalJwtSecret === undefined) {

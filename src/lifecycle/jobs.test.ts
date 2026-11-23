@@ -96,8 +96,13 @@ describe('createRevenueLedgerIndexerJob failure handling', () => {
 
     job.start();
 
-    await expect(job.awaitIdle()).resolves.toBeUndefined();
-    expect(error).toHaveBeenCalledTimes(1);
+    await expect(job.awaitIdle()).rejects.toThrow('scan failed');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(error).toHaveBeenCalledWith(
+      'Revenue ledger indexer job failed:',
+      expect.any(Error),
+    );
     expect(releaseRevenueLedgerIndexerLock).toHaveBeenCalledTimes(1);
 
     job.beginShutdown();
