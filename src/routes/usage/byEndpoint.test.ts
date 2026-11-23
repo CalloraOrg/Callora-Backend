@@ -7,6 +7,7 @@ import {
 } from '../../repositories/usageEventsRepository.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../../tests/helpers/jwt.js';
 
 const USER_ID = 'user-1';
 
@@ -29,9 +30,23 @@ function createTestApp(repo: InMemoryUsageEventsRepository): express.Express {
   return app;
 }
 
-const auth = (req: request.Test): request.Test => req.set('x-user-id', USER_ID);
+const auth = (req: request.Test): request.Test =>
+  req.set('Authorization', `Bearer ${signTestToken({ userId: USER_ID })}`);
 
 describe('GET /api/usage/by-endpoint', () => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterAll(() => {
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
+    }
+  });
   it('requires authentication', async () => {
     const repo = new InMemoryUsageEventsRepository([]);
     const app = createTestApp(repo);
@@ -107,7 +122,7 @@ describe('GET /api/usage/by-endpoint', () => {
         .query({ limit: 'invalid' })
     );
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('limit must be a positive integer');
+    expect(res.body.error.message).toContain('limit must be a positive integer');
   });
 
   it('rejects negative limit', async () => {
@@ -120,7 +135,7 @@ describe('GET /api/usage/by-endpoint', () => {
         .query({ limit: '-1' })
     );
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('limit must be a positive integer');
+    expect(res.body.error.message).toContain('limit must be a positive integer');
   });
 
   it('rejects invalid dates', async () => {
@@ -155,6 +170,6 @@ describe('GET /api/usage/by-endpoint', () => {
         })
     );
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('from must be before or equal to to');
+    expect(res.body.error.message).toContain('from must be before or equal to to');
   });
 });

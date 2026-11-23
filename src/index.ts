@@ -8,9 +8,19 @@ import { closeDbPool } from "./config/health.js";
 import { disconnectPrisma } from "./lib/prisma.js";
 import { createGracefulShutdownHandler, type DrainableSubsystem } from "./lifecycle/shutdown.js";
 import { startRevenueLedgerIndexerJob } from "./lifecycle/jobs.js";
-import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
 import { createRevenueLedgerIndexerJob } from "./services/revenueLedgerIndexer.js";
 import { PgUsageEventsRepository } from "./repositories/usageEventsRepository.pg.js";
+import { startBackgroundJobs } from "./lifecycle/jobs.js";
+import {
+  createAdvisoryLockHooks,
+  SETTLEMENT_STATUS_SYNC_LOCK_KEY,
+} from "./lib/advisoryLock.js";
+import { InMemoryApiRegistry } from "./data/apiRegistry.js";
+import { RevenueSettlementService } from "./services/revenueSettlementService.js";
+import { PostgresSettlementStore } from "./services/settlementStore.js";
+import { createSettlementStatusSyncJob } from "./services/settlementStatusSyncJob.js";
+import { createSorobanSettlementClient } from "./services/sorobanSettlement.js";
+import { PostgresUsageStore } from "./services/usageStore.js";
 
 // Re-exported for backward compatibility with existing consumers/tests.
 export {
@@ -48,6 +58,10 @@ async function startServer(): Promise<void> {
       socket.once("close", () => activeConnections.delete(socket));
     });
 
+    const { subsystems } = startBackgroundJobs({
+      pool,
+      config,
+    });
     // Create and start the background jobs (if enabled)
     const shutdownSubsystems: DrainableSubsystem[] = [];
 
@@ -64,23 +78,46 @@ async function startServer(): Promise<void> {
       shutdownSubsystems.push(revenueLedgerIndexer.subsystem);
     }
 
-    if (config.idempotencySweeper.enabled) {
+    if (config.settlementSync.enabled && !config.demoMode) {
+      const usageStore = new PostgresUsageStore(pool);
+      const settlementStore = new PostgresSettlementStore(pool);
+      const apiRegistry = new InMemoryApiRegistry();
+      const settlementClient = createSorobanSettlementClient();
+      const settlementService = new RevenueSettlementService(
+        usageStore,
+        settlementStore,
+        apiRegistry,
+        settlementClient,
+        {
+          horizonUrl: config.horizon?.url,
+          horizonRequestTimeoutMs: config.settlementSync.timeoutMs,
+          maxTooEarlyRetries: config.settlementSync.maxRetries,
+        },
+      );
+      const lockHooks = createAdvisoryLockHooks(
+        pool,
+        SETTLEMENT_STATUS_SYNC_LOCK_KEY,
+      );
+      const settlementSyncJob = createSettlementStatusSyncJob(
+        settlementService,
+        {
+          intervalMs: config.settlementSync.intervalMs,
+          ...lockHooks,
+        },
+      );
+      settlementSyncJob.start();
       const sweeperJob = createIdempotencySweeperJob(pool, {
-        intervalMs: config.idempotencySweeper.intervalMs,
-        batchSize: config.idempotencySweeper.batchSize,
-        timeBudgetMs: config.idempotencySweeper.timeBudgetMs,
-      });
-      sweeperJob.start();
       console.log(
-        `[idempotencySweeper] Started with interval ${config.idempotencySweeper.intervalMs}ms, batch size ${config.idempotencySweeper.batchSize}, time budget ${config.idempotencySweeper.timeBudgetMs}ms`,
+        `[settlementStatusSync] Started with interval ${config.settlementSync.intervalMs}ms (lock key: ${SETTLEMENT_STATUS_SYNC_LOCK_KEY})`,
       );
 
-      // Register sweeper as a graceful subsystem
       shutdownSubsystems.push({
-        name: "idempotency-sweeper",
+        name: "settlement-status-sync",
         beginShutdown: () => {
+          settlementSyncJob.beginShutdown();
           sweeperJob.beginShutdown();
         },
+        awaitIdle: () => settlementSyncJob.awaitIdle(),
         awaitIdle: () => sweeperJob.awaitIdle(),
       });
     }

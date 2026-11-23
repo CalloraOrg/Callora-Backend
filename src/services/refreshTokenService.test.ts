@@ -81,7 +81,7 @@ describe('RefreshTokenService', () => {
       expect(payload).toBeNull();
     });
 
-    it('should reject an expired refresh token', () => {
+    it('should reject an expired refresh token', async () => {
       const expiredService = new RefreshTokenService({
         jwtSecret: TEST_JWT_SECRET,
         accessTokenExpiry: '15m',
@@ -89,12 +89,11 @@ describe('RefreshTokenService', () => {
       });
 
       const tokenPair = expiredService.createTokenPair('test-user-id');
-      
+
       // Wait for token to expire
-      setTimeout(() => {
-        const payload = expiredService.verifyRefreshToken(tokenPair.refreshToken);
-        expect(payload).toBeNull();
-      }, 10);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      const payload = expiredService.verifyRefreshToken(tokenPair.refreshToken);
+      expect(payload).toBeNull();
     });
 
     it('should reject a token with wrong secret', () => {
@@ -229,7 +228,7 @@ describe('RefreshTokenService', () => {
     });
   });
   describe('handleReuse', () => {
-    it('should revoke the token family instead of all user tokens', async () => {
+    it('should revoke all user tokens as theft countermeasure', async () => {
       const storedToken = {
         id: 'token-123',
         userId: 'user-456',
@@ -243,8 +242,78 @@ describe('RefreshTokenService', () => {
 
       await service.handleReuse(storedToken, repository);
 
-      expect(repository.revokeFamily).toHaveBeenCalledWith('family-789', 'user-456');
+      expect(repository.revokeAllUserTokens).toHaveBeenCalledWith('user-456');
+      expect(repository.revokeFamily).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('atomicRotateRefreshToken', () => {
+    it('rotates a valid token and returns a new token pair', async () => {
+      const pair = service.createTokenPair('user-1');
+      const payload = service.verifyRefreshToken(pair.refreshToken)!;
+      const consumedRecord = service.createRefreshTokenRecord('user-1', pair.refreshToken, 'family-1');
+
+      const repository = {
+        consumeRefreshToken: jest.fn().mockResolvedValue({ status: 'consumed', token: consumedRecord }),
+        revokeAllUserTokens: jest.fn().mockResolvedValue(undefined),
+      } as unknown as RefreshTokenRepository;
+
+      const result = await service.atomicRotateRefreshToken(
+        pair.refreshToken,
+        payload,
+        'GDTEST123STELLAR',
+        repository,
+      );
+
+      expect(result.outcome).toBe('success');
+      if (result.outcome === 'success') {
+        expect(result.tokens.accessToken).toBeDefined();
+        expect(result.tokens.refreshToken).toBeDefined();
+        expect(result.tokens.refreshToken).not.toBe(pair.refreshToken);
+      }
       expect(repository.revokeAllUserTokens).not.toHaveBeenCalled();
+    });
+
+    it('triggers handleReuse (revoking all user tokens) when a revoked token is presented', async () => {
+      const pair = service.createTokenPair('user-1');
+      const payload = service.verifyRefreshToken(pair.refreshToken)!;
+
+      const repository = {
+        consumeRefreshToken: jest.fn().mockResolvedValue({ status: 'revoked' }),
+        revokeAllUserTokens: jest.fn().mockResolvedValue(undefined),
+      } as unknown as RefreshTokenRepository;
+
+      const result = await service.atomicRotateRefreshToken(
+        pair.refreshToken,
+        payload,
+        undefined,
+        repository,
+      );
+
+      expect(result).toEqual({ outcome: 'revoked' });
+      expect(repository.revokeAllUserTokens).toHaveBeenCalledWith('user-1');
+    });
+
+    it('passes through expired, not_found, and hash_mismatch outcomes without revoking', async () => {
+      const pair = service.createTokenPair('user-1');
+      const payload = service.verifyRefreshToken(pair.refreshToken)!;
+
+      for (const status of ['expired', 'not_found', 'hash_mismatch'] as const) {
+        const repository = {
+          consumeRefreshToken: jest.fn().mockResolvedValue({ status }),
+          revokeAllUserTokens: jest.fn().mockResolvedValue(undefined),
+        } as unknown as RefreshTokenRepository;
+
+        const result = await service.atomicRotateRefreshToken(
+          pair.refreshToken,
+          payload,
+          undefined,
+          repository,
+        );
+
+        expect(result).toEqual({ outcome: status });
+        expect(repository.revokeAllUserTokens).not.toHaveBeenCalled();
+      }
     });
   });
 });

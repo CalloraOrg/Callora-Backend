@@ -17,7 +17,7 @@ const mockSetTimeout = jest.fn();
 const mockBuild = jest.fn();
 
 const mockSimulateTransaction = jest.fn();
-const mockPrepareTransaction = jest.fn();
+const mockAssembleTransaction = jest.fn();
 
 class MockAddress {
   constructor(private readonly value: string) {
@@ -88,10 +88,6 @@ class MockRpcServer {
   simulateTransaction(tx: unknown) {
     return mockSimulateTransaction(tx);
   }
-
-  prepareTransaction(tx: unknown, simulationResult: unknown) {
-    return mockPrepareTransaction(tx, simulationResult);
-  }
 }
 
 jest.mock('@stellar/stellar-sdk', () => ({
@@ -111,8 +107,13 @@ jest.mock('@stellar/stellar-sdk', () => ({
     Server: MockRpcServer,
     Api: {
       isSimulationSuccess: (result: { error?: unknown }) => !result.error,
+      isSimulationError: (result: { error?: unknown }) => Boolean(result.error),
     },
   },
+}));
+
+jest.mock('@stellar/stellar-sdk/rpc', () => ({
+  assembleTransaction: (...args: unknown[]) => mockAssembleTransaction(...args),
 }));
 
 jest.mock('../config/index.js', () => ({
@@ -183,22 +184,21 @@ describe('TransactionBuilderService', () => {
     mockSimulateTransaction.mockResolvedValue({
       result: {
         retval: 'success',
+        auth: [],
       },
       events: [],
-      footprint: { readOnly: [], readWrite: [] },
+      transactionData: { build: () => ({}) },
+      cost: { cpuInsns: '1000', memBytes: '1000' },
       latestLedger: 12345678,
       minResourceFee: '100000',
     });
 
-    mockPrepareTransaction.mockResolvedValue({
-      transaction: {
+    mockAssembleTransaction.mockImplementation(() => ({
+      build: () => ({
         signatures: [],
         toXDR: () => 'prepared-xdr-with-soroban-data',
-      },
-      resourceFee: '123456',
-      minResourceFee: '100000',
-      latestLedger: 12345678,
-    });
+      }),
+    }));
   });
 
   test('builds an unsigned transaction with configured fee and timeout defaults', async () => {
@@ -213,7 +213,7 @@ describe('TransactionBuilderService', () => {
     assert.equal(result.network, 'testnet');
     assert.equal(result.fee, '100');
     assert.equal(result.timeout, 300);
-    assert.equal(result.resourceFee, '123456');
+    assert.equal(result.resourceFee, '100000');
     assert.equal(result.minResourceFee, '100000');
     assert.equal(result.latestLedger, 12345678);
     assert.equal(result.memo, undefined);
@@ -221,9 +221,9 @@ describe('TransactionBuilderService', () => {
     assert.equal(result.xdr, 'prepared-xdr-with-soroban-data');
     assert.equal(mockServerConstructor.mock.calls[0]?.[0], 'https://horizon-testnet.stellar.org');
     assert.equal(mockAddMemo.mock.calls.length, 0);
-    // Verify simulateTransaction and prepareTransaction were called
+    // Verify simulateTransaction and assembleTransaction were called
     assert.equal(mockSimulateTransaction.mock.calls.length, 1);
-    assert.equal(mockPrepareTransaction.mock.calls.length, 1);
+    assert.equal(mockAssembleTransaction.mock.calls.length, 1);
   });
 
   test('uses a durable reserved sequence when a sequence store is configured for backend account', async () => {
@@ -241,7 +241,7 @@ describe('TransactionBuilderService', () => {
       amountUsdc: '12.3456789',
     });
 
-    assert.deepEqual(sequenceStore.allocate.mock.calls[0], ['GUSERPUBLICKEY123', 2n]);
+    expect(sequenceStore.allocate.mock.calls[0]).toEqual(['GUSERPUBLICKEY123', 2n]);
     assert.equal(mockBuild.mock.calls[0]?.[0].sourceAccount.sequence, '8');
   });
 
@@ -504,9 +504,11 @@ describe('TransactionBuilderService', () => {
     assert.equal(error.simulationDetails.errorMessage, 'BelowMinDeposit');
   });
 
-  test('handles prepareTransaction failure', async () => {
+  test('handles assembleTransaction failure', async () => {
     const service = new TransactionBuilderService();
-    mockPrepareTransaction.mockRejectedValueOnce(new Error('prepare failed'));
+    mockAssembleTransaction.mockImplementationOnce(() => {
+      throw new Error('assemble failed');
+    });
 
     const error = await service.buildDepositTransaction({
       userStellarAddress: 'GUSERPUBLICKEY123',
@@ -515,7 +517,7 @@ describe('TransactionBuilderService', () => {
     }).catch((err) => err);
 
     assert.ok(error instanceof SimulationError);
-    assert.ok(error.message.includes('prepareTransaction failed'));
+    assert.ok(error.message.includes('assembleTransaction failed'));
   });
 
   test('retries transient RPC errors during simulation', async () => {
@@ -605,5 +607,69 @@ describe('TransactionBuilderService', () => {
     });
 
     assert.equal(createServer.mock.calls[0]?.[0], 'https://horizon-testnet.stellar.org');
+  });
+
+  test('produces a decodable unsigned XDR with expected source account, operation, fee, and timeout', async () => {
+    const actualSdk = jest.requireActual<typeof import('@stellar/stellar-sdk')>('@stellar/stellar-sdk');
+    const sourceKeypair = actualSdk.Keypair.random();
+    const sourcePublicKey = sourceKeypair.publicKey();
+    const contractId = actualSdk.StrKey.encodeContract(Buffer.alloc(32, 7));
+    const networkPassphrase = 'Test SDF Network ; September 2015';
+    const fee = '250';
+    const timeout = 180;
+
+    mockLoadAccount.mockResolvedValueOnce(new actualSdk.Account(sourcePublicKey, '41'));
+    mockAssembleTransaction.mockImplementationOnce(() => ({
+      build: () => {
+        const op = actualSdk.Operation.invokeContractFunction({
+          contract: contractId,
+          function: 'deposit',
+          args: [
+            actualSdk.nativeToScVal(new actualSdk.Address(sourcePublicKey), { type: 'address' }),
+            actualSdk.nativeToScVal(10_000_000n, { type: 'i128' }),
+          ],
+        });
+        return new actualSdk.TransactionBuilder(new actualSdk.Account(sourcePublicKey, '41'), {
+          fee,
+          networkPassphrase,
+        })
+          .addOperation(op)
+          .setTimeout(timeout)
+          .build();
+      },
+    }));
+
+    const service = new TransactionBuilderService({
+      baseFee: fee,
+      timeoutSeconds: timeout,
+    });
+
+    // Temporarily allow this valid contractId by matching config
+    const { config } = jest.requireMock('../config/index.js') as {
+      config: { stellar: { networks: { testnet: { vaultContractId: string } } } };
+    };
+    const prevContractId = config.stellar.networks.testnet.vaultContractId;
+    config.stellar.networks.testnet.vaultContractId = contractId;
+
+    try {
+      const result = await service.buildDepositTransaction({
+        userStellarAddress: sourcePublicKey,
+        vaultContractId: contractId,
+        amountUsdc: '1.0000000',
+      });
+
+      const decoded = actualSdk.TransactionBuilder.fromXDR(result.xdr, networkPassphrase);
+      assert.ok(decoded instanceof actualSdk.Transaction);
+      assert.equal(decoded.source, sourcePublicKey);
+      assert.equal(decoded.fee, fee);
+      assert.equal(decoded.signatures.length, 0);
+      assert.equal(decoded.operations.length, 1);
+      assert.equal(decoded.operations[0]?.type, 'invokeHostFunction');
+      assert.ok(decoded.timeBounds);
+      assert.ok(Number(decoded.timeBounds.maxTime) > 0);
+      assert.equal(result.timeout, timeout);
+    } finally {
+      config.stellar.networks.testnet.vaultContractId = prevContractId;
+    }
   });
 });

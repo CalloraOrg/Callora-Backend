@@ -23,7 +23,10 @@ describe('InMemorySettlementStore', () => {
       const settlements = store.getDeveloperSettlements('dev_1');
 
       expect(settlements).toHaveLength(1);
-      expect(settlements[0]).toEqual(settlement);
+      expect(settlements[0]).toEqual({
+        ...settlement,
+        completed_at: null,
+      });
     });
 
     it('maintains settlement order by creation date (newest first)', () => {
@@ -307,6 +310,7 @@ describe('InMemorySettlementStore', () => {
         status: 'completed',
         tx_hash: '0xtx1',
         created_at: '2024-01-01T00:00:00.000Z',
+        completed_at: expect.any(String),
       });
 
       const stl2 = dev1Settlements.find(s => s.id === 'stl_2');
@@ -317,6 +321,7 @@ describe('InMemorySettlementStore', () => {
         status: 'failed',
         tx_hash: null,
         created_at: '2024-01-02T00:00:00.000Z',
+        completed_at: null,
       });
     });
 
@@ -334,7 +339,10 @@ describe('InMemorySettlementStore', () => {
       const settlements = store.getDeveloperSettlements('');
 
       expect(settlements).toHaveLength(1);
-      expect(settlements[0]).toEqual(edgeCaseSettlement);
+      expect(settlements[0]).toEqual({
+        ...edgeCaseSettlement,
+        completed_at: null,
+      });
     });
 
     it('handles very large amounts correctly', () => {
@@ -491,6 +499,7 @@ describe('InMemorySettlementStore', () => {
         status: 'completed',
         tx_hash: '0xsuccessful_tx',
         created_at: settlement.created_at,
+        completed_at: expect.any(String),
       });
     });
   });

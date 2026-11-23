@@ -3,6 +3,13 @@ import { InMemorySettlementStore } from './settlementStore.js';
 import { InMemoryUsageStore } from './usageStore.js';
 import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import type { SorobanSettlementClient } from './sorobanSettlement.js';
+import { createSettlementStatusSyncJob } from './settlementStatusSyncJob.js';
+import {
+  createAdvisoryLockHooks,
+  SETTLEMENT_STATUS_SYNC_LOCK_KEY,
+  type AdvisoryLockClient,
+  type AdvisoryLockPool,
+} from '../lib/advisoryLock.js';
 
 describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
   let usageStore: InMemoryUsageStore;
@@ -536,5 +543,172 @@ describe('settlementStatusSyncJob - reconcilePendingSettlements', () => {
 
       setTimeoutSpy.mockRestore();
     });
+  });
+});
+
+describe('createSettlementStatusSyncJob - locking and graceful shutdown', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('runs reconcilePendingSettlements on interval when no lock hook is provided', async () => {
+    jest.useFakeTimers();
+    const reconcilePendingSettlements = jest.fn(async () => ({
+      checked: 0,
+      completed: 0,
+      failed: 0,
+      retried: 0,
+      errors: 0,
+    }));
+    const service = { reconcilePendingSettlements } as unknown as RevenueSettlementService;
+    const job = createSettlementStatusSyncJob(service, { intervalMs: 100 });
+
+    job.start();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(reconcilePendingSettlements).toHaveBeenCalledTimes(1);
+
+    job.stop();
+    await jest.advanceTimersByTimeAsync(300);
+    expect(reconcilePendingSettlements).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips tick when advisory lock is held elsewhere (pg_try_advisory_lock returns false)', async () => {
+    jest.useFakeTimers();
+    const reconcilePendingSettlements = jest.fn(async () => ({
+      checked: 0,
+      completed: 0,
+      failed: 0,
+      retried: 0,
+      errors: 0,
+    }));
+    const service = { reconcilePendingSettlements } as unknown as RevenueSettlementService;
+    const query = jest.fn(async () => ({ rows: [{ acquired: false }] }));
+    const release = jest.fn();
+    const fakePool: AdvisoryLockPool = {
+      connect: jest.fn(async () => ({
+        query: query as unknown as AdvisoryLockClient['query'],
+        release,
+      })),
+    };
+
+    const job = createSettlementStatusSyncJob(service, {
+      intervalMs: 100,
+      ...createAdvisoryLockHooks(fakePool, SETTLEMENT_STATUS_SYNC_LOCK_KEY),
+    });
+
+    job.start();
+    await jest.advanceTimersByTimeAsync(100);
+    job.stop();
+
+    expect(query).toHaveBeenCalledWith(
+      'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
+      [SETTLEMENT_STATUS_SYNC_LOCK_KEY],
+    );
+    expect(reconcilePendingSettlements).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('always releases lock when reconcilePendingSettlements throws', async () => {
+    jest.useFakeTimers();
+    const reconcilePendingSettlements = jest.fn(async () => {
+      throw new Error('boom');
+    });
+    const service = { reconcilePendingSettlements } as unknown as RevenueSettlementService;
+    const logger = { error: jest.fn() };
+    const acquireLock = jest.fn(async () => true);
+    const releaseLock = jest.fn(async () => undefined);
+
+    const job = createSettlementStatusSyncJob(service, {
+      intervalMs: 100,
+      logger,
+      acquireLock,
+      releaseLock,
+    });
+
+    job.start();
+    await jest.advanceTimersByTimeAsync(100);
+    job.stop();
+
+    expect(acquireLock).toHaveBeenCalledTimes(1);
+    expect(reconcilePendingSettlements).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Settlement status sync job failed:',
+      expect.any(Error),
+    );
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips overlapping tick when previous tick is still running', async () => {
+    jest.useFakeTimers();
+    let resolveTick!: () => void;
+    const reconcilePendingSettlements = jest.fn(
+      () =>
+        new Promise<{
+          checked: number;
+          completed: number;
+          failed: number;
+          retried: number;
+          errors: number;
+        }>((resolve) => {
+          resolveTick = () =>
+            resolve({ checked: 0, completed: 0, failed: 0, retried: 0, errors: 0 });
+        }),
+    );
+    const service = { reconcilePendingSettlements } as unknown as RevenueSettlementService;
+    const job = createSettlementStatusSyncJob(service, { intervalMs: 100 });
+
+    job.start();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(reconcilePendingSettlements).toHaveBeenCalledTimes(1);
+
+    // Next interval fires while first tick is still in flight
+    await jest.advanceTimersByTimeAsync(100);
+    expect(reconcilePendingSettlements).toHaveBeenCalledTimes(1);
+
+    resolveTick();
+    await job.awaitIdle();
+    job.stop();
+  });
+
+  it('beginShutdown stops future ticks and awaitIdle waits for an in-flight tick', async () => {
+    jest.useFakeTimers();
+    let resolveTick!: () => void;
+    const reconcilePendingSettlements = jest.fn(
+      () =>
+        new Promise<{
+          checked: number;
+          completed: number;
+          failed: number;
+          retried: number;
+          errors: number;
+        }>((resolve) => {
+          resolveTick = () =>
+            resolve({ checked: 0, completed: 0, failed: 0, retried: 0, errors: 0 });
+        }),
+    );
+    const service = { reconcilePendingSettlements } as unknown as RevenueSettlementService;
+    const job = createSettlementStatusSyncJob(service, { intervalMs: 100 });
+
+    job.start();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(reconcilePendingSettlements).toHaveBeenCalledTimes(1);
+
+    job.beginShutdown();
+
+    let idleResolved = false;
+    const idlePromise = job.awaitIdle().then(() => {
+      idleResolved = true;
+    });
+
+    await Promise.resolve();
+    expect(idleResolved).toBe(false);
+
+    // Advancing timers after beginShutdown should not trigger new ticks
+    await jest.advanceTimersByTimeAsync(300);
+    expect(reconcilePendingSettlements).toHaveBeenCalledTimes(1);
+
+    resolveTick();
+    await idlePromise;
+    expect(idleResolved).toBe(true);
   });
 });

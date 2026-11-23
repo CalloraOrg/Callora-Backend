@@ -442,8 +442,8 @@ describe('GET /api/admin/webhooks/monitor — response shape', () => {
             .set('x-admin-api-key', ADMIN_KEY);
 
         expect(res.status).toBe(500);
-        expect(res.body).toHaveProperty('code');
-        expect(res.body).toHaveProperty('message');
+        expect(res.body).toHaveProperty('error.code');
+        expect(res.body).toHaveProperty('error.message');
         expect(res.body).toHaveProperty('requestId');
     });
 });

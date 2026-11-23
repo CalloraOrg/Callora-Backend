@@ -9,6 +9,12 @@ import {
   type TenantRepository,
 } from './tenants.js';
 import type { CreateTenantInput, UpdateTenantInput } from '../validators/tenants.js';
+import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
+
+function authHeader(userId = 'dev-1') {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+  return `Bearer ${signTestToken({ userId })}`;
+}
 
 class MockTenantRepository implements TenantRepository {
   list = jest.fn(async (): Promise<TenantRecord[]> => ([
@@ -101,7 +107,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-tenant-create')
       .set('x-correlation-id', 'corr-tenant-create')
       .send({
@@ -143,7 +149,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-invalid-create')
       .send({ contactEmail: 'bad-email' });
 
@@ -170,7 +176,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ name: 'GrantFox Ops', unsafeRole: 'admin' });
 
     expect(res.status).toBe(400);
@@ -186,7 +192,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .patch('/api/tenants/tenant_123')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-tenant-update')
       .send({ name: 'GrantFox Stadium Ops', plan: 'enterprise' });
 
@@ -208,7 +214,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .patch('/api/tenants/no')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-invalid-update')
       .send({});
 
@@ -228,7 +234,7 @@ describe('createTenantsRouter', () => {
 
     const created = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ name: 'AI' });
 
     expect(created.status).toBe(201);
@@ -244,7 +250,7 @@ describe('createTenantsRouter', () => {
 
     const updated = await request(app)
       .patch(`/api/tenants/${created.body.data.id}`)
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ contactEmail: 'ai-ops@grantfox.test' });
 
     expect(updated.status).toBe(200);
@@ -260,17 +266,17 @@ describe('createTenantsRouter', () => {
 
   it('does not list or update another developer\'s tenant', async () => {
     const app = buildDefaultRepositoryApp();
-    const own = await request(app).post('/api/tenants').set('x-user-id', 'dev-1').send({ name: 'Own tenant' });
-    const foreign = await request(app).post('/api/tenants').set('x-user-id', 'dev-2').send({ name: 'Foreign tenant' });
+    const own = await request(app).post('/api/tenants').set('Authorization', authHeader('dev-1')).send({ name: 'Own tenant' });
+    const foreign = await request(app).post('/api/tenants').set('Authorization', authHeader('dev-2')).send({ name: 'Foreign tenant' });
 
-    const list = await request(app).get('/api/tenants').set('x-user-id', 'dev-1');
+    const list = await request(app).get('/api/tenants').set('Authorization', authHeader('dev-1'));
     expect(list.status).toBe(200);
     expect(list.body.data).toHaveLength(1);
     expect(list.body.data[0].id).toBe(own.body.data.id);
 
     const crossTenantUpdate = await request(app)
       .patch(`/api/tenants/${foreign.body.data.id}`)
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ name: 'Attempted takeover' });
     expect(crossTenantUpdate.status).toBe(404);
     expect(crossTenantUpdate.body.error.code).toBe('NOT_FOUND');
@@ -283,7 +289,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ name: 'GrantFox Ops' });
 
     expect(res.status).toBe(500);
@@ -297,7 +303,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .patch('/api/tenants/tenant_123')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ name: 'GrantFox Ops' });
 
     expect(res.status).toBe(500);
@@ -322,7 +328,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authHeader('dev-1'));
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -338,7 +344,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authHeader('dev-1'));
 
     expect(res.status).toBe(200);
     expect(res.headers.etag).toBeDefined();
@@ -350,7 +356,7 @@ describe('createTenantsRouter', () => {
 
     const first = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authHeader('dev-1'));
 
     expect(first.status).toBe(200);
     const etag = first.headers.etag as string;
@@ -358,7 +364,7 @@ describe('createTenantsRouter', () => {
 
     const second = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('If-None-Match', etag);
 
     expect(second.status).toBe(304);
@@ -370,7 +376,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('If-None-Match', '"different-hash-value"');
 
     expect(res.status).toBe(200);
@@ -382,7 +388,7 @@ describe('createTenantsRouter', () => {
 
     const first = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authHeader('dev-1'));
 
     expect(first.status).toBe(200);
     const etag = first.headers.etag as string;
@@ -390,7 +396,7 @@ describe('createTenantsRouter', () => {
 
     const second = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('If-None-Match', weakTag);
 
     expect(second.status).toBe(200);
@@ -403,7 +409,7 @@ describe('createTenantsRouter', () => {
 
     const res = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authHeader('dev-1'));
 
     expect(res.status).toBe(500);
     expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');

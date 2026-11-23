@@ -218,7 +218,7 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
   async cleanupExpiredTokens(): Promise<number> {
     const result = await this.writeDb.query(
       `DELETE FROM refresh_tokens
-       WHERE (expires_at < CURRENT_TIMESTAMP OR is_revoked = true)`
+       WHERE (expires_at < NOW() OR is_revoked = true)`
     );
     return (result as { rowCount?: number | null }).rowCount ?? 0;
   }
@@ -227,7 +227,7 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
     const result = await this.readDb.query(
       `SELECT COUNT(*) as count
        FROM refresh_tokens
-       WHERE user_id = $1 AND expires_at > CURRENT_TIMESTAMP AND is_revoked = false`,
+       WHERE user_id = $1 AND expires_at > NOW() AND is_revoked = false`,
       [userId]
     );
     const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -248,7 +248,7 @@ export class DatabaseRefreshTokenRepository implements RefreshTokenRepository {
         SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, is_revoked, family_id
         FROM refresh_tokens
         WHERE user_id = $1
-          AND (created_at, id) < ($2, $3)
+          AND (created_at < $2 OR (created_at = $2 AND id < $3))
         ORDER BY created_at DESC, id DESC
         LIMIT $4`;
       params = [userId, afterCursor.timestamp.toISOString(), afterCursor.id, fetchLimit];

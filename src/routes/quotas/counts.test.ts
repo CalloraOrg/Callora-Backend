@@ -30,6 +30,8 @@ import countsRouter, { quotasDrainTracker } from './counts.js';
 import * as quotaService from '../../services/quotaService.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { createInFlightDrainTracker } from '../../lifecycle/shutdown.js';
+import { asyncHandler } from '../../utils/asyncHandler.js';
+import { TEST_JWT_SECRET, signTestToken } from '../../../tests/helpers/jwt.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -37,7 +39,6 @@ import { createInFlightDrainTracker } from '../../lifecycle/shutdown.js';
 
 /**
  * Builds a minimal Express app mounting the counts router.
- * Optionally injects a user identity via x-user-id (mimics requireAuth in test mode).
  */
 function buildApp() {
   const app = express();
@@ -47,10 +48,10 @@ function buildApp() {
   return app;
 }
 
-/** JWT helper: builds an Authorization header accepted by requireAuth in test mode. */
+/** JWT helper: builds an Authorization header accepted by requireAuth. */
 function authHeader(userId = 'user-123') {
-  // requireAuth in test/CI mode accepts x-user-id shortcut
-  return { 'x-user-id': userId };
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+  return { Authorization: `Bearer ${signTestToken({ userId })}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -89,10 +90,10 @@ describe('quotasDrainTracker — drain behaviour', () => {
 
     const app = express();
     app.use(tracker.middleware);
-    app.get('/test', async (_req: Request, res: Response) => {
+    app.get('/test', asyncHandler(async (_req: Request, res: Response) => {
       await requestHeld;
       res.status(200).json({ ok: true });
-    });
+    }));
 
     // Start a request but do not await it yet
     const responsePromise = request(app).get('/test');

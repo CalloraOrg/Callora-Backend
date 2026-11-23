@@ -142,6 +142,7 @@ export const coreSettings = {
       : undefined,
 
   settlementSync: {
+    enabled: env.SETTLEMENT_STATUS_SYNC_ENABLED,
     intervalMs: env.SETTLEMENT_STATUS_SYNC_INTERVAL_MS,
     timeoutMs: env.SETTLEMENT_STATUS_SYNC_TIMEOUT_MS,
     maxRetries: env.SETTLEMENT_MAX_RETRIES,
