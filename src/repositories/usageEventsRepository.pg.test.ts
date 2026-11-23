@@ -605,15 +605,10 @@ test('repository accepts bigint values returned directly from the database drive
   assert.equal(events[0]?.amount, 450n);
 });
 
-// Skipped: since #1544 this query joins revenue_ledger_skips, which pg-mem
-// cannot evaluate ("Not supported: lookups on joins"). The same query is
-// exercised against real PostgreSQL in src/services/revenueLedgerIndexer.test.ts.
-test.skip('findUnindexedRevenueLedgerEvents resolves developer ownership from apis and skips indexed rows', async () => {
+test('findUnindexedRevenueLedgerEvents skips indexed rows, handles skip-table retries, and covers edge cases', async () => {
   const { repository, pool } = createUsageEventsRepository();
 
   try {
-    // No apis table in Postgres anymore
-
     await repository.create({
       userId: 'consumer-1',
       apiId: 'api-weather',
@@ -647,7 +642,30 @@ test.skip('findUnindexedRevenueLedgerEvents resolves developer ownership from ap
       stellarTxHash: 'tx-ledger-3',
       createdAt: new Date('2026-02-03T10:00:00.000Z'),
     });
+    await repository.create({
+      userId: 'consumer-4',
+      apiId: 'api-perm-skip',
+      endpointId: 'endpoint-4',
+      apiKeyId: 'key-4',
+      developerId: 'dev-1',
+      amount: 400n,
+      requestId: 'req-ledger-4',
+      stellarTxHash: 'tx-ledger-4',
+      createdAt: new Date('2026-02-04T10:00:00.000Z'),
+    });
+    await repository.create({
+      userId: 'consumer-5',
+      apiId: 'api-retry-skip',
+      endpointId: 'endpoint-5',
+      apiKeyId: 'key-5',
+      developerId: 'dev-1',
+      amount: 500n,
+      requestId: 'req-ledger-5',
+      stellarTxHash: 'tx-ledger-5',
+      createdAt: new Date('2026-02-05T10:00:00.000Z'),
+    });
 
+    // Event 1 is already indexed in revenue_ledger.
     await pool.query(
       `
         INSERT INTO revenue_ledger (
@@ -662,6 +680,25 @@ test.skip('findUnindexedRevenueLedgerEvents resolves developer ownership from ap
       ['api-weather', 'dev-weather', '100', '1', new Date('2026-02-01T10:00:00.000Z')],
     );
 
+    // Event 4 is permanently skipped (even with a past next_retry_at).
+    await pool.query(
+      `
+        INSERT INTO revenue_ledger_skips (usage_event_id, reason, next_retry_at, permanent)
+        VALUES ($1, $2, $3, $4)
+      `,
+      ['4', 'unresolvable_api', new Date('2026-02-28T00:00:00.000Z'), true],
+    );
+
+    // Event 5 has a non-permanent skip with a future next_retry_at.
+    const futureRetryAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await pool.query(
+      `
+        INSERT INTO revenue_ledger_skips (usage_event_id, reason, next_retry_at, permanent)
+        VALUES ($1, $2, $3, $4)
+      `,
+      ['5', 'transient_error', futureRetryAt, false],
+    );
+
     const events = await repository.findUnindexedRevenueLedgerEvents();
 
     assert.deepEqual(events, [
@@ -670,12 +707,39 @@ test.skip('findUnindexedRevenueLedgerEvents resolves developer ownership from ap
         apiId: 'api-chat',
         amount: 250n,
         createdAt: new Date('2026-02-02T10:00:00.000Z'),
+        stellarTxHash: 'tx-ledger-2',
+        deductionStatus: null,
       },
       {
         usageEventId: '3',
         apiId: 'api-missing',
         amount: 999n,
         createdAt: new Date('2026-02-03T10:00:00.000Z'),
+        stellarTxHash: 'tx-ledger-3',
+        deductionStatus: null,
+      },
+    ]);
+
+    // Edge cases: limit = 0 and cursor beyond last id.
+    assert.deepEqual(await repository.findUnindexedRevenueLedgerEvents('0', 0), []);
+    assert.deepEqual(await repository.findUnindexedRevenueLedgerEvents('999', 100), []);
+
+    // Once the non-permanent skip becomes due (next_retry_at <= NOW()), the row is returned
+    // even when the cursor is already past its id.
+    await pool.query(
+      `UPDATE revenue_ledger_skips SET next_retry_at = $1 WHERE usage_event_id = $2`,
+      [new Date('2026-03-01T00:00:00.000Z'), '5'],
+    );
+
+    const dueRetryEvents = await repository.findUnindexedRevenueLedgerEvents('999', 100);
+    assert.deepEqual(dueRetryEvents, [
+      {
+        usageEventId: '5',
+        apiId: 'api-retry-skip',
+        amount: 500n,
+        createdAt: new Date('2026-02-05T10:00:00.000Z'),
+        stellarTxHash: 'tx-ledger-5',
+        deductionStatus: null,
       },
     ]);
   } finally {
