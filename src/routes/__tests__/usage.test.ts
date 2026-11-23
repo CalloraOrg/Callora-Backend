@@ -29,21 +29,19 @@ function makeEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
     apiId: 'api-1',
     endpoint: '/v1/test',
     occurredAt: now,
-    createdAt: now,
-    revenue: 100,
-    amount: 100,
+    revenue: 100n,
     apiKeyId: 'key-1',
     developerId: 'dev-1',
     requestId: `req-${Math.random().toString(36).slice(2, 8)}`,
     ...overrides,
-  };
+  } as UsageEvent;
 }
 
 function makeStats(overrides: Partial<UsageStats> = {}): UsageStats {
   return {
     apiId: 'api-1',
     calls: 10,
-    revenue: 1000,
+    revenue: 1000n,
     ...overrides,
   };
 }
@@ -59,9 +57,8 @@ function makeUsageRepo(overrides: Partial<MockUsageRepo> = {}): MockUsageRepo {
     developerOwnsApi: jest.fn().mockResolvedValue(true),
     aggregateByDeveloper: jest.fn().mockResolvedValue([]),
     aggregateByUser: jest.fn().mockResolvedValue({ totalCalls: 0, totalRevenue: 0, breakdownByApi: [] }),
-    create: jest.fn(),
     ...overrides,
-  };
+  } as unknown as MockUsageRepo;
 }
 
 function buildApp(usageRepo: MockUsageRepo) {
@@ -198,8 +195,8 @@ describe('GET /api/usage — Offset/Limit Pagination', () => {
 describe('GET /api/usage — Legacy Cursor Pagination', () => {
   it('returns usage events with next_cursor when cursor param is used', async () => {
     const events: UsageEvent[] = [
-      makeEvent({ id: 'evt-1', createdAt: new Date('2026-07-01T00:00:00Z') }),
-      makeEvent({ id: 'evt-2', createdAt: new Date('2026-07-02T00:00:00Z') }),
+      makeEvent({ id: 'evt-1', occurredAt: new Date('2026-07-01T00:00:00Z') }),
+      makeEvent({ id: 'evt-2', occurredAt: new Date('2026-07-02T00:00:00Z') }),
     ];
     (events as any)._nextCursor = 'bmV4dC1jdXJzb3I=';
     (events as any)._hasMore = true;
@@ -238,8 +235,8 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
   it('returns events with nextCursor and prevCursor when using after param', async () => {
     const cursorResult: CursorResult = {
       events: [
-        makeEvent({ id: 'evt-1', createdAt: new Date('2026-07-01T00:00:00Z') }),
-        makeEvent({ id: 'evt-2', createdAt: new Date('2026-07-02T00:00:00Z') }),
+        makeEvent({ id: 'evt-1', occurredAt: new Date('2026-07-01T00:00:00Z') }),
+        makeEvent({ id: 'evt-2', occurredAt: new Date('2026-07-02T00:00:00Z') }),
       ],
       nextCursor: 'bmV4dC1jdXJzb3I=',
       prevCursor: null,
@@ -266,7 +263,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
   it('returns events with prevCursor when using before param', async () => {
     const cursorResult: CursorResult = {
       events: [
-        makeEvent({ id: 'evt-1', createdAt: new Date('2026-06-30T00:00:00Z') }),
+        makeEvent({ id: 'evt-1', occurredAt: new Date('2026-06-30T00:00:00Z') }),
       ],
       nextCursor: null,
       prevCursor: 'cHJldi1jdXJzb3I=',

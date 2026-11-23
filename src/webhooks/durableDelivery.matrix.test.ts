@@ -42,7 +42,7 @@ describe('durable delivery state transition matrix', () => {
       await store.fail(claim!, `failure-${index}`, 'x', claim!.nextAttemptAt)
       claim = await store.claim('tenant-1', 'event-22', `worker-${index}`, claim!.nextAttemptAt)
     }
-    const failed = await store.fail(claim!, 'x', 1000)
+    const failed = await store.fail(claim!, `worker-${attempt - 1}`, 'x', 1000)
     expect(failed?.nextAttemptAt).toBe(1000 + delay)
   })
 

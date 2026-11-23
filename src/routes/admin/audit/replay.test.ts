@@ -70,7 +70,8 @@ import type {
   AuditLogRepository,
 } from '../../../repositories/auditLogRepository.js';
 import type { CreditsRepository } from '../../../repositories/creditsRepository.js';
-import type { ApiRepository, Api } from '../../../repositories/apiRepository.js';
+import type { ApiRepository } from '../../../repositories/apiRepository.js';
+import type { Api } from '../../../db/schema.js';
 import type {
   UsageAdminStore,
   UsageAggregateSnapshot,
@@ -157,17 +158,19 @@ class MockCreditsRepo implements CreditsRepository {
   }
 }
 
-class MockApiRepo implements ApiRepository {
+class MockApiRepo implements Partial<ApiRepository> {
   deleteResults = new Map<number, boolean>();
   restoreResults = new Map<number, Api | null>();
 
-  create() { throw new Error('not implemented'); }
-  createWithEndpoints() { throw new Error('not implemented'); }
-  update() { throw new Error('not implemented'); }
-  findById() { throw new Error('not implemented'); }
-  listByDeveloper() { throw new Error('not implemented'); }
-  listAll() { throw new Error('not implemented'); }
-  listActive() { throw new Error('not implemented'); }
+  create(): Promise<Api> { throw new Error('not implemented'); }
+  createWithEndpoints(): Promise<never> { throw new Error('not implemented'); }
+  update(): Promise<Api | null> { throw new Error('not implemented'); }
+  findById(): Promise<null> { throw new Error('not implemented'); }
+  listByDeveloper(): Promise<Api[]> { throw new Error('not implemented'); }
+  listPublic(): Promise<Api[]> { throw new Error('not implemented'); }
+  getEndpoints(): Promise<never> { throw new Error('not implemented'); }
+  findRawById(): Promise<Api | null> { throw new Error('not implemented'); }
+  bulkCreateEndpoints(): Promise<never> { throw new Error('not implemented'); }
 
   delete(id: number): Promise<boolean> {
     return Promise.resolve(this.deleteResults.get(id) ?? true);
@@ -230,6 +233,11 @@ const baseEntry = (overrides: Partial<AuditLogEntry> = {}): AuditLogEntry => ({
   correlationId: 'req-1',
   bodyHash: null,
   details: null,
+  sequenceNo: 1,
+  previousHash: '0'.repeat(64),
+  integrityHash: '1'.repeat(64),
+  target: null,
+  outcome: 'success',
   createdAt: '2026-06-28T10:00:00.000Z',
   ...overrides,
 });
@@ -302,9 +310,9 @@ describe('POST /api/admin/audit/replay — authorization', () => {
       totalEvents: 1,
       settledEvents: 0,
       unsettledEvents: 1,
-      totalAmountUsdc: 0,
-      settledAmountUsdc: 0,
-      unsettledAmountUsdc: 0,
+      totalAmountUsdc: 0n,
+      settledAmountUsdc: 0n,
+      unsettledAmountUsdc: 0n,
       apiCount: 0,
       endpointCount: 0,
       firstEventAt: null,
@@ -587,9 +595,9 @@ describe('POST /api/admin/audit/replay — successful replay', () => {
       totalEvents: 10,
       settledEvents: 0,
       unsettledEvents: 10,
-      totalAmountUsdc: 50,
-      settledAmountUsdc: 0,
-      unsettledAmountUsdc: 50,
+      totalAmountUsdc: 50n,
+      settledAmountUsdc: 0n,
+      unsettledAmountUsdc: 50n,
       apiCount: 2,
       endpointCount: 5,
       firstEventAt: '2026-01-01T00:00:00.000Z',

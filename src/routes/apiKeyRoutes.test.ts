@@ -162,7 +162,7 @@ describe('API key lifecycle routes', () => {
 
   it('lists keys with masked values and revoked status', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['read', 'write'],
@@ -192,7 +192,7 @@ describe('API key lifecycle routes', () => {
 
   it('revokes an API key and revoked keys are no longer verifiable', async () => {
     const app = createTestApp();
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],
@@ -274,7 +274,7 @@ describe('API key lifecycle routes', () => {
     resetTokenRevocationService();
     const tokenRevocation = getTokenRevocationService({ defaultTtlMs: 60000 });
     
-    const created = apiKeyRepository.create({
+    const created = await apiKeyRepository.create({
       apiId: '101',
       userId: 'dev-1',
       scopes: ['*'],

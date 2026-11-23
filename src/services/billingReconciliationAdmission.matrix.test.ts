@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from '@jest/globals'
 import { BillingConflictError, InMemoryBillingAdmissionStore, admitBillingEvent } from './billingReconciliationAdmission.js'
 
 const event = (n: number, overrides: Record<string, unknown> = {}) => ({
@@ -8,7 +8,7 @@ const event = (n: number, overrides: Record<string, unknown> = {}) => ({
 })
 
 describe('billing admission mutation matrix', () => {
-  it.each(Array.from({ length: 20 }, (_, index) => index + 1))('applies distinct provider event %i once', async n => {
+  it.each(Array.from({ length: 20 }, (_, index) => index + 1))('applies distinct provider event %i once', async (n: number) => {
     const store = new InMemoryBillingAdmissionStore()
     const first = await admitBillingEvent(store, event(n))
     const second = await admitBillingEvent(store, event(n))
@@ -35,7 +35,7 @@ describe('billing admission mutation matrix', () => {
     expect(store.getBalance('developer-matrix')).toBe(2200)
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['tenant', { tenantId: 'tenant-other' }],
     ['provider id', { providerEventId: 'provider-other' }],
     ['invoice', { invoiceId: 'invoice-other' }],
@@ -47,7 +47,7 @@ describe('billing admission mutation matrix', () => {
     expect(result.outcome).toBe('applied')
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['zero amount', { amountMinor: 0 }],
     ['largest safe amount', { amountMinor: Number.MAX_SAFE_INTEGER }],
     ['lowercase currency', { currency: 'eur' }],
@@ -58,7 +58,7 @@ describe('billing admission mutation matrix', () => {
     await expect(admitBillingEvent(store, event(24, change))).resolves.toMatchObject({ outcome: 'applied' })
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['unsafe amount', { amountMinor: Number.MAX_SAFE_INTEGER + 1 }],
     ['negative string amount', { amountMinor: '-1' }],
     ['invalid currency length', { currency: 'US' }],

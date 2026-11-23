@@ -299,7 +299,7 @@ describe('/v1/call/:apiSlugOrId integration tests', () => {
         POSTGRES_PASSWORD: 'testpassword',
       })
       .withExposedPorts(5432)
-      .waitingFor(Wait.forLogMessage(/database system is ready to accept connections/));
+      .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/));
 
     const startedContainer = await container.start();
     const host = startedContainer.getHost();

@@ -18,7 +18,11 @@
 
 import request from 'supertest';
 import express from 'express';
-import refundsRouter, { getRefundStore, clearRefundStore } from './refunds.js';
+import refundsRouter, * as refundsModule from './refunds.js';
+const { getRefundStore, clearRefundStore } = refundsModule as unknown as {
+  getRefundStore: () => Map<string, Record<string, unknown>>;
+  clearRefundStore: () => void;
+};
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import { __setTracer } from '../otel/spans.js';

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from '@jest/globals'
 import { BillingConflictError, InMemoryBillingAdmissionStore, admitBillingEvent, providerEventFingerprint } from './billingReconciliationAdmission.js'
 
 const base = (overrides: Record<string, unknown> = {}) => ({
@@ -24,7 +24,7 @@ describe('billing reconciliation admission', () => {
     expect(store.getBalance('dev-1')).toBe(1250)
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['amount', { amountMinor: 1251 }],
     ['invoice', { invoiceId: 'invoice-2' }],
     ['developer', { developerId: 'dev-2' }],
@@ -55,7 +55,7 @@ describe('billing reconciliation admission', () => {
     expect(store.getRecord('tenant-b', 'evt-001')).toBeDefined()
   })
 
-  it.each([
+  it.each<[string, Record<string, unknown>]>([
     ['empty tenant', { tenantId: '' }],
     ['empty event id', { providerEventId: '' }],
     ['empty invoice', { invoiceId: ' ' }],

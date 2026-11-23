@@ -28,7 +28,7 @@ function createMockDb(rows: Array<{ plan_overrides: string | null }>) {
   };
 
   return {
-    transaction: async (cb: (tx: typeof tx) => Promise<unknown>) => cb(tx),
+    transaction: async (cb: (txArg: typeof tx) => Promise<unknown>) => cb(tx),
   };
 }
 
@@ -53,7 +53,7 @@ function buildApp(db: MockDb) {
     res.locals.adminActor = 'admin-api-key';
     next();
   });
-  app.use('/api/admin/quotas', createAdminQuotaBulkRouter({ db }));
+  app.use('/api/admin/quotas', createAdminQuotaBulkRouter({ db: db as unknown as NonNullable<Parameters<typeof createAdminQuotaBulkRouter>[0]>['db'] }));
   app.use(errorHandler);
   return app;
 }

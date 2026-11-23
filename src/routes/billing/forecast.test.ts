@@ -72,7 +72,7 @@ function buildApp(options: {
   if (options.usageEventsRepository) {
     app.locals.usageEventsRepository = options.usageEventsRepository;
   }
-  app.use('/api/billing/forecast', createBillingForecastRouter(options));
+  app.use('/api/billing/forecast', createBillingForecastRouter(options as Parameters<typeof createBillingForecastRouter>[0]));
   app.use(errorHandler);
   return app;
 }

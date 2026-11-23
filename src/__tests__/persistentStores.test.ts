@@ -237,8 +237,8 @@ test('voided unsettled revenue is reversed and settled revenue receives a negati
       `SELECT usage_event_id, amount_usdc::text, reversed_at, reversal_of_usage_event_id
        FROM revenue_ledger ORDER BY id`,
     );
-    const settled = rows.rows.find((row) => String(row.usage_event_id) === String(settledEvent?.id));
-    const compensation = rows.rows.find((row) => String(row.reversal_of_usage_event_id) === String(settledEvent?.id));
+    const settled = rows.rows.find((row: Record<string, unknown>) => String(row.usage_event_id) === String(settledEvent?.id));
+    const compensation = rows.rows.find((row: Record<string, unknown>) => String(row.reversal_of_usage_event_id) === String(settledEvent?.id));
     expect(settled?.amount_usdc).toBe('9');
     expect(settled?.reversed_at).toBeTruthy();
     expect(compensation?.amount_usdc).toBe('-9');

@@ -40,7 +40,6 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
           if (token === 'valid-token') {
             res.locals.authenticatedUser = {
               id: 'jwt-user-1',
-              email: 'jwt-user@example.com',
             };
             next();
             return;
@@ -65,7 +64,6 @@ function createTestApp(vaultRepository: InMemoryVaultRepository, useJwtAuth = fa
       if (userId) {
         res.locals.authenticatedUser = {
           id: userId,
-          email: `${userId}@example.com`,
         };
         next();
       } else {
