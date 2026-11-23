@@ -24,6 +24,7 @@ export class SorobanRpcClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeout: number;
   private readonly circuitBreaker: CircuitBreaker;
+  private requestCounter = 0;
 
   constructor(options: SorobanRpcClientOptions) {
     this.rpcUrl = options.rpcUrl;
@@ -45,7 +46,7 @@ export class SorobanRpcClient {
           },
           body: JSON.stringify({
             jsonrpc: '2.0',
-            id: Date.now().toString(),
+            id: String(++this.requestCounter),
             method,
             params,
           }),
