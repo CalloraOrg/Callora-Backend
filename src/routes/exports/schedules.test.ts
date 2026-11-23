@@ -28,9 +28,11 @@ const IDEM_SCHEDULE_BODY = {
 function createMockDb() {
   const store = new Map<string, Record<string, unknown>>();
   const recordKey = (scope: unknown, key: unknown) => `${String(scope)}:${String(key)}`;
+  let leaseSeq = 0;
   return {
     query: jest.fn().mockImplementation(async (sql: string, params: unknown[]) => {
       if (sql.includes('DELETE')) {
+        store.delete(recordKey(params[0], params[1]));
         return { rows: [] };
       }
       if (sql.includes('SELECT')) {
@@ -38,20 +40,21 @@ function createMockDb() {
         return { rows: store.has(key) ? [store.get(key)!] : [] };
       }
       if (sql.includes('INSERT') && !sql.includes('SELECT')) {
+        const leaseToken = `2026-01-01 00:00:00.${String(++leaseSeq).padStart(6, '0')}`;
         store.set(recordKey(params[0], params[1]), {
           request_hash: params[2],
-          status: params[3],
-          expires_at: params[4],
+          status: 'started',
+          lease_token: leaseToken,
         });
-        return { rows: [], rowCount: 1 };
+        return { rows: [{ lease_token: leaseToken }], rowCount: 1 };
       }
-      if (sql.includes('UPDATE')) {
-        const key = recordKey(params[3], params[4]);
+      if (sql.includes('UPDATE') && sql.includes("status = 'completed'")) {
+        const key = recordKey(params[2], params[3]);
         store.set(key, {
           ...store.get(key),
-          status: params[0],
-          response_status: params[1],
-          response_body: params[2],
+          status: 'completed',
+          response_status: params[0],
+          response_body: params[1],
         });
         return { rows: [] };
       }
@@ -200,6 +203,7 @@ describe('Idempotency-Key on /api/exports/schedules', () => {
 
     expect(second.status).toBe(201);
     expect(second.headers['idempotent-replayed']).toBe('true');
+    expect(second.body.data.id).toBe(first.body.data.id);
     expect(second.body.data.s3SecretAccessKey).toBe('[REDACTED]');
   });
 
