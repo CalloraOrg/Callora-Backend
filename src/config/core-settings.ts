@@ -151,6 +151,9 @@ export const coreSettings = {
     intervalMs: env.SETTLEMENT_RECON_INTERVAL_MS,
   },
   revenueLedgerIndexer: {
+    // Default on outside tests so the indexer boots in every real deployment.
+    enabled:
+      env.REVENUE_LEDGER_INDEXER_ENABLED ?? env.NODE_ENV !== "test",
     intervalMs: env.REVENUE_LEDGER_INDEXER_INTERVAL_MS,
     batchSize: env.REVENUE_LEDGER_INDEXER_BATCH_SIZE,
   },

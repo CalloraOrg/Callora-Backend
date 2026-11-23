@@ -9,6 +9,23 @@ import type { SubscriptionRepository } from '../repositories/subscriptionReposit
 import type { ApiRepository } from '../repositories/apiRepository.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { Api, Developer, Subscription } from '../db/schema.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+const originalJwtSecret = process.env.JWT_SECRET;
+
+beforeAll(() => {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+});
+
+afterAll(() => {
+  if (originalJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = originalJwtSecret;
+  }
+});
+
+const bearer = (userId: string): string => `Bearer ${signTestToken({ userId })}`;
 
 const TEST_ORIGIN = 'https://app.callora.com';
 
@@ -157,7 +174,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({});
     expect(res.status).toBe(400);
   });
@@ -167,7 +184,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 'bad' });
     expect(res.status).toBe(400);
   });
@@ -177,7 +194,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, metering_limit: 0 });
     expect(res.status).toBe(400);
   });
@@ -188,7 +205,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 99 });
     expect(res.status).toBe(404);
   });
@@ -199,7 +216,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 11 });
     expect(res.status).toBe(404);
   });
@@ -210,7 +227,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-owner') // this user is the owner
+      .set('Authorization', bearer('user-owner')) // this user is the owner
       .send({ api_id: 10 });
     expect(res.status).toBe(403);
   });
@@ -223,7 +240,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10 });
     expect(res.status).toBe(409);
   });
@@ -235,7 +252,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, metering_limit: 500 });
     expect(res.status).toBe(201);
     expect(res.body.id).toBe(created.id);
@@ -247,7 +264,7 @@ describe('POST /api/subscriptions', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, metering_limit: null });
     expect(res.status).toBe(201);
   });
@@ -269,7 +286,7 @@ describe('GET /api/subscriptions', () => {
     const res = await request(app)
       .get('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual([]);
     expect(res.body.total).toBe(0);
@@ -282,7 +299,7 @@ describe('GET /api/subscriptions', () => {
     const res = await request(app)
       .get('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(2);
   });
@@ -298,7 +315,7 @@ describe('GET /api/subscriptions', () => {
     const res = await request(app)
       .get('/api/subscriptions?status=active')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].id).toBe('sub-a');
@@ -309,7 +326,7 @@ describe('GET /api/subscriptions', () => {
     const res = await request(app)
       .get('/api/subscriptions?status=invalid')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(400);
   });
 });
@@ -330,7 +347,7 @@ describe('GET /api/subscriptions/:id', () => {
     const res = await request(app)
       .get('/api/subscriptions/does-not-exist')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(404);
   });
 
@@ -341,7 +358,7 @@ describe('GET /api/subscriptions/:id', () => {
     const res = await request(app)
       .get('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(403);
   });
 
@@ -352,7 +369,7 @@ describe('GET /api/subscriptions/:id', () => {
     const res = await request(app)
       .get('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(200);
     expect(res.body.id).toBe('sub-001');
   });
@@ -376,7 +393,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/does-not-exist')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ status: 'paused' });
     expect(res.status).toBe(404);
   });
@@ -388,7 +405,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ status: 'paused' });
     expect(res.status).toBe(403);
   });
@@ -400,7 +417,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ status: 'active' });
     expect(res.status).toBe(400);
   });
@@ -412,7 +429,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({});
     expect(res.status).toBe(400);
   });
@@ -424,7 +441,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ metering_limit: -1 });
     expect(res.status).toBe(400);
   });
@@ -440,7 +457,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ status: 'paused' });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('paused');
@@ -457,7 +474,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ metering_limit: 1000 });
     expect(res.status).toBe(200);
     expect(res.body.metering_limit).toBe(1000);
@@ -474,7 +491,7 @@ describe('PATCH /api/subscriptions/:id', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ metering_limit: null });
     expect(res.status).toBe(200);
     expect(res.body.metering_limit).toBeNull();
@@ -497,7 +514,7 @@ describe('DELETE /api/subscriptions/:id', () => {
     const res = await request(app)
       .delete('/api/subscriptions/does-not-exist')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(404);
   });
 
@@ -508,7 +525,7 @@ describe('DELETE /api/subscriptions/:id', () => {
     const res = await request(app)
       .delete('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(403);
   });
 
@@ -519,7 +536,7 @@ describe('DELETE /api/subscriptions/:id', () => {
     const res = await request(app)
       .delete('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(400);
   });
 
@@ -534,7 +551,7 @@ describe('DELETE /api/subscriptions/:id', () => {
     const res = await request(app)
       .delete('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber');
+      .set('Authorization', bearer('user-subscriber'));
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('cancelled');
     expect(res.body.cancelled_at).not.toBeNull();
@@ -555,7 +572,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: retryPolicy });
 
     expect(res.status).toBe(201);
@@ -571,7 +588,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10 });
 
     expect(res.status).toBe(201);
@@ -586,7 +603,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: null });
 
     expect(res.status).toBe(201);
@@ -599,7 +616,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: { maxRetries: 11 } });
 
     expect(res.status).toBe(400);
@@ -611,7 +628,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: { maxRetries: -1 } });
 
     expect(res.status).toBe(400);
@@ -623,7 +640,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: { baseDelayMs: 99 } });
 
     expect(res.status).toBe(400);
@@ -635,7 +652,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: { baseDelayMs: 60001 } });
 
     expect(res.status).toBe(400);
@@ -647,7 +664,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: { maxRetries: 3.5 } });
 
     expect(res.status).toBe(400);
@@ -659,7 +676,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: { baseDelayMs: 1000.5 } });
 
     expect(res.status).toBe(400);
@@ -674,7 +691,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: retryPolicy });
 
     expect(res.status).toBe(201);
@@ -689,7 +706,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: retryPolicy });
 
     expect(res.status).toBe(201);
@@ -704,7 +721,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: retryPolicy });
 
     expect(res.status).toBe(201);
@@ -716,7 +733,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     const res = await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: { maxRetries: 3, unknownField: 'x' } });
 
     expect(res.status).toBe(400);
@@ -732,7 +749,7 @@ describe('POST /api/subscriptions — retry_policy', () => {
     await request(app)
       .post('/api/subscriptions')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ api_id: 10, retry_policy: retryPolicy });
 
     expect(createFn).toHaveBeenCalledWith(
@@ -755,7 +772,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ retry_policy: retryPolicy });
 
     expect(res.status).toBe(200);
@@ -774,7 +791,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ retry_policy: null });
 
     expect(res.status).toBe(200);
@@ -789,7 +806,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ retry_policy: { maxRetries: 15 } });
 
     expect(res.status).toBe(400);
@@ -803,7 +820,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ retry_policy: { baseDelayMs: 50 } });
 
     expect(res.status).toBe(400);
@@ -817,7 +834,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ retry_policy: { maxRetries: 2.5 } });
 
     expect(res.status).toBe(400);
@@ -837,7 +854,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ retry_policy: retryPolicy });
 
     expect(updateFn).toHaveBeenCalledWith(
@@ -859,7 +876,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ status: 'paused', retry_policy: retryPolicy });
 
     expect(res.status).toBe(200);
@@ -881,7 +898,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ status: 'paused' });
 
     // retry_policy should NOT be in the update call (undefined = leave unchanged)
@@ -897,7 +914,7 @@ describe('PATCH /api/subscriptions/:id — retry_policy', () => {
     const res = await request(app)
       .patch('/api/subscriptions/sub-001')
       .set('Origin', TEST_ORIGIN)
-      .set('x-user-id', 'user-subscriber')
+      .set('Authorization', bearer('user-subscriber'))
       .send({ retry_policy: { maxRetries: 3, bogus: true } });
 
     expect(res.status).toBe(400);

@@ -10,7 +10,7 @@ The graceful shutdown handler ensures that the application terminates cleanly wh
 
 - **Signal Handling**: Responds to SIGTERM and SIGINT signals
 - **Request Draining**: Waits up to 30 seconds for in-flight HTTP requests to complete
-- **Subsystem Coordination**: Stops and drains the six subsystems registered in `shutdownSubsystems`, then cancels the remaining background jobs
+- **Subsystem Coordination**: Stops and drains the subsystems registered in `shutdownSubsystems`, then cancels the remaining background jobs
 - **Database Cleanup**: Closes all database connection pools gracefully
 - **Structured Logging**: Logs each phase of the shutdown process with correlation IDs
 - **Timeout Protection**: Forcefully closes lingering connections after the grace period
@@ -83,9 +83,9 @@ route module) does **not** register it — see
 ## Registered drain subsystems
 
 `src/index.ts` builds the `shutdownSubsystems: DrainableSubsystem[]` array that is
-passed to `createGracefulShutdownHandler`. The array is populated in one place
-and has no conditional (`push`) entries, so the registered set is identical in
-every environment:
+passed to `createGracefulShutdownHandler`. Entries are pushed only when the
+corresponding background job is enabled, so the registered set can differ
+between environments:
 
 <!-- shutdown-subsystem-order:start -->
 ```text
@@ -113,6 +113,21 @@ the code disagree.
 | 5 | `webhook-dispatcher` | `stopWebhookDispatching` / `awaitWebhookDispatcherIdle` | Webhook deliveries still queued or in flight. |
 | 6 | `settlement-reconciliation` | `settlementReconJob` | The settlement reconciliation run in progress (see [Settlement reconciliation worker](./settlement-reconciliation-worker.md)). |
 | 7 | `monthly-invoice` | `monthlyInvoiceJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `MONTHLY_INVOICE_JOB_ENABLED` is enabled and `DEMO_MODE` is false) | The monthly invoice generation run in progress. |
+
+### Revenue ledger indexer bootstrap
+
+`src/index.ts` boots the indexer through `startRevenueLedgerIndexerJob` in
+`src/lifecycle/jobs.ts`. The job is created only when
+`REVENUE_LEDGER_INDEXER_ENABLED` is true (the default outside tests) and the
+server is not in demo mode. When either condition is false, no job is created
+and no `revenue-ledger-indexer` subsystem is registered.
+
+When enabled, the subsystem is registered before `closeDatabase`, so the job is
+stopped and drained before the PostgreSQL pools close. `beginShutdown()` stops
+scheduling new ticks, `awaitIdle()` waits for the tick that was already running,
+and `RevenueLedgerIndexer.runOnce()` releases its PostgreSQL advisory lock in a
+`finally` block. A rejected tick is logged by the job and does not stop the
+scheduler or crash the server.
 
 ### Jobs that are cancelled, not drained
 

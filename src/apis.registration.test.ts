@@ -18,6 +18,30 @@ import type { Developer } from './db/schema.js';
 import { InMemoryApiRepository } from './repositories/apiRepository.js';
 import type { DeveloperRepository } from './repositories/developerRepository.js';
 import { InMemoryUsageEventsRepository } from './repositories/usageEventsRepository.js';
+import { signTestToken, TEST_JWT_SECRET } from '../tests/helpers/jwt.js';
+
+const originalJwtSecret = process.env.JWT_SECRET;
+const originalAllowMissingOrigin = process.env.CORS_ALLOW_MISSING_ORIGIN;
+
+beforeAll(() => {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+  process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
+});
+
+afterAll(() => {
+  if (originalJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = originalJwtSecret;
+  }
+  if (originalAllowMissingOrigin === undefined) {
+    delete process.env.CORS_ALLOW_MISSING_ORIGIN;
+  } else {
+    process.env.CORS_ALLOW_MISSING_ORIGIN = originalAllowMissingOrigin;
+  }
+});
+
+const bearer = (userId: string): string => `Bearer ${signTestToken({ userId })}`;
 
 const developerProfile: Developer = {
   id: 42,
@@ -70,16 +94,16 @@ describe('POST /api/apis', () => {
   test('returns validation details with field paths for invalid endpoint payloads', async () => {
     const response = await request(buildApp())
       .post('/api/apis')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({
         ...validBody,
         endpoints: [{ path: '/forecast', method: 'FETCH', price_per_call_usdc: 'free' }],
       });
 
     assert.equal(response.status, 400);
-    assert.equal(response.body.code, 'VALIDATION_ERROR');
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
     assert.deepEqual(
-      response.body.details.map((detail: { field: string }) => detail.field),
+      response.body.error.details.map((detail: { field: string }) => detail.field),
       ['body.endpoints[0].method', 'body.endpoints[0].price_per_call_usdc'],
     );
   });
@@ -89,22 +113,23 @@ describe('POST /api/apis', () => {
 
     const createResponse = await request(app)
       .post('/api/apis')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send(validBody);
 
     assert.equal(createResponse.status, 201);
-    assert.equal(createResponse.body.developer_id, developerProfile.id);
-    assert.equal(createResponse.body.status, 'active');
-    assert.equal(createResponse.body.endpoints.length, 1);
+    assert.equal(createResponse.body.data.developer_id, developerProfile.id);
+    assert.equal(createResponse.body.data.status, 'active');
+    assert.equal(createResponse.body.data.endpoints.length, 1);
 
     const listResponse = await request(app).get('/api/apis');
     assert.equal(listResponse.status, 200);
+
     assert.equal(listResponse.body.data.length, 1);
     assert.equal(listResponse.body.data[0].name, validBody.name);
 
-    const detailResponse = await request(app).get(`/api/apis/${createResponse.body.id}`);
+    const detailResponse = await request(app).get(`/api/apis/${createResponse.body.data.id}`);
     assert.equal(detailResponse.status, 200);
-    assert.equal(detailResponse.body.endpoints[0].price_per_call_usdc, '0.01');
+    assert.equal(detailResponse.body.data.endpoints[0].price_per_call_usdc, '0.01');
   });
 
   test('GET /api/apis returns ETag and supports conditional GET (304 Not Modified)', async () => {
@@ -112,7 +137,7 @@ describe('POST /api/apis', () => {
 
     await request(app)
       .post('/api/apis')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send(validBody);
 
     const firstResponse = await request(app).get('/api/apis');

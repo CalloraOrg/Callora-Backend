@@ -6,7 +6,10 @@ import { initializeDb, closeDb } from "./db/index.js";
 import { closePgPool, pool } from "./db.js";
 import { closeDbPool } from "./config/health.js";
 import { disconnectPrisma } from "./lib/prisma.js";
-import { createGracefulShutdownHandler } from "./lifecycle/shutdown.js";
+import { createGracefulShutdownHandler, type DrainableSubsystem } from "./lifecycle/shutdown.js";
+import { startRevenueLedgerIndexerJob } from "./lifecycle/jobs.js";
+import { createRevenueLedgerIndexerJob } from "./services/revenueLedgerIndexer.js";
+import { PgUsageEventsRepository } from "./repositories/usageEventsRepository.pg.js";
 import { startBackgroundJobs } from "./lifecycle/jobs.js";
 import {
   createAdvisoryLockHooks,
@@ -59,6 +62,21 @@ async function startServer(): Promise<void> {
       pool,
       config,
     });
+    // Create and start the background jobs (if enabled)
+    const shutdownSubsystems: DrainableSubsystem[] = [];
+
+    const revenueLedgerIndexer = startRevenueLedgerIndexerJob({
+      settings: config.revenueLedgerIndexer,
+      demoMode: config.demoMode,
+      createJob: () =>
+        createRevenueLedgerIndexerJob(new PgUsageEventsRepository(), {
+          intervalMs: config.revenueLedgerIndexer.intervalMs,
+          batchSize: config.revenueLedgerIndexer.batchSize,
+        }),
+    });
+    if (revenueLedgerIndexer) {
+      shutdownSubsystems.push(revenueLedgerIndexer.subsystem);
+    }
 
     if (config.settlementSync.enabled && !config.demoMode) {
       const usageStore = new PostgresUsageStore(pool);
@@ -88,16 +106,19 @@ async function startServer(): Promise<void> {
         },
       );
       settlementSyncJob.start();
+      const sweeperJob = createIdempotencySweeperJob(pool, {
       console.log(
         `[settlementStatusSync] Started with interval ${config.settlementSync.intervalMs}ms (lock key: ${SETTLEMENT_STATUS_SYNC_LOCK_KEY})`,
       );
 
-      subsystems.push({
+      shutdownSubsystems.push({
         name: "settlement-status-sync",
         beginShutdown: () => {
           settlementSyncJob.beginShutdown();
+          sweeperJob.beginShutdown();
         },
         awaitIdle: () => settlementSyncJob.awaitIdle(),
+        awaitIdle: () => sweeperJob.awaitIdle(),
       });
     }
 
@@ -108,7 +129,7 @@ async function startServer(): Promise<void> {
         await closeDb();
         await Promise.allSettled([closePgPool(), disconnectPrisma(), closeDbPool()]);
       },
-      subsystems,
+      subsystems: shutdownSubsystems,
       timeoutMs: 30_000,
     });
 

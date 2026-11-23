@@ -72,8 +72,11 @@ export function registerAppMiddleware(app: express.Express): void {
 
   app.use(requestIdMiddleware);
   app.use(createResponseValidatorMiddleware());
-  app.use(envelopeMiddleware);
+  // Enrichment must wrap res.json/res.send before the envelope middleware does,
+  // otherwise the injected requestId turns { data, meta } into an opaque object
+  // and the envelope cannot unwrap it.
   app.use(responseEnrichMiddleware);
+  app.use(envelopeMiddleware);
   const memoryAccountingMiddleware = createMemoryAccountingMiddleware(
     config.memoryAccounting,
   );
