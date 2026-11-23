@@ -137,6 +137,10 @@ export const executionEnvironmentFields = {
     .optional(),
 
   // Monthly invoice job
+  MONTHLY_INVOICE_JOB_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   MONTHLY_INVOICE_JOB_INTERVAL_MS: z.coerce
     .number()
     .int()

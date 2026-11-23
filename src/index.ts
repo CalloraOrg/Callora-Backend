@@ -7,7 +7,17 @@ import { closePgPool, pool } from "./db.js";
 import { closeDbPool } from "./config/health.js";
 import { disconnectPrisma } from "./lib/prisma.js";
 import { createGracefulShutdownHandler } from "./lifecycle/shutdown.js";
-import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
+import { startBackgroundJobs } from "./lifecycle/jobs.js";
+import {
+  createAdvisoryLockHooks,
+  SETTLEMENT_STATUS_SYNC_LOCK_KEY,
+} from "./lib/advisoryLock.js";
+import { InMemoryApiRegistry } from "./data/apiRegistry.js";
+import { RevenueSettlementService } from "./services/revenueSettlementService.js";
+import { PostgresSettlementStore } from "./services/settlementStore.js";
+import { createSettlementStatusSyncJob } from "./services/settlementStatusSyncJob.js";
+import { createSorobanSettlementClient } from "./services/sorobanSettlement.js";
+import { PostgresUsageStore } from "./services/usageStore.js";
 
 // Re-exported for backward compatibility with existing consumers/tests.
 export {
@@ -45,28 +55,49 @@ async function startServer(): Promise<void> {
       socket.once("close", () => activeConnections.delete(socket));
     });
 
-    // Create and start the idempotency sweeper job (if enabled)
-    let sweeperJob = null;
-    const subsystems = [];
+    const { subsystems } = startBackgroundJobs({
+      pool,
+      config,
+    });
 
-    if (config.idempotencySweeper.enabled) {
-      sweeperJob = createIdempotencySweeperJob(pool, {
-        intervalMs: config.idempotencySweeper.intervalMs,
-        batchSize: config.idempotencySweeper.batchSize,
-        timeBudgetMs: config.idempotencySweeper.timeBudgetMs,
-      });
-      sweeperJob.start();
+    if (config.settlementSync.enabled && !config.demoMode) {
+      const usageStore = new PostgresUsageStore(pool);
+      const settlementStore = new PostgresSettlementStore(pool);
+      const apiRegistry = new InMemoryApiRegistry();
+      const settlementClient = createSorobanSettlementClient();
+      const settlementService = new RevenueSettlementService(
+        usageStore,
+        settlementStore,
+        apiRegistry,
+        settlementClient,
+        {
+          horizonUrl: config.horizon?.url,
+          horizonRequestTimeoutMs: config.settlementSync.timeoutMs,
+          maxTooEarlyRetries: config.settlementSync.maxRetries,
+        },
+      );
+      const lockHooks = createAdvisoryLockHooks(
+        pool,
+        SETTLEMENT_STATUS_SYNC_LOCK_KEY,
+      );
+      const settlementSyncJob = createSettlementStatusSyncJob(
+        settlementService,
+        {
+          intervalMs: config.settlementSync.intervalMs,
+          ...lockHooks,
+        },
+      );
+      settlementSyncJob.start();
       console.log(
-        `[idempotencySweeper] Started with interval ${config.idempotencySweeper.intervalMs}ms, batch size ${config.idempotencySweeper.batchSize}, time budget ${config.idempotencySweeper.timeBudgetMs}ms`,
+        `[settlementStatusSync] Started with interval ${config.settlementSync.intervalMs}ms (lock key: ${SETTLEMENT_STATUS_SYNC_LOCK_KEY})`,
       );
 
-      // Register sweeper as a graceful subsystem
       subsystems.push({
-        name: "idempotency-sweeper",
+        name: "settlement-status-sync",
         beginShutdown: () => {
-          sweeperJob!.beginShutdown();
+          settlementSyncJob.beginShutdown();
         },
-        awaitIdle: () => sweeperJob!.awaitIdle(),
+        awaitIdle: () => settlementSyncJob.awaitIdle(),
       });
     }
 

@@ -1,6 +1,6 @@
 import { CircuitBreaker, CircuitBreakerConfig, createCircuitBreaker } from '../lib/circuitBreaker.js';
 import { env } from '../config/env.js';
-import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
+import { withSorobanLatencyWrapper } from '../lib/sorobanLatencyChaos.js';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const BREAKER_KEY = 'soroban-rpc';

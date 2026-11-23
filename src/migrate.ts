@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
 import { createHash } from 'node:crypto';
+import type { Pool } from 'pg';
 import { logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
@@ -87,6 +88,112 @@ export function discoverMigrations(dir: string): string[] {
   }
 
   return sorted.map(({ filename }) => filename);
+}
+
+/**
+ * List up-migration SQL files in deterministic order without enforcing strict
+ * gap/duplicate guards. Excludes `.down.sql` files.
+ *
+ * Files with a leading numeric prefix are ordered numerically (ties broken
+ * lexicographically), followed by any non-prefixed `.sql` files in
+ * lexicographical order.
+ */
+export function listUpMigrations(dir: string): string[] {
+  const files = readdirSync(dir).filter(
+    f => (f.endsWith('.sql') || f.endsWith('.up.sql')) && !f.endsWith('.down.sql'),
+  );
+
+  return files.sort((a, b) => {
+    const prefixA = extractPrefix(a);
+    const prefixB = extractPrefix(b);
+    if (prefixA !== null && prefixB !== null) {
+      return prefixA - prefixB || a.localeCompare(b);
+    }
+    if (prefixA !== null) return -1;
+    if (prefixB !== null) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+export interface ApplyPostgresMigrationsOptions {
+  /**
+   * Optional predicate to decide whether a discovered migration file should be
+   * executed against PostgreSQL. Returning false skips the file.
+   */
+  filter?: (filename: string, sql: string) => boolean;
+}
+
+export interface ApplyPostgresMigrationsResult {
+  applied: string[];
+  skipped: string[];
+}
+
+/**
+ * Apply ordered `.sql` up-migrations to a PostgreSQL pool, recording applied
+ * files and SHA-256 checksums in `schema_versions`.
+ */
+export async function applyPostgresMigrations(
+  pool: Pool,
+  dir: string,
+  options: ApplyPostgresMigrationsOptions = {},
+): Promise<ApplyPostgresMigrationsResult> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schema_versions (
+      id          SERIAL PRIMARY KEY,
+      version     INTEGER,
+      filename    TEXT NOT NULL UNIQUE,
+      checksum    TEXT NOT NULL,
+      applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      executed_by TEXT DEFAULT NULL
+    )
+  `);
+
+  const existing = await pool.query<{ filename: string }>(
+    'SELECT filename FROM schema_versions',
+  );
+  const alreadyApplied = new Set(existing.rows.map(row => row.filename));
+
+  const available = listUpMigrations(dir);
+  const applied: string[] = [];
+  const skipped: string[] = [];
+
+  for (const filename of available) {
+    if (alreadyApplied.has(filename)) {
+      continue;
+    }
+
+    const filePath = path.join(dir, filename);
+    const sql = readFileSync(filePath, 'utf8');
+
+    if (options.filter && !options.filter(filename, sql)) {
+      skipped.push(filename);
+      continue;
+    }
+
+    const checksum = computeChecksum(filePath);
+    const prefix = extractPrefix(filename);
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query(sql);
+      await client.query(
+        'INSERT INTO schema_versions (version, filename, checksum) VALUES ($1, $2, $3) ON CONFLICT (filename) DO NOTHING',
+        [prefix, filename, checksum],
+      );
+      await client.query('COMMIT');
+      applied.push(filename);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw new Error(
+        `Failed to apply PostgreSQL migration "${filename}": ${(error as Error).message}`,
+      );
+    } finally {
+      client.release();
+    }
+  }
+
+  return { applied, skipped };
 }
 
 // ---------------------------------------------------------------------------

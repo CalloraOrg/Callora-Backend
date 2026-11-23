@@ -16,8 +16,8 @@ import { env } from '../config/env.js';
 const TX_FAILED_TOO_EARLY = 'tx_failed_too_early';
 
 export interface RevenueSettlementOptions {
-  /** Minimum accumulated USDC to trigger a payout (default: 5.00) */
-  minPayoutUsdc?: number;
+  /** Minimum accumulated USDC decimal string to trigger a payout (default: 5.00) */
+  minPayoutUsdc?: string;
   /** Maximum number of events to process per developer per batch (to avoid hitting transaction limits) */
   maxEventsPerBatch?: number;
   horizonUrl?: string;
@@ -94,9 +94,7 @@ export class RevenueSettlementService {
       return { processed: 0, settledAmount: 0n, errors: 0 };
     }
 
-    // Convert minPayoutUsdc option (a float like 5.0) to bigint contract units.
-    const rawMinPayout = this.options.minPayoutUsdc ?? 5.0;
-    const minPayout = parseUsdcToUnits(rawMinPayout.toFixed(7));
+    const minPayout = parseUsdcToUnits(this.options.minPayoutUsdc ?? '5');
     const maxEvents = this.options.maxEventsPerBatch ?? 1000;
 
     // Group events by developerId
