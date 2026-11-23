@@ -78,6 +78,7 @@ Configuration is validated with Zod at startup (`src/config/env.ts`); the server
 | `SQLITE_PATH` | no | SQLite file path (default `./database.db`; `/tmp/callora.db` on Vercel) |
 | `CORS_ALLOW_MISSING_ORIGIN` | no | Allow requests without an `Origin` header (curl, server-to-server) |
 | `RATE_LIMIT_*`, `REST_RATE_LIMIT_*`, `GATEWAY_RATE_LIMIT_*` | no | Rate limiting (memory or Postgres store) |
+| `MONTHLY_INVOICE_JOB_ENABLED`, `MONTHLY_INVOICE_JOB_INTERVAL_MS` | no | Enable/configure the periodic monthly invoice worker (default: enabled outside `test`, skipped in demo mode, 24h interval) |
 
 ## API overview
 

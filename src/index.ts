@@ -7,7 +7,7 @@ import { closePgPool, pool } from "./db.js";
 import { closeDbPool } from "./config/health.js";
 import { disconnectPrisma } from "./lib/prisma.js";
 import { createGracefulShutdownHandler } from "./lifecycle/shutdown.js";
-import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
+import { startBackgroundJobs } from "./lifecycle/jobs.js";
 
 // Re-exported for backward compatibility with existing consumers/tests.
 export {
@@ -45,30 +45,10 @@ async function startServer(): Promise<void> {
       socket.once("close", () => activeConnections.delete(socket));
     });
 
-    // Create and start the idempotency sweeper job (if enabled)
-    let sweeperJob = null;
-    const subsystems = [];
-
-    if (config.idempotencySweeper.enabled) {
-      sweeperJob = createIdempotencySweeperJob(pool, {
-        intervalMs: config.idempotencySweeper.intervalMs,
-        batchSize: config.idempotencySweeper.batchSize,
-        timeBudgetMs: config.idempotencySweeper.timeBudgetMs,
-      });
-      sweeperJob.start();
-      console.log(
-        `[idempotencySweeper] Started with interval ${config.idempotencySweeper.intervalMs}ms, batch size ${config.idempotencySweeper.batchSize}, time budget ${config.idempotencySweeper.timeBudgetMs}ms`,
-      );
-
-      // Register sweeper as a graceful subsystem
-      subsystems.push({
-        name: "idempotency-sweeper",
-        beginShutdown: () => {
-          sweeperJob!.beginShutdown();
-        },
-        awaitIdle: () => sweeperJob!.awaitIdle(),
-      });
-    }
+    const { subsystems } = startBackgroundJobs({
+      pool,
+      config,
+    });
 
     const gracefulShutdown = createGracefulShutdownHandler({
       server,
