@@ -264,6 +264,8 @@ describe('auth_index migration — file pairing', () => {
 /** Stub AuthController — every method is a jest.fn() that sends a canned 200. */
 function makeController(): jest.Mocked<AuthController> {
   return {
+    walletLogin:    jest.fn((_req, res) => res.json({ accessToken: 'tok', refreshToken: 'ref', tokenType: 'Bearer' })),
+    getWalletNonce: jest.fn((_req, res) => res.json({ nonce: 'n', message: 'm', expiresAt: '2026-01-01' })),
     refreshToken:   jest.fn((_req, res) => res.json({ accessToken: 'tok', tokenType: 'Bearer' })),
     revokeToken:    jest.fn((_req, res) => res.json({ message: 'ok' })),
     revokeAllTokens:jest.fn((_req, res) => res.json({ message: 'ok' })),
@@ -409,6 +411,38 @@ describe('GET /api/auth/tokens — authentication guard', () => {
       .get('/api/auth/tokens')
       .set('x-user-id', 'user-123');
     expect(ctrl.getTokenInfo).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /api/auth/wallet & GET /api/auth/wallet/nonce — routing', () => {
+  let ctrl: jest.Mocked<AuthController>;
+  let app: express.Express;
+
+  beforeEach(() => {
+    ctrl = makeController();
+    app = buildApp(ctrl);
+  });
+
+  it('GET /api/auth/wallet/nonce invokes authController.getWalletNonce', async () => {
+    const res = await request(app).get('/api/auth/wallet/nonce?walletAddress=GABC');
+    expect(ctrl.getWalletNonce).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+  });
+
+  it('POST /api/auth/wallet returns 400 when body fields are missing', async () => {
+    const res = await request(app).post('/api/auth/wallet').send({});
+    expect(res.status).toBe(400);
+    expect(ctrl.walletLogin).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/auth/wallet invokes authController.walletLogin on valid body', async () => {
+    const res = await request(app).post('/api/auth/wallet').send({
+      walletAddress: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+      signature: 'aabbcc',
+      message: 'test message',
+    });
+    expect(ctrl.walletLogin).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(200);
   });
 });

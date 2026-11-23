@@ -16,7 +16,6 @@
     "dist",
     "src/**/*.test.ts",
     "src/**/__tests__/**",
-    "src/test-support/**",
-    "src/test-db.ts"
+    "src/test-support/**"
   ]
 }

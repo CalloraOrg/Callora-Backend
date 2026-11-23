@@ -135,7 +135,7 @@ describe('requireAuth middleware integration', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(401);
-    expect(res.body.code).toBe('MISSING_CLAIMS');
+    expect(res.body.error.code).toBe('MISSING_CLAIMS');
   });
 
   it('rejects token with empty userId', async () => {
@@ -145,7 +145,7 @@ describe('requireAuth middleware integration', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(401);
-    expect(res.body.code).toBe('MISSING_CLAIMS');
+    expect(res.body.error.code).toBe('MISSING_CLAIMS');
   });
 
   it('rejects token with empty sub', async () => {
@@ -155,7 +155,7 @@ describe('requireAuth middleware integration', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(401);
-    expect(res.body.code).toBe('MISSING_CLAIMS');
+    expect(res.body.error.code).toBe('MISSING_CLAIMS');
   });
 
   it('accepts token with userId', async () => {

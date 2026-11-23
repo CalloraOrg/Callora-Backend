@@ -6753,6 +6753,204 @@
           }
         }
       }
+    },
+    "/auth/wallet/nonce": {
+      "get": {
+        "summary": "Request challenge nonce for wallet login",
+        "operationId": "getWalletNonce",
+        "description": "Issues a single-use short-lived challenge nonce and formatted message to sign.",
+        "parameters": [
+          {
+            "name": "walletAddress",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stellar G... public key"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Challenge nonce successfully generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/WalletNonceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid wallet address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid ed25519 wallet address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/wallet": {
+      "post": {
+        "summary": "Authenticate with Stellar wallet signature",
+        "operationId": "walletLogin",
+        "description": "Verifies ed25519 signature over server-issued challenge and returns token pair.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "": "#/components/schemas/WalletLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/WalletLoginResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or missing fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature, expired nonce, or key mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/wallet/nonce": {
+      "get": {
+        "summary": "Request challenge nonce for wallet login",
+        "operationId": "getWalletNonce",
+        "description": "Issues a single-use short-lived challenge nonce and formatted message to sign.",
+        "parameters": [
+          {
+            "name": "walletAddress",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stellar G... public key"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Challenge nonce successfully generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/WalletNonceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid wallet address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid ed25519 wallet address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/wallet": {
+      "post": {
+        "summary": "Authenticate with Stellar wallet signature",
+        "operationId": "walletLogin",
+        "description": "Verifies ed25519 signature over server-issued challenge and returns token pair.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "": "#/components/schemas/WalletLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authentication successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/WalletLoginResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or missing fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature, expired nonce, or key mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8371,6 +8569,12 @@
           "EXPORT_SCHEDULE_NOT_FOUND",
           "MISSING_AUTH_FIELDS",
           "AUTH_NOT_IMPLEMENTED",
+          "INVALID_WALLET_ADDRESS",
+          "INVALID_WALLET_SIGNATURE",
+          "INVALID_WALLET_NONCE",
+          "EXPIRED_WALLET_NONCE",
+          "REUSED_WALLET_NONCE",
+          "TAMPERED_WALLET_MESSAGE",
           "COMPONENT_NOT_CONFIGURED",
           "INVALID_ENTRY_ID",
           "AUDIT_ENTRY_NOT_FOUND",
@@ -9531,6 +9735,117 @@
             "type": "string",
             "format": "date-time",
             "description": "ISO timestamp when forecast was computed."
+          }
+        }
+      },
+      "WalletNonceResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "nonce",
+              "message",
+              "expiresAt"
+            ],
+            "properties": {
+              "nonce": {
+                "type": "string",
+                "description": "Cryptographic nonce for the wallet challenge"
+              },
+              "message": {
+                "type": "string",
+                "description": "The formatted challenge message to be signed"
+              },
+              "expiresAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Expiry timestamp of the challenge"
+              }
+            }
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WalletLoginRequest": {
+        "type": "object",
+        "required": [
+          "walletAddress",
+          "signature",
+          "message"
+        ],
+        "properties": {
+          "walletAddress": {
+            "type": "string",
+            "description": "The Stellar public key (G...)"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Hex or base64 ed25519 signature over message"
+          },
+          "message": {
+            "type": "string",
+            "description": "The challenge message including server nonce"
+          }
+        }
+      },
+      "WalletLoginResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data",
+          "requestId",
+          "timestamp"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "accessToken",
+              "refreshToken",
+              "tokenType"
+            ],
+            "properties": {
+              "accessToken": {
+                "type": "string",
+                "description": "JWT access token"
+              },
+              "refreshToken": {
+                "type": "string",
+                "description": "Opaque refresh token"
+              },
+              "tokenType": {
+                "type": "string",
+                "const": "Bearer"
+              }
+            }
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

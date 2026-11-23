@@ -1,23 +1,64 @@
 import type { Request, Response, NextFunction } from 'express';
+import { StrKey, Keypair } from '@stellar/stellar-sdk';
 import { RefreshTokenService } from '../services/refreshTokenService.js';
 import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
+import { type UserRepository, defaultUserRepository } from '../repositories/userRepository.js';
+import { WalletNonceStore, defaultWalletNonceStore } from '../services/walletNonceStore.js';
 import { logger } from '../logger.js';
-import { UnauthorizedError } from '../errors/index.js';
+import { BadRequestError, UnauthorizedError } from '../errors/index.js';
 import { getClientIp, DEFAULT_PROXY_HEADERS } from '../lib/clientIp.js';
 import { successEnvelope, getRequestId } from '../lib/envelope.js';
 
 export interface AuthControllerOptions {
   refreshTokenService: RefreshTokenService;
   refreshTokenRepository: RefreshTokenRepository;
+  userRepository?: UserRepository;
+  walletNonceStore?: WalletNonceStore;
 }
 
 export class AuthController {
   private readonly refreshTokenService: RefreshTokenService;
   private readonly refreshTokenRepository: RefreshTokenRepository;
+  private readonly userRepository: UserRepository;
+  private readonly walletNonceStore: WalletNonceStore;
 
   constructor(options: AuthControllerOptions) {
     this.refreshTokenService = options.refreshTokenService;
     this.refreshTokenRepository = options.refreshTokenRepository;
+    this.userRepository = options.userRepository ?? defaultUserRepository;
+    this.walletNonceStore = options.walletNonceStore ?? defaultWalletNonceStore;
+  }
+
+  /**
+   * Request a fresh challenge nonce for wallet authentication.
+   * GET /auth/wallet/nonce?walletAddress=G...
+   */
+  async getWalletNonce(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const walletAddress = (req.query.walletAddress as string | undefined) ?? (req.query.wallet_address as string | undefined);
+
+      if (!walletAddress) {
+        next(new BadRequestError('Wallet address is required', 'MISSING_AUTH_FIELDS'));
+        return;
+      }
+
+      if (!StrKey.isValidEd25519PublicKey(walletAddress)) {
+        next(new UnauthorizedError('Invalid Stellar wallet address', 'INVALID_WALLET_ADDRESS'));
+        return;
+      }
+
+      const challenge = this.walletNonceStore.generateNonce(walletAddress);
+      const requestId = getRequestId(req);
+
+      res.json(successEnvelope({
+        nonce: challenge.nonce,
+        message: challenge.message,
+        expiresAt: challenge.expiresAt.toISOString(),
+      }, requestId));
+    } catch (error) {
+      logger.error('[AuthController] Error generating wallet nonce', { error });
+      next(error);
+    }
   }
 
   /**
@@ -38,17 +79,78 @@ export class AuthController {
 
       // Extract client IP for structured logging
       const clientIp = getClientIp(req, process.env.TRUST_PROXY_HEADERS === 'true', DEFAULT_PROXY_HEADERS);
+      const requestId = getRequestId(req);
 
+      // NOTE: Never log signature or nonce
       logger.info('[AuthController] Wallet login attempt', {
         walletAddress,
         clientIp,
       });
 
-      // TODO: Implement actual Stellar signature verification
-      // This would typically call a service to verify the wallet signature
-      // against the message and derive a user ID for JWT generation
+      // 1. Validate wallet address format (Stellar G... ed25519 public key)
+      if (!StrKey.isValidEd25519PublicKey(walletAddress)) {
+        next(new UnauthorizedError('Invalid Stellar wallet address', 'INVALID_WALLET_ADDRESS'));
+        return;
+      }
 
-      next(new UnauthorizedError('Wallet login not fully implemented', 'AUTH_NOT_IMPLEMENTED'));
+      // 2. Validate challenge nonce
+      const nonceResult = this.walletNonceStore.validateAndConsume(walletAddress, message);
+      if (!nonceResult.valid) {
+        next(new UnauthorizedError(nonceResult.error ?? 'Invalid challenge nonce', nonceResult.code ?? 'INVALID_WALLET_NONCE'));
+        return;
+      }
+
+      // 3. Decode signature (hex or base64)
+      let sigBuffer: Buffer;
+      if (/^[0-9a-fA-F]{128}$/.test(signature)) {
+        sigBuffer = Buffer.from(signature, 'hex');
+      } else {
+        try {
+          sigBuffer = Buffer.from(signature, 'base64');
+        } catch {
+          next(new UnauthorizedError('Malformed signature encoding', 'INVALID_WALLET_SIGNATURE'));
+          return;
+        }
+      }
+
+      if (sigBuffer.length !== 64) {
+        next(new UnauthorizedError('Invalid signature byte length', 'INVALID_WALLET_SIGNATURE'));
+        return;
+      }
+
+      // 4. Verify ed25519 signature over exact message
+      try {
+        const keypair = Keypair.fromPublicKey(walletAddress);
+        const verified = keypair.verify(Buffer.from(message, 'utf-8'), sigBuffer);
+        if (!verified) {
+          next(new UnauthorizedError('Signature verification failed', 'INVALID_WALLET_SIGNATURE'));
+          return;
+        }
+      } catch {
+        next(new UnauthorizedError('Signature verification failed', 'INVALID_WALLET_SIGNATURE'));
+        return;
+      }
+
+      // 5. Upsert user by Stellar address through UserRepository
+      let user = await this.userRepository.findByStellarAddress(walletAddress);
+      if (!user) {
+        user = await this.userRepository.create({ stellarAddress: walletAddress });
+        logger.info('[AuthController] Created new user for wallet login', { userId: user.id });
+      }
+
+      // 6. Issue access and refresh token pair
+      const tokenPair = this.refreshTokenService.createTokenPair(user.id, walletAddress);
+      const refreshTokenRecord = this.refreshTokenService.createRefreshTokenRecord(user.id, tokenPair.refreshToken);
+      await this.refreshTokenRepository.createRefreshToken(refreshTokenRecord);
+
+      logger.info('[AuthController] Wallet login successful', { userId: user.id });
+
+      // 7. Respond with standard success envelope
+      res.json(successEnvelope({
+        accessToken: tokenPair.accessToken,
+        refreshToken: tokenPair.refreshToken,
+        tokenType: 'Bearer',
+      }, requestId));
 
     } catch (error) {
       logger.error('[AuthController] Error during wallet login', { error });

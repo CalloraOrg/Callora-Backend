@@ -65,7 +65,11 @@ const DELIVER_BODY = JSON.stringify({
 describe('POST /api/webhooks/deliver/:developerId — rotation, skew, replay, deletion', () => {
   let app: express.Express;
 
+  let origAdminKey: string | undefined;
+
   beforeEach(() => {
+    origAdminKey = process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = 'test-admin-key';
     app = buildApp();
     WebhookStore.clear();
     WebhookStore.register({
@@ -75,6 +79,14 @@ describe('POST /api/webhooks/deliver/:developerId — rotation, skew, replay, de
       secret_current: 'current-secret',
       createdAt: new Date(),
     });
+  });
+
+  afterEach(() => {
+    if (origAdminKey !== undefined) {
+      process.env.ADMIN_API_KEY = origAdminKey;
+    } else {
+      delete process.env.ADMIN_API_KEY;
+    }
   });
 
   async function deliver(
@@ -184,7 +196,10 @@ describe('POST /api/webhooks/deliver/:developerId — rotation, skew, replay, de
     const before = await deliver('dev-deliver', headers);
     expect(before.status).toBe(200);
 
-    await request(app).delete('/api/webhooks/dev-deliver').expect(200);
+    await request(app)
+      .delete('/api/webhooks/dev-deliver')
+      .set('x-admin-api-key', 'test-admin-key')
+      .expect(200);
 
     const after = await deliver(
       'dev-deliver',

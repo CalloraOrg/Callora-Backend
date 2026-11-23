@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import type { NextFunction, Request, Response } from 'express';
+import { UnauthorizedError } from '../errors/index.js';
 import {
   openApiErrorHandler,
   formatOpenApiField,
@@ -33,6 +34,17 @@ function body(result: { body: unknown }): Record<string, unknown> {
 }
 
 describe('openApiErrorHandler', () => {
+  it('delegates application auth errors to the canonical error handler', () => {
+    const error = new UnauthorizedError('Missing token', 'MISSING_TOKEN');
+    const res = response();
+    const next = jest.fn();
+
+    openApiErrorHandler(error, request(), res.value, next);
+
+    expect(next).toHaveBeenCalledWith(error);
+    expect(res.result.sent).toBe(false);
+  });
+
   describe('formatOpenApiField', () => {
     it('formats query parameters properly', () => {
       expect(formatOpenApiField({ path: '/query/limit' }, 0)).toBe('query.limit');

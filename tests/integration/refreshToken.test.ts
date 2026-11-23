@@ -6,6 +6,7 @@ import { RefreshTokenService } from '../../src/services/refreshTokenService.js';
 import { AuthController } from '../../src/controllers/authController.js';
 import { createAuthRoutes } from '../../src/routes/authRoutes.js';
 import { errorHandler } from '../../src/middleware/errorHandler.js';
+import { createAuthTestDb } from '../helpers/authDb.js';
 import { TEST_JWT_SECRET } from '../helpers/jwt.js';
 import type { ConsumeResult, NewRefreshTokenTemplate } from '../../src/repositories/refreshTokenRepository.js';
 
@@ -141,51 +142,6 @@ class MockRefreshTokenRepository {
   }
 }
 
-class InMemoryIdempotencyPool {
-  private records = new Map<string, any>();
-
-  async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
-    if (sql.includes('DELETE FROM idempotency_store WHERE expires_at')) {
-      return { rows: [] };
-    }
-
-    if (sql.includes('SELECT request_hash')) {
-      const record = this.records.get(params[0]);
-      return { rows: record ? [record] : [] };
-    }
-
-    if (sql.includes('INSERT INTO idempotency_store')) {
-      const [idempotencyKey, requestHash, status, expiresAt] = params;
-      this.records.set(idempotencyKey, {
-        request_hash: requestHash,
-        status,
-        response_status: null,
-        response_body: null,
-        expires_at: expiresAt,
-      });
-      return { rows: [] };
-    }
-
-    if (sql.includes('UPDATE idempotency_store')) {
-      const [status, responseStatus, responseBody, idempotencyKey] = params;
-      const record = this.records.get(idempotencyKey);
-      this.records.set(idempotencyKey, {
-        ...record,
-        status,
-        response_status: responseStatus,
-        response_body: responseBody,
-      });
-      return { rows: [] };
-    }
-
-    if (sql.includes('DELETE FROM idempotency_store WHERE idempotency_key')) {
-      this.records.delete(params[0]);
-    }
-
-    return { rows: [] };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // App builder
 // ---------------------------------------------------------------------------
@@ -228,6 +184,7 @@ describe('Refresh Token Integration Tests', () => {
   let app: express.Express;
   let refreshTokenService: RefreshTokenService;
   let mockRepository: MockRefreshTokenRepository;
+  let idempotencyDb: Awaited<ReturnType<typeof createAuthTestDb>> | undefined;
 
   beforeEach(() => {
     refreshTokenService = new RefreshTokenService({
@@ -237,6 +194,11 @@ describe('Refresh Token Integration Tests', () => {
     });
     mockRepository = new MockRefreshTokenRepository();
     app = buildTestApp(refreshTokenService, mockRepository);
+  });
+
+  afterEach(async () => {
+    await idempotencyDb?.end();
+    idempotencyDb = undefined;
   });
 
   // ── POST /auth/refresh ─────────────────────────────────────────────────────
@@ -325,7 +287,8 @@ describe('Refresh Token Integration Tests', () => {
     });
 
     it('replays a successful refresh retry with the same Idempotency-Key', async () => {
-      app.locals.dbPool = new InMemoryIdempotencyPool();
+      idempotencyDb = await createAuthTestDb();
+      app.locals.dbPool = idempotencyDb.pool;
       const userId = 'test-user-idempotent-refresh';
       const tokenPair = refreshTokenService.createTokenPair(userId);
       const tokenRecord = refreshTokenService.createRefreshTokenRecord(userId, tokenPair.refreshToken);
@@ -597,23 +560,8 @@ describe('Refresh Token Integration Tests', () => {
         await mockRepository.createRefreshToken(record);
       }
 
-      const mockAuth = (req: any, res: any, next: any) => {
-        req.developerId = userId;
-        res.locals.authenticatedUser = { id: userId };
-        next();
-      };
-
-      const testApp = express();
-      testApp.use(express.json());
-      testApp.use(mockAuth);
-      const authController = new AuthController({
-        refreshTokenService,
-        refreshTokenRepository: mockRepository as any
-      });
-      testApp.use('/auth', createAuthRoutes(authController));
-      testApp.use(errorHandler);
-
-      const res = await request(testApp).post('/auth/revoke-all').set('x-user-id', userId).send();
+      const res = await request(app).post('/auth/revoke-all')
+        .set('Authorization', `Bearer ${tokenPairs[0]!.accessToken}`);
       expect(res.status).toBe(200);
       expect(responseData(res).message).toBe('All tokens revoked successfully');
 
@@ -637,23 +585,8 @@ describe('Refresh Token Integration Tests', () => {
         await mockRepository.createRefreshToken(record);
       }
 
-      const mockAuth = (req: any, res: any, next: any) => {
-        req.developerId = userId;
-        res.locals.authenticatedUser = { id: userId };
-        next();
-      };
-
-      const testApp = express();
-      testApp.use(express.json());
-      testApp.use(mockAuth);
-      const authController = new AuthController({
-        refreshTokenService,
-        refreshTokenRepository: mockRepository as any
-      });
-      testApp.use('/auth', createAuthRoutes(authController));
-      testApp.use(errorHandler);
-
-      const res = await request(testApp).get('/auth/tokens').set('x-user-id', userId).send();
+      const res = await request(app).get('/auth/tokens')
+        .set('Authorization', `Bearer ${tokenPairs[0]!.accessToken}`);
       expect(res.status).toBe(200);
       expect(responseData(res).activeRefreshTokens).toBe(2);
       expect(responseData(res).maxAllowedTokens).toBe(5);

@@ -78,12 +78,9 @@ export function openApiErrorHandler(
   res: Response,
   next: NextFunction,
 ): void {
-  // Application errors already carry a public code and validation details.
-  // Let the main error handler build their envelope instead of flattening them
-  // to a status-derived code here.
-  if (isAppError(err)) {
-    return next(err);
-  }
+  // Application errors carry their own public codes and validation details.
+  // Let the canonical handler preserve them instead of mapping by status.
+  if (isAppError(err)) return next(err);
 
   const status = typeof err.status === 'number' ? err.status : err.statusCode;
   if (!status) {

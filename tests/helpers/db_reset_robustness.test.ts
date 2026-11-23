@@ -1,5 +1,5 @@
 import { createTestDb, resetTestDb } from './db.js';
-import { resetDb } from '../../src/test-db.js';
+import { resetDb } from '../../scripts/test-db.js';
 import { db as sqliteDb, schema as sqliteSchema } from '../../src/db/index.js';
 import { sql } from 'drizzle-orm';
 

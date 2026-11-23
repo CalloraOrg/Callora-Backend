@@ -288,6 +288,24 @@ export const ErrorCode = {
   /** The authentication method is not yet implemented */
   AUTH_NOT_IMPLEMENTED: "AUTH_NOT_IMPLEMENTED",
 
+  /** The Stellar wallet address is missing, malformed, or not a valid ed25519 public key */
+  INVALID_WALLET_ADDRESS: "INVALID_WALLET_ADDRESS",
+
+  /** The wallet signature verification failed or signature is invalid */
+  INVALID_WALLET_SIGNATURE: "INVALID_WALLET_SIGNATURE",
+
+  /** The wallet authentication nonce is missing or not recognized */
+  INVALID_WALLET_NONCE: "INVALID_WALLET_NONCE",
+
+  /** The wallet authentication nonce has expired */
+  EXPIRED_WALLET_NONCE: "EXPIRED_WALLET_NONCE",
+
+  /** The wallet authentication nonce has already been consumed */
+  REUSED_WALLET_NONCE: "REUSED_WALLET_NONCE",
+
+  /** The signed message does not match the server-issued challenge */
+  TAMPERED_WALLET_MESSAGE: "TAMPERED_WALLET_MESSAGE",
+
   /** A required system component is not configured */
   COMPONENT_NOT_CONFIGURED: "COMPONENT_NOT_CONFIGURED",
 

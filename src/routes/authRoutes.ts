@@ -33,6 +33,12 @@ export function createAuthRoutes(authController: AuthController): Router {
   // cancellation downstream.
   router.use(authTimeout);
 
+  // GET /auth/wallet/nonce - Request a challenge nonce for wallet login
+  router.get('/wallet/nonce',
+    loginThrottle,
+    (req, res, next) => authController.getWalletNonce(req, res, next)
+  );
+
   // POST /auth/wallet - Wallet-based login with IP throttling
   // Rate limited to prevent brute force attacks
   router.post('/wallet',
