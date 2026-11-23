@@ -116,8 +116,8 @@ describe('GET /health/:apiSlug', () => {
       const res = await request(app).get('/gateway/health/unknown-api');
 
       expect(res.status).toBe(404);
-      expect(res.body).toHaveProperty('code', 'NOT_FOUND');
-      expect(res.body).toHaveProperty('message', 'API not found');
+      expect(res.body.error).toHaveProperty('code', 'NOT_FOUND');
+      expect(res.body.error).toHaveProperty('message', 'API not found');
     });
 
     it('skips slug validation and returns data when no registry is provided', async () => {

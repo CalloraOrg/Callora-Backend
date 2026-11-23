@@ -3,6 +3,7 @@ import { requireAuth, type AuthenticatedLocals } from '../../middleware/requireA
 import { UnauthorizedError } from '../../errors/index.js';
 import { logger } from '../../logger.js';
 import { getRequestId } from '../../utils/asyncContext.js';
+import { asyncHandler } from '../../utils/asyncHandler.js';
 
 export interface UsageSseDeps {
   broadcaster?: UsageSseBroadcaster;
@@ -90,7 +91,7 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
   const router = Router();
   const broadcaster = deps.broadcaster ?? defaultUsageSseBroadcaster;
 
-  router.get('/', requireAuth, async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+  router.get('/', requireAuth, asyncHandler(async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
     const user = res.locals.authenticatedUser;
     if (!user) {
       next(new UnauthorizedError());
@@ -147,7 +148,7 @@ export function createUsageSseRouter(deps: UsageSseDeps = {}): Router {
     req.once('close', () => disconnect('close'));
     req.once('aborted', () => disconnect('aborted'));
     res.once('close', () => disconnect('response-close'));
-  });
+  }));
 
   return router;
 }

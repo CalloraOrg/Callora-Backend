@@ -13,28 +13,8 @@ import http from 'node:http';
 import express from 'express';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { GenericContainer, Wait } from 'testcontainers';
-import { Pool } from 'pg';
-import path from 'node:path';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-async function runMigration(pool: Pool, migrationPath: string): Promise<void> {
-  const sql = fs.readFileSync(migrationPath, 'utf-8');
-  const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
-  for (const statement of statements) {
-    try { await pool.query(statement); } catch (e) { /* ignore */ }
-  }
-}
-
-async function runAllMigrations(pool: Pool): Promise<void> {
-  const migrationsDir = path.join(__dirname, '../../migrations');
-  const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql') && !f.endsWith('.down.sql')).sort();
-  for (const file of files) { await runMigration(pool, path.join(migrationsDir, file)); }
-}
+import type { Pool } from 'pg';
+import { createTestDb } from '../helpers/db.js';
 // ── Mock dependencies ─────────────────────────────────────────────────────────
 
 import { createProxyRouter } from '../../src/routes/proxyRoutes.js';
@@ -50,6 +30,8 @@ import type {
   RateLimitResult,
 } from '../../src/types/gateway.js';
 import { errorHandler } from '../../src/middleware/errorHandler.js';
+import { requestIdMiddleware } from '../../src/middleware/requestId.js';
+import { parseUsdcToUnits } from '../../src/lib/usdcUnits.js';
 
 // ── Required env vars (jest.env-setup.cjs sets JWT_SECRET / ADMIN_API_KEY / METRICS_API_KEY) ─────
 
@@ -219,6 +201,7 @@ function buildProxyApp(overrides?: {
   pool?: Pool;
 }): express.Express {
   const app = express();
+  app.use(requestIdMiddleware);
   app.use(express.json());
   
   if (overrides?.pool) {
@@ -256,7 +239,7 @@ function buildProxyApp(overrides?: {
     apiKeys,
     proxyConfig: {
       timeoutMs: 5000,
-      allowedHosts: ['*'],
+      allowedHosts: ['localhost', '*'],
     },
     circuitBreakerStore,
   });
@@ -290,47 +273,21 @@ describe('/v1/call/:apiSlugOrId integration tests', () => {
   let usageStore: MockUsageStore;
   let testContext: any = null;
 
-  // ── Start upstream server once per suite ────────────────────────────────
+  // ── Start upstream server and in-memory pg-mem DB once per suite ──────────
   beforeAll(async () => {
-    const container = new GenericContainer('postgres:16-alpine')
-      .withEnvironment({
-        POSTGRES_DB: 'callora_test',
-        POSTGRES_USER: 'testuser',
-        POSTGRES_PASSWORD: 'testpassword',
-      })
-      .withExposedPorts(5432)
-      .waitingFor(Wait.forLogMessage(/database system is ready to accept connections/));
-
-    const startedContainer = await container.start();
-    const host = startedContainer.getHost();
-    const port = startedContainer.getMappedPort(5432);
-    
-    testContext = {
-      container: startedContainer,
-      pool: new Pool({
-        host,
-        port,
-        database: 'callora_test',
-        user: 'testuser',
-        password: 'testpassword',
-      }),
-    };
-
-    await runAllMigrations(testContext.pool);
-    process.env.DATABASE_URL = `postgresql://testuser:testpassword@${host}:${port}/callora_test`;
+    testContext = createTestDb();
 
     const result = await startUpstreamServer();
     upstreamServer = result.server;
     upstreamUrl = result.url;
-  }, 60000);
+  });
 
   afterAll(async () => {
     if (upstreamServer) {
       await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
     }
     if (testContext) {
-      await testContext.pool.end();
-      await testContext.container.stop();
+      await testContext.end();
     }
   });
 
@@ -393,8 +350,9 @@ describe('/v1/call/:apiSlugOrId integration tests', () => {
     await new Promise((r) => setImmediate(r));
     const events = await usageStore.getEvents();
     expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events[0].apiKey).toBe(TEST_API_KEY_VALUE);
-    expect(events[0].amountUsdc).toBe(TEST_ENDPOINT_PRICE_USDC);
+    expect(events[0].apiId).toBe('api_test_001');
+    expect(events[0].userId).toBe(TEST_DEVELOPER_ID);
+    expect(events[0].amountUsdc).toBe(parseUsdcToUnits(TEST_ENDPOINT_PRICE_USDC.toFixed(7)));
     expect(events[0].statusCode).toBe(200);
   });
 

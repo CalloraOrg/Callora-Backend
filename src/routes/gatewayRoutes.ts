@@ -412,18 +412,20 @@ export function createGatewayRouter(deps: GatewayDeps): Router {
         const timer = startUpstreamTimer(req.params.apiId, req.method);
 
         try {
-          const upstreamRes = await fetch(`${upstreamUrl}${req.path}`, {
-            method: req.method,
-            headers: {
-              'Content-Type': 'application/json',
-              'x-request-id': requestId,
-              // Propagate correlation id so multi-hop request chains are traceable
-              // in upstream service logs.
-              'x-correlation-id': correlationId,
-            },
-            body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
-            signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
-          });
+          const upstreamRes = await endpointBreaker.execute(req.params.apiId, () =>
+            fetch(`${upstreamUrl}${req.path}`, {
+              method: req.method,
+              headers: {
+                'Content-Type': 'application/json',
+                'x-request-id': requestId,
+                // Propagate correlation id so multi-hop request chains are traceable
+                // in upstream service logs.
+                'x-correlation-id': correlationId,
+              },
+              body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
+              signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+            }),
+          );
 
           upstreamStatus = upstreamRes.status;
           upstreamBody = await upstreamRes.text();

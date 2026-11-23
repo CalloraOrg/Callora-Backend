@@ -2,7 +2,7 @@ import {
   extractSimulationDetails,
   type SimulationDetails,
 } from '../lib/simulationDiagnostics.js';
-import { withSorobanLatencyWrapper } from '../../tests/chaos/sorobanLatency.js';
+import { withSorobanLatencyWrapper } from '../lib/sorobanLatencyChaos.js';
 import { env } from '../config/env.js';
 import { getOrCreateRequestId } from '../utils/asyncContext.js';
 

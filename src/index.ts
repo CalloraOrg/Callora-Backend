@@ -8,6 +8,16 @@ import { closeDbPool } from "./config/health.js";
 import { disconnectPrisma } from "./lib/prisma.js";
 import { createGracefulShutdownHandler } from "./lifecycle/shutdown.js";
 import { createIdempotencySweeperJob } from "./services/idempotencySweeper.js";
+import {
+  createAdvisoryLockHooks,
+  SETTLEMENT_STATUS_SYNC_LOCK_KEY,
+} from "./lib/advisoryLock.js";
+import { InMemoryApiRegistry } from "./data/apiRegistry.js";
+import { RevenueSettlementService } from "./services/revenueSettlementService.js";
+import { PostgresSettlementStore } from "./services/settlementStore.js";
+import { createSettlementStatusSyncJob } from "./services/settlementStatusSyncJob.js";
+import { createSorobanSettlementClient } from "./services/sorobanSettlement.js";
+import { PostgresUsageStore } from "./services/usageStore.js";
 
 // Re-exported for backward compatibility with existing consumers/tests.
 export {
@@ -67,6 +77,47 @@ async function startServer(): Promise<void> {
           sweeperJob!.beginShutdown();
         },
         awaitIdle: () => sweeperJob!.awaitIdle(),
+      });
+    }
+
+    if (config.settlementSync.enabled && !config.demoMode) {
+      const usageStore = new PostgresUsageStore(pool);
+      const settlementStore = new PostgresSettlementStore(pool);
+      const apiRegistry = new InMemoryApiRegistry();
+      const settlementClient = createSorobanSettlementClient();
+      const settlementService = new RevenueSettlementService(
+        usageStore,
+        settlementStore,
+        apiRegistry,
+        settlementClient,
+        {
+          horizonUrl: config.horizon?.url,
+          horizonRequestTimeoutMs: config.settlementSync.timeoutMs,
+          maxTooEarlyRetries: config.settlementSync.maxRetries,
+        },
+      );
+      const lockHooks = createAdvisoryLockHooks(
+        pool,
+        SETTLEMENT_STATUS_SYNC_LOCK_KEY,
+      );
+      const settlementSyncJob = createSettlementStatusSyncJob(
+        settlementService,
+        {
+          intervalMs: config.settlementSync.intervalMs,
+          ...lockHooks,
+        },
+      );
+      settlementSyncJob.start();
+      console.log(
+        `[settlementStatusSync] Started with interval ${config.settlementSync.intervalMs}ms (lock key: ${SETTLEMENT_STATUS_SYNC_LOCK_KEY})`,
+      );
+
+      subsystems.push({
+        name: "settlement-status-sync",
+        beginShutdown: () => {
+          settlementSyncJob.beginShutdown();
+        },
+        awaitIdle: () => settlementSyncJob.awaitIdle(),
       });
     }
 
