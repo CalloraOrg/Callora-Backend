@@ -55,7 +55,7 @@ describe('RevenueSettlementService', () => {
     client = { distribute: distributeMock };
 
     service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
-      minPayoutUsdc: 5,
+      minPayoutUsdc: '5',
       maxEventsPerBatch: 10,
     });
 
@@ -249,7 +249,7 @@ describe('RevenueSettlementService', () => {
       });
 
     service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
-      minPayoutUsdc: 5,
+      minPayoutUsdc: '5',
       maxEventsPerBatch: 10,
     });
 
@@ -291,7 +291,7 @@ describe('RevenueSettlementService', () => {
 
     // minPayout = 5 USDC = 50_000_000 units — won't fire. Lower the threshold.
     service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
-      minPayoutUsdc: 0.0000001,  // 1 unit
+      minPayoutUsdc: '0.0000001',  // 1 unit
       maxEventsPerBatch: 10_000,
     });
 
@@ -304,6 +304,18 @@ describe('RevenueSettlementService', () => {
       'dev_1',
       expect.objectContaining({ amount: '0.0010000' }),
     );
+  });
+
+  it('accepts a zero payout threshold and settles a one-unit amount', async () => {
+    service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
+      minPayoutUsdc: '0',
+    });
+    recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: 1n });
+
+    const result = await service.runBatch();
+
+    expect(result).toEqual({ processed: 1, settledAmount: 1n, errors: 0 });
+    expect(distributeMock).toHaveBeenCalledWith('dev_1', 1n);
   });
 
   it('minPayout boundary — payout happens when totalAmount === minPayout (≥ semantics)', async () => {
@@ -334,7 +346,7 @@ describe('RevenueSettlementService', () => {
     recordUsageEvent(usageStore, { id: 'e1', requestId: 'r1', apiId: 'api_1', amountUsdc: hugeAmount });
 
     service = new RevenueSettlementService(usageStore, settlementStore, apiRegistry, client, {
-      minPayoutUsdc: 0.0000001,
+      minPayoutUsdc: '0.0000001',
       maxEventsPerBatch: 1,
     });
 
