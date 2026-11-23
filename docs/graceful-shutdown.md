@@ -95,6 +95,7 @@ every environment:
 4. idempotency-sweeper
 5. webhook-dispatcher
 6. settlement-reconciliation
+7. monthly-invoice
 ```
 <!-- shutdown-subsystem-order:end -->
 
@@ -111,11 +112,12 @@ the code disagree.
 | 4 | `idempotency-sweeper` | `idempotencySweeperJob` | The idempotency-record sweep that was already running when the signal arrived. |
 | 5 | `webhook-dispatcher` | `stopWebhookDispatching` / `awaitWebhookDispatcherIdle` | Webhook deliveries still queued or in flight. |
 | 6 | `settlement-reconciliation` | `settlementReconJob` | The settlement reconciliation run in progress (see [Settlement reconciliation worker](./settlement-reconciliation-worker.md)). |
+| 7 | `monthly-invoice` | `monthlyInvoiceJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `MONTHLY_INVOICE_JOB_ENABLED` is enabled and `DEMO_MODE` is false) | The monthly invoice generation run in progress. |
 
 ### Jobs that are cancelled, not drained
 
 `closeAllDataResources` — passed to the handler as the `closeDatabase` callback —
-calls `stop()` on every background job it can reach. Five of those jobs are
+calls `stop()` on every background job it can reach. Four of those jobs are
 **not** members of `shutdownSubsystems`, so their `stop()` runs in Phase 6, after
 the drain window, and no `awaitIdle()` is ever performed for them:
 
@@ -123,11 +125,10 @@ the drain window, and no `awaitIdle()` is ever performed for them:
 |---|---|---|
 | `settlement-status-sync` | always | `stop()` clears the polling timer. The job type exposes only `stop()` — there is no `beginShutdown()` / `awaitIdle()` pair to register. |
 | `anomaly-detector` | `config.usageAnomalyDetector.enabled` (`USAGE_ANOMALY_DETECTOR_ENABLED`) | Poller whose tick is bounded by DB query timeouts; the job is constructed but never added to `shutdownSubsystems`. |
-| `monthly-invoice` | always | Scheduler driven by a day boundary; the job is constructed but never added to `shutdownSubsystems`. |
 | `slo-alert` | `SLO_ALERT_WEBHOOK_URL` is set **and** at least one `SLO_ROUTE_CONFIGS` entry exists | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
 | `slow-query-alerter` | `SLOW_QUERY_ALERT_WEBHOOK_URL` is set | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
 
-`anomaly-detector`, `monthly-invoice`, `slo-alert` and `slow-query-alerter` do
+`anomaly-detector`, `slo-alert` and `slow-query-alerter` do
 expose `beginShutdown()` / `awaitIdle()` and could be appended to
 `shutdownSubsystems` without changing the handler. That is a runtime behaviour
 change with its own review, not a documentation fix, so this document records
