@@ -336,6 +336,7 @@ export function createGatewayApiKeyAuthMiddleware<
     res.locals = res.locals || {};
     res.locals.apiKeyTier = matchedCandidate.apiKeyRecord.tier;
 
+    recordApiKeyLookup('hit');
     next();
   } catch (err) {
     recordApiKeyLookup('error');
