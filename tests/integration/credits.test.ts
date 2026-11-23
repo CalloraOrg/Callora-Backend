@@ -87,6 +87,7 @@ jest.mock('../../src/logger.ts', () => {
 // ---------------------------------------------------------------------------
 
 import { createApp } from '../../src/app.js';
+import { signForwardedIdentity } from '../../src/middleware/requireAuth.js';
 import { defaultCreditsRepository } from '../../src/repositories/creditsRepository.js';
 import { resetCreditsRateLimit } from '../../src/routes/billing/credits.js';
 import type { Credit } from '../../src/db/schema.js';
@@ -261,15 +262,37 @@ describe('GET /api/billing/credits — Integration Tests [b#044]', () => {
       expect(mockRepo.getOrCreateByUserId).toHaveBeenCalledWith(OTHER_USER_ID);
     });
 
-    it('authenticates successfully using the x-user-id header (local/test path)', async () => {
+    it('authenticates successfully using a signed x-user-id forwarded identity header', async () => {
       mockRepo.getOrCreateByUserId.mockResolvedValue(makeCredit());
 
-      const res = await request(app)
-        .get('/api/billing/credits')
-        .set('x-user-id', TEST_USER_ID);
+      const prevTrust = process.env.TRUST_FORWARDED_USER_ID;
+      const prevSecret = process.env.FORWARDED_USER_ID_SECRET;
+      const secret = 'test-forwarded-secret';
+      process.env.TRUST_FORWARDED_USER_ID = 'true';
+      process.env.FORWARDED_USER_ID_SECRET = secret;
 
-      expect(res.status).toBe(200);
-      expect(mockRepo.getOrCreateByUserId).toHaveBeenCalledWith(TEST_USER_ID);
+      try {
+        const { signature, timestamp } = signForwardedIdentity({
+          secret,
+          method: 'GET',
+          path: '/api/billing/credits',
+          userId: TEST_USER_ID,
+        });
+
+        const res = await request(app)
+          .get('/api/billing/credits')
+          .set('x-user-id', TEST_USER_ID)
+          .set('x-gateway-signature', signature)
+          .set('x-gateway-timestamp', timestamp);
+
+        expect(res.status).toBe(200);
+        expect(mockRepo.getOrCreateByUserId).toHaveBeenCalledWith(TEST_USER_ID);
+      } finally {
+        if (prevTrust === undefined) delete process.env.TRUST_FORWARDED_USER_ID;
+        else process.env.TRUST_FORWARDED_USER_ID = prevTrust;
+        if (prevSecret === undefined) delete process.env.FORWARDED_USER_ID_SECRET;
+        else process.env.FORWARDED_USER_ID_SECRET = prevSecret;
+      }
     });
   });
 
@@ -347,7 +370,7 @@ describe('GET /api/billing/credits — Integration Tests [b#044]', () => {
 
       const res = await request(app)
         .get('/api/billing/credits')
-        .set('x-user-id', 'brand-new-user-xyz');
+        .set('Authorization', `Bearer ${signToken('brand-new-user-xyz')}`);
 
       expect(res.status).toBe(200);
       expect(res.body.data.balance_usdc).toBe('0.00');
@@ -375,7 +398,7 @@ describe('GET /api/billing/credits — Integration Tests [b#044]', () => {
 
       const res = await request(app)
         .get('/api/billing/credits')
-        .set('x-user-id', TEST_USER_ID);
+        .set('Authorization', `Bearer ${signToken(TEST_USER_ID)}`);
 
       expect(res.body.data.balance_usdc).toBe('999999.9999999');
     });
@@ -507,7 +530,7 @@ describe('GET /api/billing/credits — Integration Tests [b#044]', () => {
 
       const res = await request(app)
         .get('/api/billing/credits')
-        .set('x-user-id', TEST_USER_ID);
+        .set('Authorization', `Bearer ${signToken(TEST_USER_ID)}`);
 
       expect(res.status).toBe(500);
       // The raw internal error detail must not appear in the response body.
@@ -521,7 +544,7 @@ describe('GET /api/billing/credits — Integration Tests [b#044]', () => {
 
       const res = await request(app)
         .get('/api/billing/credits')
-        .set('x-user-id', TEST_USER_ID)
+        .set('Authorization', `Bearer ${signToken(TEST_USER_ID)}`)
         .set('x-request-id', 'req-correlation-abc');
 
       expect(res.status).toBe(500);
@@ -668,7 +691,7 @@ describe('GET /api/billing/credits — Integration Tests [b#044]', () => {
         users.map((userId) =>
           request(app)
             .get('/api/billing/credits')
-            .set('x-user-id', userId),
+            .set('Authorization', `Bearer ${signToken(userId)}`),
         ),
       );
 

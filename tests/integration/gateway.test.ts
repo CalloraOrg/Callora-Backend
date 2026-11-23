@@ -102,7 +102,10 @@ describe('Gateway X-Api-Key auth', () => {
       .set('x-api-key', validKey);
 
     expect(res.status).toBe(504);
-    expect(res.body.error).toMatch(/timeout|timed out/i);
+    expect(res.body.error).toMatchObject({
+      code: 'GATEWAY_TIMEOUT',
+      message: expect.stringMatching(/timeout|timed out/i),
+    });
     expect(res.body).toHaveProperty('requestId');
   });
 

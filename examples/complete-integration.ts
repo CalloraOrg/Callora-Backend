@@ -94,7 +94,7 @@ const settlementService = new RevenueSettlementService(
   settlementStore,
   apiRegistry,
   settlementClient,
-  { minPayoutUsdc: 1 }, // low threshold so the demo triggers a payout
+  { minPayoutUsdc: '1' }, // low threshold so the demo triggers a payout
 );
 
 // ============================================================================

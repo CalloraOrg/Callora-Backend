@@ -1,4 +1,4 @@
-import { InMemoryUsageStore } from './usageStore.js';
+import { createPostgresUsageStore, InMemoryUsageStore, type UsageStoreQueryable } from './usageStore.js';
 import type { UsageEvent } from '../types/gateway.js';
 
 const USDC = (n: number): bigint => BigInt(Math.round(n * 10_000_000));
@@ -24,6 +24,44 @@ describe('InMemoryUsageStore', () => {
 
   beforeEach(() => {
     store = new InMemoryUsageStore();
+  });
+
+  describe('PostgresUsageStore precision', () => {
+    it('binds event ids above Number.MAX_SAFE_INTEGER without precision loss', async () => {
+      const query = jest.fn(async (_text: string, _params?: unknown[]) => ({ rows: [{ id: '7' }] }));
+      const db = { query, connect: jest.fn() } as unknown as UsageStoreQueryable;
+      const store = createPostgresUsageStore(db);
+
+      await store.markAsSettled(['9007199254740993'], 'settlement-1');
+
+      expect(query.mock.calls[1]?.[1]).toEqual(['7', '9007199254740993']);
+    });
+
+    it('preserves aggregate contract units above Number.MAX_SAFE_INTEGER', async () => {
+      const query = jest.fn()
+        .mockResolvedValueOnce({
+          rows: [{
+            total_events: '1',
+            settled_events: '0',
+            unsettled_events: '1',
+            total_amount_usdc: '9007199254740993',
+            settled_amount_usdc: '0',
+            unsettled_amount_usdc: '9007199254740993',
+            api_count: '1',
+            endpoint_count: '1',
+            first_event_at: null,
+            last_event_at: null,
+          }],
+        })
+        .mockResolvedValueOnce({ rows: [{ status_code: 200, count: '1' }] });
+      const db = { query, connect: jest.fn() } as unknown as UsageStoreQueryable;
+      const store = createPostgresUsageStore(db);
+
+      const snapshot = await store.getDeveloperUsageSnapshot('dev-1');
+
+      expect(snapshot?.totalAmountUsdc).toBe(9007199254740993n);
+      expect(snapshot?.unsettledAmountUsdc).toBe(9007199254740993n);
+    });
   });
 
   it('records an event and returns true', () => {

@@ -8,6 +8,11 @@ import { HmacObjectStorageClient } from '../services/scheduledExports.js';
 import { encodeCursor } from '../lib/cursorPagination.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
 import type { Developer } from '../db/schema.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+function authHeader(userId: string): string {
+  return `Bearer ${signTestToken({ userId })}`;
+}
 
 // Test setup
 const exportStore = new InMemoryExportStore();
@@ -64,8 +69,13 @@ function createTestApp() {
 }
 
 describe('GET /api/exports', () => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+  const originalCorsAllowMissing = process.env.CORS_ALLOW_MISSING_ORIGIN;
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+    process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
     
     // Clear the export store before each test
     // Access the internal records map and clear it
@@ -79,6 +89,19 @@ describe('GET /api/exports', () => {
       }
       return Promise.resolve(undefined);
     });
+  });
+
+  afterAll(() => {
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
+    }
+    if (originalCorsAllowMissing === undefined) {
+      delete process.env.CORS_ALLOW_MISSING_ORIGIN;
+    } else {
+      process.env.CORS_ALLOW_MISSING_ORIGIN = originalCorsAllowMissing;
+    }
   });
 
   it('should return 401 when not authenticated', async () => {
@@ -96,7 +119,7 @@ describe('GET /api/exports', () => {
     });
     const response = await request(app)
       .get('/api/exports')
-      .set('x-user-id', 'user-no-profile');
+      .set('Authorization', authHeader('user-no-profile'));
     expect(response.status).toBe(403);
     expect(response.body.error.code).toBe('DEVELOPER_NOT_FOUND');
   });
@@ -105,7 +128,7 @@ describe('GET /api/exports', () => {
     const app = createTestApp();
     const response = await request(app)
       .get('/api/exports')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(response.status).toBe(200);
     expect(response.body.data).toEqual([]);
     expect(response.body.pagination).toBeDefined();
@@ -128,7 +151,7 @@ describe('GET /api/exports', () => {
 
     const response = await request(app)
       .get('/api/exports')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     
     expect(response.status).toBe(200);
     expect(response.body.data.length).toBe(1);
@@ -167,7 +190,7 @@ describe('GET /api/exports', () => {
     // Request only CSV exports
     const response = await request(app)
       .get('/api/exports?format=csv')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     
     expect(response.status).toBe(200);
     expect(response.body.data.length).toBe(1);
@@ -178,7 +201,7 @@ describe('GET /api/exports', () => {
     const app = createTestApp();
     const response = await request(app)
       .get('/api/exports?developerId=other-developer')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     expect(response.status).toBe(403);
     expect(response.body.error.code).toBe('FORBIDDEN');
@@ -202,7 +225,7 @@ describe('GET /api/exports', () => {
     // Request with limit=3
     const response = await request(app)
       .get('/api/exports?limit=3')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     
     expect(response.status).toBe(200);
     expect(response.body.data.length).toBe(3);
@@ -230,7 +253,7 @@ describe('GET /api/exports', () => {
 
     const pageOne = await request(app)
       .get('/api/exports?limit=2')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     expect(pageOne.status).toBe(200);
     expect(pageOne.body.data.map((record: { id: string }) => record.id)).toEqual(['export-c', 'export-b']);
@@ -247,7 +270,7 @@ describe('GET /api/exports', () => {
 
     const pageTwo = await request(app)
       .get(`/api/exports?limit=2&cursor=${encodeURIComponent(pageOne.body.pagination.nextCursor)}`)
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     expect(pageTwo.status).toBe(200);
     expect(pageTwo.body.data.map((record: { id: string }) => record.id)).toEqual(['export-a']);
@@ -260,7 +283,7 @@ describe('GET /api/exports', () => {
     const app = createTestApp();
     const response = await request(app)
       .get('/api/exports?cursor=not-a-valid-cursor')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('VALIDATION_ERROR');
@@ -276,7 +299,7 @@ describe('GET /api/exports', () => {
     const app = createTestApp();
     const response = await request(app)
       .get('/api/exports?limit=3abc')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('VALIDATION_ERROR');
@@ -306,7 +329,7 @@ describe('GET /api/exports', () => {
       const app = createTestApp();
       const response = await request(app)
         .get('/api/exports')
-        .set('x-user-id', 'user-1');
+        .set('Authorization', authHeader('user-1'));
 
       expect(response.status).toBe(200);
       expect(response.headers['content-security-policy']).toBe(expectedCsp);
@@ -330,7 +353,7 @@ describe('GET /api/exports', () => {
 
       const response = await request(app)
         .get('/api/exports')
-        .set('x-user-id', 'user-no-profile');
+        .set('Authorization', authHeader('user-no-profile'));
 
       expect(response.status).toBe(403);
       expect(response.headers['content-security-policy']).toBe(expectedCsp);
@@ -344,6 +367,7 @@ describe('GET /api/exports', () => {
 
     beforeEach(() => {
       originalEnv = process.env.EXPORTS_CORS_ALLOWED_ORIGINS;
+      delete process.env.CORS_ALLOW_MISSING_ORIGIN;
     });
 
     afterEach(() => {
@@ -352,6 +376,7 @@ describe('GET /api/exports', () => {
       } else {
         process.env.EXPORTS_CORS_ALLOWED_ORIGINS = originalEnv;
       }
+      process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
     });
 
     it('denies cross-origin requests by default if environment variable is not set', async () => {
@@ -374,7 +399,7 @@ describe('GET /api/exports', () => {
         .get('/api/exports')
         .set('Origin', 'https://allowed.example.com')
         // include auth to ensure we hit the 200 path instead of 401
-        .set('x-user-id', 'user-1');
+        .set('Authorization', authHeader('user-1'));
         
       expect(response.status).toBe(200);
       expect(response.headers['access-control-allow-origin']).toBe('https://allowed.example.com');

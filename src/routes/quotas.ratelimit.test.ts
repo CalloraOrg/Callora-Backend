@@ -32,6 +32,7 @@ import { errorHandler } from "../middleware/errorHandler.js";
 import { requestIdMiddleware } from "../middleware/requestId.js";
 import { envelopeMiddleware } from "../middleware/envelope.js";
 import { logger } from "../logger.js";
+import { TooManyRequestsError } from "../errors/index.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -302,7 +303,7 @@ describe("createQuotasRouter — /api/quotas route wiring", () => {
     // Build app with a custom middleware that always blocks (for unit testing)
     const alwaysBlock: express.RequestHandler = (_req, res, next) => {
       res.set("Retry-After", "5");
-      next(new (require("../errors/index.js").TooManyRequestsError)("blocked"));
+      next(new TooManyRequestsError("blocked"));
     };
 
     const app = express();

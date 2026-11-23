@@ -1,5 +1,9 @@
 /**
- * Test-only harness to inject latency into Soroban RPC calls when SOROBAN_CHAOS=1
+ * Environment-gated latency chaos helper for Soroban RPC calls.
+ *
+ * Injects a random 50–500 ms delay before Soroban RPC requests when
+ * `SOROBAN_CHAOS=1`. Ignored when `NODE_ENV=production` as a safety guard
+ * so chaos latency cannot be accidentally activated in production.
  */
 
 const MIN_LATENCY_MS = 50;
@@ -12,6 +16,9 @@ function randomLatency(minMs: number = MIN_LATENCY_MS, maxMs: number = MAX_LATEN
 }
 
 export async function injectLatency(): Promise<void> {
+  if (process.env.NODE_ENV === 'production') {
+    return;
+  }
   const chaosEnabled = process.env.SOROBAN_CHAOS === '1';
   if (!chaosEnabled) {
     return;

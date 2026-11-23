@@ -93,12 +93,36 @@ export interface SettlementStoreQueryable {
 }
 
 const toCount = (value: string | number): number =>
-  typeof value === 'number' ? value : Number(value);
+  typeof value === 'number' ? value : parseInt(value, 10);
+
+const expandScientificNotation = (value: string): string => {
+  const [mantissa, exponentPart] = value.toLowerCase().split('e');
+  if (exponentPart === undefined) return value;
+
+  const exponent = parseInt(exponentPart, 10);
+  const negative = mantissa.startsWith('-');
+  const unsignedMantissa = negative ? mantissa.slice(1) : mantissa;
+  const [whole, fraction = ''] = unsignedMantissa.split('.');
+  const digits = whole + fraction;
+  const decimalPosition = whole.length + exponent;
+  const sign = negative ? '-' : '';
+
+  if (decimalPosition <= 0) {
+    return `${sign}0.${'0'.repeat(-decimalPosition)}${digits}`;
+  }
+  if (decimalPosition >= digits.length) {
+    return `${sign}${digits}${'0'.repeat(decimalPosition - digits.length)}`;
+  }
+  return `${sign}${digits.slice(0, decimalPosition)}.${digits.slice(decimalPosition)}`;
+};
+
+const parseSettlementAmount = (value: string | number): bigint =>
+  parseUsdcToUnits(expandScientificNotation(String(value)));
 
 const mapSettlementRow = (row: SettlementStoreRow): Settlement => ({
   id: row.external_id,
   developerId: row.developer_id,
-  amount: parseUsdcToUnits(typeof row.amount_usdc === 'number' ? row.amount_usdc.toFixed(7) : String(row.amount_usdc)),
+  amount: parseSettlementAmount(row.amount_usdc),
   status: row.status,
   tx_hash: row.stellar_tx_hash,
   created_at: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
