@@ -20,6 +20,7 @@
     "pretest": "npm run error-codes:check",
     "test": "jest --forceExit",
     "test:serial": "jest --runInBand --forceExit",
+    "test:quarantine": "node scripts/run-quarantine.mjs",
     "test:unit": "jest --runInBand --forceExit --testPathIgnorePatterns tests/integration",
     "test:integration": "jest --runInBand --forceExit tests/integration",
     "test:coverage": "jest --runInBand --coverage --forceExit --testPathIgnorePatterns tests/integration",
