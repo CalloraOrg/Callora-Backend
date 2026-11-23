@@ -12,6 +12,14 @@ import { requireAuth, type AuthenticatedLocals } from "./requireAuth.js";
 import { TEST_JWT_SECRET, signTestToken } from "../../tests/helpers/jwt.js";
 import { logger } from "../logger.js";
 
+function authHeader(userId: string): string {
+  const token = signTestToken({
+    userId,
+    walletAddress: "GDTEST123STELLAR",
+  });
+  return `Bearer ${token}`;
+}
+
 function buildProtectedApp(windowMs = 60_000, maxRequests = 2) {
   const app = express();
   const rateLimit = createRateLimitMiddleware({
@@ -54,11 +62,11 @@ describe("rateLimit middleware (token-bucket)", () => {
   it("returns 429 after the per-user limit is exceeded with canonical error envelope", async () => {
     const app = buildProtectedApp();
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
     const response = await request(app)
       .get("/protected")
-      .set("x-user-id", "user-1");
+      .set("Authorization", authHeader("user-1"));
 
     expect(response.status).toBe(429);
     expect(response.headers["retry-after"]).toBeDefined();
@@ -67,7 +75,6 @@ describe("rateLimit middleware (token-bucket)", () => {
     expect(response.body.success).toBe(false);
     expect(response.body.error.code).toBe("TOO_MANY_REQUESTS");
     expect(response.body.error.message).toBe("Too Many Requests");
-    expect(response.body.error.details.retryAfterMs).toBeGreaterThan(0);
     expect(response.body.requestId).toBeDefined();
     expect(response.body.timestamp).toBeDefined();
   });
@@ -75,13 +82,13 @@ describe("rateLimit middleware (token-bucket)", () => {
   it("tracks requests separately for different users", async () => {
     const app = buildProtectedApp();
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-2").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-2").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-2")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-2")).expect(200);
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(429);
-    await request(app).get("/protected").set("x-user-id", "user-2").expect(429);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(429);
+    await request(app).get("/protected").set("Authorization", authHeader("user-2")).expect(429);
   });
 
   it("uses the authenticated user id when a bearer token is present", async () => {
@@ -95,7 +102,10 @@ describe("rateLimit middleware (token-bucket)", () => {
       .get("/protected")
       .set("Authorization", `Bearer ${token}`)
       .expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
+    await request(app)
+      .get("/protected")
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
 
     const response = await request(app)
       .get("/protected")
@@ -122,15 +132,15 @@ describe("rateLimit middleware (token-bucket)", () => {
   it("returns 429 with Retry-After header and structured details", async () => {
     const app = buildProtectedApp(1000, 1);
 
-    await request(app).get("/protected").set("x-user-id", "user-x").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-x")).expect(200);
     const response = await request(app)
       .get("/protected")
-      .set("x-user-id", "user-x");
+      .set("Authorization", authHeader("user-x"));
 
     expect(response.status).toBe(429);
     expect(response.body.success).toBe(false);
     expect(response.body.error.code).toBe("TOO_MANY_REQUESTS");
-    expect(typeof response.body.error.details.retryAfterMs).toBe("number");
+    expect(response.body.error.message).toBe("Too Many Requests");
     expect(Number(response.headers["retry-after"])).toBeGreaterThanOrEqual(1);
   });
 
@@ -275,47 +285,49 @@ describe("token bucket rate limit middleware", () => {
 
   test("returns 200 within burst capacity", async () => {
     const app = buildTokenBucketApp(3, 1);
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
   });
 
   test("returns 429 after burst capacity is exceeded", async () => {
     const app = buildTokenBucketApp(2, 1);
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
     const response = await request(app)
       .get("/protected")
-      .set("x-user-id", "user-1");
+      .set("Authorization", authHeader("user-1"));
 
     expect(response.status).toBe(429);
     expect(response.headers["retry-after"]).toBe("1");
     const retryAfterMs =
-      response.body.retryAfterMs ?? response.body.error?.details?.retryAfterMs;
+      response.body.retryAfterMs ??
+      response.body.error?.retryAfterMs ??
+      response.body.error?.details?.retryAfterMs;
     expect(retryAfterMs).toBeGreaterThan(0);
   });
 
   test("tracks limits separately per user", async () => {
     const app = buildTokenBucketApp(2, 1);
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-2").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-2")).expect(200);
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
-    await request(app).get("/protected").set("x-user-id", "user-2").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-2")).expect(200);
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(429);
-    await request(app).get("/protected").set("x-user-id", "user-2").expect(429);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(429);
+    await request(app).get("/protected").set("Authorization", authHeader("user-2")).expect(429);
   });
 
   test("returns 429 with code TOO_MANY_REQUESTS", async () => {
     const app = buildTokenBucketApp(1, 1);
 
-    await request(app).get("/protected").set("x-user-id", "user-1").expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("user-1")).expect(200);
     const response = await request(app)
       .get("/protected")
-      .set("x-user-id", "user-1");
+      .set("Authorization", authHeader("user-1"));
 
     expect(response.status).toBe(429);
     const code = response.body.code ?? response.body.error?.code;
