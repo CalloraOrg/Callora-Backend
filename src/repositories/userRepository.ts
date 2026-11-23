@@ -129,7 +129,7 @@ export class PgUserRepository implements UserRepository {
 
     if (data.stellarAddress !== undefined) {
       values.push(assertNonEmpty(data.stellarAddress, 'stellarAddress'));
-      updates.push(`stellar_address = ${values.length}`);
+      updates.push(`stellar_address = $${values.length}`);
     }
 
     if (updates.length === 0) {

@@ -282,16 +282,17 @@ describe('gatewayRateLimit middleware', () => {
 
     test('reset clears all buckets', () => {
       const limiter = new InMemoryGatewayRateLimiter(1000, 5);
+      const now = 1000000;
 
-      limiter.check('user:a');
-      limiter.check('user:b');
-      expect(limiter.getTokens('user:a')).toBe(4);
-      expect(limiter.getTokens('user:b')).toBe(4);
+      limiter.check('user:a', now);
+      limiter.check('user:b', now);
+      expect(limiter.getTokens('user:a', now)).toBe(4);
+      expect(limiter.getTokens('user:b', now)).toBe(4);
 
       limiter.reset();
 
-      expect(limiter.getTokens('user:a')).toBe(5);
-      expect(limiter.getTokens('user:b')).toBe(5);
+      expect(limiter.getTokens('user:a', now)).toBe(5);
+      expect(limiter.getTokens('user:b', now)).toBe(5);
     });
 
     test('tokens never exceed maxRequests after refill', () => {

@@ -59,7 +59,10 @@ describe('DepositController', () => {
 
     // Create mock request/response objects
     mockReq = {
+      headers: {},
       body: {},
+      query: {},
+      params: {},
     };
 
     mockRes = {
@@ -190,8 +193,10 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(401);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Authentication required',
-        code: 'UNAUTHORIZED',
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Authentication required',
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -209,8 +214,10 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'amount_usdc is required',
-        code: 'MISSING_AMOUNT',
+        error: {
+          code: 'MISSING_AMOUNT',
+          message: 'amount_usdc is required',
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -228,8 +235,10 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'amount_usdc must be a string',
-        code: 'INVALID_AMOUNT_TYPE',
+        error: {
+          code: 'INVALID_AMOUNT_TYPE',
+          message: 'amount_usdc must be a string',
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -252,9 +261,11 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Amount must be positive and have at most 7 decimal places',
-        code: 'INVALID_AMOUNT_FORMAT',
-        provided: '10.00',
+        error: {
+          code: 'INVALID_AMOUNT_FORMAT',
+          message: 'Amount must be positive and have at most 7 decimal places',
+          details: { provided: '10.00' },
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -272,9 +283,11 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'network must be either "testnet" or "mainnet"',
-        code: 'INVALID_NETWORK',
-        provided: 'invalid',
+        error: {
+          code: 'INVALID_NETWORK',
+          message: 'network must be either "testnet" or "mainnet"',
+          details: { provided: 'invalid' },
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -318,9 +331,11 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'source_account must be a valid Stellar public key (G...)',
-        code: 'INVALID_SOURCE_ACCOUNT',
-        provided: 'invalid-key',
+        error: {
+          code: 'INVALID_SOURCE_ACCOUNT',
+          message: 'source_account must be a valid Stellar public key (G...)',
+          details: { provided: 'invalid-key' },
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -340,8 +355,10 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(404);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: "Vault not found for user on network 'testnet'. Please create a vault first.",
-        code: 'VAULT_NOT_FOUND',
+        error: {
+          code: 'VAULT_NOT_FOUND',
+          message: "Vault not found for user on network 'testnet'. Please create a vault first.",
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -377,8 +394,10 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(400);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'User does not have a Stellar address configured. Please update your profile.',
-        code: 'STELLAR_ADDRESS_REQUIRED',
+        error: {
+          code: 'STELLAR_ADDRESS_REQUIRED',
+          message: 'User does not have a Stellar address configured. Please update your profile.',
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -411,8 +430,10 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(500);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Invalid vault contract configuration. Please contact support.',
-        code: 'INVALID_CONTRACT_ID',
+        error: {
+          code: 'INVALID_CONTRACT_ID',
+          message: 'Invalid vault contract configuration. Please contact support.',
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });
@@ -486,14 +507,14 @@ describe('DepositController', () => {
       expect(mockRes.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: false,
-          error: expect.objectContaining({
-            code: 'SIMULATION_FAILED',
-            message: 'Soroban simulation failed. See diagnostics for details.',
-            simulationDetails: expect.objectContaining({
-              errorCode: 8,
-              errorMessage: 'BelowMinDeposit',
-            }),
+          code: 'SIMULATION_FAILED',
+          error: 'Soroban simulation failed. See diagnostics for details.',
+          simulationDetails: expect.objectContaining({
+            errorCode: 8,
+            errorMessage: 'BelowMinDeposit',
           }),
+          requestId: expect.any(String),
+          timestamp: expect.any(String),
         })
       );
     });
@@ -525,8 +546,10 @@ describe('DepositController', () => {
       expect(mockRes.status).toHaveBeenCalledWith(500);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Failed to prepare deposit transaction',
-        code: 'INTERNAL_ERROR',
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Failed to prepare deposit transaction',
+        },
         requestId: expect.any(String),
         timestamp: expect.any(String),
       });

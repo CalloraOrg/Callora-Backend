@@ -7,6 +7,12 @@ import { requestIdMiddleware } from '../middleware/requestId.js';
 import { logger } from '../logger.js';
 import { createTenantsRouter, type TenantRecord, type TenantRepository } from './tenants.js';
 import type { CreateTenantInput, UpdateTenantInput } from '../validators/tenants.js';
+import { TEST_JWT_SECRET, signTestToken } from '../../tests/helpers/jwt.js';
+
+function authHeader(userId = 'dev-1') {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+  return `Bearer ${signTestToken({ userId })}`;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -211,7 +217,7 @@ describe('POST /api/tenants — Zod validation integration', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-missing-name')
       .send({ contactEmail: 'bad-email' });
 
@@ -234,7 +240,7 @@ describe('POST /api/tenants — Zod validation integration', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-unknown-key')
       .send({ name: 'GrantFox Ops', unsafeRole: 'admin' });
 
@@ -251,7 +257,7 @@ describe('POST /api/tenants — Zod validation integration', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-bad-plan')
       .send({ name: 'GrantFox Ops', plan: 'premium' });
 
@@ -268,7 +274,7 @@ describe('POST /api/tenants — Zod validation integration', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-create-ok')
       .send({ name: 'GrantFox Stadium' });
 
@@ -289,7 +295,7 @@ describe('POST /api/tenants — Zod validation integration', () => {
 
     const res = await request(app)
       .post('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ name: '  GrantFox Ops  ', slug: 'GrantFox-Ops', plan: 'growth' });
 
     expect(res.status).toBe(201);
@@ -332,7 +338,7 @@ describe('PATCH /api/tenants/:tenantId — Zod validation integration', () => {
 
     const res = await request(app)
       .patch('/api/tenants/no')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-patch-multi-error')
       .send({});
 
@@ -352,7 +358,7 @@ describe('PATCH /api/tenants/:tenantId — Zod validation integration', () => {
 
     const res = await request(app)
       .patch('/api/tenants/tenant_123')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .send({ slug: 'new-slug' });
 
     expect(res.status).toBe(400);
@@ -368,7 +374,7 @@ describe('PATCH /api/tenants/:tenantId — Zod validation integration', () => {
 
     const res = await request(app)
       .patch('/api/tenants/tenant_123')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-patch-ok')
       .send({ plan: 'enterprise' });
 
@@ -418,7 +424,7 @@ describe('GET /api/tenants — list integration', () => {
 
     const res = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('x-request-id', 'req-list-ok');
 
     expect(res.status).toBe(200);
@@ -434,7 +440,7 @@ describe('GET /api/tenants — list integration', () => {
 
     const res = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authHeader('dev-1'));
 
     expect(res.status).toBe(200);
     expect(res.headers.etag).toBeDefined();
@@ -446,14 +452,14 @@ describe('GET /api/tenants — list integration', () => {
 
     const first = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', authHeader('dev-1'));
 
     expect(first.status).toBe(200);
     const etag = first.headers.etag as string;
 
     const second = await request(app)
       .get('/api/tenants')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader('dev-1'))
       .set('If-None-Match', etag);
 
     expect(second.status).toBe(304);

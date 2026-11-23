@@ -219,21 +219,30 @@ describe('public /api/maintenance — CORS allowlist enforcement (issue #940)', 
 
     it('returns 304 Not Modified when If-None-Match matches', async () => {
       const app = buildApp();
-      const firstRes = await request(app)
-        .get('/api/maintenance')
-        .set('Origin', 'http://localhost:5173');
-      
-      const etag = firstRes.headers.etag;
-      
-      const secondRes = await request(app)
-        .get('/api/maintenance')
-        .set('Origin', 'http://localhost:5173')
-        .set('If-None-Match', etag);
-      
-      expect(secondRes.status).toBe(304);
-      expect(secondRes.body).toEqual({});
-      expect(secondRes.headers['content-type']).toBeUndefined();
-      expect(secondRes.headers['content-length']).toBeUndefined();
+      const isoSpy = jest
+        .spyOn(Date.prototype, 'toISOString')
+        .mockReturnValue('2026-01-01T00:00:00.000Z');
+      try {
+        const firstRes = await request(app)
+          .get('/api/maintenance')
+          .set('Origin', 'http://localhost:5173')
+          .set('x-request-id', 'etag-req-1');
+
+        const etag = firstRes.headers.etag;
+
+        const secondRes = await request(app)
+          .get('/api/maintenance')
+          .set('Origin', 'http://localhost:5173')
+          .set('x-request-id', 'etag-req-1')
+          .set('If-None-Match', etag);
+
+        expect(secondRes.status).toBe(304);
+        expect(secondRes.body).toEqual({});
+        expect(secondRes.headers['content-type']).toBeUndefined();
+        expect(secondRes.headers['content-length']).toBeUndefined();
+      } finally {
+        isoSpy.mockRestore();
+      }
     });
 
     it('returns 200 OK when If-None-Match does not match', async () => {

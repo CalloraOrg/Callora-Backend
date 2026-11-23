@@ -7,6 +7,7 @@ import {
 } from '../../repositories/usageEventsRepository.js';
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../../tests/helpers/jwt.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -35,13 +36,28 @@ function createTestApp(repo: InMemoryUsageEventsRepository): express.Express {
   return app;
 }
 
-const auth = (req: request.Test): request.Test => req.set('x-user-id', USER_ID);
+const auth = (req: request.Test): request.Test =>
+  req.set('Authorization', `Bearer ${signTestToken({ userId: USER_ID })}`);
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe('GET /api/usage/aggregate', () => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterAll(() => {
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
+    }
+  });
+
   beforeEach(() => { nextId = 1; });
 
   // -------------------------------------------------------------------------

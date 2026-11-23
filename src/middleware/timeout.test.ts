@@ -18,6 +18,7 @@ import express from 'express';
 import request from 'supertest';
 import { createTimeoutMiddleware } from './timeout.js';
 import { errorHandler } from './errorHandler.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 describe('createTimeoutMiddleware', () => {
   // ── Happy-path ─────────────────────────────────────────────────────────────
@@ -134,13 +135,13 @@ describe('createTimeoutMiddleware', () => {
     app.get(
       '/race',
       createTimeoutMiddleware({ timeoutMs: 50 }),
-      async (_req, res) => {
+      asyncHandler(async (_req, res) => {
         // Wait longer than the timeout, then try to respond
         await new Promise((r) => setTimeout(r, 100));
         if (!res.headersSent) {
           res.status(200).json({ status: 'too-late' });
         }
-      },
+      }),
     );
     app.use(errorHandler);
 
@@ -224,13 +225,13 @@ describe('createTimeoutMiddleware', () => {
     app.get(
       '/no-timeout',
       createTimeoutMiddleware({ durationMs: -1 }),
-      async (_req, res) => {
+      asyncHandler(async (_req, res) => {
         // Simulate some async work that completes fine
         await new Promise((r) => setTimeout(r, 20));
         if (!res.headersSent) {
           res.json({ ok: true });
         }
-      },
+      }),
     );
     app.use(errorHandler);
 
@@ -245,12 +246,12 @@ describe('createTimeoutMiddleware', () => {
     app.get(
       '/no-timeout-zero',
       createTimeoutMiddleware({ timeoutMs: 0 }),
-      async (_req, res) => {
+      asyncHandler(async (_req, res) => {
         await new Promise((r) => setTimeout(r, 20));
         if (!res.headersSent) {
           res.json({ ok: true });
         }
-      },
+      }),
     );
     app.use(errorHandler);
 
