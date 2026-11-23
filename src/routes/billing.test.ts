@@ -1,5 +1,9 @@
 import express from 'express';
 import request from 'supertest';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+
 import billingRouter from './billing.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
@@ -47,26 +51,26 @@ describe('GET /api/billing', () => {
     const app = buildApp(pool as unknown as { query: jest.Mock });
     const res = await request(app)
       .get('/api/billing?limit=1')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'dev-1' })}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].requestId).toBe('request-2');
-    expect(res.body.meta.hasMore).toBe(true);
-    expect(res.body.meta.nextCursor).toBeTruthy();
+    expect(res.body.data.data).toHaveLength(1);
+    expect(res.body.data.data[0].requestId).toBe('request-2');
+    expect(res.body.data.meta.hasMore).toBe(true);
+    expect(res.body.data.meta.nextCursor).toBeTruthy();
   });
 
   it('rejects an invalid cursor', async () => {
     const app = buildApp({ query: jest.fn() } as unknown as { query: jest.Mock });
     const res = await request(app)
       .get('/api/billing?cursor=invalid-cursor')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'dev-1' })}`);
 
     expect(res.status).toBe(400);
   });
 
   it('returns the next page when a valid cursor is supplied', async () => {
-    const cursor = encodeCursor(new Date('2024-01-02T00:00:00.000Z'), 'req-2');
+    const cursor = encodeCursor(new Date('2024-01-02T00:00:00.000Z'), '2');
     const pool = {
       query: jest.fn().mockResolvedValue({ rows: [] }),
     };
@@ -74,50 +78,59 @@ describe('GET /api/billing', () => {
     const app = buildApp(pool as unknown as { query: jest.Mock });
     const res = await request(app)
       .get(`/api/billing?limit=1&cursor=${encodeURIComponent(cursor)}`)
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'dev-1' })}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual([]);
-    expect(res.body.meta.hasMore).toBe(false);
+    expect(res.body.data.data).toEqual([]);
+    expect(res.body.data.meta.hasMore).toBe(false);
   });
 
   it('supports ETag and returns 304 Not Modified', async () => {
-    const pool = {
-      query: jest.fn().mockResolvedValue({
-        rows: [
-          {
-            id: 'req-3',
-            request_id: 'request-3',
-            developer_id: 'dev-1',
-            api_id: 'api-3',
-            endpoint_id: 'endpoint-3',
-            api_key_id: 'key-3',
-            amount_usdc: '1.00',
-            created_at: new Date('2024-01-03T00:00:00.000Z'),
-          },
-        ],
-      }),
-    };
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    jest.setSystemTime(new Date('2024-01-03T00:00:00.000Z'));
 
-    const app = buildApp(pool as unknown as { query: jest.Mock });
+    try {
+      const pool = {
+        query: jest.fn().mockResolvedValue({
+          rows: [
+            {
+              id: 'req-3',
+              request_id: 'request-3',
+              developer_id: 'dev-1',
+              api_id: 'api-3',
+              endpoint_id: 'endpoint-3',
+              api_key_id: 'key-3',
+              amount_usdc: '1.00',
+              created_at: new Date('2024-01-03T00:00:00.000Z'),
+            },
+          ],
+        }),
+      };
 
-    // First request should return 200 and ETag
-    const res1 = await request(app)
-      .get('/api/billing?limit=1')
-      .set('x-user-id', 'dev-1');
+      const app = buildApp(pool as unknown as { query: jest.Mock });
 
-    expect(res1.status).toBe(200);
-    expect(res1.headers.etag).toBeDefined();
+      // First request should return 200 and ETag
+      const res1 = await request(app)
+        .get('/api/billing?limit=1')
+        .set('x-request-id', 'etag-test-req')
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'dev-1' })}`);
 
-    const etag = res1.headers.etag;
+      expect(res1.status).toBe(200);
+      expect(res1.headers.etag).toBeDefined();
 
-    // Second request with If-None-Match should return 304
-    const res2 = await request(app)
-      .get('/api/billing?limit=1')
-      .set('x-user-id', 'dev-1')
-      .set('If-None-Match', etag);
+      const etag = res1.headers.etag;
 
-    expect(res2.status).toBe(304);
-    expect(res2.body).toEqual({});
+      // Second request with If-None-Match should return 304
+      const res2 = await request(app)
+        .get('/api/billing?limit=1')
+        .set('x-request-id', 'etag-test-req')
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'dev-1' })}`)
+        .set('If-None-Match', etag);
+
+      expect(res2.status).toBe(304);
+      expect(res2.body).toEqual({});
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
