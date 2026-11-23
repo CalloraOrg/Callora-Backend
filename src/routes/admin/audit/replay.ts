@@ -116,6 +116,9 @@ export interface AdminAuditReplayRouterDeps {
   creditsRepository?: CreditsRepository;
   apiRepository?: ApiRepository;
   usageStore?: UsageAdminStore;
+  /** Override for the developer-plan-overrides persistence step inside
+   *  approveQuotaRequest. Injected in tests to avoid a live DB call. */
+  updatePlanOverrides?: (developerId: string, overrides: Record<string, unknown>) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +135,7 @@ export function createAdminAuditReplayRouter(
     deps.creditsRepository ?? defaultCreditsRepository;
   const apiRepository = deps.apiRepository ?? defaultApiRepository;
   const usageStore = deps.usageStore ?? createUsageStore();
+  const updatePlanOverrides = deps.updatePlanOverrides;
 
   /**
    * @openapi
@@ -261,7 +265,7 @@ export function createAdminAuditReplayRouter(
             throw badDetails('requestId');
           }
           try {
-            const updated = await approveQuotaRequest(requestId, adminActor, adminNotes);
+            const updated = await approveQuotaRequest(requestId, adminActor, adminNotes, updatePlanOverrides);
             outcome = { status: 'success', event: originalEntry.event, result: { requestId, status: updated.status } };
           } catch (e) {
             outcome = mapQuotaError(e, originalEntry.event, requestId);
