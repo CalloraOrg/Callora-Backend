@@ -197,7 +197,7 @@ export function createSloAlertJob(options: SloAlertJobOptions): SloAlertJob {
   const tick = async (): Promise<void> => {
     if (!accepting || running) return;
 
-    running = (async () => {
+    const task = (async () => {
       try {
         recordSloAlerterRun();
         const now = Date.now();
@@ -250,12 +250,17 @@ export function createSloAlertJob(options: SloAlertJobOptions): SloAlertJob {
         }
       } catch (error) {
         log.error('[sloAlertJob] Job failed:', error);
-      } finally {
-        running = null;
       }
     })();
 
-    await running;
+    running = task;
+    try {
+      await task;
+    } finally {
+      if (running === task) {
+        running = null;
+      }
+    }
   };
 
   return {

@@ -1,6 +1,7 @@
 import { adminLogMiddleware } from '../middleware/adminLog.js';
 import { etagMiddleware } from '../middleware/etag.js';
 import { Router, type Response } from 'express';
+import { pool } from '../db.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { createAdminIpAllowlist } from '../middleware/ipAllowlist.js';
 import { adminHistogramMiddleware } from '../middleware/metricsHistogram.js';
@@ -79,7 +80,7 @@ router.get('/users', async (req, res, next) => {
   }
 });
 
-router.use('/usage/export', createAdminUsageExportRouter());
+router.use('/usage/export', createAdminUsageExportRouter({ pool }));
 
 /**
  * GET /api/admin/usage/:developerId

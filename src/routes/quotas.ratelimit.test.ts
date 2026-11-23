@@ -32,6 +32,12 @@ import { errorHandler } from "../middleware/errorHandler.js";
 import { requestIdMiddleware } from "../middleware/requestId.js";
 import { envelopeMiddleware } from "../middleware/envelope.js";
 import { logger } from "../logger.js";
+import { TooManyRequestsError } from "../errors/index.js";
+import { TEST_JWT_SECRET, signTestToken } from "../../tests/helpers/jwt.js";
+
+function authHeader(userId: string) {
+  return `Bearer ${signTestToken({ userId })}`;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -85,7 +91,7 @@ describe("createQuotaRateLimitMiddleware", () => {
   const originalSecret = process.env.JWT_SECRET;
 
   beforeEach(() => {
-    process.env.JWT_SECRET = "test-secret";
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
     jest.spyOn(logger, "warn").mockImplementation(() => {});
     jest.spyOn(logger, "error").mockImplementation(() => {});
   });
@@ -145,35 +151,32 @@ describe("createQuotaRateLimitMiddleware", () => {
     expect(res.body.timestamp).toBeDefined();
   });
 
-  it("injects retryAfterMs into the error envelope", async () => {
+  it("sets Retry-After header and standardised error envelope on 429", async () => {
     const app = buildMiddlewareApp(1, 1);
 
-    await request(app).get("/protected").set("x-user-id", "u1").expect(200);
-    const res = await request(app).get("/protected").set("x-user-id", "u1");
+    await request(app).get("/protected").set("Authorization", authHeader("u1")).expect(200);
+    const res = await request(app).get("/protected").set("Authorization", authHeader("u1"));
 
     expect(res.status).toBe(429);
-    // retryAfterMs may be nested in error.details or at error level depending
-    // on envelope middleware — check either location.
-    const retryAfterMs =
-      res.body.error?.retryAfterMs ??
-      res.body.error?.details?.retryAfterMs ??
-      res.body.retryAfterMs;
-    expect(typeof retryAfterMs).toBe("number");
-    expect(retryAfterMs).toBeGreaterThan(0);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error?.code).toBe("TOO_MANY_REQUESTS");
+    const retryAfter = Number(res.headers["retry-after"]);
+    expect(Number.isInteger(retryAfter)).toBe(true);
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
   });
 
   it("tracks buckets independently per authenticated user", async () => {
     const app = buildMiddlewareApp(2, 1);
 
     // User A: 2 allowed, then blocked
-    await request(app).get("/protected").set("x-user-id", "userA").expect(200);
-    await request(app).get("/protected").set("x-user-id", "userA").expect(200);
-    await request(app).get("/protected").set("x-user-id", "userA").expect(429);
+    await request(app).get("/protected").set("Authorization", authHeader("userA")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("userA")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("userA")).expect(429);
 
     // User B: not affected by User A's exhausted bucket
-    await request(app).get("/protected").set("x-user-id", "userB").expect(200);
-    await request(app).get("/protected").set("x-user-id", "userB").expect(200);
-    await request(app).get("/protected").set("x-user-id", "userB").expect(429);
+    await request(app).get("/protected").set("Authorization", authHeader("userB")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("userB")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("userB")).expect(429);
   });
 
   it("falls back to IP-based keying for unauthenticated requests", async () => {
@@ -189,13 +192,13 @@ describe("createQuotaRateLimitMiddleware", () => {
   it("does not block a second user when a first user is rate-limited", async () => {
     const app = buildMiddlewareApp(1, 1);
 
-    await request(app).get("/protected").set("x-user-id", "userX").expect(200);
-    await request(app).get("/protected").set("x-user-id", "userX").expect(429);
+    await request(app).get("/protected").set("Authorization", authHeader("userX")).expect(200);
+    await request(app).get("/protected").set("Authorization", authHeader("userX")).expect(429);
 
     // Different user should still be allowed
     const res = await request(app)
       .get("/protected")
-      .set("x-user-id", "userY");
+      .set("Authorization", authHeader("userY"));
     expect(res.status).toBe(200);
   });
 
@@ -217,7 +220,7 @@ describe("createQuotasRouter — /api/quotas route wiring", () => {
   const originalSecret = process.env.JWT_SECRET;
 
   beforeEach(() => {
-    process.env.JWT_SECRET = "test-secret";
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
     jest.spyOn(logger, "warn").mockImplementation(() => {});
     jest.spyOn(logger, "error").mockImplementation(() => {});
   });
@@ -274,16 +277,16 @@ describe("createQuotasRouter — /api/quotas route wiring", () => {
     // Exhaust user A
     await request(app)
       .get("/api/quotas/counts")
-      .set("x-user-id", "userA");
+      .set("Authorization", authHeader("userA"));
     const resA = await request(app)
       .get("/api/quotas/counts")
-      .set("x-user-id", "userA");
+      .set("Authorization", authHeader("userA"));
     expect(resA.status).toBe(429);
 
     // User B has their own bucket — not blocked
     const resB = await request(app)
       .get("/api/quotas/counts")
-      .set("x-user-id", "userB");
+      .set("Authorization", authHeader("userB"));
     expect(resB.status).not.toBe(429);
   });
 
@@ -302,7 +305,7 @@ describe("createQuotasRouter — /api/quotas route wiring", () => {
     // Build app with a custom middleware that always blocks (for unit testing)
     const alwaysBlock: express.RequestHandler = (_req, res, next) => {
       res.set("Retry-After", "5");
-      next(new (require("../errors/index.js").TooManyRequestsError)("blocked"));
+      next(new TooManyRequestsError("blocked"));
     };
 
     const app = express();

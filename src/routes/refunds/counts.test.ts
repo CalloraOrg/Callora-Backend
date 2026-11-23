@@ -24,6 +24,12 @@ import {
   InMemoryDisputeRepository,
   DisputeService,
 } from '../../services/disputeService.js';
+import { TEST_JWT_SECRET, signTestToken } from '../../../tests/helpers/jwt.js';
+
+function authHeader(userId: string) {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+  return `Bearer ${signTestToken({ userId })}`;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,7 +64,7 @@ describe('computeCounts', () => {
 
     const res = await request(buildApp(svc))
       .get('/api/refunds')
-      .set('x-user-id', 'u1');
+      .set('Authorization', authHeader('u1'));
 
     expect(res.status).toBe(200);
     expect(res.body.counts.total).toBe(2);
@@ -82,7 +88,7 @@ describe('GET /api/refunds', () => {
     const { svc } = makeSvc();
     const res = await request(buildApp(svc))
       .get('/api/refunds')
-      .set('x-user-id', 'u1');
+      .set('Authorization', authHeader('u1'));
 
     expect(res.status).toBe(200);
     expect(res.body.counts.total).toBe(0);
@@ -100,7 +106,7 @@ describe('GET /api/refunds', () => {
 
     const res = await request(buildApp(svc))
       .get('/api/refunds')
-      .set('x-user-id', 'u1');
+      .set('Authorization', authHeader('u1'));
 
     expect(res.status).toBe(200);
     expect(res.body.counts.total).toBe(2);
@@ -116,7 +122,7 @@ describe('GET /api/refunds', () => {
 
     const res = await request(buildApp(svc))
       .get('/api/refunds')
-      .set('x-user-id', 'u1');
+      .set('Authorization', authHeader('u1'));
 
     expect(res.status).toBe(200);
     expect(res.body.counts.total).toBe(3);

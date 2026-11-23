@@ -55,7 +55,7 @@ describe('sloService', () => {
     it('throws when bucketSizeMs exceeds windowMs', () => {
       expect(() =>
         createSloAnalysisWindow({
-          windowMs: 600_000,
+          windowMs: 60_000,
           bucketSizeMs: 120_000,
         }),
       ).toThrow('bucketSizeMs must be a positive integer not exceeding windowMs');
@@ -90,21 +90,21 @@ describe('sloService', () => {
 
   describe('addSample — validation and bucketing', () => {
     it('rejects negative durations', () => {
-      const window = createSloAnalysisWindow({ windowMs: 60_000 });
+      const window = createSloAnalysisWindow({ windowMs: 600_000 });
       expect(() => window.addSample(200, -1)).toThrow(
         'durationMs must be a non-negative finite number',
       );
     });
 
     it('rejects infinite durations', () => {
-      const window = createSloAnalysisWindow({ windowMs: 60_000 });
+      const window = createSloAnalysisWindow({ windowMs: 600_000 });
       expect(() =>
         window.addSample(200, Number.POSITIVE_INFINITY),
       ).toThrow('durationMs must be a non-negative finite number');
     });
 
     it('rejects out-of-range HTTP statuses (defensive against bad input)', () => {
-      const window = createSloAnalysisWindow({ windowMs: 60_000 });
+      const window = createSloAnalysisWindow({ windowMs: 600_000 });
       expect(() => window.addSample(99, 5)).toThrow(
         'statusCode must be an integer in [100, 599]',
       );
@@ -115,7 +115,7 @@ describe('sloService', () => {
     });
 
     it('aggregates samples within the same bucket window', () => {
-      const window = createSloAnalysisWindow({ windowMs: 60_000 });
+      const window = createSloAnalysisWindow({ windowMs: 600_000 });
       const t0 = 1_700_000_000_000; // arbitrary
       window.addSample(200, 10, t0);
       window.addSample(500, 30, t0 + 100);
@@ -144,7 +144,7 @@ describe('sloService', () => {
   describe('eviction', () => {
     it('drops buckets that fall entirely outside the window', () => {
       const window = createSloAnalysisWindow({
-        windowMs: 600_000,
+        windowMs: 60_000,
         bucketSizeMs: 1_000,
       });
       window.addSample(200, 5, 1_000);
@@ -157,7 +157,7 @@ describe('sloService', () => {
 
     it('keeps buckets that overlap the trailing edge of the window', () => {
       const window = createSloAnalysisWindow({
-        windowMs: 600_000,
+        windowMs: 60_000,
         bucketSizeMs: 30_000,
       });
       window.addSample(200, 5, 0); // bucket [0, 30000)
@@ -379,9 +379,9 @@ describe('sloService', () => {
       const metrics = window.getMetrics(t0 + 5000);
       expect(metrics.totalRequests).toBe(110);
       expect(metrics.errorRate).toBeCloseTo(10 / 110, 6);
-      // The reservoir has up to 200 samples — all 110 fit. P95 of the
-      // (mostly 100ms, some 800ms) distribution is 100ms.
-      expect(metrics.p95LatencyMs).toBe(100);
+      // The reservoir has up to 200 samples — all 110 fit. Nearest-rank P95
+      // (floor(110 * 0.95) = 104, 0-indexed) falls in the 800ms tail (indices 100..109).
+      expect(metrics.p95LatencyMs).toBe(800);
     });
   });
 
@@ -389,6 +389,6 @@ describe('sloService', () => {
     // Sanity check that the concrete class is also exported alongside the
     // factory; some test callers prefer direct construction.
     const window = new SloAnalysisWindow({ windowMs: 600_000 });
-    expect(window.windowMs).toBe(60_000);
+    expect(window.windowMs).toBe(600_000);
   });
 });

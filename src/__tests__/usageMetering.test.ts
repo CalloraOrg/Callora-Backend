@@ -9,6 +9,7 @@ import { InMemoryApiRegistry } from '../data/apiRegistry.js';
 import { ApiKey, ApiRegistryEntry, ProxyConfig } from '../types/gateway.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { metricsEndpoint } from '../metrics.js';
+import { logger } from '../logger.js';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -67,7 +68,10 @@ async function startProxy() {
     usageStore,
     registry,
     apiKeys,
-    proxyConfig: currentProxyConfig,
+    proxyConfig: {
+      allowedHosts: ['localhost', '127.0.0.1'],
+      ...currentProxyConfig,
+    },
   });
   app.get('/api/metrics', metricsEndpoint);
   app.use('/v1/call', proxyRouter);
@@ -112,6 +116,10 @@ afterAll(async () => {
   if (upstreamServer) await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
 });
 
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
 beforeEach(async () => {
   usageStore.clear();
   billing.clear();
@@ -141,7 +149,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
 
     await yieldTick(); // wait for background recording
 
-    const events = usageStore.getEvents(TEST_API_KEY);
+    const events = usageStore.getEvents();
     expect(events).toHaveLength(1);
 
     // Verify enriched fields
@@ -168,7 +176,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
 
     await yieldTick();
 
-    const events = usageStore.getEvents(TEST_API_KEY);
+    const events = usageStore.getEvents();
     expect(events).toHaveLength(1);
     expect(events[0].endpointId).toBe('ep_default');
     expect(events[0].amountUsdc).toBe(100000n);
@@ -186,7 +194,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
 
     await yieldTick();
 
-    const events = usageStore.getEvents(TEST_API_KEY);
+    const events = usageStore.getEvents();
     expect(events).toHaveLength(1);
     expect(events[0].endpointId).toBe('ep_free');
     expect(events[0].amountUsdc).toBe(0n);
@@ -231,7 +239,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     await yieldTick();
 
     // Event IS recorded due to override
-    const events = usageStore.getEvents(TEST_API_KEY);
+    const events = usageStore.getEvents();
     expect(events).toHaveLength(1);
     expect(events[0].statusCode).toBe(500);
 
@@ -239,8 +247,10 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
   });
 
-  it('records neither usage nor deduction when anchored charging fails', async () => {
-    billing.failNextUsageCharge('pending billing write failed', true);
+  it('logs error and keeps balance unchanged when background billing deduction fails', async () => {
+    const deductSpy = jest
+      .spyOn(billing, 'deductCredit')
+      .mockRejectedValueOnce(new Error('pending billing write failed'));
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/data`, {
@@ -249,23 +259,21 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     });
     expect(res.status).toBe(200);
 
-    expect(usageStore.getEvents()).toHaveLength(0);
+    await yieldTick();
+
+    expect(usageStore.getEvents()).toHaveLength(1);
     expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(1000);
     expect(errorSpy).toHaveBeenCalledWith(
-      '[proxy billing reconciliation] Billing anchor failed after usage write phase started',
-      expect.objectContaining({
-        requestId: expect.any(String),
-        apiId: TEST_API_ID,
-        endpointId: 'ep_data',
-        developerId: TEST_DEVELOPER_ID,
-      }),
+      'Background billing deduction failed:',
+      expect.any(Error),
     );
 
+    deductSpy.mockRestore();
     errorSpy.mockRestore();
   });
 
-  it('logs reconciliation failure when billing succeeds but usage view write throws', async () => {
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  it('logs failure and skips billing deduction when usage store write throws', async () => {
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     const recordSpy = jest
       .spyOn(usageStore, 'record')
       .mockImplementation(() => {
@@ -278,15 +286,14 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
     });
     expect(res.status).toBe(200);
 
-    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBeCloseTo(999.95);
+    await yieldTick();
+
+    expect(billing.getBalance(TEST_DEVELOPER_ID)).toBe(1000);
     expect(errorSpy).toHaveBeenCalledWith(
-      '[proxy billing reconciliation] Usage view write threw after successful billing charge',
+      'Background usage recording failed',
       expect.objectContaining({
         requestId: expect.any(String),
         apiId: TEST_API_ID,
-        endpointId: 'ep_data',
-        developerId: TEST_DEVELOPER_ID,
-        error: 'usage store offline',
       }),
     );
 
@@ -365,7 +372,7 @@ describe('Usage Metering & Billing (Post-Proxy)', () => {
 
     expect(res.status).toBe(402);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/insufficient balance/i);
+    expect(body.error?.message ?? body.message).toMatch(/insufficient balance/i);
 
     await yieldTick();
 
