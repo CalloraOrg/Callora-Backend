@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from '@jest/globals';
 import { quotaRequestSchema } from './quotaRequest';
 
 describe('quotaRequestSchema', () => {
@@ -14,7 +14,7 @@ describe('quotaRequestSchema', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toEqual(input);
-        expect(typeof result.data.requestedQuota).toBe('number');
+        expect(typeof (result.data as Record<string, unknown>).requestedQuota).toBe('number');
         expect(typeof result.data.reason).toBe('string');
       }
     });
@@ -83,7 +83,7 @@ describe('quotaRequestSchema', () => {
         const issue = result.error.issues.find(
           (i) => i.path[0] === 'requestedQuota',
         );
-        expect(issue).defined();
+        expect(issue).toBeDefined();
         expect(issue?.message).toMatch(/required/i);
       }
     });
@@ -96,7 +96,7 @@ describe('quotaRequestSchema', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         const issue = result.error.issues.find((i) => i.path[0] === 'reason');
-        expect(issue).defined();
+        expect(issue).toBeDefined();
         expect(issue?.message).toMatch(/required/i);
       }
     });

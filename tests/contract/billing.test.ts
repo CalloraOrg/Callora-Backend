@@ -236,7 +236,18 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
       };
     },
     async upsertProfile(userId: string, data: unknown) {
-      return { id: 1, user_id: userId, ...(typeof data === 'object' && data !== null ? data : {}), updated_at: new Date() };
+      return {
+        id: 1,
+        user_id: userId,
+        name: null,
+        website: null,
+        description: null,
+        category: null,
+        plan_overrides: null,
+        created_at: new Date(),
+        ...(typeof data === 'object' && data !== null ? data : {}),
+        updated_at: new Date(),
+      };
     },
   };
 

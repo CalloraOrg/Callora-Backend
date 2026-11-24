@@ -84,6 +84,10 @@ class MockRefreshTokenRepository implements RefreshTokenRepository {
     return null;
   }
 
+  async consumeRefreshToken(_tokenId: string, _userId: string, _tokenHash: string, _newToken: unknown): Promise<any> {
+    return { status: 'not_found' };
+  }
+
   async updateLastUsed(tokenId: string, userId: string): Promise<void> {
     for (const t of this.tokens.values()) {
       if (t.id === tokenId && t.userId === userId) {

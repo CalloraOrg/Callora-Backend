@@ -11,7 +11,7 @@ jest.mock('../../middleware/adminAuth.js', () => ({
   },
 }));
 
-const mockRecord = jest.fn<AuditService['record']>();
+const mockRecord = jest.fn<ReturnType<AuditService['record']>, Parameters<AuditService['record']>>();
 const mockAuditService: AuditService = { record: mockRecord };
 
 function buildApp(auditBreaker?: CircuitBreaker) {

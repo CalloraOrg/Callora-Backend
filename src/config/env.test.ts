@@ -393,7 +393,7 @@ describe('env schema — upstream host allowlist', () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toBe('api.example.com');
+      expect((result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS).toBe('api.example.com');
     }
   });
 
@@ -402,9 +402,10 @@ describe('env schema — upstream host allowlist', () => {
     const result = envSchema.safeParse({ ...baseEnv });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('127.0.0.1');
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('::1');
+      const hosts = (result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS;
+      expect(hosts).toContain('localhost');
+      expect(hosts).toContain('127.0.0.1');
+      expect(hosts).toContain('::1');
     }
   });
 
@@ -413,7 +414,7 @@ describe('env schema — upstream host allowlist', () => {
     const result = envSchema.safeParse({ ...baseEnv });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
+      expect((result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
     }
   });
 
@@ -425,7 +426,7 @@ describe('env schema — upstream host allowlist', () => {
     });
     expect(result.success).toBe((true));
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toEqual(['api.example.com', 'api2.example.com']);
+      expect((result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS).toEqual(['api.example.com', 'api2.example.com']);
     }
   });
 

@@ -276,6 +276,7 @@ describe('/v1/call/:apiSlugOrId integration tests', () => {
   // ── Start upstream server and in-memory pg-mem DB once per suite ──────────
   beforeAll(async () => {
     testContext = createTestDb();
+      .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/));
 
     const result = await startUpstreamServer();
     upstreamServer = result.server;
