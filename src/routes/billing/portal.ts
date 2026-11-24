@@ -138,7 +138,6 @@ export function createBillingPortalRouter(prisma: PrismaClient = defaultPrisma a
             where: { user_id: user.id, status: 'paid' },
             select: { total_amount_usdc: true, created_at: true },
             orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-            take: 1,
           }),
           prisma.invoice.findMany({
             where: { user_id: user.id },
