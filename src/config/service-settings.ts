@@ -53,6 +53,10 @@ export const serviceSettings = {
   bulkEndpointLimit: env.BULK_ENDPOINT_LIMIT,
 
   slowQueryAlerter: {
+    enabled:
+      env.SLOW_QUERY_ALERTER_ENABLED ??
+      Boolean(env.SLOW_QUERY_ALERT_WEBHOOK_URL),
+    explicitlyEnabled: env.SLOW_QUERY_ALERTER_ENABLED === true,
     webhookUrl: env.SLOW_QUERY_ALERT_WEBHOOK_URL,
     p95ThresholdMs: env.SLOW_QUERY_P95_THRESHOLD_MS,
     pollIntervalMs: env.SLOW_QUERY_POLL_INTERVAL_MS,
@@ -66,6 +70,7 @@ export const serviceSettings = {
 
   usageAnomalyDetector: {
     enabled: env.USAGE_ANOMALY_DETECTOR_ENABLED,
+    explicitlyEnabled: env.USAGE_ANOMALY_DETECTOR_ENABLED,
     multiplier: env.USAGE_ANOMALY_MULTIPLIER,
     pollIntervalMs: env.USAGE_ANOMALY_POLL_INTERVAL_MS,
     windowMs: env.USAGE_ANOMALY_WINDOW_MS,
@@ -88,7 +93,9 @@ export const serviceSettings = {
 
   sloAlert: {
     enabled:
-      Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0,
+      env.SLO_ALERT_ENABLED ??
+      (Boolean(env.SLO_ALERT_WEBHOOK_URL) && env.SLO_ROUTE_CONFIGS.length > 0),
+    explicitlyEnabled: env.SLO_ALERT_ENABLED === true,
     webhookUrl: env.SLO_ALERT_WEBHOOK_URL,
     pollIntervalMs: env.SLO_ALERT_POLL_INTERVAL_MS,
     dedupWindowMs: env.SLO_ALERT_DEDUP_WINDOW_MS,

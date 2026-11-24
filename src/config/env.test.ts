@@ -473,3 +473,38 @@ describe("environment template parity", () => {
     expect(missingKeys).toEqual([]);
   });
 });
+
+describe('env schema — alert job toggles', () => {
+  it('defaults SLOW_QUERY_ALERTER_ENABLED and SLO_ALERT_ENABLED to undefined when omitted', () => {
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.SLOW_QUERY_ALERTER_ENABLED).toBeUndefined();
+      expect(result.data.SLO_ALERT_ENABLED).toBeUndefined();
+    }
+  });
+
+  it('parses explicit true and false values for SLOW_QUERY_ALERTER_ENABLED and SLO_ALERT_ENABLED', () => {
+    const enabled = envSchema.safeParse({
+      ...baseEnv,
+      SLOW_QUERY_ALERTER_ENABLED: 'true',
+      SLO_ALERT_ENABLED: 'true',
+    });
+    expect(enabled.success).toBe(true);
+    if (enabled.success) {
+      expect(enabled.data.SLOW_QUERY_ALERTER_ENABLED).toBe(true);
+      expect(enabled.data.SLO_ALERT_ENABLED).toBe(true);
+    }
+
+    const disabled = envSchema.safeParse({
+      ...baseEnv,
+      SLOW_QUERY_ALERTER_ENABLED: 'false',
+      SLO_ALERT_ENABLED: 'false',
+    });
+    expect(disabled.success).toBe(true);
+    if (disabled.success) {
+      expect(disabled.data.SLOW_QUERY_ALERTER_ENABLED).toBe(false);
+      expect(disabled.data.SLO_ALERT_ENABLED).toBe(false);
+    }
+  });
+});
