@@ -4,6 +4,7 @@
 
 ### Added
 
+- Daily export records and claims persist in Postgres through `PostgresExportStore` (migration `0033_developer_export_claims`) outside demo mode and tests. `GET /api/exports` now survives a restart, and a developer's day cannot be exported twice across instances. Closes #1557.
 - Added `responseBytes` and `actor` fields to the `/api/billing` structured access log so every entry carries request ID, latency, status, response size, and the authenticated actor.
 - Stamp `Deprecation: true` and `Sunset: 2026-12-31T00:00:00.000Z` on legacy `/v1` responses and emit a structured warning log with the request correlation ID whenever a legacy endpoint is used.
 - Added per-user and per-IP rate limiting for the public API routes under `/api/apis`, returning a standard `429 TOO_MANY_REQUESTS` envelope with `Retry-After` and request correlation details.
