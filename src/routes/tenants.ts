@@ -1,93 +1,29 @@
 import { Router, type Request, type Response } from 'express';
-import { randomUUID } from 'crypto';
+import { config } from '../config/index.js';
+import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedLocals } from '../middleware/requireAuth.js';
 import { bodyValidator, validate } from '../middleware/validate.js';
 import { buildSuccessEnvelope } from '../middleware/envelope.js';
 import { etagMiddleware, generateETag } from '../middleware/etag.js';
 import { logger } from '../logger.js';
-import { NotFoundError } from '../errors/index.js';
+import {
+  InMemoryTenantRepository,
+  PostgresTenantRepository,
+  type TenantRecord,
+  type TenantRepository,
+  type TenantRepositoryQueryable,
+} from '../repositories/tenantRepository.js';
 import {
   createTenantSchema,
   tenantParamsSchema,
   updateTenantSchema,
-  type CreateTenantInput,
-  type UpdateTenantInput,
 } from '../validators/tenants.js';
 
-export interface TenantRecord {
-  id: string;
-  name: string;
-  slug: string;
-  contactEmail?: string;
-  plan: 'starter' | 'growth' | 'enterprise';
-  metadata?: Record<string, string | number | boolean>;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface TenantRepository {
-  list(actorId: string): Promise<TenantRecord[]>;
-  create(input: CreateTenantInput, actorId: string): Promise<TenantRecord>;
-  update(tenantId: string, input: UpdateTenantInput, actorId: string): Promise<TenantRecord>;
-}
-
-class InMemoryTenantRepository implements TenantRepository {
-  private tenants = new Map<string, TenantRecord>();
-
-  async list(actorId: string): Promise<TenantRecord[]> {
-    return Array.from(this.tenants.values()).filter((tenant) => tenant.createdBy === actorId);
-  }
-
-  async create(input: CreateTenantInput, actorId: string): Promise<TenantRecord> {
-    const now = new Date().toISOString();
-    const slug = input.slug ?? slugify(input.name);
-    const tenant: TenantRecord = {
-      id: `ten_${randomUUID()}`,
-      name: input.name,
-      slug,
-      contactEmail: input.contactEmail,
-      plan: input.plan,
-      metadata: input.metadata,
-      createdBy: actorId,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.tenants.set(tenant.id, tenant);
-    return tenant;
-  }
-
-  async update(tenantId: string, input: UpdateTenantInput, _actorId: string): Promise<TenantRecord> {
-    const existing = this.tenants.get(tenantId);
-    // Do not create or reveal arbitrary IDs during an update. Both unknown
-    // and cross-tenant IDs use the same not-found response to avoid existence
-    // probing.
-    if (!existing || existing.createdBy !== _actorId) {
-      throw new NotFoundError('Tenant not found');
-    }
-
-    const updated: TenantRecord = {
-      ...existing,
-      ...input,
-      updatedAt: new Date().toISOString(),
-    };
-    this.tenants.set(tenantId, updated);
-    return updated;
-  }
-}
+export type { TenantRecord, TenantRepository };
 
 export interface TenantsRouterDeps {
   tenantRepository?: TenantRepository;
-}
-
-function slugify(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 63);
-
-  return slug.length >= 3 ? slug : `tenant-${slug || 'new'}`;
+  pool?: TenantRepositoryQueryable;
 }
 
 function requestId(req: Request): string {
@@ -100,7 +36,13 @@ function correlationId(req: Request): string {
 
 export function createTenantsRouter(deps: TenantsRouterDeps = {}): Router {
   const router = Router();
-  const tenantRepository = deps.tenantRepository ?? new InMemoryTenantRepository();
+  const tenantRepository =
+    deps.tenantRepository ??
+    (deps.pool
+      ? new PostgresTenantRepository(deps.pool)
+      : !config.demoMode && Boolean(process.env.DATABASE_URL)
+        ? new PostgresTenantRepository(pool)
+        : new InMemoryTenantRepository());
 
   router.post(
     '/',
