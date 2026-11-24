@@ -10,7 +10,7 @@ The graceful shutdown handler ensures that the application terminates cleanly wh
 
 - **Signal Handling**: Responds to SIGTERM and SIGINT signals
 - **Request Draining**: Waits up to 30 seconds for in-flight HTTP requests to complete
-- **Subsystem Coordination**: Stops and drains the six subsystems registered in `shutdownSubsystems`, then cancels the remaining background jobs
+- **Subsystem Coordination**: Stops and drains the subsystems registered in `shutdownSubsystems`, then cancels the remaining background jobs
 - **Database Cleanup**: Closes all database connection pools gracefully
 - **Structured Logging**: Logs each phase of the shutdown process with correlation IDs
 - **Timeout Protection**: Forcefully closes lingering connections after the grace period
@@ -83,9 +83,9 @@ route module) does **not** register it — see
 ## Registered drain subsystems
 
 `src/index.ts` builds the `shutdownSubsystems: DrainableSubsystem[]` array that is
-passed to `createGracefulShutdownHandler`. The array is populated in one place
-and has no conditional (`push`) entries, so the registered set is identical in
-every environment:
+passed to `createGracefulShutdownHandler`. Entries are pushed only when the
+corresponding background job is enabled, so the registered set can differ
+between environments:
 
 <!-- shutdown-subsystem-order:start -->
 ```text
@@ -95,6 +95,7 @@ every environment:
 4. idempotency-sweeper
 5. webhook-dispatcher
 6. settlement-reconciliation
+7. monthly-invoice
 ```
 <!-- shutdown-subsystem-order:end -->
 
@@ -111,11 +112,27 @@ the code disagree.
 | 4 | `idempotency-sweeper` | `idempotencySweeperJob` | The idempotency-record sweep that was already running when the signal arrived. |
 | 5 | `webhook-dispatcher` | `stopWebhookDispatching` / `awaitWebhookDispatcherIdle` | Webhook deliveries still queued or in flight. |
 | 6 | `settlement-reconciliation` | `settlementReconJob` | The settlement reconciliation run in progress (see [Settlement reconciliation worker](./settlement-reconciliation-worker.md)). |
+| 7 | `monthly-invoice` | `monthlyInvoiceJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `MONTHLY_INVOICE_JOB_ENABLED` is enabled and `DEMO_MODE` is false) | The monthly invoice generation run in progress. |
+
+### Revenue ledger indexer bootstrap
+
+`src/index.ts` boots the indexer through `startRevenueLedgerIndexerJob` in
+`src/lifecycle/jobs.ts`. The job is created only when
+`REVENUE_LEDGER_INDEXER_ENABLED` is true (the default outside tests) and the
+server is not in demo mode. When either condition is false, no job is created
+and no `revenue-ledger-indexer` subsystem is registered.
+
+When enabled, the subsystem is registered before `closeDatabase`, so the job is
+stopped and drained before the PostgreSQL pools close. `beginShutdown()` stops
+scheduling new ticks, `awaitIdle()` waits for the tick that was already running,
+and `RevenueLedgerIndexer.runOnce()` releases its PostgreSQL advisory lock in a
+`finally` block. A rejected tick is logged by the job and does not stop the
+scheduler or crash the server.
 
 ### Jobs that are cancelled, not drained
 
 `closeAllDataResources` — passed to the handler as the `closeDatabase` callback —
-calls `stop()` on every background job it can reach. Five of those jobs are
+calls `stop()` on every background job it can reach. Four of those jobs are
 **not** members of `shutdownSubsystems`, so their `stop()` runs in Phase 6, after
 the drain window, and no `awaitIdle()` is ever performed for them:
 
@@ -123,11 +140,10 @@ the drain window, and no `awaitIdle()` is ever performed for them:
 |---|---|---|
 | `settlement-status-sync` | always | `stop()` clears the polling timer. The job type exposes only `stop()` — there is no `beginShutdown()` / `awaitIdle()` pair to register. |
 | `anomaly-detector` | `config.usageAnomalyDetector.enabled` (`USAGE_ANOMALY_DETECTOR_ENABLED`) | Poller whose tick is bounded by DB query timeouts; the job is constructed but never added to `shutdownSubsystems`. |
-| `monthly-invoice` | always | Scheduler driven by a day boundary; the job is constructed but never added to `shutdownSubsystems`. |
 | `slo-alert` | `SLO_ALERT_WEBHOOK_URL` is set **and** at least one `SLO_ROUTE_CONFIGS` entry exists | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
 | `slow-query-alerter` | `SLOW_QUERY_ALERT_WEBHOOK_URL` is set | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
 
-`anomaly-detector`, `monthly-invoice`, `slo-alert` and `slow-query-alerter` do
+`anomaly-detector`, `slo-alert` and `slow-query-alerter` do
 expose `beginShutdown()` / `awaitIdle()` and could be appended to
 `shutdownSubsystems` without changing the handler. That is a runtime behaviour
 change with its own review, not a documentation fix, so this document records

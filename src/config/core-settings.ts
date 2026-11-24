@@ -142,6 +142,7 @@ export const coreSettings = {
       : undefined,
 
   settlementSync: {
+    enabled: env.SETTLEMENT_STATUS_SYNC_ENABLED,
     intervalMs: env.SETTLEMENT_STATUS_SYNC_INTERVAL_MS,
     timeoutMs: env.SETTLEMENT_STATUS_SYNC_TIMEOUT_MS,
     maxRetries: env.SETTLEMENT_MAX_RETRIES,
@@ -150,6 +151,9 @@ export const coreSettings = {
     intervalMs: env.SETTLEMENT_RECON_INTERVAL_MS,
   },
   revenueLedgerIndexer: {
+    // Default on outside tests so the indexer boots in every real deployment.
+    enabled:
+      env.REVENUE_LEDGER_INDEXER_ENABLED ?? env.NODE_ENV !== "test",
     intervalMs: env.REVENUE_LEDGER_INDEXER_INTERVAL_MS,
     batchSize: env.REVENUE_LEDGER_INDEXER_BATCH_SIZE,
   },

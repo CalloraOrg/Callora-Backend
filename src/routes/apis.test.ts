@@ -17,6 +17,30 @@ import type { DeveloperRepository } from '../repositories/developerRepository.js
 import { createApisRouter } from './apis.js';
 import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 import { ListingsCache } from '../lib/listingsCache.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+const originalJwtSecret = process.env.JWT_SECRET;
+const originalAllowMissingOrigin = process.env.CORS_ALLOW_MISSING_ORIGIN;
+
+beforeAll(() => {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+  process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
+});
+
+afterAll(() => {
+  if (originalJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = originalJwtSecret;
+  }
+  if (originalAllowMissingOrigin === undefined) {
+    delete process.env.CORS_ALLOW_MISSING_ORIGIN;
+  } else {
+    process.env.CORS_ALLOW_MISSING_ORIGIN = originalAllowMissingOrigin;
+  }
+});
+
+const bearer = (userId: string): string => `Bearer ${signTestToken({ userId })}`;
 
 const developerProfile: Developer = {
   id: 11,
@@ -121,7 +145,7 @@ describe('createApisRouter', () => {
     );
   });
 
-  it('supports valid status filtering', async () => {
+  it('accepts a valid status filter but only lists active APIs publicly', async () => {
     const app = buildApp();
 
     const res = await request(app).get('/api/apis?status=draft');
@@ -129,9 +153,8 @@ describe('createApisRouter', () => {
     expect(res.status).toBe(200);
     expect(res.body.meta).toMatchObject({ limit: 20, hasMore: false });
     expect(res.body.meta).not.toHaveProperty('offset');
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].id).toBe(2);
-    expect(res.body.data[0].status).toBe('draft');
+    // The public catalogue never exposes drafts, even when asked explicitly.
+    expect(res.body.data).toHaveLength(0);
   });
 
   it('uses the request correlation id in access logs for API routes', async () => {
@@ -163,7 +186,7 @@ describe('createApisRouter', () => {
     const res = await request(app).get('/api/apis?status=invalid');
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('status must be one of');
+    expect(res.body.error.message).toContain('status must be one of');
   });
 
   it('applies pagination params to the response metadata and items', async () => {
@@ -184,7 +207,7 @@ describe('createApisRouter', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.etag).toBeDefined();
-    expect(res.headers.etag).toMatch(/^W\/"/);
+    expect(res.headers.etag).toMatch(/^"[0-9a-f]{32}"$/);
   });
 
   it('returns 304 Not Modified for GET /:id when If-None-Match matches', async () => {
@@ -242,11 +265,11 @@ describe('createApisRouter', () => {
     }));
     app.use(errorHandler);
 
-    await request(app).get('/api/apis').set('x-user-id', 'user-1').expect(200);
-    const res = await request(app).get('/api/apis').set('x-user-id', 'user-1');
+    await request(app).get('/api/apis').set('Authorization', bearer('user-1')).expect(200);
+    const res = await request(app).get('/api/apis').set('Authorization', bearer('user-1'));
 
     expect(res.status).toBe(429);
-    expect(res.body.code).toBe('TOO_MANY_REQUESTS');
+    expect(res.body.error.code).toBe('TOO_MANY_REQUESTS');
     expect(res.headers['retry-after']).toBe('60');
   });
 
@@ -307,7 +330,7 @@ describe('createApisRouter', () => {
       const res = await request(app).get('/api/apis');
 
       expect(res.status).toBe(200);
-      expect(res.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+      expect(res.headers.etag).toMatch(/^"[0-9a-f]{32}"$/);
       expect(res.body.data).toHaveLength(1);
     });
 
@@ -335,7 +358,7 @@ describe('createApisRouter', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(1);
-      expect(res.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+      expect(res.headers.etag).toMatch(/^"[0-9a-f]{32}"$/);
     });
 
     it('returns a different ETag when query filters change the response body', async () => {
@@ -355,7 +378,7 @@ describe('createApisRouter', () => {
       expect(missing.body.data).toHaveLength(0);
     });
 
-    it('does not return 304 when the client sends only a weak ETag', async () => {
+    it('returns 304 for a weak If-None-Match because the comparison is weak', async () => {
       const app = buildEtagApp();
 
       const first = await request(app).get('/api/apis');
@@ -364,8 +387,8 @@ describe('createApisRouter', () => {
 
       const second = await request(app).get('/api/apis').set('If-None-Match', weakTag);
 
-      expect(second.status).toBe(200);
-      expect(second.body.data).toHaveLength(1);
+      expect(second.status).toBe(304);
+      expect(second.text).toBe('');
     });
   });
 });
@@ -424,7 +447,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
     const app = buildBulkApp();
     const res = await request(app)
       .post('/api/apis/abc/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ endpoints: [{ path: '/test', method: 'GET', price_per_call_usdc: '0.01' }] });
     expect(res.status).toBe(400);
   });
@@ -433,7 +456,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
     const app = buildBulkApp();
     const res = await request(app)
       .post('/api/apis/202/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ endpoints: [{ path: '/test', method: 'GET', price_per_call_usdc: '0.01' }] });
     expect(res.status).toBe(404);
   });
@@ -442,7 +465,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
     const app = buildBulkApp();
     const res = await request(app)
       .post('/api/apis/101/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ endpoints: [] });
     expect(res.status).toBe(400);
   });
@@ -451,7 +474,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
     const app = buildBulkApp();
     const res = await request(app)
       .post('/api/apis/101/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ endpoints: [{ path: '', method: 'INVALID', price_per_call_usdc: '-1' }] });
     expect(res.status).toBe(400);
   });
@@ -467,7 +490,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
 
     const res = await request(app)
       .post('/api/apis/101/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send(payload);
 
     expect(res.status).toBe(201);
@@ -500,7 +523,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
 
     const res = await request(app)
       .post('/api/apis/101/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ endpoints: manyEndpoints });
 
     expect(res.status).toBe(400);
@@ -511,7 +534,7 @@ describe('POST /api/apis/:id/endpoints/bulk', () => {
 
     const createRes = await request(app)
       .post('/api/apis/101/endpoints/bulk')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ endpoints: [{ path: '/persist', method: 'GET', price_per_call_usdc: '0.02' }] });
 
     expect(createRes.status).toBe(201);

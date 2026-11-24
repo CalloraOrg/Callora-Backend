@@ -6,6 +6,23 @@ import { requestIdMiddleware } from '../../middleware/requestId.js';
 import type { UsageEventsRepository, UsageEvent, UserUsageEventQuery, UsageStats, UsageBucket } from '../../repositories/usageEventsRepository.js';
 import { generateCursor } from '../../lib/pagination.js';
 import { encodeCursor } from '../../lib/cursorPagination.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../../tests/helpers/jwt.js';
+
+const originalJwtSecret = process.env.JWT_SECRET;
+
+beforeAll(() => {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+});
+
+afterAll(() => {
+  if (originalJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = originalJwtSecret;
+  }
+});
+
+const authHeader = (userId = 'user-1') => `Bearer ${signTestToken({ userId })}`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,7 +105,7 @@ describe('GET /api/usage — Schema Validation', () => {
     const app = buildApp(repo);
     const res = await request(app)
       .get('/api/usage?limit=101')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('BAD_REQUEST');
   });
@@ -98,7 +115,7 @@ describe('GET /api/usage — Schema Validation', () => {
     const app = buildApp(repo);
     const res = await request(app)
       .get('/api/usage?limit=0')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(400);
   });
 
@@ -107,7 +124,7 @@ describe('GET /api/usage — Schema Validation', () => {
     const app = buildApp(repo);
     const res = await request(app)
       .get('/api/usage?groupBy=invalid')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(400);
   });
 
@@ -116,7 +133,7 @@ describe('GET /api/usage — Schema Validation', () => {
     const app = buildApp(repo);
     const res = await request(app)
       .get('/api/usage?from=2026-07-10T00:00:00Z&to=2026-07-01T00:00:00Z')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(400);
   });
 
@@ -148,7 +165,7 @@ describe('GET /api/usage — Offset/Limit Pagination', () => {
 
     const res = await request(app)
       .get('/api/usage?offset=0&limit=10')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(2);
     expect(res.body.stats.totalCalls).toBe(10);
@@ -165,7 +182,7 @@ describe('GET /api/usage — Offset/Limit Pagination', () => {
 
     const res = await request(app)
       .get('/api/usage?offset=0&limit=3')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(200);
     expect(res.body.pagination.hasMore).toBe(true);
   });
@@ -180,7 +197,7 @@ describe('GET /api/usage — Offset/Limit Pagination', () => {
 
     await request(app)
       .get('/api/usage?offset=0&limit=10')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     const query = findByUser.mock.calls[0][0] as UserUsageEventQuery & { from: Date; to: Date };
     expect(query.from).toBeInstanceOf(Date);
@@ -210,7 +227,7 @@ describe('GET /api/usage — Legacy Cursor Pagination', () => {
     const cursor = generateCursor('2026-07-01T00:00:00.000Z', 'evt-1');
     const res = await request(app)
       .get(`/api/usage?cursor=${cursor}&limit=2`)
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(200);
     expect(res.body.pagination).toBeDefined();
     expect(res.body.pagination.hasMore).toBe(true);
@@ -222,7 +239,7 @@ describe('GET /api/usage — Legacy Cursor Pagination', () => {
 
     const res = await request(app)
       .get('/api/usage?cursor=invalid-base64!!')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(400);
   });
 });
@@ -250,7 +267,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
     const cursor = buildJsonCursor(new Date('2026-06-30T00:00:00.000Z'), 'evt-0');
     const res = await request(app)
       .get(`/api/usage?after=${encodeURIComponent(cursor)}&limit=2`)
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(2);
     expect(res.body.pagination).toMatchObject({
@@ -277,7 +294,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
     const cursor = buildJsonCursor(new Date('2026-07-02T00:00:00.000Z'), 'evt-3');
     const res = await request(app)
       .get(`/api/usage?before=${encodeURIComponent(cursor)}&limit=1`)
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(200);
     expect(res.body.pagination.prevCursor).toBe('cHJldi1jdXJzb3I=');
   });
@@ -290,7 +307,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
 
     const res = await request(app)
       .get('/api/usage?after=!!!not-valid-base64!!!&limit=2')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(400);
     expect(res.body.error.message).toContain('cursor');
   });
@@ -303,7 +320,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
 
     const res = await request(app)
       .get('/api/usage?before=!!!not-valid-base64!!!&limit=2')
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
     expect(res.status).toBe(400);
   });
 
@@ -323,7 +340,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
     const cursor = buildJsonCursor(new Date('2026-06-30T00:00:00.000Z'), 'evt-0');
     const res = await request(app)
       .get(`/api/usage?after=${encodeURIComponent(cursor)}&limit=2`)
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     // Verify the cursor pagination path ran successfully
     expect(res.status).toBe(200);
@@ -351,7 +368,7 @@ describe('GET /api/usage — Cursor Pagination (after/before)', () => {
     const cursor = buildJsonCursor(new Date('2026-06-30T00:00:00.000Z'), 'evt-0');
     const res = await request(app)
       .get(`/api/usage?after=${encodeURIComponent(cursor)}&limit=2`)
-      .set('x-user-id', 'user-1');
+      .set('Authorization', authHeader('user-1'));
 
     // Should still return a response (fallback)
     expect(res.status).toBe(200);

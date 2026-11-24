@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
 import { DataType, newDb } from 'pg-mem';
@@ -7,6 +9,15 @@ import type { DeveloperRepository } from '../repositories/developerRepository.js
 import { createPostgresSettlementStore } from '../services/settlementStore.js';
 import { createPostgresUsageStore } from '../services/usageStore.js';
 import { PgUsageEventsRepository, type UsageEventsRepositoryQueryable } from '../repositories/usageEventsRepository.pg.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+const MIGRATIONS_DIR = path.resolve(process.cwd(), 'migrations');
+
+function readMigration(filename: string): string {
+  return fs
+    .readFileSync(path.join(MIGRATIONS_DIR, filename), 'utf8')
+    .replace(/\bDECIMAL\s*\(\s*\d+\s*,\s*\d+\s*\)/gi, 'NUMERIC');
+}
 
 function createPersistentStoreHarness() {
   const db = newDb();
@@ -17,50 +28,53 @@ function createPersistentStoreHarness() {
     implementation: () => new Date('2026-03-01T00:00:00.000Z'),
   });
 
+  db.public.registerFunction({
+    name: 'concat',
+    args: [DataType.text, DataType.integer],
+    returns: DataType.text,
+    implementation: (prefix: string, id: number) => `${prefix}${id}`,
+  });
+
   db.public.none(`
+    CREATE TABLE apis (
+      id VARCHAR(255) PRIMARY KEY,
+      developer_id VARCHAR(255) NOT NULL
+    );
+
     CREATE TABLE usage_events (
       id BIGSERIAL PRIMARY KEY,
       user_id VARCHAR(255) NOT NULL,
       api_id VARCHAR(255) NOT NULL,
       endpoint_id VARCHAR(255) NOT NULL,
       api_key_id VARCHAR(255) NOT NULL,
-      api_key VARCHAR(255),
+      developer_id VARCHAR(255) NOT NULL DEFAULT '',
       amount_usdc NUMERIC NOT NULL,
-      request_id VARCHAR(255) NOT NULL UNIQUE,
-      status_code INTEGER NOT NULL DEFAULT 200,
+      request_id VARCHAR(255) NOT NULL,
       stellar_tx_hash VARCHAR(64),
       deduction_status VARCHAR(16) NOT NULL DEFAULT 'pending',
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE apis (
-      id VARCHAR(255) PRIMARY KEY,
-      developer_id VARCHAR(255) NOT NULL
-    );
-
-    CREATE TABLE settlements (
-      id BIGSERIAL PRIMARY KEY,
-      external_id VARCHAR(255) NOT NULL UNIQUE,
-      developer_id VARCHAR(255) NOT NULL,
-      amount_usdc NUMERIC NOT NULL,
-      stellar_tx_hash VARCHAR(64),
-      status VARCHAR(20) NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      completed_at TIMESTAMP
+      UNIQUE (request_id, developer_id)
     );
+  `);
 
+  db.public.none(readMigration('002_create_settlements.sql'));
+
+  db.public.none(`
     CREATE TABLE revenue_ledger (
       id BIGSERIAL PRIMARY KEY,
       api_id VARCHAR(255) NOT NULL,
       developer_id VARCHAR(255) NOT NULL,
       amount_usdc NUMERIC NOT NULL,
-      usage_event_id BIGINT UNIQUE REFERENCES usage_events(id),
+      usage_event_id BIGINT REFERENCES usage_events(id),
       settlement_id BIGINT REFERENCES settlements(id),
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
       reversed_at TIMESTAMP,
       reversal_of_usage_event_id BIGINT UNIQUE
     );
   `);
+
+  db.public.none(readMigration('005_add_persistent_store_columns.sql'));
+  db.public.none(readMigration('0031_settlement_retry_policy.sql'));
 
   const { Pool } = db.adapters.createPg();
   const pool = new Pool();
@@ -296,7 +310,20 @@ test('persistent stores survive new instances and keep developer revenue availab
     const app = express();
     app.use(express.json());
     const developerRepository: DeveloperRepository = {
-      findByUserId: async () => undefined,
+      findByUserId: async (userId: string) =>
+        userId === 'dev_restart'
+          ? {
+              id: 1,
+              user_id: 'dev_restart',
+              name: 'Restart Dev',
+              website: null,
+              description: null,
+              category: null,
+              plan_overrides: null,
+              created_at: new Date('2026-01-01T00:00:00.000Z'),
+              updated_at: new Date('2026-01-01T00:00:00.000Z'),
+            }
+          : undefined,
       getOrCreateByUserId: async () => {
         throw new Error('not used in this test');
       },
@@ -311,20 +338,31 @@ test('persistent stores survive new instances and keep developer revenue availab
     }));
     app.use(errorHandler);
 
-    const res = await request(app)
-      .get('/api/developers/revenue')
-      .set('x-user-id', 'dev_restart');
+    const previousJwtSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+    try {
+      const token = signTestToken({ userId: 'dev_restart' });
+      const res = await request(app)
+        .get('/api/developers/revenue')
+        .set('Authorization', `Bearer ${token}`);
 
-    expect(res.status).toBe(200);
-    expect(res.body.summary).toEqual({
-      total_earned: 13,
-      pending: 5,
-      available_to_withdraw: 0,
-    });
-    expect(res.body.settlements.map((settlement: { id: string }) => settlement.id)).toEqual([
-      'stl_pending',
-      'stl_completed',
-    ]);
+      expect(res.status).toBe(200);
+      expect(res.body.summary).toEqual({
+        total_earned: 13,
+        pending: 5,
+        available_to_withdraw: 0,
+      });
+      expect(res.body.settlements.map((settlement: { id: string }) => settlement.id)).toEqual([
+        'stl_pending',
+        'stl_completed',
+      ]);
+    } finally {
+      if (previousJwtSecret === undefined) {
+        delete process.env.JWT_SECRET;
+      } else {
+        process.env.JWT_SECRET = previousJwtSecret;
+      }
+    }
   } finally {
     await harness.pool.end();
   }

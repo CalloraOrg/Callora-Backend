@@ -6,6 +6,7 @@ import {
   formatOpenApiField,
   formatOpenApiCode,
 } from './openApiErrorHandler.js';
+import { BadRequestError } from '../errors/index.js';
 
 function response() {
   const result = { statusCode: 200, body: undefined as unknown, sent: false };
@@ -118,6 +119,17 @@ describe('openApiErrorHandler', () => {
       const output = response();
       const next = jest.fn() as unknown as NextFunction;
       const error = new Error('database connection failed');
+
+      openApiErrorHandler(error, request(), output.value, next);
+
+      expect(next).toHaveBeenCalledWith(error);
+      expect(output.result.sent).toBe(false);
+    });
+
+    it('passes application errors to the main error handler', () => {
+      const output = response();
+      const next = jest.fn() as unknown as NextFunction;
+      const error = new BadRequestError('nope', 'DEVELOPER_NOT_FOUND');
 
       openApiErrorHandler(error, request(), output.value, next);
 

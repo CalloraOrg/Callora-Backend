@@ -6,6 +6,23 @@ import type { Developer } from '../db/schema.js';
 import type { UpdateDeveloperProfileInput, SettlementStore } from '../types/developer.js';
 import type { UsageStore } from '../types/gateway.js';
 import type { DeveloperRepository } from '../repositories/developerRepository.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+const originalJwtSecret = process.env.JWT_SECRET;
+
+beforeAll(() => {
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
+});
+
+afterAll(() => {
+  if (originalJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = originalJwtSecret;
+  }
+});
+
+const bearer = (userId: string): string => `Bearer ${signTestToken({ userId })}`;
 
 const mockSettlementStore = {
   create: jest.fn(),
@@ -74,10 +91,10 @@ describe('GET /api/developers/revenue', () => {
 
     const res = await request(app)
       .get('/api/developers/revenue')
-      .set('x-user-id', 'no-profile-user');
+      .set('Authorization', bearer('no-profile-user'));
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe('DEVELOPER_NOT_FOUND');
+    expect(res.body.error.code).toBe('DEVELOPER_NOT_FOUND');
   });
 
   it('returns correct revenue summary and clamped limit', async () => {
@@ -92,7 +109,7 @@ describe('GET /api/developers/revenue', () => {
 
     const res = await request(app)
       .get('/api/developers/revenue?limit=500')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(res.status).toBe(200);
     expect(res.body.summary).toEqual({
@@ -116,7 +133,7 @@ describe('GET /api/developers/revenue', () => {
 
     const res = await request(app)
       .get('/api/developers/revenue')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(res.status).toBe(200);
     // getDeveloperSettlements must be called with dev-1's user_id, not another id
@@ -143,7 +160,7 @@ describe('GET /api/developers/me', () => {
 
     const res = await request(app)
       .get('/api/developers/me')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(res.status).toBe(200);
     expect(mockDeveloperRepository.getOrCreateByUserId).toHaveBeenCalledWith('dev-1');
@@ -169,12 +186,12 @@ describe('PATCH /api/developers/me', () => {
   it('validates website URL and category enum', async () => {
     const res = await request(app)
       .patch('/api/developers/me')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({ website: 'not-a-url', category: 'unknown' });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details).toEqual(
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'body.website' }),
         expect.objectContaining({ field: 'body.category' }),
@@ -185,12 +202,12 @@ describe('PATCH /api/developers/me', () => {
   it('rejects an empty patch body', async () => {
     const res = await request(app)
       .patch('/api/developers/me')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({});
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.details).toEqual(
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.details).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ field: 'body', message: 'At least one profile field must be provided' }),
       ]),
@@ -209,7 +226,7 @@ describe('PATCH /api/developers/me', () => {
 
     const res = await request(app)
       .patch('/api/developers/me')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', bearer('dev-1'))
       .send({
         name: 'Updated Dev',
         website: 'https://example.com',
@@ -275,10 +292,10 @@ describe('GET /api/developers/exports', () => {
 
     const res = await request(exportsApp)
       .get('/api/developers/exports')
-      .set('x-user-id', 'no-profile-user');
+      .set('Authorization', bearer('no-profile-user'));
 
     expect(res.status).toBe(403);
-    expect(res.body.code).toBe('DEVELOPER_NOT_FOUND');
+    expect(res.body.error.code).toBe('DEVELOPER_NOT_FOUND');
   });
 
   it('returns 200 with paginated data array containing the expected fields', async () => {
@@ -299,7 +316,7 @@ describe('GET /api/developers/exports', () => {
 
     const res = await request(exportsApp)
       .get('/api/developers/exports')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
@@ -320,7 +337,7 @@ describe('GET /api/developers/exports', () => {
 
     const res = await request(exportsApp)
       .get('/api/developers/exports')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual([]);
@@ -343,7 +360,7 @@ describe('GET /api/developers/exports', () => {
 
     const res = await request(exportsApp)
       .get('/api/developers/exports')
-      .set('x-user-id', 'dev-1');
+      .set('Authorization', bearer('dev-1'));
 
     expect(res.status).toBe(200);
     expect(res.body.data[0].downloadUrl).toBe(expectedUrl);

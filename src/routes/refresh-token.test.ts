@@ -32,6 +32,7 @@
 
 import request from 'supertest';
 import express from 'express';
+import crypto from 'node:crypto';
 import type { Server } from 'http';
 import jwt from 'jsonwebtoken';
 
@@ -42,7 +43,11 @@ import { RefreshTokenService } from '../services/refreshTokenService.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
 import type { RefreshToken } from '../types/auth.js';
-import type { RefreshTokenRepository } from '../repositories/refreshTokenRepository.js';
+import type {
+  ConsumeResult,
+  NewRefreshTokenTemplate,
+  RefreshTokenRepository,
+} from '../repositories/refreshTokenRepository.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -135,6 +140,35 @@ class MockRefreshTokenRepository implements RefreshTokenRepository {
   ): Promise<{ tokens: RefreshToken[]; hasMore: boolean }> {
     const userTokens = Array.from(this.tokens.values()).filter((t) => t.userId === userId);
     return { tokens: userTokens.slice(0, limit), hasMore: userTokens.length > limit };
+  }
+
+  async consumeRefreshToken(
+    tokenId: string,
+    userId: string,
+    tokenHash: string,
+    newToken: NewRefreshTokenTemplate,
+  ): Promise<ConsumeResult> {
+    let found: RefreshToken | null = null;
+    for (const token of this.tokens.values()) {
+      if (token.id === tokenId && token.userId === userId) {
+        found = token;
+        break;
+      }
+    }
+
+    if (!found) return { status: 'not_found' };
+    if (found.isRevoked) return { status: 'revoked' };
+    if (found.expiresAt <= new Date()) return { status: 'expired' };
+    if (found.tokenHash !== tokenHash) return { status: 'hash_mismatch' };
+
+    found.isRevoked = true;
+    (found as any).lastUsedAt = new Date();
+
+    const newId = newToken.id || crypto.randomUUID();
+    const record: RefreshToken = { id: newId, familyId: found.familyId, ...newToken };
+    this.tokens.set(newId, record);
+
+    return { status: 'consumed', token: { ...found } };
   }
 }
 
@@ -305,7 +339,7 @@ describe('POST /api/refresh-token — happy path', () => {
     testApp = buildApp();
   });
 
-  it('returns 200 with accessToken and tokenType for a valid refresh token', async () => {
+  it('returns 200 with accessToken, refreshToken and tokenType for a valid refresh token', async () => {
     const { refreshToken } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
 
     const res = await request(testApp.app)
@@ -313,11 +347,13 @@ describe('POST /api/refresh-token — happy path', () => {
       .send({ refreshToken });
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('accessToken');
-    expect(res.body.tokenType).toBe('Bearer');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveProperty('accessToken');
+    expect(res.body.data).toHaveProperty('refreshToken');
+    expect(res.body.data.tokenType).toBe('Bearer');
 
     // Verify the returned access token is a valid JWT with the right claims
-    const decoded = jwt.verify(res.body.accessToken, TEST_SECRET) as any;
+    const decoded = jwt.verify(res.body.data.accessToken, TEST_SECRET) as any;
     expect(decoded.userId).toBe('user-abc');
     expect(decoded.type).toBe('access');
   });
@@ -359,8 +395,9 @@ describe('POST /api/refresh-token — revoked token', () => {
     testApp = buildApp();
   });
 
-  it('returns 401 REVOKED_TOKEN for a revoked refresh token', async () => {
+  it('returns 401 REVOKED_TOKEN for a revoked refresh token and revokes all user tokens', async () => {
     const { refreshToken, stored } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
+    const other = await seedValidToken(testApp.refreshTokenService, testApp.repo, stored.userId);
     await testApp.repo.revokeRefreshToken(stored.id, stored.userId);
 
     const res = await request(testApp.app)
@@ -368,7 +405,23 @@ describe('POST /api/refresh-token — revoked token', () => {
       .send({ refreshToken });
 
     expect(res.status).toBe(401);
-    expect(res.body.error?.code ?? res.body.code).toBe('REVOKED_TOKEN');
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('REVOKED_TOKEN');
+    const remaining = await testApp.repo.findRefreshTokenById(other.stored.id, stored.userId);
+    expect(remaining?.isRevoked).toBe(true);
+  });
+
+  it('returns 401 EXPIRED_TOKEN when the stored refresh token record is expired', async () => {
+    const { refreshToken, stored } = await seedValidToken(testApp.refreshTokenService, testApp.repo);
+    stored.expiresAt = new Date(Date.now() - 10_000);
+
+    const res = await request(testApp.app)
+      .post('/api/refresh-token')
+      .send({ refreshToken });
+
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('EXPIRED_TOKEN');
   });
 });
 
@@ -457,10 +510,12 @@ describe('POST /api/refresh-token — graceful shutdown drain', () => {
       subsystems: [drainTracker.subsystem],
     });
 
-    // Fire the slow request — don't await supertest yet, just start it.
-    const requestPromise = request(slowApp)
+    // Fire the slow request immediately against `server` (supertest only starts
+    // sending once `.then()` is invoked).
+    const requestPromise = request(server)
       .post('/api/refresh-token')
-      .send({ refreshToken: 'any' });
+      .send({ refreshToken: 'any' })
+      .then((res) => res);
 
     // Give the request time to enter the handler before triggering shutdown.
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -473,7 +528,8 @@ describe('POST /api/refresh-token — graceful shutdown drain', () => {
 
     // Wait for the delayed response to be sent.
     await delayedResponseSettled;
-    await requestPromise; // ensure supertest drains the socket
+    const res = await requestPromise; // ensure supertest drains the socket
+    expect(res.status).toBe(200);
 
     // Now the shutdown can complete.
     const exitCode = await shutdownPromise;

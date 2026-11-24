@@ -143,10 +143,8 @@ describe('adminAuth middleware on /api/admin routes', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('data');
-    expect(res.body.data).toMatchObject({
-      data: [],
-      meta: { total: 0, limit: 20, offset: 0 },
-    });
+    expect(res.body.data).toEqual([]);
+    expect(res.body.meta).toMatchObject({ total: 0, limit: 20, offset: 0 });
     expect(mockFindUsers).toHaveBeenCalledTimes(1);
     expect(logger.audit).toHaveBeenCalledWith(
       'LIST_USERS',
@@ -173,10 +171,8 @@ describe('adminAuth middleware on /api/admin routes', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('data');
-    expect(res.body.data).toMatchObject({
-      data: [],
-      meta: { total: 0, limit: 20, offset: 0 },
-    });
+    expect(res.body.data).toEqual([]);
+    expect(res.body.meta).toMatchObject({ total: 0, limit: 20, offset: 0 });
     expect(mockFindUsers).toHaveBeenCalledTimes(1);
     expect(logger.audit).toHaveBeenCalledWith(
       'LIST_USERS',

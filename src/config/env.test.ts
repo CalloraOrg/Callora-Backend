@@ -332,8 +332,29 @@ describe('env schema — revenue ledger indexer config', () => {
     const result = envSchema.safeParse({ ...baseEnv });
     expect(result.success).toBe(true);
     if (result.success) {
+      expect(result.data.REVENUE_LEDGER_INDEXER_ENABLED).toBeUndefined();
       expect(result.data.REVENUE_LEDGER_INDEXER_INTERVAL_MS).toBe(30_000);
       expect(result.data.REVENUE_LEDGER_INDEXER_BATCH_SIZE).toBe(500);
+    }
+  });
+
+  it('parses the revenue ledger indexer enabled flag', () => {
+    const disabled = envSchema.safeParse({
+      ...baseEnv,
+      REVENUE_LEDGER_INDEXER_ENABLED: 'false',
+    });
+    expect(disabled.success).toBe(true);
+    if (disabled.success) {
+      expect(disabled.data.REVENUE_LEDGER_INDEXER_ENABLED).toBe(false);
+    }
+
+    const enabled = envSchema.safeParse({
+      ...baseEnv,
+      REVENUE_LEDGER_INDEXER_ENABLED: 'true',
+    });
+    expect(enabled.success).toBe(true);
+    if (enabled.success) {
+      expect(enabled.data.REVENUE_LEDGER_INDEXER_ENABLED).toBe(true);
     }
   });
 

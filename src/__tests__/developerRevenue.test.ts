@@ -7,6 +7,13 @@ import { errorHandler } from '../middleware/errorHandler.js';
 import { DeveloperProfile, SettlementStore } from '../types/developer.js';
 import { UsageStore } from '../types/gateway.js';
 import { parseUsdcToUnits } from '../lib/usdcUnits.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
+
+const authHeaders = (userId: string) => ({
+  Authorization: `Bearer ${signTestToken({ userId })}`,
+});
+
+let previousJwtSecret: string | undefined;
 
 /** Convert a USDC float/string to bigint contract units for test fixtures. */
 const u = (usdc: number | string): bigint => parseUsdcToUnits(
@@ -156,6 +163,8 @@ function seedProfile(userId: string, id: number): void {
 }
 
 beforeAll(() => {
+  previousJwtSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = TEST_JWT_SECRET;
   settlementStore = createSettlementStore();
   usageStore = createUsageStore();
   devProfiles.clear();
@@ -213,6 +222,11 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  if (previousJwtSecret === undefined) {
+    delete process.env.JWT_SECRET;
+  } else {
+    process.env.JWT_SECRET = previousJwtSecret;
+  }
   return new Promise<void>((resolve) => {
     server.close(() => resolve());
   });
@@ -225,19 +239,19 @@ describe('GET /api/developers/revenue', () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`);
     expect(res.status).toBe(401);
     const body = await res.json();
-    expect(body.message).toBeTruthy();
+    expect(body.error?.message ?? body.message).toBeTruthy();
   });
 
   it('returns 401 for an invalid token', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': '' },
+      headers: { Authorization: 'Bearer invalid-token' },
     });
     expect(res.status).toBe(401);
   });
 
   it('returns 200 with correct shape for a valid token', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_001' }, // implicitly mock-auths dev_001
+      headers: authHeaders('dev_001'), // implicitly mock-auths dev_001
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -261,7 +275,7 @@ describe('GET /api/developers/revenue', () => {
 
   it('returns correct summary values for dev_001', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_001' },
+      headers: authHeaders('dev_001'),
     });
     const body = await res.json();
 
@@ -275,7 +289,7 @@ describe('GET /api/developers/revenue', () => {
   it('respects limit and offset query params', async () => {
     const res = await fetch(
       `${baseUrl}/api/developers/revenue?limit=2&offset=0`,
-      { headers: { 'x-user-id': 'dev_001' } },
+      { headers: authHeaders('dev_001') },
     );
     const body = await res.json();
 
@@ -288,7 +302,7 @@ describe('GET /api/developers/revenue', () => {
   it('returns empty settlements when offset exceeds total', async () => {
     const res = await fetch(
       `${baseUrl}/api/developers/revenue?limit=20&offset=100`,
-      { headers: { 'x-user-id': 'dev_001' } },
+      { headers: authHeaders('dev_001') },
     );
     const body = await res.json();
 
@@ -298,7 +312,7 @@ describe('GET /api/developers/revenue', () => {
 
   it('uses default limit=20 and offset=0 when params are omitted', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_001' },
+      headers: authHeaders('dev_001'),
     });
     const body = await res.json();
 
@@ -309,7 +323,7 @@ describe('GET /api/developers/revenue', () => {
   it('clamps limit to 100 when a larger value is given', async () => {
     const res = await fetch(
       `${baseUrl}/api/developers/revenue?limit=999`,
-      { headers: { 'x-user-id': 'dev_001' } },
+      { headers: authHeaders('dev_001') },
     );
     const body = await res.json();
 
@@ -346,13 +360,13 @@ describe('GET /api/developers/revenue', () => {
       apiId: 'api_frac',
       endpointId: 'ep_frac',
       userId: 'dev_003',
-      amountUsdc: u(50.123456789),
+      amountUsdc: u('50.1234567'),
       statusCode: 200,
       timestamp: new Date().toISOString(),
     });
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_003' },
+      headers: authHeaders('dev_003'),
     });
     const body = await res.json();
 
@@ -402,7 +416,7 @@ describe('GET /api/developers/revenue', () => {
     });
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_004' },
+      headers: authHeaders('dev_004'),
     });
     const body = await res.json();
 
@@ -443,7 +457,7 @@ describe('GET /api/developers/revenue', () => {
     });
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_005' },
+      headers: authHeaders('dev_005'),
     });
     const body = await res.json();
 
@@ -475,7 +489,7 @@ describe('GET /api/developers/revenue', () => {
     });
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_006' },
+      headers: authHeaders('dev_006'),
     });
     const body = await res.json();
 
@@ -501,7 +515,7 @@ describe('GET /api/developers/revenue', () => {
     }
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_007' },
+      headers: authHeaders('dev_007'),
     });
     const body = await res.json();
 
@@ -536,7 +550,7 @@ describe('GET /api/developers/revenue', () => {
     });
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_008' },
+      headers: authHeaders('dev_008'),
     });
     const body = await res.json();
 
@@ -574,7 +588,7 @@ describe('GET /api/developers/revenue', () => {
     });
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_009' },
+      headers: authHeaders('dev_009'),
     });
     const body = await res.json();
 
@@ -585,7 +599,7 @@ describe('GET /api/developers/revenue', () => {
 
   it('handles developer with no revenue data', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_no_data' },
+      headers: authHeaders('dev_no_data'),
     });
     const body = await res.json();
 
@@ -610,7 +624,7 @@ describe('GET /api/developers/revenue', () => {
     }
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_010' },
+      headers: authHeaders('dev_010'),
     });
     const body = await res.json();
 
@@ -644,7 +658,7 @@ describe('GET /api/developers/revenue', () => {
     // Test limit = 100 (max allowed)
     const res1 = await fetch(
       `${baseUrl}/api/developers/revenue?limit=100&offset=0`,
-      { headers: { 'x-user-id': 'dev_011' } },
+      { headers: authHeaders('dev_011') },
     );
     const body1 = await res1.json();
     expect(body1.settlements.length).toBe(100);
@@ -653,7 +667,7 @@ describe('GET /api/developers/revenue', () => {
     // Test offset = 99 (should return 1 settlement)
     const res2 = await fetch(
       `${baseUrl}/api/developers/revenue?limit=20&offset=99`,
-      { headers: { 'x-user-id': 'dev_011' } },
+      { headers: authHeaders('dev_011') },
     );
     const body2 = await res2.json();
     expect(body2.settlements.length).toBe(1);
@@ -662,7 +676,7 @@ describe('GET /api/developers/revenue', () => {
     // Test offset = 100 (should return 0 settlements)
     const res3 = await fetch(
       `${baseUrl}/api/developers/revenue?limit=20&offset=100`,
-      { headers: { 'x-user-id': 'dev_011' } },
+      { headers: authHeaders('dev_011') },
     );
     const body3 = await res3.json();
     expect(body3.settlements.length).toBe(0);
@@ -695,7 +709,7 @@ describe('GET /api/developers/revenue', () => {
     });
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_012' },
+      headers: authHeaders('dev_012'),
     });
     const body = await res.json();
 
@@ -726,7 +740,7 @@ describe('GET /api/developers/revenue', () => {
     await Promise.all(promises);
 
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_013' },
+      headers: authHeaders('dev_013'),
     });
     const body = await res.json();
 
@@ -743,19 +757,19 @@ describe('GET /api/developers/revenue — RBAC enforcement', () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`);
     expect(res.status).toBe(401);
     const body = await res.json();
-    expect(body.message).toBeTruthy();
+    expect(body.error?.message ?? body.message).toBeTruthy();
   });
 
   it('returns 401 for an empty x-user-id header', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': '' },
+      headers: { Authorization: 'Bearer invalid-token' },
     });
     expect(res.status).toBe(401);
   });
 
   it('returns 200 and only the owner\'s data when the owner requests their own revenue', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_001' },
+      headers: authHeaders('dev_001'),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -769,16 +783,16 @@ describe('GET /api/developers/revenue — RBAC enforcement', () => {
   it('returns 403 when a developer profile does not exist for the authenticated user', async () => {
     // 'unknown_user' has no entry in devProfiles, so findByUserId returns undefined
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'unknown_user' },
+      headers: authHeaders('unknown_user'),
     });
     expect(res.status).toBe(403);
     const body = await res.json();
-    expect(body.code).toBe('DEVELOPER_NOT_FOUND');
+    expect(body.error?.code ?? body.code).toBe('DEVELOPER_NOT_FOUND');
   });
 
   it('does not expose dev_002 settlements to dev_001', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_001' },
+      headers: authHeaders('dev_001'),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -790,7 +804,7 @@ describe('GET /api/developers/revenue — RBAC enforcement', () => {
 
   it('does not expose dev_001 settlements to dev_002', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_002' },
+      headers: authHeaders('dev_002'),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -806,7 +820,7 @@ describe('GET /api/developers/revenue — RBAC enforcement', () => {
 
   it('returns correct totals for dev_002 independently of dev_001 data', async () => {
     const res = await fetch(`${baseUrl}/api/developers/revenue`, {
-      headers: { 'x-user-id': 'dev_002' },
+      headers: authHeaders('dev_002'),
     });
     expect(res.status).toBe(200);
     const body = await res.json();

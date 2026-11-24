@@ -1,5 +1,7 @@
 import request from 'supertest';
 import express from 'express';
+import jwt from 'jsonwebtoken';
+import { createApp } from '../app.js';
 import { VaultController } from './vaultController.js';
 import { InMemoryVaultRepository, type VaultRepository } from '../repositories/vaultRepository.js';
 import { errorHandler } from '../middleware/errorHandler.js';
@@ -9,11 +11,15 @@ import { requestIdMiddleware } from '../middleware/requestId.js';
 import { UnauthorizedError } from '../errors/index.js';
 
 /**
- * Asserts the standard error envelope shape `{ code, message, requestId }`.
+ * Asserts the standard error envelope shape `{ success: false, error: { code, message }, requestId, timestamp }`.
  */
 function expectErrorEnvelope(body: unknown, message: string | undefined, code: string): void {
-  expect(body).toMatchObject(message === undefined ? { code } : { message, code });
+  expect(body).toMatchObject({
+    success: false,
+    error: message === undefined ? { code } : { message, code },
+  });
   expect(typeof (body as { requestId?: unknown }).requestId).toBe('string');
+  expect(typeof (body as { timestamp?: unknown }).timestamp).toBe('string');
 }
 
 jest.mock('better-sqlite3', () => {
@@ -116,7 +122,8 @@ describe('VaultController - getBalance', () => {
         .set('Authorization', 'Bearer valid-token');
 
       expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('balance_usdc');
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveProperty('balance_usdc');
     });
 
     it('returns 401 for expired JWT token', async () => {
@@ -166,8 +173,8 @@ describe('VaultController - getBalance', () => {
 
       expect(response.status).toBe(404);
       expectErrorEnvelope(response.body, undefined, 'VAULT_NOT_FOUND');
-      expect(response.body.message).toContain('Vault not found');
-      expect(response.body.message).toContain('testnet'); // default network
+      expect(response.body.error.message).toContain('Vault not found');
+      expect(response.body.error.message).toContain('testnet'); // default network
     });
 
     it('returns 400 for invalid network parameter', async () => {
@@ -179,9 +186,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
-      expect(response.body).toHaveProperty('message', 'Request validation failed');
-      expect(response.body.details[0]).toMatchObject({
+      expectErrorEnvelope(response.body, 'Request validation failed', 'VALIDATION_ERROR');
+      expect(response.body.error.details[0]).toMatchObject({
         field: 'query.network',
       });
     });
@@ -195,8 +201,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
-      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
+      expectErrorEnvelope(response.body, undefined, 'VALIDATION_ERROR');
+      expect(response.body.error.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('returns 400 for network parameter with only whitespace', async () => {
@@ -208,8 +214,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
-      expect(response.body.details[0]).toHaveProperty('field', 'query.network');
+      expectErrorEnvelope(response.body, undefined, 'VALIDATION_ERROR');
+      expect(response.body.error.details[0]).toHaveProperty('field', 'query.network');
     });
 
     it('accepts case-sensitive network parameters', async () => {
@@ -244,11 +250,15 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
-        balance_usdc: '0.0000000',
-        contractId: 'contract-123',
-        network: 'testnet',
-        lastSyncedAt: null
+      expect(response.body).toMatchObject({
+        success: true,
+        data: {
+          balance_usdc: '0.0000000',
+          contractId: 'contract-123',
+          network: 'testnet',
+          lastSyncedAt: null,
+          stale: true,
+        },
       });
     });
 
@@ -263,11 +273,15 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-2');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
-        balance_usdc: '1.5000000',
-        contractId: 'contract-456',
-        network: 'testnet',
-        lastSyncedAt: '2023-01-01T12:00:00.000Z'
+      expect(response.body).toMatchObject({
+        success: true,
+        data: {
+          balance_usdc: '1.5000000',
+          contractId: 'contract-456',
+          network: 'testnet',
+          lastSyncedAt: '2023-01-01T12:00:00.000Z',
+          stale: true,
+        },
       });
     });
 
@@ -281,11 +295,15 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-3');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
-        balance_usdc: '0.0000000',
-        contractId: 'contract-mainnet',
-        network: 'mainnet',
-        lastSyncedAt: null
+      expect(response.body).toMatchObject({
+        success: true,
+        data: {
+          balance_usdc: '0.0000000',
+          contractId: 'contract-mainnet',
+          network: 'mainnet',
+          lastSyncedAt: null,
+          stale: true,
+        },
       });
     });
   });
@@ -303,7 +321,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-large');
 
       expect(response.status).toBe(200);
-      expect(response.body.balance_usdc).toBe('1000000000.0000000');
+      expect(response.body.data.balance_usdc).toBe('1000000000.0000000');
     });
 
     it('handles small fractional balances correctly', async () => {
@@ -318,7 +336,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-small');
 
       expect(response.status).toBe(200);
-      expect(response.body.balance_usdc).toBe('0.0000001');
+      expect(response.body.data.balance_usdc).toBe('0.0000001');
     });
 
     it('returns 500 when repository throws unexpected error', async () => {
@@ -333,7 +351,7 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
 
       expect(response.status).toBe(500);
-      expectErrorEnvelope(response.body, 'Failed to retrieve vault balance', 'VAULT_BALANCE_RETRIEVAL_FAILED');
+      expectErrorEnvelope(response.body, 'Failed to retrieve vault balance', 'INTERNAL_SERVER_ERROR');
 
       // Restore original method
       repository.findByUserId = originalFindByUserId;
@@ -367,8 +385,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-1');
       
       expect(response1.status).toBe(200);
-      expect(response1.body.contractId).toBe('contract-123');
-      expect(response1.body.balance_usdc).toBe('0.0000000');
+      expect(response1.body.data.contractId).toBe('contract-123');
+      expect(response1.body.data.balance_usdc).toBe('0.0000000');
 
       // user-1 tries to access with different user ID (should get their own vault or 404)
       const response2 = await request(app)
@@ -376,8 +394,8 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-2');
       
       expect(response2.status).toBe(200);
-      expect(response2.body.contractId).toBe('contract-456'); // user-2's vault
-      expect(response2.body.balance_usdc).toBe('5.0000000');
+      expect(response2.body.data.contractId).toBe('contract-456'); // user-2's vault
+      expect(response2.body.data.balance_usdc).toBe('5.0000000');
     });
 
     it('prevents network parameter injection attacks', async () => {
@@ -399,7 +417,7 @@ describe('VaultController - getBalance', () => {
           .set('x-user-id', 'user-1');
 
         expect(response.status).toBe(400);
-        expect(response.body).toHaveProperty('code', 'VALIDATION_ERROR');
+        expectErrorEnvelope(response.body, undefined, 'VALIDATION_ERROR');
       }
     });
 
@@ -417,52 +435,104 @@ describe('VaultController - getBalance', () => {
       
       // Validate response structure
       expect(response.body).toEqual(expect.any(Object));
-      expect(response.body).toHaveProperty('balance_usdc');
-      expect(response.body).toHaveProperty('contractId');
-      expect(response.body).toHaveProperty('network');
-      expect(response.body).toHaveProperty('lastSyncedAt');
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveProperty('balance_usdc');
+      expect(response.body.data).toHaveProperty('contractId');
+      expect(response.body.data).toHaveProperty('network');
+      expect(response.body.data).toHaveProperty('lastSyncedAt');
+      expect(response.body.data).toHaveProperty('stale');
       
       // Validate data types
-      expect(typeof response.body.balance_usdc).toBe('string');
-      expect(typeof response.body.contractId).toBe('string');
-      expect(typeof response.body.network).toBe('string');
-      expect(['string', 'null']).toContain(typeof response.body.lastSyncedAt);
+      expect(typeof response.body.data.balance_usdc).toBe('string');
+      expect(typeof response.body.data.contractId).toBe('string');
+      expect(typeof response.body.data.network).toBe('string');
+      expect(['string', 'null']).toContain(typeof response.body.data.lastSyncedAt);
+      expect(typeof response.body.data.stale).toBe('boolean');
       
       // Validate balance format (should be decimal with 7 places)
-      expect(response.body.balance_usdc).toMatch(/^\d+\.\d{7}$/);
+      expect(response.body.data.balance_usdc).toMatch(/^\d+\.\d{7}$/);
     });
   });
 
   describe('Integration with App Router', () => {
     it('works when mounted through the main app router', async () => {
-      const { createApp } = await import('../app.js');
-      const repository = new InMemoryVaultRepository();
-      await repository.create('integration-user', 'contract-integration', 'testnet');
-      
-      const app = createApp({ vaultRepository: repository });
-      
-      const response = await request(app)
-        .get('/api/vault/balance')
-        .set('x-user-id', 'integration-user');
-      
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('balance_usdc');
-      expect(response.body).toHaveProperty('contractId');
+      const prevSecret = process.env.JWT_SECRET;
+      process.env.JWT_SECRET = 'test-vault-integration-secret';
+      try {
+        const repository = new InMemoryVaultRepository();
+        await repository.create('integration-user', 'contract-integration', 'testnet');
+        
+        const app = createApp({
+          vaultRepository: repository,
+          vaultReader: {
+            readVault: jest.fn().mockResolvedValue({
+              balance: 0n,
+              maxDeduct: 0n,
+              paused: false,
+              usdcToken: 'GUSDC',
+              settlement: 'GSETTLEMENT',
+              ledger: 1,
+            }),
+          },
+        });
+        const token = jwt.sign({ sub: 'integration-user' }, process.env.JWT_SECRET, {
+          algorithm: 'HS256',
+        });
+        
+        const response = await request(app)
+          .get('/api/vault/balance')
+          .set('Authorization', `Bearer ${token}`);
+        
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(response.body.data).toHaveProperty('balance_usdc');
+        expect(response.body.data).toHaveProperty('contractId');
+      } finally {
+        if (prevSecret === undefined) {
+          delete process.env.JWT_SECRET;
+        } else {
+          process.env.JWT_SECRET = prevSecret;
+        }
+      }
     });
 
     it('maintains error structure consistency in full app context', async () => {
-      const { createApp } = await import('../app.js');
-      const repository = new InMemoryVaultRepository();
-      // Don't create vault to trigger 404
-      
-      const app = createApp({ vaultRepository: repository });
-      
-      const response = await request(app)
-        .get('/api/vault/balance')
-        .set('x-user-id', 'nonexistent-user');
-      
-      expect(response.status).toBe(404);
-      expectErrorEnvelope(response.body, undefined, 'VAULT_NOT_FOUND');
+      const prevSecret = process.env.JWT_SECRET;
+      process.env.JWT_SECRET = 'test-vault-integration-secret';
+      try {
+        const repository = new InMemoryVaultRepository();
+        // Don't create vault to trigger 404
+        
+        const app = createApp({
+          vaultRepository: repository,
+          vaultReader: {
+            readVault: jest.fn().mockResolvedValue({
+              balance: 0n,
+              maxDeduct: 0n,
+              paused: false,
+              usdcToken: 'GUSDC',
+              settlement: 'GSETTLEMENT',
+              ledger: 1,
+            }),
+          },
+        });
+        const token = jwt.sign({ sub: 'nonexistent-user' }, process.env.JWT_SECRET, {
+          algorithm: 'HS256',
+        });
+        
+        const response = await request(app)
+          .get('/api/vault/balance')
+          .set('Authorization', `Bearer ${token}`);
+        
+        expect(response.status).toBe(404);
+        expectErrorEnvelope(response.body, undefined, 'VAULT_NOT_FOUND');
+      } finally {
+        if (prevSecret === undefined) {
+          delete process.env.JWT_SECRET;
+        } else {
+          process.env.JWT_SECRET = prevSecret;
+        }
+      }
     });
   });
 
@@ -478,17 +548,18 @@ describe('VaultController - getBalance', () => {
         .set('x-user-id', 'user-consistency');
       
       expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
       
       // Verify required fields exist
-      const requiredFields = ['balance_usdc', 'contractId', 'network', 'lastSyncedAt'];
+      const requiredFields = ['balance_usdc', 'contractId', 'network', 'lastSyncedAt', 'stale'];
       requiredFields.forEach(field => {
-        expect(response.body).toHaveProperty(field);
+        expect(response.body.data).toHaveProperty(field);
       });
       
       // Verify no extra fields
-      const responseKeys = Object.keys(response.body);
+      const responseKeys = Object.keys(response.body.data);
       expect(responseKeys).toEqual(expect.arrayContaining(requiredFields));
-      expect(responseKeys.length).toBeGreaterThanOrEqual(requiredFields.length);
+      expect(responseKeys.length).toBe(requiredFields.length);
     });
 
     it('ensures all error responses have consistent structure', async () => {
@@ -512,9 +583,8 @@ describe('VaultController - getBalance', () => {
         .get('/api/vault/balance?network=invalid')
         .set('x-user-id', 'user-1');
       expect(validationResponse.status).toBe(400);
-      expect(validationResponse.body).toHaveProperty('message');
-      expect(typeof validationResponse.body.message).toBe('string');
-      expect(validationResponse.body).toHaveProperty('code', 'VALIDATION_ERROR');
+      expectErrorEnvelope(validationResponse.body, undefined, 'VALIDATION_ERROR');
+      expect(typeof validationResponse.body.error.message).toBe('string');
     });
   });
 });

@@ -4,6 +4,7 @@ import { createUsageRouter } from './usage.js';
 import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { type UsageEventsRepository } from '../repositories/usageEventsRepository.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
 
 const mockUsageEventsRepository = {
   record: jest.fn(),
@@ -14,12 +15,27 @@ const mockUsageEventsRepository = {
 } as unknown as jest.Mocked<UsageEventsRepository>;
 
 describe('Usage Router Rate Limiting', () => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterAll(() => {
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
+    }
+  });
+
+  const authHeader = `Bearer ${signTestToken({ userId: 'test-user-id' })}`;
+
   function buildApp() {
     const app = express();
     
-    app.use((req: Request, res: Response, next: NextFunction) => {
+    app.use((req: Request, _res: Response, next: NextFunction) => {
       req.id = 'test-request-id';
-      res.locals.authenticatedUser = { id: 'test-user-id' };
       next();
     });
 
@@ -43,15 +59,15 @@ describe('Usage Router Rate Limiting', () => {
     const app = buildApp();
 
     // First request should succeed
-    let response = await request(app).get('/usage');
+    let response = await request(app).get('/usage').set('Authorization', authHeader);
     expect(response.status).toBe(200);
 
     // Second request should succeed
-    response = await request(app).get('/usage');
+    response = await request(app).get('/usage').set('Authorization', authHeader);
     expect(response.status).toBe(200);
 
     // Third request should hit the rate limit
-    response = await request(app).get('/usage');
+    response = await request(app).get('/usage').set('Authorization', authHeader);
     expect(response.status).toBe(429);
     expect(response.body).toEqual({
       success: false,
@@ -60,6 +76,7 @@ describe('Usage Router Rate Limiting', () => {
         message: 'Too Many Requests'
       },
       requestId: 'test-request-id',
+      timestamp: expect.any(String),
     });
     expect(response.headers['retry-after']).toBeDefined();
     
@@ -67,7 +84,7 @@ describe('Usage Router Rate Limiting', () => {
     await new Promise(resolve => setTimeout(resolve, 1050));
     
     // Fourth request should succeed after window resets
-    response = await request(app).get('/usage');
+    response = await request(app).get('/usage').set('Authorization', authHeader);
     expect(response.status).toBe(200);
   });
 });

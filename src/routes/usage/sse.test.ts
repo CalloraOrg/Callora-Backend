@@ -1,3 +1,5 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import request from 'supertest';
 import {
@@ -9,6 +11,7 @@ import {
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 import { logger } from '../../logger.js';
+import { signTestToken, TEST_JWT_SECRET } from '../../../tests/helpers/jwt.js';
 
 const USER_A = 'user-1';
 const USER_B = 'user-2';
@@ -62,11 +65,25 @@ class CountingUsageSseBroadcaster extends UsageSseBroadcaster {
 
 interface UsageSseTestApp {
   app: Express;
+  server: http.Server;
+  port: number;
   broadcaster: CountingUsageSseBroadcaster;
   serverRequests: Request[];
 }
 
-const createTestApp = (): UsageSseTestApp => {
+const openServers: http.Server[] = [];
+
+const startServer = (app: Express): Promise<{ server: http.Server; port: number }> =>
+  new Promise((resolve) => {
+    const server = http.createServer(app);
+    openServers.push(server);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({ server, port });
+    });
+  });
+
+const createTestApp = async (): Promise<UsageSseTestApp> => {
   const broadcaster = new CountingUsageSseBroadcaster();
   const serverRequests: Request[] = [];
   const app = express();
@@ -79,7 +96,8 @@ const createTestApp = (): UsageSseTestApp => {
   app.use('/api/usage/sse', createUsageSseRouter({ broadcaster }));
   app.use(errorHandler);
 
-  return { app, broadcaster, serverRequests };
+  const { server, port } = await startServer(app);
+  return { app, server, port, broadcaster, serverRequests };
 };
 
 interface SseStream {
@@ -94,19 +112,26 @@ const openStreams: SseStream[] = [];
  * Opens a streaming `GET /api/usage/sse` request that stays open until aborted,
  * mirroring how a browser `EventSource` behaves.
  */
-const openSseStream = (app: Express, userId: string): SseStream => {
+const openSseStream = (port: number, userId: string): SseStream => {
   let received = '';
   let announceConnected: () => void = () => undefined;
   const connected = new Promise<void>((resolve) => {
     announceConnected = resolve;
   });
   let connectedSeen = false;
+  let incomingRes: http.IncomingMessage | undefined;
 
-  const stream = request(app)
-    .get('/api/usage/sse')
-    .set('x-user-id', userId)
-    .buffer(false)
-    .parse((res, callback) => {
+  const clientReq = http.get(
+    {
+      hostname: '127.0.0.1',
+      port,
+      path: '/api/usage/sse',
+      headers: {
+        Authorization: `Bearer ${signTestToken({ userId })}`,
+      },
+    },
+    (res) => {
+      incomingRes = res;
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => {
         received += chunk;
@@ -119,18 +144,20 @@ const openSseStream = (app: Express, userId: string): SseStream => {
       res.on('error', () => {
         // Expected when the stream is aborted during teardown.
       });
-      callback(null, received);
-    });
+    },
+  );
 
   // Registering listeners keeps the abort error from surfacing as an
   // unhandled 'error' event once the test tears the stream down.
-  stream.on('error', () => undefined);
-  stream.end(() => undefined);
+  clientReq.on('error', () => undefined);
 
   const handle: SseStream = {
     output: () => received,
     connected,
-    abort: () => stream.abort(),
+    abort: () => {
+      incomingRes?.destroy();
+      clientReq.destroy();
+    },
   };
   openStreams.push(handle);
 
@@ -265,6 +292,20 @@ describe('UsageSseBroadcaster', () => {
 });
 
 describe('GET /api/usage/sse', () => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET;
+  });
+
+  afterAll(() => {
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
+    }
+  });
+
   beforeEach(() => {
     // The router logs one connect + one disconnect line per stream.
     jest.spyOn(logger, 'info').mockImplementation(() => undefined);
@@ -274,9 +315,13 @@ describe('GET /api/usage/sse', () => {
     while (openStreams.length > 0) {
       openStreams.pop()?.abort();
     }
+    while (openServers.length > 0) {
+      const server = openServers.pop()!;
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
     defaultUsageSseBroadcaster.clear();
     jest.restoreAllMocks();
-    await delay(10);
   });
 
   it('returns 401 when the request is unauthenticated', async () => {
@@ -296,6 +341,8 @@ describe('GET /api/usage/sse', () => {
     app.use('/api/usage/sse', createUsageSseRouter());
     app.use(errorHandler);
 
+    const { port } = await startServer(app);
+
     const emittedEvent = {
       id: 'evt-1',
       requestId: 'req-1',
@@ -311,12 +358,18 @@ describe('GET /api/usage/sse', () => {
     const received = await new Promise<string>((resolve, reject) => {
       let seen = '';
       let emitted = false;
+      let done = false;
 
-      const streamRequest = request(app)
-        .get('/api/usage/sse')
-        .set('x-user-id', USER_A)
-        .buffer(false)
-        .parse((res, callback) => {
+      const clientReq = http.get(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: '/api/usage/sse',
+          headers: {
+            Authorization: `Bearer ${signTestToken({ userId: USER_A })}`,
+          },
+        },
+        (res) => {
           res.setEncoding('utf8');
           res.on('data', (chunk: string) => {
             seen += chunk;
@@ -326,17 +379,23 @@ describe('GET /api/usage/sse', () => {
               defaultUsageSseBroadcaster.emitForUser(USER_A, emittedEvent);
             }
 
-            if (seen.includes('"apiId":"api-1"')) {
-              streamRequest.abort();
+            if (!done && seen.includes('"apiId":"api-1"')) {
+              done = true;
+              res.destroy();
+              clientReq.destroy();
               resolve(seen);
             }
           });
-          res.on('error', reject);
-          callback(null, seen);
-        });
+          res.on('error', (err) => {
+            if (!done) {
+              reject(err);
+            }
+          });
+        },
+      );
 
-      streamRequest.end((error) => {
-        if (error && !seen.includes('event: usage')) {
+      clientReq.on('error', (error) => {
+        if (!done) {
           reject(error);
         }
       });
@@ -351,10 +410,10 @@ describe('GET /api/usage/sse', () => {
   });
 
   it('does not deliver one user\'s events to another user\'s stream', async () => {
-    const { app, broadcaster } = createTestApp();
+    const { port, broadcaster } = await createTestApp();
 
-    const streamA = openSseStream(app, USER_A);
-    const streamB = openSseStream(app, USER_B);
+    const streamA = openSseStream(port, USER_A);
+    const streamB = openSseStream(port, USER_B);
     await Promise.all([streamA.connected, streamB.connected]);
 
     expect(broadcaster.listenerCount(USER_A)).toBe(1);
@@ -381,10 +440,10 @@ describe('GET /api/usage/sse', () => {
   });
 
   it('drops every listener once the client disconnects', async () => {
-    const { app, broadcaster } = createTestApp();
+    const { port, broadcaster } = await createTestApp();
 
-    const streamA = openSseStream(app, USER_A);
-    const streamB = openSseStream(app, USER_B);
+    const streamA = openSseStream(port, USER_A);
+    const streamB = openSseStream(port, USER_B);
     await Promise.all([streamA.connected, streamB.connected]);
     expect(broadcaster.trackedUserCount()).toBe(2);
 
@@ -400,10 +459,10 @@ describe('GET /api/usage/sse', () => {
   });
 
   it('keeps serving the remaining stream when one of a user\'s streams disconnects', async () => {
-    const { app, broadcaster } = createTestApp();
+    const { port, broadcaster } = await createTestApp();
 
-    const first = openSseStream(app, USER_A);
-    const second = openSseStream(app, USER_A);
+    const first = openSseStream(port, USER_A);
+    const second = openSseStream(port, USER_A);
     await Promise.all([first.connected, second.connected]);
     expect(broadcaster.listenerCount(USER_A)).toBe(2);
 
@@ -418,9 +477,9 @@ describe('GET /api/usage/sse', () => {
   });
 
   it('unsubscribes exactly once on the aborted path', async () => {
-    const { app, broadcaster, serverRequests } = createTestApp();
+    const { port, broadcaster, serverRequests } = await createTestApp();
 
-    const stream = openSseStream(app, USER_A);
+    const stream = openSseStream(port, USER_A);
     await stream.connected;
     expect(broadcaster.listenerCount(USER_A)).toBe(1);
 
@@ -435,9 +494,9 @@ describe('GET /api/usage/sse', () => {
   });
 
   it('unsubscribes exactly once on the close path', async () => {
-    const { app, broadcaster, serverRequests } = createTestApp();
+    const { port, broadcaster, serverRequests } = await createTestApp();
 
-    const stream = openSseStream(app, USER_A);
+    const stream = openSseStream(port, USER_A);
     await stream.connected;
     expect(broadcaster.listenerCount(USER_A)).toBe(1);
 
@@ -452,9 +511,9 @@ describe('GET /api/usage/sse', () => {
   });
 
   it('unsubscribes exactly once when both close and aborted are emitted', async () => {
-    const { app, broadcaster, serverRequests } = createTestApp();
+    const { port, broadcaster, serverRequests } = await createTestApp();
 
-    const stream = openSseStream(app, USER_A);
+    const stream = openSseStream(port, USER_A);
     await stream.connected;
 
     serverRequests[0].emit('aborted');

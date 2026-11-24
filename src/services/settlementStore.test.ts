@@ -482,6 +482,47 @@ describe('PostgresSettlementStore', () => {
       assert.equal(results[1].amount, 200000000n);
     });
 
+    test('preserves zero, seven-decimal, and large contract-unit amounts exactly', async () => {
+      const rows = [
+        {
+          external_id: 'settle_zero',
+          developer_id: 'dev_abc',
+          amount_usdc: '0.0000000',
+          status: 'pending',
+          stellar_tx_hash: null,
+          created_at: '2025-01-15T10:00:00Z',
+        },
+        {
+          external_id: 'settle_one_unit',
+          developer_id: 'dev_abc',
+          amount_usdc: 0.0000001,
+          status: 'pending',
+          stellar_tx_hash: null,
+          created_at: '2025-01-16T10:00:00Z',
+        },
+        {
+          external_id: 'settle_large',
+          developer_id: 'dev_abc',
+          amount_usdc: '900719925.4740993',
+          status: 'pending',
+          stellar_tx_hash: null,
+          created_at: '2025-01-17T10:00:00Z',
+        },
+      ];
+
+      client = createMockClient([makeQr(rows)]);
+      pool = createMockPool(client);
+      store = new PostgresSettlementStore(pool);
+
+      const results = await store.getDeveloperSettlements('dev_abc');
+
+      assert.deepEqual(results.map((settlement) => settlement.amount), [
+        0n,
+        1n,
+        9007199254740993n,
+      ]);
+    });
+
     test('returns empty array for developer with no settlements', async () => {
       client = createMockClient([
         makeQr([]),

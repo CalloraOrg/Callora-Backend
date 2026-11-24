@@ -166,10 +166,7 @@ describe('sloAlertJob', () => {
       for (let i = 0; i < 3; i++) window.addSample(200, 5, t0 + 10);
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const { body, init } = getFetchBody(fetchMock);
@@ -190,7 +187,7 @@ describe('sloAlertJob', () => {
       expect((body.data as { observed: number }).observed).toBeCloseTo(0.8, 6);
       expect((body.data as { totalRequests: number }).totalRequests).toBe(15);
 
-      const alerts = await getMetric('slo_alerter_alerts_total');
+      const alerts = await getMetric('slo_alerts_total');
       expect(alerts).toBeDefined();
       const series = alerts!.values.filter(
         (v) =>
@@ -204,7 +201,7 @@ describe('sloAlertJob', () => {
       expect(runs).toBeDefined();
       expect(runs!.values[0]!.value).toBe(1);
 
-      const activeBurns = await getMetric('slo_alerter_active_burns');
+      const activeBurns = await getMetric('slo_active_burns');
       expect(activeBurns).toBeDefined();
       expect(activeBurns!.values[0]!.value).toBe(1);
 
@@ -284,10 +281,7 @@ describe('sloAlertJob', () => {
       for (let i = 0; i < 5; i++) window.addSample(200, 250, now + 10 + i);
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const { body } = getFetchBody(fetchMock);
@@ -366,23 +360,17 @@ describe('sloAlertJob', () => {
       window.addSample(200, 5, t0 + 10);
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // Still within the dedup window (100ms) – fire no further alerts.
-      jest.advanceTimersByTime(50);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(50);
+      await job.awaitIdle();
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // Past the dedup window – expect a fresh alert.
-      jest.advanceTimersByTime(100);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(100);
+      await job.awaitIdle();
       expect(fetchMock).toHaveBeenCalledTimes(2);
 
       job.stop();
@@ -525,10 +513,7 @@ describe('sloAlertJob', () => {
       for (let i = 0; i < 100; i++) health.addSample(200, 5, now + i);
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1); // only billing
       const { body, init } = getFetchBody(fetchMock);
@@ -553,13 +538,14 @@ describe('sloAlertJob', () => {
         statusText: 'Bad Gateway',
       } as Response);
       global.fetch = fetchMock as unknown as typeof fetch;
-      const errorSpy = jest.spyOn(console, 'error');
+      const errorSpy = jest.fn();
 
       const job = createSloAlertJob({
         webhookUrl,
         pollIntervalMs: 300_000,
         dedupWindowMs: 3_600_000,
         observationWindowMs: 60 * 60 * 1000,
+        logger: { error: errorSpy, info: jest.fn(), warn: jest.fn() },
       });
 
       const window = getSloWindow('POST', '/api/billing/deduct')!;
@@ -568,14 +554,13 @@ describe('sloAlertJob', () => {
       window.addSample(200, 5, now + 10);
 
       job.start();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await job.awaitIdle();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const loggedErrorCall = errorSpy.mock.calls.find((args) =>
-        String(args[0]).includes('[sloAlertJob] Webhook returned 502'),
+      const loggedErrorCall = errorSpy.mock.calls.find(
+        (args) =>
+          String(args[0]).includes('[sloAlertJob] Webhook returned') &&
+          args[1] === 502,
       );
       expect(loggedErrorCall).toBeDefined();
       job.stop();
@@ -586,13 +571,14 @@ describe('sloAlertJob', () => {
         { method: 'POST', route: '/api/billing/deduct', maxErrorRate: 0.1 },
       ]);
       global.fetch = jest.fn().mockRejectedValue(new Error('network down')) as unknown as typeof fetch;
-      const errorSpy = jest.spyOn(console, 'error');
+      const errorSpy = jest.fn();
 
       const job = createSloAlertJob({
         webhookUrl,
         pollIntervalMs: 300_000,
         dedupWindowMs: 3_600_000,
         observationWindowMs: 60 * 60 * 1000,
+        logger: { error: errorSpy, info: jest.fn(), warn: jest.fn() },
       });
 
       const window = getSloWindow('POST', '/api/billing/deduct')!;

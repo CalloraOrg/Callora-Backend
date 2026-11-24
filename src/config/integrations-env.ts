@@ -59,6 +59,10 @@ export const integrationEnvironmentFields = {
     .default(false),
   HORIZON_URL: z.string().url().optional(),
   HORIZON_TIMEOUT: z.coerce.number().default(2_000),
+  SETTLEMENT_STATUS_SYNC_ENABLED: z
+    .string()
+    .transform((v) => v === "true")
+    .default(false),
   SETTLEMENT_STATUS_SYNC_INTERVAL_MS: z.coerce
     .number()
     .int()
@@ -75,6 +79,11 @@ export const integrationEnvironmentFields = {
     .int()
     .positive()
     .default(86_400_000),
+  // Tri-state: unset means "on outside tests" (see coreSettings).
+  REVENUE_LEDGER_INDEXER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   REVENUE_LEDGER_INDEXER_INTERVAL_MS: z.coerce
     .number()
     .int()
