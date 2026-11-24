@@ -45,9 +45,9 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
   const repo = deps.pluginRepository ?? defaultPluginRepository;
 
   // ── GET /  — list all plugins ────────────────────────────────────────────
-  router.get('/', (_req, res, next) => {
+  router.get('/', async (_req, res, next) => {
     try {
-      const plugins = repo.list();
+      const plugins = await repo.list();
       res.json({ plugins, total: plugins.length });
     } catch (err) {
       next(err);
@@ -59,11 +59,11 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
     '/',
     requireAuth,
     bodyValidator(pluginManifestSchema),
-    (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actor = res.locals.authenticatedUser!.id;
         const manifest = pluginManifestSchema.parse(req.body);
-        const record = repo.register(manifest, actor);
+        const record = await repo.register(manifest, actor);
 
         logger.audit('PLUGIN_REGISTERED', actor, {
           pluginId: manifest.id,
@@ -78,9 +78,9 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
   );
 
   // ── GET /:id  — single plugin ─────────────────────────────────────────────
-  router.get('/:id', (req, res, next) => {
+  router.get('/:id', async (req, res, next) => {
     try {
-      const record = repo.findById(req.params.id);
+      const record = await repo.findById(req.params.id);
       if (!record) {
         return next(new NotFoundError(`Plugin '${req.params.id}' not found`));
       }
@@ -94,10 +94,10 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
   router.post(
     '/:id/install',
     requireAuth,
-    (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actor = res.locals.authenticatedUser!.id;
-        const record = repo.install(req.params.id, actor);
+        const record = await repo.install(req.params.id, actor);
 
         // Fire the install hook (sandboxed stub) if the plugin declares before_charge
         const installHook: HookEvent = 'before_charge';
@@ -122,10 +122,10 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
   router.delete(
     '/:id/install',
     requireAuth,
-    (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actor = res.locals.authenticatedUser!.id;
-        const record = repo.uninstall(req.params.id, actor);
+        const record = await repo.uninstall(req.params.id, actor);
 
         logger.audit('PLUGIN_UNINSTALLED', actor, { pluginId: req.params.id });
 
@@ -140,11 +140,11 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
   router.delete(
     '/:id',
     requireAuthOrAdmin,
-    (req, res: Response<unknown, AuthenticatedLocals>, next) => {
+    async (req, res: Response<unknown, AuthenticatedLocals>, next) => {
       try {
         const actor = res.locals.authenticatedUser?.id ?? (res.locals as { adminActor?: string }).adminActor;
         const isAdmin = Boolean((res.locals as { adminActor?: string }).adminActor);
-        repo.delete(req.params.id, actor!, isAdmin);
+        await repo.delete(req.params.id, actor!, isAdmin);
 
         logger.audit('PLUGIN_DELETED', actor!, { pluginId: req.params.id });
 
