@@ -465,7 +465,7 @@ describe("v1 forwarded identity HTTP contract", () => {
     const router = express.Router();
     router.use(createPerDevConcurrencyMiddleware({ maxConcurrent: 2 }));
     router.use(createRateLimitMiddleware({ windowMs: 60_000, maxRequests: 100 }));
-    router.get("/usage", requireAuth, (_req, res) => { res.json({ userId: res.locals.authenticatedUser.id }); });
+    router.get("/usage", requireAuth, (_req, res) => { res.json({ userId: res.locals.authenticatedUser?.id }); });
     const mounted = express(); mounted.use("/api", router); mounted.use(errorHandler);
     const signed = signForwardedIdentity({ secret: TEST_GATEWAY_SECRET, method: "GET", path: "/api/usage", userId: "http-user", now: Date.now() });
     const headers = { "x-user-id": "http-user", "x-gateway-signature": signed.signature, "x-gateway-timestamp": signed.timestamp };

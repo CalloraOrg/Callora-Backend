@@ -1,10 +1,20 @@
 import { config } from "../config/index.js";
+import { pool as defaultPool } from "../db.js";
 import { validateStorageEndpoint } from "../lib/storageEndpoint.js";
 import type { UsageEventsRepository } from "../repositories/usageEventsRepository.js";
 import { HmacObjectStorageClient, InMemoryScheduleStore, ScheduledExportsService } from "./scheduledExports.js";
+import { PostgresScheduleStore, type ScheduleStoreQueryable } from "./postgresScheduleStore.js";
 import { InMemoryExportStore, ReportExporterService, type DeveloperExportStore } from "./reportExporter.js";
 import { PostgresExportStore } from "./postgresExportStore.js";
 
+export interface CreateAppExportsOptions {
+  pool?: ScheduleStoreQueryable;
+}
+
+export function createAppExports(
+  usageEventsRepository: UsageEventsRepository,
+  options?: CreateAppExportsOptions,
+) {
 /**
  * Demo mode and tests keep export records in memory. Other deployments persist
  * them, so export history survives a restart and a day cannot be exported
@@ -16,8 +26,6 @@ function defaultExportStore(): DeveloperExportStore {
     : new PostgresExportStore();
 }
 
-export function createAppExports(
-  usageEventsRepository: UsageEventsRepository,
   exportStore: DeveloperExportStore = defaultExportStore(),
 ) {
   const getExportEvents = async () => {
@@ -79,6 +87,9 @@ export function createAppExports(
         },
       )
     : undefined;
+  const scheduleStorePool =
+    options?.pool ??
+    (!config.demoMode && config.databaseUrl && config.nodeEnv !== 'test' ? defaultPool : undefined);
   const scheduledExportsService = exportsConfigured
     ? new ScheduledExportsService(
         {
@@ -89,7 +100,9 @@ export function createAppExports(
               .filter((event) => !to || event.createdAt <= to)
               .slice(offset ?? 0, limit === undefined ? undefined : (offset ?? 0) + limit),
         },
-        new InMemoryScheduleStore(exportConfig.signingSecret!),
+        scheduleStorePool
+          ? new PostgresScheduleStore(scheduleStorePool, exportConfig.signingSecret!)
+          : new InMemoryScheduleStore(exportConfig.signingSecret!),
         objectStorageClient,
       )
     : undefined;

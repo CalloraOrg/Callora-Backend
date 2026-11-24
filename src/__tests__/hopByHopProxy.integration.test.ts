@@ -18,8 +18,11 @@
  */
 
 import express from 'express';
+import http from 'node:http';
 import type { Server } from 'node:http';
 import { createProxyRouter } from '../routes/proxyRoutes.js';
+import { errorHandler } from '../middleware/errorHandler.js';
+import { buildHopByHopSet } from '../lib/hopByHop.js';
 import { MockSorobanBilling } from '../services/billingService.js';
 import { InMemoryRateLimiter } from '../services/rateLimiter.js';
 import { InMemoryUsageStore } from '../services/usageStore.js';
@@ -82,8 +85,9 @@ beforeAll(async () => {
     app.use(express.json());
     app.use('/v1/call', createProxyRouter({
       billing, rateLimiter, usageStore, registry, apiKeys,
-      proxyConfig: { timeoutMs: 2000 },
+      proxyConfig: { timeoutMs: 2000, allowedHosts: ['localhost'] },
     }));
+    app.use(errorHandler);
     proxyServer = app.listen(0, () => {
       const addr = proxyServer.address();
       if (addr && typeof addr === 'object') proxyUrl = `http://localhost:${addr.port}`;
@@ -138,18 +142,37 @@ describe('hop-by-hop request header stripping', () => {
       res.status(200).json({ ok: true });
     });
 
-    // Simulate a client that sends Connection: x-dynamic-hop
-    // (In practice, fetch() doesn't allow setting Connection, so this test
-    // verifies the middleware logic via the unit tests. The integration test
-    // confirms the middleware is wired correctly.)
-    await fetch(`${proxyUrl}/v1/call/${API_SLUG}/dynamic`, {
-      method: 'GET',
-      headers: {
-        'x-api-key': API_KEY,
-        'x-unrelated': 'should-arrive',
-      },
+    const connectionHeader = 'x-dynamic-hop, keep-alive';
+    const expectedStripSet = buildHopByHopSet(connectionHeader);
+    expect(expectedStripSet.has('x-dynamic-hop')).toBe(true);
+    expect(expectedStripSet.has('connection')).toBe(true);
+
+    // Use node:http because fetch() forbids setting the Connection header.
+    const target = new URL(`${proxyUrl}/v1/call/${API_SLUG}/dynamic`);
+    await new Promise<void>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: target.hostname,
+          port: target.port,
+          path: target.pathname,
+          method: 'GET',
+          headers: {
+            'x-api-key': API_KEY,
+            connection: connectionHeader,
+            'x-dynamic-hop': 'should-be-stripped',
+            'x-unrelated': 'should-arrive',
+          },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', resolve);
+        },
+      );
+      req.on('error', reject);
+      req.end();
     });
 
+    expect(received['x-dynamic-hop']).toBeUndefined();
     expect(received['x-unrelated']).toBe('should-arrive');
   });
 
