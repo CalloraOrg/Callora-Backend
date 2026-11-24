@@ -1,5 +1,9 @@
 import express from 'express';
 import request from 'supertest';
+import { signTestToken, TEST_JWT_SECRET } from '../../../tests/helpers/jwt.js';
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../../middleware/requestId.js';
 import { createBillingPortalRouter, type PrismaClient, type PrismaInvoice } from './portal.js';
@@ -113,7 +117,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices')
-        .set('x-user-id', 'empty-user');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'empty-user' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual([]);
       expect(res.body.meta.hasMore).toBe(false);
@@ -127,7 +131,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(2);
       expect(res.body.data[0].invoiceNumber).toBe('INV-002');
@@ -142,7 +146,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].invoiceNumber).toBe('INV-001');
@@ -161,7 +165,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices?limit=2')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(2);
       expect(res.body.meta.limit).toBe(2);
@@ -177,7 +181,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices?status=paid')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(2);
       expect(res.body.data.every((i: Record<string, unknown>) => i.status === 'paid')).toBe(true);
@@ -187,7 +191,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices?limit=999')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
 
@@ -195,7 +199,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices?limit=-1')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
 
@@ -212,7 +216,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const page1 = await request(app)
         .get('/api/billing/portal/invoices?limit=2')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(page1.body.data).toHaveLength(2);
       expect(page1.body.meta.hasMore).toBe(true);
 
@@ -221,7 +225,7 @@ describe('Billing Portal Routes', () => {
 
       const page2 = await request(app)
         .get(`/api/billing/portal/invoices?limit=2&cursor=${encodeURIComponent(cursor)}`)
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(page2.status).toBe(200);
       expect(page2.body.data).toHaveLength(1);
       expect(page2.body.meta.hasMore).toBe(false);
@@ -232,7 +236,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices?cursor=invalid-cursor')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
 
@@ -240,7 +244,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices?status=invalid_status')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
   });
@@ -258,7 +262,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000099/line-items')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(404);
     });
 
@@ -268,7 +272,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000002/line-items')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(404);
     });
 
@@ -305,7 +309,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000001/line-items')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(2);
       expect(res.body.data[0].description).toBe('API calls');
@@ -324,7 +328,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000003/line-items')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual([]);
     });
@@ -343,7 +347,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000099/pdf')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(404);
     });
 
@@ -353,7 +357,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000002/pdf')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(404);
     });
 
@@ -379,7 +383,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000001/pdf')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('application/pdf');
       expect(res.headers['content-disposition']).toContain('INV-001');
@@ -410,7 +414,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000002/pdf')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       const pdfStr = (res.body as Buffer).toString('ascii');
       expect(pdfStr).toContain('Premium API');
@@ -429,7 +433,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       await request(app)
         .get(`/api/billing/portal/invoices/${invId}/pdf`)
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
 
       const updateMock = prisma.invoice.update as jest.Mock;
       expect(updateMock).toHaveBeenCalledWith({
@@ -534,7 +538,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/summary')
-        .set('x-user-id', 'empty-user');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'empty-user' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data.totalOutstanding).toBe('0');
       expect(res.body.data.totalPaid).toBe('0');
@@ -569,7 +573,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/summary')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data.totalOutstanding).toBe('100000000');
       expect(res.body.data.totalPaid).toBe('300000000');
@@ -595,7 +599,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/summary')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data.currentBillingPeriod.start).toBe('2026-02-01T00:00:00.000Z');
       expect(res.body.data.currentBillingPeriod.end).toBe('2026-02-28T00:00:00.000Z');
@@ -618,7 +622,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/summary')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data.lastPaymentDate).toBe('2026-02-15T00:00:00.000Z');
     });
@@ -640,7 +644,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/summary')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data.totalOutstanding).toBe('100');
       expect(res.body.data.invoiceCount).toBe(1);
@@ -660,7 +664,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000099')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(404);
     });
 
@@ -673,7 +677,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000002')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(404);
     });
 
@@ -713,7 +717,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000001')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data.id).toBe('00000000-0000-0000-0000-000000000001');
       expect(res.body.data.invoiceNumber).toBe('INV-001');
@@ -736,7 +740,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/00000000-0000-0000-0000-000000000003')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(200);
       expect(res.body.data.id).toBe('00000000-0000-0000-0000-000000000003');
       expect(res.body.data.lineItems).toEqual([]);
@@ -746,7 +750,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/not-a-uuid')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
   });
@@ -756,7 +760,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/not-a-uuid/line-items')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
 
@@ -764,7 +768,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices/not-a-uuid/pdf')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
 
@@ -772,7 +776,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(prisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices?limit=abc')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(400);
     });
 
@@ -783,7 +787,7 @@ describe('Billing Portal Routes', () => {
       const app = buildApp(brokenPrisma);
       const res = await request(app)
         .get('/api/billing/portal/invoices')
-        .set('x-user-id', 'user-a');
+        .set('Authorization', `Bearer ${signTestToken({ userId: 'user-a' })}`);
       expect(res.status).toBe(500);
     });
   });

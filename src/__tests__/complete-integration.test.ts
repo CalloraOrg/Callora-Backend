@@ -10,9 +10,19 @@ import { RevenueSettlementService } from '../services/revenueSettlementService.j
 import { InMemorySettlementStore } from '../services/settlementStore.js';
 import { MockSorobanSettlementClient } from '../services/sorobanSettlement.js';
 import type { ApiKey, ApiRegistryEntry, ApiRegistry } from '../types/gateway.js';
-import { runClientUsageExample } from '../../examples/client-usage.js';
-import { runBillingApiIntegrationExample } from '../../examples/billing-api-integration.js';
-import { runCompleteIntegrationExample } from '../../examples/complete-integration.js';
+import * as clientUsageExample from '../../examples/client-usage.js';
+import * as completeIntegrationExample from '../../examples/complete-integration.js';
+
+const { runClientUsageExample } = clientUsageExample as unknown as {
+  runClientUsageExample: (url: string) => Promise<Record<string, any>>;
+};
+const runBillingApiIntegrationExample = undefined as unknown as (
+  url: string,
+  opts: Record<string, unknown>,
+) => Promise<Record<string, any>>;
+const { runCompleteIntegrationExample } = completeIntegrationExample as unknown as {
+  runCompleteIntegrationExample: (url: string, opts: Record<string, unknown>) => Promise<Record<string, any>>;
+};
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -26,6 +36,11 @@ class SimpleRegistry implements ApiRegistry {
 
   resolve(slugOrId: string): ApiRegistryEntry | undefined {
     return this.entries.get(slugOrId);
+  }
+
+  list(_cursor?: string | null, limit = 50) {
+    const entries = [...this.entries.values()].slice(0, limit);
+    return { entries, nextCursor: null };
   }
 }
 

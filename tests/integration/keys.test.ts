@@ -9,6 +9,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import request from 'supertest';
+import { GenericContainer, Network, Wait, type StartedTestContainer } from 'testcontainers';
 import jwt from 'jsonwebtoken';
 
 jest.mock('better-sqlite3', () => {
@@ -34,10 +35,12 @@ import { createTestDb } from '../helpers/db.js';
 
 const TEST_JWT_SECRET = 'test-secret-key-for-e2e-integration-tests';
 
+  container: StartedTestContainer;
 interface TestUser {
   userId: string;
   walletAddress: string;
   developerId: number;
+let testContext!: TestContext;
 }
 
 /**
@@ -68,6 +71,7 @@ describe('API Keys Integration Tests (End-to-End)', () => {
   const prevCorsAllowMissingOrigin = process.env.CORS_ALLOW_MISSING_ORIGIN;
 
   beforeAll(async () => {
+      .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/));
     process.env.JWT_SECRET = TEST_JWT_SECRET;
     process.env.CORS_ALLOW_MISSING_ORIGIN = 'true';
 
@@ -187,6 +191,7 @@ describe('API Keys Integration Tests (End-to-End)', () => {
       delete process.env.CORS_ALLOW_MISSING_ORIGIN;
     } else {
       process.env.CORS_ALLOW_MISSING_ORIGIN = prevCorsAllowMissingOrigin;
+      await (testContext.container as unknown as { stop(): Promise<unknown> }).stop();
     }
   });
 

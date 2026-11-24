@@ -146,7 +146,7 @@ export function createPluginsRouter(deps: PluginRouterDeps = {}): Router {
         const isAdmin = Boolean((res.locals as { adminActor?: string }).adminActor);
         await repo.delete(req.params.id, actor!, isAdmin);
 
-        logger.audit('PLUGIN_DELETED', actor, { pluginId: req.params.id });
+        logger.audit('PLUGIN_DELETED', actor!, { pluginId: req.params.id });
 
         res.status(204).send();
       } catch (err) {

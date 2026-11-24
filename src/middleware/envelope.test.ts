@@ -156,7 +156,7 @@ describe('envelopeMiddleware + validator middleware stack (contract order)', () 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data).toBe('already-wrapped');
-    expect('data' in (res.body as { data?: unknown }).data).toBe(false);
+    expect(typeof res.body.data === 'object' && res.body.data !== null && 'data' in res.body.data).toBe(false);
   });
 
   it('wraps error-status responses with code+message into error envelope', async () => {

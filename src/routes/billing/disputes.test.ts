@@ -19,6 +19,10 @@ jest.mock('better-sqlite3', () => {
 
 import express from 'express';
 import request from 'supertest';
+import { signTestToken, TEST_JWT_SECRET } from '../../../tests/helpers/jwt.js';
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+
 import { errorHandler } from '../../middleware/errorHandler.js';
 import { createDisputesRouter } from './disputes.js';
 import {
@@ -199,7 +203,7 @@ describe('POST /api/billing/disputes', () => {
   it('returns 400 for invalid body', async () => {
     const res = await request(buildApp())
       .post('/api/billing/disputes')
-      .set('x-user-id', 'u1')
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'u1' })}`)
       .send({ reason: 'x' }); // missing usage_event_id
     expect(res.status).toBe(400);
   });
@@ -208,7 +212,7 @@ describe('POST /api/billing/disputes', () => {
     const { svc } = makeSvc();
     const res = await request(buildApp(svc))
       .post('/api/billing/disputes')
-      .set('x-user-id', 'u1')
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'u1' })}`)
       .send({ usage_event_id: 'evt-1', reason: 'wrong charge' });
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('OPEN');
@@ -220,7 +224,7 @@ describe('POST /api/billing/disputes', () => {
     svc.openDispute({ usage_event_id: 'evt-1', reason: 'x' }, 'u1');
     const res = await request(buildApp(svc))
       .post('/api/billing/disputes')
-      .set('x-user-id', 'u2')
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'u2' })}`)
       .send({ usage_event_id: 'evt-1', reason: 'y' });
     expect(res.status).toBe(409);
   });
@@ -238,7 +242,7 @@ describe('GET /api/billing/disputes', () => {
     svc.openDispute({ usage_event_id: 'e2', reason: 'y' }, 'u2');
     const res = await request(buildApp(svc))
       .get('/api/billing/disputes')
-      .set('x-user-id', 'u1');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'u1' })}`);
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
     expect(res.body.disputes[0].opened_by).toBe('u1');
@@ -258,7 +262,7 @@ describe('GET /api/billing/disputes/:id', () => {
     const d = svc.openDispute({ usage_event_id: 'e1', reason: 'x' }, 'u1');
     const res = await request(buildApp(svc))
       .get(`/api/billing/disputes/${d.id}`)
-      .set('x-user-id', 'u2');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'u2' })}`);
     expect(res.status).toBe(403);
   });
 
@@ -267,7 +271,7 @@ describe('GET /api/billing/disputes/:id', () => {
     const d = svc.openDispute({ usage_event_id: 'e1', reason: 'x' }, 'u1');
     const res = await request(buildApp(svc))
       .get(`/api/billing/disputes/${d.id}`)
-      .set('x-user-id', 'u1');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'u1' })}`);
     expect(res.status).toBe(200);
     expect(res.body.dispute.id).toBe(d.id);
     expect(Array.isArray(res.body.events)).toBe(true);
@@ -276,7 +280,7 @@ describe('GET /api/billing/disputes/:id', () => {
   it('returns 404 for unknown dispute', async () => {
     const res = await request(buildApp())
       .get('/api/billing/disputes/ghost')
-      .set('x-user-id', 'u1');
+      .set('Authorization', `Bearer ${signTestToken({ userId: 'u1' })}`);
     expect(res.status).toBe(404);
   });
 });

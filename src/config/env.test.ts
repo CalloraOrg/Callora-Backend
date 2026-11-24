@@ -393,7 +393,7 @@ describe('env schema — upstream host allowlist', () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toBe('api.example.com');
+      expect((result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS).toBe('api.example.com');
     }
   });
 
@@ -402,9 +402,10 @@ describe('env schema — upstream host allowlist', () => {
     const result = envSchema.safeParse({ ...baseEnv });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('127.0.0.1');
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('::1');
+      const hosts = (result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS;
+      expect(hosts).toContain('localhost');
+      expect(hosts).toContain('127.0.0.1');
+      expect(hosts).toContain('::1');
     }
   });
 
@@ -413,7 +414,7 @@ describe('env schema — upstream host allowlist', () => {
     const result = envSchema.safeParse({ ...baseEnv });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
+      expect((result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS).toContain('localhost');
     }
   });
 
@@ -425,7 +426,7 @@ describe('env schema — upstream host allowlist', () => {
     });
     expect(result.success).toBe((true));
     if (result.success) {
-      expect(result.data.UPSTREAM_ALLOWED_HOSTS).toEqual(['api.example.com', 'api2.example.com']);
+      expect((result.data as Record<string, unknown>).UPSTREAM_ALLOWED_HOSTS).toEqual(['api.example.com', 'api2.example.com']);
     }
   });
 
@@ -470,5 +471,40 @@ describe("environment template parity", () => {
     const missingKeys = [...referencedKeys].filter((key) => !documentedKeys.has(key));
 
     expect(missingKeys).toEqual([]);
+  });
+});
+
+describe('env schema — alert job toggles', () => {
+  it('defaults SLOW_QUERY_ALERTER_ENABLED and SLO_ALERT_ENABLED to undefined when omitted', () => {
+    const result = envSchema.safeParse({ ...baseEnv });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.SLOW_QUERY_ALERTER_ENABLED).toBeUndefined();
+      expect(result.data.SLO_ALERT_ENABLED).toBeUndefined();
+    }
+  });
+
+  it('parses explicit true and false values for SLOW_QUERY_ALERTER_ENABLED and SLO_ALERT_ENABLED', () => {
+    const enabled = envSchema.safeParse({
+      ...baseEnv,
+      SLOW_QUERY_ALERTER_ENABLED: 'true',
+      SLO_ALERT_ENABLED: 'true',
+    });
+    expect(enabled.success).toBe(true);
+    if (enabled.success) {
+      expect(enabled.data.SLOW_QUERY_ALERTER_ENABLED).toBe(true);
+      expect(enabled.data.SLO_ALERT_ENABLED).toBe(true);
+    }
+
+    const disabled = envSchema.safeParse({
+      ...baseEnv,
+      SLOW_QUERY_ALERTER_ENABLED: 'false',
+      SLO_ALERT_ENABLED: 'false',
+    });
+    expect(disabled.success).toBe(true);
+    if (disabled.success) {
+      expect(disabled.data.SLOW_QUERY_ALERTER_ENABLED).toBe(false);
+      expect(disabled.data.SLO_ALERT_ENABLED).toBe(false);
+    }
   });
 });
