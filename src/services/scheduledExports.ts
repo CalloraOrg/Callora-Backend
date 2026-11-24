@@ -57,8 +57,47 @@ export interface ScheduleStore {
   update(id: string, update: Partial<ExportSchedule>): Promise<ExportSchedule | undefined>;
 }
 
-interface StoredExportSchedule extends Omit<ExportSchedule, 's3SecretAccessKey'> {
+export interface StoredExportSchedule extends Omit<ExportSchedule, 's3SecretAccessKey'> {
   s3SecretAccessKey: string;
+}
+
+export function deriveScheduleEncryptionKey(encryptionKey: string): Buffer {
+  return crypto.createHash('sha256').update(encryptionKey).digest();
+}
+
+export function encryptSchedule(schedule: ExportSchedule, encryptionKey: Buffer): StoredExportSchedule {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(schedule.s3SecretAccessKey, 'utf8'),
+    cipher.final(),
+  ]);
+  const secret = [iv, cipher.getAuthTag(), encrypted]
+    .map((part) => part.toString('base64url'))
+    .join('.');
+  return { ...schedule, s3SecretAccessKey: `v1.${secret}` };
+}
+
+export function decryptSchedule(schedule: StoredExportSchedule, encryptionKey: Buffer): ExportSchedule {
+  const [version, ivEncoded, tagEncoded, encryptedEncoded] = schedule.s3SecretAccessKey.split('.');
+  if (version !== 'v1' || !ivEncoded || !tagEncoded || !encryptedEncoded) {
+    throw new Error('Stored export secret has an unsupported encrypted format.');
+  }
+  try {
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      encryptionKey,
+      Buffer.from(ivEncoded, 'base64url'),
+    );
+    decipher.setAuthTag(Buffer.from(tagEncoded, 'base64url'));
+    const secret = Buffer.concat([
+      decipher.update(Buffer.from(encryptedEncoded, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8');
+    return { ...schedule, s3SecretAccessKey: secret };
+  } catch {
+    throw new Error('Stored export secret has an unsupported encrypted format.');
+  }
 }
 
 export interface CreateScheduleInput {
@@ -160,63 +199,32 @@ export class InMemoryScheduleStore implements ScheduleStore {
   private readonly encryptionKey: Buffer;
 
   constructor(encryptionKey: string) {
-    this.encryptionKey = crypto.createHash('sha256').update(encryptionKey).digest();
+    this.encryptionKey = deriveScheduleEncryptionKey(encryptionKey);
   }
 
   async list(): Promise<ExportSchedule[]> {
     return [...this.schedules.values()]
-      .map((schedule) => this.decryptSchedule(schedule))
+      .map((schedule) => decryptSchedule(schedule, this.encryptionKey))
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
 
   async getById(id: string): Promise<ExportSchedule | undefined> {
     const schedule = this.schedules.get(id);
-    return schedule ? this.decryptSchedule(schedule) : undefined;
+    return schedule ? decryptSchedule(schedule, this.encryptionKey) : undefined;
   }
 
   async save(schedule: ExportSchedule): Promise<ExportSchedule> {
-    this.schedules.set(schedule.id, this.encryptSchedule(schedule));
+    this.schedules.set(schedule.id, encryptSchedule(schedule, this.encryptionKey));
     return schedule;
   }
 
   async update(id: string, update: Partial<ExportSchedule>): Promise<ExportSchedule | undefined> {
     const stored = this.schedules.get(id);
-    const current = stored ? this.decryptSchedule(stored) : undefined;
+    const current = stored ? decryptSchedule(stored, this.encryptionKey) : undefined;
     if (!current) return undefined;
     const next: ExportSchedule = { ...current, ...update, updatedAt: new Date() };
-    this.schedules.set(id, this.encryptSchedule(next));
+    this.schedules.set(id, encryptSchedule(next, this.encryptionKey));
     return next;
-  }
-
-  private encryptSchedule(schedule: ExportSchedule): StoredExportSchedule {
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', this.encryptionKey, iv);
-    const encrypted = Buffer.concat([
-      cipher.update(schedule.s3SecretAccessKey, 'utf8'),
-      cipher.final(),
-    ]);
-    const secret = [iv, cipher.getAuthTag(), encrypted]
-      .map((part) => part.toString('base64url'))
-      .join('.');
-    return { ...schedule, s3SecretAccessKey: `v1.${secret}` };
-  }
-
-  private decryptSchedule(schedule: StoredExportSchedule): ExportSchedule {
-    const [version, ivEncoded, tagEncoded, encryptedEncoded] = schedule.s3SecretAccessKey.split('.');
-    if (version !== 'v1' || !ivEncoded || !tagEncoded || !encryptedEncoded) {
-      throw new Error('Stored export secret has an unsupported encrypted format.');
-    }
-    const decipher = crypto.createDecipheriv(
-      'aes-256-gcm',
-      this.encryptionKey,
-      Buffer.from(ivEncoded, 'base64url'),
-    );
-    decipher.setAuthTag(Buffer.from(tagEncoded, 'base64url'));
-    const secret = Buffer.concat([
-      decipher.update(Buffer.from(encryptedEncoded, 'base64url')),
-      decipher.final(),
-    ]).toString('utf8');
-    return { ...schedule, s3SecretAccessKey: secret };
   }
 }
 
