@@ -34,7 +34,7 @@ export function createApp(
   app.use((req, res, next) => {
     const userId = req.headers['x-user-id'];
     if (typeof userId === 'string' && userId.length > 0) {
-      res.locals.authenticatedUser = { id: userId, email: `${userId}@example.com` };
+      res.locals.authenticatedUser = { id: userId };
     }
     next();
   });

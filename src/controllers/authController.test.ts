@@ -27,8 +27,8 @@ describe('AuthController — Wallet Login & Challenge Nonce', () => {
       findRefreshTokenById: jest.fn().mockResolvedValue(null),
       revokeRefreshToken: jest.fn().mockResolvedValue(true),
       revokeAllUserTokens: jest.fn().mockResolvedValue(1),
-      countActiveTokensByUser: jest.fn().mockResolvedValue(0),
-    };
+      countActiveTokens: jest.fn().mockResolvedValue(0),
+    } as unknown as jest.Mocked<RefreshTokenRepository>;
 
     mockUserRepo = {
       create: jest.fn().mockImplementation(({ stellarAddress }: { stellarAddress: string }) =>

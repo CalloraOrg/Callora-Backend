@@ -4,7 +4,8 @@ import { validateStorageEndpoint } from "../lib/storageEndpoint.js";
 import type { UsageEventsRepository } from "../repositories/usageEventsRepository.js";
 import { HmacObjectStorageClient, InMemoryScheduleStore, ScheduledExportsService } from "./scheduledExports.js";
 import { PostgresScheduleStore, type ScheduleStoreQueryable } from "./postgresScheduleStore.js";
-import { InMemoryExportStore, ReportExporterService } from "./reportExporter.js";
+import { InMemoryExportStore, ReportExporterService, type DeveloperExportStore } from "./reportExporter.js";
+import { PostgresExportStore } from "./postgresExportStore.js";
 
 export interface CreateAppExportsOptions {
   pool?: ScheduleStoreQueryable;
@@ -13,6 +14,22 @@ export interface CreateAppExportsOptions {
 export function createAppExports(
   usageEventsRepository: UsageEventsRepository,
   options?: CreateAppExportsOptions,
+) {
+/**
+ * Demo mode and tests keep export records in memory. Other deployments persist
+ * them, so export history survives a restart and a day cannot be exported
+ * twice across instances.
+ */
+function defaultExportStore(): DeveloperExportStore {
+  return config.demoMode || process.env.NODE_ENV === "test"
+    ? new InMemoryExportStore()
+    : new PostgresExportStore();
+}
+
+  exportStore: DeveloperExportStore = defaultExportStore(),
+) {
+}
+
 ) {
   const getExportEvents = async () => {
     const events = await usageEventsRepository.getEvents?.();
@@ -65,7 +82,7 @@ export function createAppExports(
           },
         },
         objectStorageClient,
-        new InMemoryExportStore(),
+        exportStore,
         {
           s3Bucket: exportConfig.bucket!,
           s3Endpoint: exportEndpoint!,

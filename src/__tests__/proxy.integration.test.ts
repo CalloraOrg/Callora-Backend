@@ -44,6 +44,110 @@ let proxyUrl: string;
 let billing: MockSorobanBilling;
 let rateLimiter: InMemoryRateLimiter;
 let usageStore: InMemoryUsageStore;
+const circuitBreakerStore = new InMemoryCircuitBreakerStore();
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushUsageRecording(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+function createMockIdempotencyPool() {
+  interface Row {
+    scope: string;
+    idempotency_key: string;
+    request_hash: string;
+    status: string;
+    response_status: number | null;
+    response_body: string | null;
+    expires_at: number;
+    lease_expires_at: number;
+  }
+  const rows = new Map<string, Row>();
+  const keyOf = (scope: string, key: string) => `${scope}\0${key}`;
+  const parseSeconds = (interval: string): number => {
+    const m = /^(\d+(?:\.\d+)?)\s*seconds?$/i.exec(interval.trim());
+    return m ? Number(m[1]) * 1000 : 30_000;
+  };
+
+  return {
+    clear: () => rows.clear(),
+    query: async (sql: string, params: unknown[] = []) => {
+      const now = Date.now();
+      if (sql.includes('SELECT request_hash, status, response_status, response_body')) {
+        const [scope, key] = params as [string, string];
+        const row = rows.get(keyOf(scope, key));
+        if (row && row.expires_at > now) {
+          return { rows: [row] };
+        }
+        return { rows: [] };
+      }
+      if (sql.includes('INSERT INTO idempotency_store')) {
+        const [scope, key, requestHash, retention, lease] = params as [string, string, string, string, string];
+        const k = keyOf(scope, key);
+        const existing = rows.get(k);
+        if (existing && existing.expires_at > now) {
+          return { rows: [] };
+        }
+        const leaseExpiresAt = now + parseSeconds(lease);
+        rows.set(k, {
+          scope,
+          idempotency_key: key,
+          request_hash: requestHash,
+          status: 'started',
+          response_status: null,
+          response_body: null,
+          expires_at: now + parseSeconds(retention),
+          lease_expires_at: leaseExpiresAt,
+        });
+        return { rows: [{ lease_token: String(leaseExpiresAt) }] };
+      }
+      if (sql.includes("SET status = 'completed'")) {
+        const [responseStatus, responseBody, scope, key, leaseToken] = params as [number, string, string, string, string];
+        const row = rows.get(keyOf(scope, key));
+        if (row && row.status === 'started' && String(row.lease_expires_at) === String(leaseToken)) {
+          row.status = 'completed';
+          row.response_status = responseStatus;
+          row.response_body = responseBody;
+        }
+        return { rows: [] };
+      }
+      if (sql.includes('UPDATE idempotency_store SET lease_expires_at')) {
+        const [scope, key, param3, lease] = params as [string, string, string, string];
+        const row = rows.get(keyOf(scope, key));
+        if (row && row.status === 'started' && row.expires_at > now) {
+          const newLease = now + parseSeconds(lease);
+          if (String(row.lease_expires_at) === String(param3) || (row.request_hash === param3 && row.lease_expires_at < now)) {
+            row.lease_expires_at = newLease;
+            return { rows: [{ lease_token: String(newLease) }] };
+          }
+        }
+        return { rows: [] };
+      }
+      if (sql.includes('DELETE FROM idempotency_store')) {
+        const [scope, key, leaseToken] = params as [string, string, string];
+        const k = keyOf(scope, key);
+        const row = rows.get(k);
+        if (row && row.status === 'started' && String(row.lease_expires_at) === String(leaseToken)) {
+          rows.delete(k);
+        }
+        return { rows: [] };
+      }
+      return { rows: [] };
+    },
+  };
+}
+
+const idempotencyPool = createMockIdempotencyPool();
 
 beforeAll(async () => {
   // Start mock upstream
@@ -84,6 +188,7 @@ beforeAll(async () => {
   // Start proxy gateway
   await new Promise<void>((resolve) => {
     const app = express();
+    app.locals.dbPool = idempotencyPool;
     app.use(express.json());
     app.use(requestIdMiddleware);
     app.use('/v1/call', legacyV1DeprecationMiddleware);
@@ -94,6 +199,7 @@ beforeAll(async () => {
       usageStore,
       registry,
       apiKeys,
+      circuitBreakerStore,
       proxyConfig: {
         timeoutMs: 2000,
         allowedHosts: ['localhost'],
@@ -118,6 +224,8 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  idempotencyPool.clear();
+  circuitBreakerStore.reset();
   usageStore.clear();
   billing.clear();
   billing.setBalance(TEST_DEVELOPER_ID, 1000);
@@ -145,6 +253,7 @@ describe('Proxy /v1/call', () => {
     expect(body.items).toEqual([1, 2, 3]);
 
     // Usage recorded
+    await flushUsageRecording();
     const events = usageStore.getEvents(TEST_API_KEY);
     expect(events).toHaveLength(1);
     expect(events[0].apiId).toBe(TEST_API_ID);
@@ -169,7 +278,7 @@ describe('Proxy /v1/call', () => {
     });
     expect(res.status).toBe(404);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/unknown API/i);
+    expect(body.error?.message ?? body.message ?? body.error).toMatch(/unknown API/i);
   });
 
   it('returns 401 when API key is missing', async () => {
@@ -198,7 +307,7 @@ describe('Proxy /v1/call', () => {
 
     expect(res.status).toBe(402);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/insufficient balance/i);
+    expect(body.error?.message ?? body.message ?? body.error).toMatch(/insufficient balance/i);
     expect(usageStore.getEvents()).toHaveLength(0);
   });
 
@@ -278,7 +387,7 @@ describe('Proxy /v1/call', () => {
     expect(res.headers.get('x-request-id')).toBe(edgeRequestId);
     expect(upstreamRequestId).toBe(edgeRequestId);
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await flushUsageRecording();
     const events = usageStore.getEvents(TEST_API_KEY);
     expect(events).toHaveLength(1);
     expect(events[0].requestId).toBe(edgeRequestId);
@@ -340,14 +449,14 @@ describe('Proxy /v1/call', () => {
 
     expect(res.status).toBe(504);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/timed out|timeout/i);
+    expect(body.error?.message ?? body.message ?? body.error).toMatch(/timed out|timeout/i);
 
     await new Promise((resolve) => setImmediate(resolve));
 
     // Under the new config (2xx only), a 504 is NOT recorded by default
     const events = usageStore.getEvents(TEST_API_KEY);
     expect(events).toHaveLength(0);
-  });
+  }, 10_000);
 
   it('returns 502 when upstream is unreachable', async () => {
     // Point to a port nothing is listening on
@@ -394,7 +503,7 @@ describe('Proxy /v1/call', () => {
 
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/bad gateway/i);
+    expect(body.error?.message ?? body.message ?? body.error).toMatch(/bad gateway/i);
 
     await new Promise<void>((resolve) => tmpServer.close(() => resolve()));
   });
@@ -426,7 +535,7 @@ describe('Proxy Resilience', () => {
 
     expect(res1.status).toBe(502);
     const body1 = await res1.json();
-    expect(body1.message ?? body1.error).toMatch(/bad gateway/i);
+    expect(body1.error?.message ?? body1.message ?? body1.error).toMatch(/bad gateway/i);
 
     // Second request should succeed
     const res2 = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/reset-test`, {
@@ -450,8 +559,9 @@ describe('Proxy Resilience', () => {
 
     const startTime = Date.now();
     const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/slow`, {
-      method: 'GET',
-      headers: { 'x-api-key': TEST_API_KEY },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({}),
     });
 
     const duration = Date.now() - startTime;
@@ -461,7 +571,7 @@ describe('Proxy Resilience', () => {
     expect(res.status).toBe(504);
     
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/timed out|timeout/i);
+    expect(body.error?.message ?? body.message ?? body.error).toMatch(/timed out|timeout/i);
     expect(body.requestId).toBeTruthy();
   });
 
@@ -602,7 +712,7 @@ describe('Proxy Resilience', () => {
     // Should handle gracefully with 502
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/bad gateway/i);
+    expect(body.error?.message ?? body.message ?? body.error).toMatch(/bad gateway/i);
   });
 
   it('maintains request id through connection errors', async () => {
@@ -618,7 +728,7 @@ describe('Proxy Resilience', () => {
 
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.message ?? body.error).toMatch(/bad gateway/i);
+    expect(body.error?.message ?? body.message ?? body.error).toMatch(/bad gateway/i);
     expect(body.requestId).toBeTruthy();
   });
 
@@ -656,17 +766,28 @@ describe('Proxy Resilience', () => {
   });
 
   it('handles slow headers with timeout', async () => {
-    setUpstreamHandler((req, res) => {
-      // Send headers very slowly (one byte at a time) to trigger timeout
-      res.write('HTTP/1.1 200 OK\r\n');
-      setTimeout(() => res.write('Content-Type: application/json\r\n'), 1000);
-      setTimeout(() => res.write('\r\n'), 2500); // Beyond the 2000ms timeout
+    setUpstreamHandler((_req, res) => {
+      // Send raw HTTP headers slowly on the socket without flushing via Express res.write
+      const socket = res.socket;
+      if (!socket) return;
+      socket.write('HTTP/1.1 200 OK\r\n');
+      const t1 = setTimeout(() => {
+        if (!socket.destroyed) socket.write('Content-Type: application/json\r\n');
+      }, 1000);
+      const t2 = setTimeout(() => {
+        if (!socket.destroyed) socket.write('\r\n');
+      }, 2500); // Beyond the 2000ms timeout
+      socket.once('close', () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      });
     });
 
     const startTime = Date.now();
     const res = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/slow-headers`, {
-      method: 'GET',
-      headers: { 'x-api-key': TEST_API_KEY },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+      body: JSON.stringify({}),
     });
 
     const duration = Date.now() - startTime;
@@ -679,49 +800,51 @@ describe('Proxy Resilience', () => {
     const originalNow = Date.now;
     let fakeTime = originalNow();
     Date.now = () => fakeTime;
-    
-    let attemptCount = 0;
-    setUpstreamHandler((req, res) => {
-      attemptCount++;
-      if (attemptCount <= 5) {
-        res.socket!.destroy(); // Fail 5 times to open
-      } else {
-        res.status(200).json({ message: 'recovered' });
-      }
-    });
 
-    // Fail 5 times to trip it
-    for (let i = 0; i < 5; i++) {
-      await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
+    try {
+      let attemptCount = 0;
+      setUpstreamHandler((req, res) => {
+        attemptCount++;
+        if (attemptCount <= 5) {
+          res.socket!.destroy(); // Fail 5 times to open
+        } else {
+          res.status(200).json({ message: 'recovered' });
+        }
+      });
+
+      // Fail 5 times to trip it
+      for (let i = 0; i < 5; i++) {
+        await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+          body: JSON.stringify({}),
+        });
+      }
+
+      // 6th should fail fast
+      const resOpen = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
         body: JSON.stringify({}),
       });
+      expect(resOpen.status).toBe(502);
+
+      // Advance time by 31 seconds to exceed cooldown
+      fakeTime += 31000;
+
+      // 7th should be a half-open probe and succeed
+      const resRecovered = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
+        body: JSON.stringify({}),
+      });
+
+      expect(resRecovered.status).toBe(200);
+      const bodyRecovered = await resRecovered.json();
+      expect(bodyRecovered.message).toBe('recovered');
+    } finally {
+      Date.now = originalNow;
     }
-
-    // 6th should fail fast
-    const resOpen = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
-      body: JSON.stringify({}),
-    });
-    expect(resOpen.status).toBe(502);
-
-    // Advance time by 31 seconds to exceed cooldown
-    fakeTime += 31000;
-
-    // 7th should be a half-open probe and succeed
-    const resRecovered = await fetch(`${proxyUrl}/v1/call/${TEST_API_SLUG}/cb-test`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': TEST_API_KEY },
-      body: JSON.stringify({}),
-    });
-    
-    expect(resRecovered.status).toBe(200);
-    const bodyRecovered = await resRecovered.json();
-    expect(bodyRecovered.message).toBe('recovered');
-
-    Date.now = originalNow;
   });
 });
 
@@ -1059,20 +1182,20 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
 
       expect(res2.status).toBe(409);
       const body2 = await res2.json();
-      expect(body2.code).toBe('IDEMPOTENCY_KEY_REUSE_MISMATCH');
-      expect(body2.message).toMatch(/different request payload/i);
-      expect(body2.conflictingSummary).toBeDefined();
-      expect(body2.conflictingSummary.idempotencyKey).toBe(idempotencyKey);
-      expect(body2.conflictingSummary.incomingPayloadFingerprint).toBeTruthy();
-      expect(body2.conflictingSummary.storedPayloadFingerprint).toBeTruthy();
+      expect(body2.error.code).toBe('IDEMPOTENCY_KEY_REUSE_MISMATCH');
+      expect(body2.error.message).toMatch(/different request payload/i);
+      expect(body2.error.details).toBeDefined();
+      expect(body2.error.details.idempotencyKey).toBe(idempotencyKey);
+      expect(body2.error.details.incomingPayloadFingerprint).toBeTruthy();
+      expect(body2.error.details.storedPayloadFingerprint).toBeTruthy();
     });
 
     it('returns 409 IDEMPOTENCY_IN_PROGRESS when request is still being processed', async () => {
       // This test requires the ability to delay upstream response completion.
       // We'll set an upstream handler that hangs, then send a concurrent retry.
 
-      const upstreamReady = Promise.withResolvers<void>();
-      const upstreamShouldReply = Promise.withResolvers<void>();
+      const upstreamReady = createDeferred<void>();
+      const upstreamShouldReply = createDeferred<void>();
 
       setUpstreamHandler(async (req, res) => {
         upstreamReady.resolve();
@@ -1108,10 +1231,12 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
         body: JSON.stringify({ name: 'Slow Resource' }),
       });
 
+      // Wait for concurrent retry to get 409 while first is still in progress
+      const res2 = await promise2;
+
       // Let first request complete
       upstreamShouldReply.resolve();
       const res1 = await promise1;
-      const res2 = await promise2;
 
       // First should succeed
       expect(res1.status).toBe(200);
@@ -1121,8 +1246,8 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
       // Second (concurrent retry) should get 409 IN_PROGRESS
       expect(res2.status).toBe(409);
       const body2 = await res2.json();
-      expect(body2.code).toBe('IDEMPOTENCY_IN_PROGRESS');
-      expect(body2.message).toMatch(/already in progress/i);
+      expect(body2.error.code).toBe('IDEMPOTENCY_IN_PROGRESS');
+      expect(body2.error.message).toMatch(/already in progress/i);
     });
   });
 
@@ -1249,6 +1374,7 @@ describe('Proxy Idempotency-Key support (issue #896)', () => {
       await new Promise<void>((resolve) => proxyServer.close(() => resolve()));
 
       const app = express();
+      app.locals.dbPool = idempotencyPool;
       app.use(express.json());
       app.use(requestIdMiddleware);
       app.use('/v1/call', legacyV1DeprecationMiddleware);

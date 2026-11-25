@@ -64,12 +64,12 @@ export interface PluginRecord {
 // ---------------------------------------------------------------------------
 
 export interface PluginRepository {
-  list(): PluginRecord[];
-  findById(id: string): PluginRecord | undefined;
-  register(manifest: PluginManifest, ownerId: string): PluginRecord;
-  install(id: string, userId: string): PluginRecord;
-  uninstall(id: string, userId: string): PluginRecord;
-  delete(id: string, requesterId: string, isAdmin?: boolean): void;
+  list(): Promise<PluginRecord[]>;
+  findById(id: string): Promise<PluginRecord | undefined>;
+  register(manifest: PluginManifest, ownerId: string): Promise<PluginRecord>;
+  install(id: string, userId: string): Promise<PluginRecord>;
+  uninstall(id: string, userId: string): Promise<PluginRecord>;
+  delete(id: string, requesterId: string, isAdmin?: boolean): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,15 +79,15 @@ export interface PluginRepository {
 export class InMemoryPluginRepository implements PluginRepository {
   private readonly store = new Map<string, PluginRecord>();
 
-  list(): PluginRecord[] {
+  async list(): Promise<PluginRecord[]> {
     return Array.from(this.store.values());
   }
 
-  findById(id: string): PluginRecord | undefined {
+  async findById(id: string): Promise<PluginRecord | undefined> {
     return this.store.get(id);
   }
 
-  register(manifest: PluginManifest, ownerId: string): PluginRecord {
+  async register(manifest: PluginManifest, ownerId: string): Promise<PluginRecord> {
     if (this.store.has(manifest.id)) {
       throw new ConflictError(`Plugin '${manifest.id}' is already registered`, 'CONFLICT');
     }
@@ -103,7 +103,7 @@ export class InMemoryPluginRepository implements PluginRepository {
     return record;
   }
 
-  install(id: string, userId: string): PluginRecord {
+  async install(id: string, userId: string): Promise<PluginRecord> {
     const record = this.store.get(id);
     if (!record) {
       throw new NotFoundError(`Plugin '${id}' not found`);
@@ -121,7 +121,7 @@ export class InMemoryPluginRepository implements PluginRepository {
     return updated;
   }
 
-  uninstall(id: string, userId: string): PluginRecord {
+  async uninstall(id: string, userId: string): Promise<PluginRecord> {
     const record = this.store.get(id);
     if (!record) {
       throw new NotFoundError(`Plugin '${id}' not found`);
@@ -139,7 +139,7 @@ export class InMemoryPluginRepository implements PluginRepository {
     return updated;
   }
 
-  delete(id: string, requesterId: string, isAdmin = false): void {
+  async delete(id: string, requesterId: string, isAdmin = false): Promise<void> {
     const record = this.store.get(id);
     if (!record) {
       throw new NotFoundError(`Plugin '${id}' not found`);
