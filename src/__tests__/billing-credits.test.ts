@@ -28,7 +28,7 @@ jest.mock('../logger.js', () => ({
 
 import { defaultCreditsRepository } from '../repositories/creditsRepository.js';
 
-const mockCreditsRepository = defaultCreditsRepository as {
+const mockCreditsRepository = defaultCreditsRepository as unknown as {
   findByUserId: jest.Mock;
   getOrCreateByUserId: jest.Mock;
   updateBalance: jest.Mock;

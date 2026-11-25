@@ -1272,6 +1272,35 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "description": "Number of seconds to wait before retrying",
+                "schema": {
+                  "type": "integer",
+                  "example": 60
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "summary": "Too many requests",
+                    "value": {
+                      "code": "TOO_MANY_REQUESTS",
+                      "message": "Too many requests",
+                      "requestId": "req-abc123"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -128,8 +128,8 @@ describe('/api/admin — response schema stability', () => {
 
     mockFindUsers.mockResolvedValue({
       users: [
-        { id: 'user-admin', email: 'admin@callora.test', role: 'admin' },
-        { id: 'user-dev', email: 'dev@callora.test', role: 'developer' },
+        { id: 'user-admin' } as any,
+        { id: 'user-dev' } as any,
       ],
       total: 2,
     });

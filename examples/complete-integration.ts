@@ -81,6 +81,11 @@ class SimpleRegistry implements ApiRegistry {
   resolve(slugOrId: string): ApiRegistryEntry | undefined {
     return this.entries.get(slugOrId);
   }
+
+  list(_cursor?: string | null, limit = 50) {
+    const entries = [...this.entries.values()].slice(0, limit);
+    return { entries, nextCursor: null };
+  }
 }
 
 const apiRegistry = new SimpleRegistry();

@@ -126,6 +126,16 @@ Use `createReportExporterWorker(service, { intervalMs, maxCatchUpDays })` to sta
 
 ---
 
+## Postgres store
+
+Outside demo mode and tests, `createAppExports` uses `PostgresExportStore` (`src/services/postgresExportStore.ts`). It keeps export metadata in `developer_exports` and per-day claim state in `developer_export_claims`, created by migration `0033_developer_export_claims`. Apply that migration before enabling exports.
+
+- `claimDay` is a single statement, so two instances cannot both claim the same developer and day.
+- Saving the same developer and S3 key again replaces the existing row.
+- Expired records are filtered on read, as in the in-memory store.
+
+Verify the Postgres behaviour against a real database by setting `DATABASE_URL` and running `exportStoreContract.test.ts`. Without it, that suite runs the in-memory store only.
+
 ## In-memory adapter for testing
 
 `InMemoryExportStore` from `src/services/reportExporter.ts` implements `DeveloperExportStore` using a `Map`. It can be used in unit and integration tests without a real database:

@@ -1,6 +1,8 @@
 import express from 'express';
 import type { Server } from 'node:http';
 import { createGatewayRouter } from '../routes/gatewayRoutes.js';
+import { errorHandler } from '../middleware/errorHandler.js';
+import { requestIdMiddleware } from '../middleware/requestId.js';
 import { MockSorobanBilling } from '../services/billingService.js';
 import { InMemoryRateLimiter } from '../services/rateLimiter.js';
 import { InMemoryUsageStore } from '../services/usageStore.js';
@@ -65,6 +67,7 @@ beforeAll(async () => {
 
     const app = express();
     app.use(express.json());
+    app.use(requestIdMiddleware);
 
     const gatewayRouter = createGatewayRouter({
       billing,
@@ -74,6 +77,7 @@ beforeAll(async () => {
       apiKeys,
     });
     app.use('/api/gateway', gatewayRouter);
+    app.use(errorHandler);
 
     gatewayServer = app.listen(0, () => {
       const addr = gatewayServer.address();
@@ -147,8 +151,8 @@ describe('Gateway Proxy Integration', () => {
     expect(res.status).toBe(402);
 
     const body = await res.json();
-    expect(body.error).toMatch(/insufficient balance/i);
-    expect(body.balance).toBe(0);
+    expect(body.error.code).toBe('PAYMENT_REQUIRED');
+    expect(body.error.message).toMatch(/insufficient balance/i);
 
     // No usage event should be recorded
     const events = usageStore.getEvents(TEST_API_KEY);
@@ -171,7 +175,8 @@ describe('Gateway Proxy Integration', () => {
     expect(res.status).toBe(429);
 
     const body = await res.json();
-    expect(body.error).toMatch(/too many requests/i);
+    expect(body.error.code).toBe('TOO_MANY_REQUESTS');
+    expect(body.error.message).toMatch(/too many requests/i);
 
     // Retry-After header should be present
     const retryAfter = res.headers.get('retry-after');
@@ -256,14 +261,14 @@ describe('Gateway Proxy Integration', () => {
       expect(res.headers.get('content-type')).toMatch(/application\/json/);
 
       const body = await res.json();
-      expect(body.error).toBe('Gateway Timeout');
+      expect(body.error.code).toBe('GATEWAY_TIMEOUT');
+      expect(body.error.message).toMatch(/timed out/i);
       expect(body.requestId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
       );
 
       const events = usageStore.getEvents(TEST_API_KEY);
-      expect(events).toHaveLength(1);
-      expect(events[0].statusCode).toBe(504);
+      expect(events).toHaveLength(0);
     } finally {
       timeoutSpy.mockRestore();
     }

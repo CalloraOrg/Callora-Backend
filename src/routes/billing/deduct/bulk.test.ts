@@ -150,7 +150,15 @@ describe('Bulk Deduct API', () => {
   });
 
   it('routes the batch through deductBulk and returns aggregate results', async () => {
-    mockPool.query.mockResolvedValue({ rows: [], rowCount: 1 } as never);
+    mockPool.query.mockImplementation((sql: string) => {
+      if (typeof sql === 'string' && sql.includes('INSERT INTO idempotency_store')) {
+        return Promise.resolve({
+          rows: [{ lease_token: '2099-01-01 00:00:00.000000' }],
+          rowCount: 1,
+        } as never);
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 } as never);
+    });
     const deductBulkSpy = jest.spyOn(BillingService.prototype, 'deductBulk').mockResolvedValue({
       success: true,
       entryCount: 2,

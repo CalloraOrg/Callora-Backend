@@ -184,7 +184,7 @@ describe('DepositController', () => {
     it('should return 401 when user is not authenticated', async () => {
       // Arrange
       mockReq.body = validRequest;
-      mockRes.locals = { authenticatedUser: null };
+      mockRes.locals = { authenticatedUser: undefined };
 
       // Act
       await depositController.prepareDeposit(mockReq as Request, mockRes as Response);

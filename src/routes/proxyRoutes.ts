@@ -12,6 +12,7 @@ import {
 } from '../metrics.js';
 import { createMapBackedGatewayApiKeyAuthMiddleware } from '../middleware/gatewayApiKeyAuth.js';
 import { createConfiguredGatewayRateLimitMiddleware } from '../middleware/gatewayRateLimit.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { buildHopByHopSet } from '../lib/hopByHop.js';
 import {
   buildUpstreamTargetUrl,
@@ -138,10 +139,37 @@ export function createProxyRouter(deps: ProxyDeps): Router {
   const gatewayRateLimitMiddleware = deps.gatewayRateLimitMiddleware
     ?? createConfiguredGatewayRateLimitMiddleware(deps.rateLimiter);
 
+  const drainGuard = (_req: Request, res: Response, next: NextFunction): void => {
+    if (drainState?.isDraining()) {
+      res.set('Connection', 'close');
+      res.set('Retry-After', '0');
+      next(new ServiceUnavailableError('Service is draining; please retry on another instance'));
+      return;
+    }
+    next();
+  };
+
+  const idempotencyForProxy = (req: Request, res: Response, next: NextFunction): void => {
+    if (req.apiKeyRecord?.userId && !res.locals.authenticatedUser) {
+      res.locals.authenticatedUser = { id: req.apiKeyRecord.userId };
+    }
+    void idempotencyMiddleware(req, res, next, {
+      keyFromHeader: 'idempotency-key',
+      retentionSeconds: env.IDEMPOTENCY_RETENTION_WINDOW_SECONDS,
+      bodyExcludingKeys: ['idempotencyKey'],
+    });
+  };
+
   // Use a param of 0 to capture the wildcard path (everything after the slug)
-  router.all('/:apiSlugOrId/*', authMiddleware, gatewayRateLimitMiddleware, handleProxy);
+  // POST and PATCH routes get idempotency protection; GET/DELETE are naturally safe.
+  router.post('/:apiSlugOrId/*', drainGuard, authMiddleware, gatewayRateLimitMiddleware, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId/*', drainGuard, authMiddleware, gatewayRateLimitMiddleware, idempotencyForProxy, handleProxy);
+  router.post('/:apiSlugOrId', drainGuard, authMiddleware, gatewayRateLimitMiddleware, idempotencyForProxy, handleProxy);
+  router.patch('/:apiSlugOrId', drainGuard, authMiddleware, gatewayRateLimitMiddleware, idempotencyForProxy, handleProxy);
+
+  router.all('/:apiSlugOrId/*', drainGuard, authMiddleware, gatewayRateLimitMiddleware, handleProxy);
   // Also handle requests without a trailing path (e.g. /v1/call/my-api)
-  router.all('/:apiSlugOrId', authMiddleware, gatewayRateLimitMiddleware, handleProxy);
+  router.all('/:apiSlugOrId', drainGuard, authMiddleware, gatewayRateLimitMiddleware, handleProxy);
 
   async function handleProxy(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

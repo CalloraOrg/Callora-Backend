@@ -63,6 +63,11 @@ import {
   createSorobanBillingService,
   type SorobanBillingDependencies,
 } from "./services/createSorobanBillingService.js";
+import {
+  defaultPluginRepository,
+  type PluginRepository,
+} from "./services/pluginRegistry.js";
+import { PostgresPluginRepository } from "./services/postgresPluginRepository.js";
 //import * as OpenApiValidator from 'express-openapi-validator';
 
 interface AppDependencies extends SorobanBillingDependencies {
@@ -72,6 +77,7 @@ interface AppDependencies extends SorobanBillingDependencies {
   vaultReader?: VaultStateReader;
   apiRepository?: ApiRepository;
   developerRepository?: DeveloperRepository;
+  pluginRepository?: PluginRepository;
   findDeveloperByUserId?: (userId: string) => Promise<Developer | undefined>;
   createApiWithEndpoints?: (input: CreateApiInput) => Promise<ApiWithEndpoints>;
 }
@@ -105,7 +111,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     dependencies?.vaultRepository ?? new InMemoryVaultRepository();
   const lookupDeveloper = dependencies?.findDeveloperByUserId ?? findByUserId;
   const persistApi = dependencies?.createApiWithEndpoints ?? createApi;
-  const { reportExporterService, scheduledExportsService } = createAppExports(usageEventsRepository);
+  const { reportExporterService, scheduledExportsService } = createAppExports(
+    usageEventsRepository,
+    { pool: config.demoMode ? undefined : pool },
+  );
   const apiRepository = dependencies?.apiRepository ?? defaultApiRepository;
   const developerRepository =
     dependencies?.developerRepository ?? defaultDeveloperRepository;
@@ -164,7 +173,12 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
     }),
   );
 
-  app.use("/api/marketplace/plugins", createPluginsRouter());
+  const pluginRepository =
+    dependencies?.pluginRepository ??
+    (!config.demoMode && config.databaseUrl
+      ? new PostgresPluginRepository(pool)
+      : defaultPluginRepository);
+  app.use("/api/marketplace/plugins", createPluginsRouter({ pluginRepository }));
   app.use("/api/gateway", createGatewayHealthRouter());
 
   // Webhook management routes

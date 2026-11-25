@@ -388,7 +388,7 @@ describe("ApiKeyRepository Security Tests", () => {
       // Revoke the key
       const keys = apiKeyRepository.listForTesting();
       const keyToRevoke = keys.find(k => k.userId === userId)!;
-      const revokeResult = apiKeyRepository.revoke(keyToRevoke.id, userId);
+      const revokeResult = await apiKeyRepository.revoke(keyToRevoke.id, userId);
       expect(revokeResult).toBe('success');
 
       // Verify the flag is set
@@ -451,7 +451,7 @@ describe("ApiKeyRepository Security Tests", () => {
       }
 
       // Revoke one key
-      apiKeyRepository.revoke(createdKeys[1].id, createdKeys[1].userId);
+      await apiKeyRepository.revoke(createdKeys[1].id, createdKeys[1].userId);
 
       // Verify final state
       expect(await apiKeyRepository.verify(createdKeys[0].key)).toBeTruthy(); // Rotated key

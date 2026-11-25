@@ -113,6 +113,9 @@ the code disagree.
 | 5 | `webhook-dispatcher` | `stopWebhookDispatching` / `awaitWebhookDispatcherIdle` | Webhook deliveries still queued or in flight. |
 | 6 | `settlement-reconciliation` | `settlementReconJob` | The settlement reconciliation run in progress (see [Settlement reconciliation worker](./settlement-reconciliation-worker.md)). |
 | 7 | `monthly-invoice` | `monthlyInvoiceJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `MONTHLY_INVOICE_JOB_ENABLED` is enabled and `DEMO_MODE` is false) | The monthly invoice generation run in progress. |
+| 8 | `slo-alert` | `sloAlertJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `SLO_ALERT_ENABLED` is true or `SLO_ALERT_WEBHOOK_URL` and `SLO_ROUTE_CONFIGS` are set) | The SLO burn-rate evaluation tick in progress. |
+| 9 | `anomaly-detector` | `anomalyDetectorJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `USAGE_ANOMALY_DETECTOR_ENABLED` is true) | The usage anomaly scan tick in progress. |
+| 10 | `slow-query-alerter` | `slowQueryAlerterJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `SLOW_QUERY_ALERTER_ENABLED` is true or `SLOW_QUERY_ALERT_WEBHOOK_URL` is set) | The slow-query polling tick in progress. |
 
 ### Revenue ledger indexer bootstrap
 
@@ -132,26 +135,17 @@ scheduler or crash the server.
 ### Jobs that are cancelled, not drained
 
 `closeAllDataResources` — passed to the handler as the `closeDatabase` callback —
-calls `stop()` on every background job it can reach. Four of those jobs are
-**not** members of `shutdownSubsystems`, so their `stop()` runs in Phase 6, after
-the drain window, and no `awaitIdle()` is ever performed for them:
+calls `stop()` on every background job it can reach. `settlement-status-sync` is
+**not** a member of `shutdownSubsystems`, so its `stop()` runs in Phase 6, after
+the drain window, and no `awaitIdle()` is ever performed for it:
 
 | Job | Constructed when | Why it is not drained |
 |---|---|---|
 | `settlement-status-sync` | always | `stop()` clears the polling timer. The job type exposes only `stop()` — there is no `beginShutdown()` / `awaitIdle()` pair to register. |
-| `anomaly-detector` | `config.usageAnomalyDetector.enabled` (`USAGE_ANOMALY_DETECTOR_ENABLED`) | Poller whose tick is bounded by DB query timeouts; the job is constructed but never added to `shutdownSubsystems`. |
-| `slo-alert` | `SLO_ALERT_WEBHOOK_URL` is set **and** at least one `SLO_ROUTE_CONFIGS` entry exists | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
-| `slow-query-alerter` | `SLOW_QUERY_ALERT_WEBHOOK_URL` is set | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
 
-`anomaly-detector`, `slo-alert` and `slow-query-alerter` do
-expose `beginShutdown()` / `awaitIdle()` and could be appended to
-`shutdownSubsystems` without changing the handler. That is a runtime behaviour
-change with its own review, not a documentation fix, so this document records
-the behaviour that is actually shipped today.
-
-`revenue-ledger-indexer`, `idempotency-sweeper` and `settlement-reconciliation`
-appear in both places: they are drained in Phase 4 and then `stop()`ped
-idempotently in Phase 6.
+`revenue-ledger-indexer`, `idempotency-sweeper`, `settlement-reconciliation`,
+`slo-alert`, `anomaly-detector`, and `slow-query-alerter` are drained in Phase 4
+via `beginShutdown()` / `awaitIdle()`.
 
 ### Trackers that exist but are not wired
 

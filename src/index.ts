@@ -63,7 +63,7 @@ async function startServer(): Promise<void> {
       config,
     });
     // Create and start the background jobs (if enabled)
-    const shutdownSubsystems: DrainableSubsystem[] = [];
+    const shutdownSubsystems: DrainableSubsystem[] = [...subsystems];
 
     const revenueLedgerIndexer = startRevenueLedgerIndexerJob({
       settings: config.revenueLedgerIndexer,
@@ -106,7 +106,6 @@ async function startServer(): Promise<void> {
         },
       );
       settlementSyncJob.start();
-      const sweeperJob = createIdempotencySweeperJob(pool, {
       console.log(
         `[settlementStatusSync] Started with interval ${config.settlementSync.intervalMs}ms (lock key: ${SETTLEMENT_STATUS_SYNC_LOCK_KEY})`,
       );
@@ -115,10 +114,8 @@ async function startServer(): Promise<void> {
         name: "settlement-status-sync",
         beginShutdown: () => {
           settlementSyncJob.beginShutdown();
-          sweeperJob.beginShutdown();
         },
         awaitIdle: () => settlementSyncJob.awaitIdle(),
-        awaitIdle: () => sweeperJob.awaitIdle(),
       });
     }
 
