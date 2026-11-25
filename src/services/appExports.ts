@@ -28,6 +28,9 @@ function defaultExportStore(): DeveloperExportStore {
 
   exportStore: DeveloperExportStore = defaultExportStore(),
 ) {
+}
+
+) {
   const getExportEvents = async () => {
     const events = await usageEventsRepository.getEvents?.();
     if (!events) {
