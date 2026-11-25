@@ -61,6 +61,7 @@ export const coreSettings = {
       .split(",")
       .map((host) => host.trim())
       .filter(Boolean),
+    notificationHealthUrl: env.EXPORTS_NOTIFICATION_HEALTH_URL,
   },
 
   proxy: {

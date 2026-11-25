@@ -147,6 +147,12 @@ export const executionEnvironmentFields = {
     .positive()
     .default(86400000),
 
+  // Exports notification health probe (optional; skipped when unset)
+  EXPORTS_NOTIFICATION_HEALTH_URL: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
+
   // ────────────────────────────────────────────────────────────────────────
   // SLO burn-rate alerting (issue #706)
   //

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { BillingUsageEvent } from '../repositories/usageEventsRepository.pg.js';
-import { eventsToCsv, eventsToJson, type ObjectStorageClient } from './scheduledExports.js';
+import { eventsToCsv, eventsToJson, type ExportWorkerStatus, type ObjectStorageClient } from './scheduledExports.js';
 import { logger } from '../logger.js';
 
 export interface DeveloperExportRecord {
@@ -242,7 +242,18 @@ export class ReportExporterService {
   }
 }
 
-export interface ReportExporterWorker { start(): void; stop(): void; awaitIdle(): Promise<void> }
+export interface ReportExporterWorker {
+  start(): void;
+  stop(): void;
+  awaitIdle(): Promise<void>;
+  getWorkerStatus(): ExportWorkerStatus;
+}
+
+let activeReportExporterWorker: ReportExporterWorker | null = null;
+
+export function getReportExporterWorkerStatus(): ExportWorkerStatus | null {
+  return activeReportExporterWorker ? activeReportExporterWorker.getWorkerStatus() : null;
+}
 
 function utcDay(date: Date): string { return date.toISOString().slice(0, 10); }
 
@@ -254,8 +265,13 @@ export function createReportExporterWorker(
   const maxCatchUpDays = opts.maxCatchUpDays ?? 7;
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<DeveloperExportRecord[]> | null = null;
+  let startedAt: Date | null = null;
+  let lastTickAt: Date | null = null;
+  let lastError: string | null = null;
+
   const tick = async (): Promise<void> => {
     if (running) return;
+    lastTickAt = new Date();
     const today = new Date();
     const lastCompleteDay = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - DAY_MS);
     const days: string[] = [];
@@ -267,12 +283,48 @@ export function createReportExporterWorker(
       for (const day of days) records.push(...await service.runDailyExports(day));
       return records;
     })();
-    try { await running; } catch (error) { log.error('report exporter worker failed', error); }
-    finally { running = null; }
+    try {
+      await running;
+      lastError = null;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      log.error('report exporter worker failed', error);
+    } finally {
+      lastTickAt = new Date();
+      running = null;
+    }
   };
-  return {
-    start() { if (timer) return; void tick(); timer = setInterval(() => void tick(), opts.intervalMs); },
-    stop() { if (!timer) return; clearInterval(timer); timer = null; },
-    async awaitIdle() { if (running) await running.catch(() => undefined); },
+
+  const worker: ReportExporterWorker = {
+    start() {
+      if (timer) return;
+      startedAt = new Date();
+      void tick();
+      timer = setInterval(() => void tick(), opts.intervalMs);
+    },
+    stop() {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = null;
+    },
+    async awaitIdle() {
+      if (running) await running.catch(() => undefined);
+    },
+    getWorkerStatus(): ExportWorkerStatus {
+      const now = Date.now();
+      return {
+        name: 'reportExporter',
+        state: timer !== null ? 'running' : 'stopped',
+        intervalMs: opts.intervalMs,
+        inFlight: running !== null,
+        startedAt,
+        lastTickAt,
+        lastTickAgeMs: lastTickAt ? Math.max(0, now - lastTickAt.getTime()) : null,
+        lastError,
+      };
+    },
   };
+
+  activeReportExporterWorker = worker;
+  return worker;
 }
