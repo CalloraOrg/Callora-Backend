@@ -21,6 +21,32 @@ function makeConfig(
       enabled: true,
       intervalMs: 60_000,
     },
+    sloAlert: {
+      enabled: false,
+      explicitlyEnabled: false,
+      webhookUrl: undefined,
+      pollIntervalMs: 300_000,
+      dedupWindowMs: 86_400_000,
+      observationWindowMs: 345_600_000,
+      configs: [],
+    },
+    usageAnomalyDetector: {
+      enabled: false,
+      explicitlyEnabled: false,
+      multiplier: 5,
+      pollIntervalMs: 300_000,
+      windowMs: 300_000,
+      baselineWindows: 12,
+      dedupWindowMs: 300_000,
+    },
+    slowQueryAlerter: {
+      enabled: false,
+      explicitlyEnabled: false,
+      webhookUrl: undefined,
+      p95ThresholdMs: 500,
+      pollIntervalMs: 300_000,
+      dedupWindowMs: 3_600_000,
+    },
     ...overrides,
   };
 }
@@ -195,6 +221,243 @@ describe("startBackgroundJobs", () => {
     expect(exitCode).toBe(0);
     expect(events).toEqual(["invoiceRunComplete", "closeDatabase"]);
   });
+
+  it("creates no timers or subsystems when all toggles are off", () => {
+    const createMonthlyInvoice = jest.fn(() => makeFakeJob());
+    const createSloAlert = jest.fn(() => makeFakeJob());
+    const initSloRecorder = jest.fn();
+    const createAnomalyDetector = jest.fn(() => makeFakeJob());
+    const createSlowQueryAlerter = jest.fn(() => makeFakeJob());
+    const setIntervalSpy = jest.spyOn(globalThis, "setInterval");
+
+    const handle = startBackgroundJobs({
+      pool: mockPool,
+      config: makeConfig({
+        monthlyInvoiceJob: { enabled: false, intervalMs: 60_000 },
+      }),
+      logger: { log: jest.fn(), warn: jest.fn() },
+      createMonthlyInvoice,
+      createSloAlert,
+      initSloRecorder,
+      createAnomalyDetector,
+      createSlowQueryAlerter,
+    });
+
+    expect(createMonthlyInvoice).not.toHaveBeenCalled();
+    expect(createSloAlert).not.toHaveBeenCalled();
+    expect(initSloRecorder).not.toHaveBeenCalled();
+    expect(createAnomalyDetector).not.toHaveBeenCalled();
+    expect(createSlowQueryAlerter).not.toHaveBeenCalled();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(handle.subsystems).toEqual([]);
+    expect(handle.sloAlertJob).toBeNull();
+    expect(handle.anomalyDetectorJob).toBeNull();
+    expect(handle.slowQueryAlerterJob).toBeNull();
+  });
+
+  it("starts sloAlert, anomalyDetector, and slowQueryAlerter once when enabled and drains them on shutdown", async () => {
+    const fakeSloJob = makeFakeJob();
+    const fakeAnomalyJob = makeFakeJob();
+    const fakeSlowQueryJob = makeFakeJob();
+
+    const createSloAlert = jest.fn(() => fakeSloJob);
+    const initSloRecorder = jest.fn();
+    const createAnomalyDetector = jest.fn(() => fakeAnomalyJob);
+    const createSlowQueryAlerter = jest.fn(() => fakeSlowQueryJob);
+    const log = jest.fn();
+
+    const routeConfigs = [
+      { method: "POST", route: "/api/billing/deduct", maxErrorRate: 0.01 },
+    ];
+
+    const handle = startBackgroundJobs({
+      pool: mockPool,
+      config: makeConfig({
+        monthlyInvoiceJob: { enabled: false, intervalMs: 60_000 },
+        sloAlert: {
+          enabled: true,
+          explicitlyEnabled: true,
+          webhookUrl: "https://alerts.example.com/slo",
+          pollIntervalMs: 300_000,
+          dedupWindowMs: 86_400_000,
+          observationWindowMs: 345_600_000,
+          configs: routeConfigs,
+        },
+        usageAnomalyDetector: {
+          enabled: true,
+          explicitlyEnabled: true,
+          multiplier: 5,
+          pollIntervalMs: 300_000,
+          windowMs: 300_000,
+          baselineWindows: 12,
+          dedupWindowMs: 300_000,
+        },
+        slowQueryAlerter: {
+          enabled: true,
+          explicitlyEnabled: true,
+          webhookUrl: "https://alerts.example.com/slow-query",
+          p95ThresholdMs: 500,
+          pollIntervalMs: 300_000,
+          dedupWindowMs: 3_600_000,
+        },
+      }),
+      logger: { log, warn: jest.fn() },
+      initSloRecorder,
+      createSloAlert,
+      createAnomalyDetector,
+      createSlowQueryAlerter,
+    });
+
+    expect(initSloRecorder).toHaveBeenCalledWith({
+      configs: routeConfigs,
+      observationWindowMs: 345_600_000,
+    });
+    expect(createSloAlert).toHaveBeenCalledWith({
+      webhookUrl: "https://alerts.example.com/slo",
+      pollIntervalMs: 300_000,
+      dedupWindowMs: 86_400_000,
+      observationWindowMs: 345_600_000,
+    });
+    expect(createAnomalyDetector).toHaveBeenCalledWith(mockPool, {
+      intervalMs: 300_000,
+      config: {
+        multiplier: 5,
+        windowMs: 300_000,
+        baselineWindows: 12,
+      },
+      dedupWindowMs: 300_000,
+    });
+    expect(createSlowQueryAlerter).toHaveBeenCalledWith(mockPool, {
+      webhookUrl: "https://alerts.example.com/slow-query",
+      p95ThresholdMs: 500,
+      pollIntervalMs: 300_000,
+      dedupWindowMs: 3_600_000,
+    });
+
+    expect(fakeSloJob.start).toHaveBeenCalledTimes(1);
+    expect(fakeAnomalyJob.start).toHaveBeenCalledTimes(1);
+    expect(fakeSlowQueryJob.start).toHaveBeenCalledTimes(1);
+
+    expect(handle.sloAlertJob).toBe(fakeSloJob);
+    expect(handle.anomalyDetectorJob).toBe(fakeAnomalyJob);
+    expect(handle.slowQueryAlerterJob).toBe(fakeSlowQueryJob);
+    expect(handle.subsystems.map((s) => s.name)).toEqual([
+      "slo-alert",
+      "anomaly-detector",
+      "slow-query-alerter",
+    ]);
+
+    for (const subsystem of handle.subsystems) {
+      subsystem.beginShutdown();
+      await subsystem.awaitIdle();
+    }
+
+    expect(fakeSloJob.beginShutdown).toHaveBeenCalledTimes(1);
+    expect(fakeSloJob.awaitIdle).toHaveBeenCalledTimes(1);
+    expect(fakeAnomalyJob.beginShutdown).toHaveBeenCalledTimes(1);
+    expect(fakeAnomalyJob.awaitIdle).toHaveBeenCalledTimes(1);
+    expect(fakeSlowQueryJob.beginShutdown).toHaveBeenCalledTimes(1);
+    expect(fakeSlowQueryJob.awaitIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws a clear boot error when an explicitly enabled job is misconfigured", () => {
+    expect(() =>
+      startBackgroundJobs({
+        pool: mockPool,
+        config: makeConfig({
+          monthlyInvoiceJob: { enabled: false, intervalMs: 60_000 },
+          slowQueryAlerter: {
+            enabled: true,
+            explicitlyEnabled: true,
+            webhookUrl: "",
+            p95ThresholdMs: 500,
+            pollIntervalMs: 300_000,
+            dedupWindowMs: 3_600_000,
+          },
+        }),
+        logger: { log: jest.fn(), warn: jest.fn() },
+      }),
+    ).toThrow("[slowQueryAlerter] Invalid configuration: webhookUrl is required");
+
+    expect(() =>
+      startBackgroundJobs({
+        pool: mockPool,
+        config: makeConfig({
+          monthlyInvoiceJob: { enabled: false, intervalMs: 60_000 },
+          sloAlert: {
+            enabled: true,
+            explicitlyEnabled: true,
+            webhookUrl: "https://alerts.example.com/slo",
+            pollIntervalMs: 300_000,
+            dedupWindowMs: 86_400_000,
+            observationWindowMs: 345_600_000,
+            configs: [],
+          },
+        }),
+        logger: { log: jest.fn(), warn: jest.fn() },
+      }),
+    ).toThrow(
+      "[sloAlert] Invalid configuration: SLO_ROUTE_CONFIGS must be non-empty when SLO alert job is enabled",
+    );
+
+    expect(() =>
+      startBackgroundJobs({
+        pool: mockPool,
+        config: makeConfig({
+          monthlyInvoiceJob: { enabled: false, intervalMs: 60_000 },
+          usageAnomalyDetector: {
+            enabled: true,
+            explicitlyEnabled: true,
+            multiplier: 5,
+            pollIntervalMs: 0,
+            windowMs: 300_000,
+            baselineWindows: 12,
+            dedupWindowMs: 300_000,
+          },
+        }),
+        logger: { log: jest.fn(), warn: jest.fn() },
+      }),
+    ).toThrow("[anomalyDetector] Invalid configuration: intervalMs must be a positive integer");
+  });
+
+  it("logs and skips a misconfigured job when not explicitly enabled", () => {
+    const warn = jest.fn();
+
+    const handle = startBackgroundJobs({
+      pool: mockPool,
+      config: makeConfig({
+        monthlyInvoiceJob: { enabled: false, intervalMs: 60_000 },
+        slowQueryAlerter: {
+          enabled: true,
+          explicitlyEnabled: false,
+          webhookUrl: "",
+          p95ThresholdMs: 500,
+          pollIntervalMs: 300_000,
+          dedupWindowMs: 3_600_000,
+        },
+        sloAlert: {
+          enabled: true,
+          explicitlyEnabled: false,
+          webhookUrl: "",
+          pollIntervalMs: 300_000,
+          dedupWindowMs: 86_400_000,
+          observationWindowMs: 345_600_000,
+          configs: [{ method: "GET", route: "/health", maxErrorRate: 0.05 }],
+        },
+      }),
+      logger: { log: jest.fn(), warn },
+    });
+
+    expect(handle.slowQueryAlerterJob).toBeNull();
+    expect(handle.sloAlertJob).toBeNull();
+    expect(handle.subsystems).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("[sloAlert] Skipping due to invalid configuration:"),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("[slowQueryAlerter] Skipping due to invalid configuration:"),
+    );
+  });
 });
 jest.mock('better-sqlite3', () => {
   return class MockDatabase {
@@ -214,10 +477,12 @@ import {
 import { startRevenueLedgerIndexerJob } from './jobs.js';
 
 function makeFakeJob(overrides: Partial<RevenueLedgerIndexerJob> = {}): RevenueLedgerIndexerJob {
+  return {
     start: jest.fn(),
     stop: jest.fn(),
     beginShutdown: jest.fn(),
-    awaitIdle: jest.fn().mockResolvedValue(undefined),
+    awaitIdle: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    ...overrides,
   };
 }
 
@@ -226,11 +491,13 @@ const settings = { enabled: true, intervalMs: 30_000, batchSize: 100 };
 describe('startRevenueLedgerIndexerJob', () => {
   it('starts the job and exposes a drainable subsystem', async () => {
     const job = makeFakeJob();
+    const log = jest.fn();
 
     const started = startRevenueLedgerIndexerJob({
       settings,
       demoMode: false,
       createJob: () => job,
+      logger: { log },
     });
 
     assert.ok(started);

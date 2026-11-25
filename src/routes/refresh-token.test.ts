@@ -555,4 +555,3 @@ describe('POST /api/refresh-token — graceful shutdown drain', () => {
     expect(closeDatabase).toHaveBeenCalledTimes(1);
   });
 });
-

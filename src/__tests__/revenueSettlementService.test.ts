@@ -364,7 +364,7 @@ describe('RevenueSettlementService', () => {
 
     const emitCall = mockedEmit.mock.calls[0];
     expect(emitCall[0]).toBe('settlement_completed');
-    const payload = emitCall[2] as Record<string, unknown>;
+    const payload = emitCall[2] as unknown as Record<string, unknown>;
     expect(typeof payload.amount).toBe('string');
     expect(payload.amount).toBe('7.0000001');
   });

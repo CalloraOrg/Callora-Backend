@@ -96,6 +96,10 @@ export const executionEnvironmentFields = {
     .default(5000),
 
   // Slow query alerting
+  SLOW_QUERY_ALERTER_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   SLOW_QUERY_ALERT_WEBHOOK_URL: z.string().url().optional(),
   SLOW_QUERY_P95_THRESHOLD_MS: z.coerce.number().positive().default(500),
   SLOW_QUERY_POLL_INTERVAL_MS: z.coerce

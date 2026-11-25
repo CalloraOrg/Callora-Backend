@@ -60,7 +60,7 @@ export class InMemoryUsageStore implements UsageAdminStore {
 
   getEvents(apiKey?: string): UsageEvent[] {
     if (apiKey) {
-      return this.events.filter((e) => e.apiKey === apiKey);
+      return this.events.filter((e) => e.apiKey === apiKey || e.apiKeyId === apiKey);
     }
     return [...this.events];
   }

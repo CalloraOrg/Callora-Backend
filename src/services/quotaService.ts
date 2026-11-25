@@ -1,7 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
+import { config } from '../config/index.js';
 import { logger } from '../logger.js';
 import { NotFoundError, ConflictError, BadRequestError } from '../errors/index.js';
 import { quotasCache } from './quotasCacheWarm.js';
+import { PostgresQuotaRequestStore } from './postgresQuotaRequestStore.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -98,13 +100,24 @@ let storeInstance: QuotaRequestStore | undefined;
 
 export function getQuotaRequestStore(): QuotaRequestStore {
   if (!storeInstance) {
-    storeInstance = new InMemoryQuotaRequestStore();
+    const usePostgres =
+      !config.demoMode &&
+      process.env.NODE_ENV !== 'test' &&
+      Boolean(process.env.DATABASE_URL);
+    storeInstance = usePostgres
+      ? new PostgresQuotaRequestStore()
+      : new InMemoryQuotaRequestStore();
   }
   return storeInstance;
 }
 
 export function setQuotaRequestStore(store: QuotaRequestStore): void {
   storeInstance = store;
+  quotasCache.invalidateAll();
+}
+
+export function resetQuotaRequestStore(): void {
+  storeInstance = undefined;
   quotasCache.invalidateAll();
 }
 
@@ -378,6 +391,8 @@ export async function bulkUpdateQuotaRequests(
       success: true,
     });
   }
+
+  quotasCache.invalidateAll();
 
   return {
     results,

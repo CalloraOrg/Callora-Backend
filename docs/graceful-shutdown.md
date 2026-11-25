@@ -96,6 +96,9 @@ between environments:
 5. webhook-dispatcher
 6. settlement-reconciliation
 7. monthly-invoice
+8. slo-alert
+9. anomaly-detector
+10. slow-query-alerter
 ```
 <!-- shutdown-subsystem-order:end -->
 
@@ -113,6 +116,9 @@ the code disagree.
 | 5 | `webhook-dispatcher` | `stopWebhookDispatching` / `awaitWebhookDispatcherIdle` | Webhook deliveries still queued or in flight. |
 | 6 | `settlement-reconciliation` | `settlementReconJob` | The settlement reconciliation run in progress (see [Settlement reconciliation worker](./settlement-reconciliation-worker.md)). |
 | 7 | `monthly-invoice` | `monthlyInvoiceJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `MONTHLY_INVOICE_JOB_ENABLED` is enabled and `DEMO_MODE` is false) | The monthly invoice generation run in progress. |
+| 8 | `slo-alert` | `sloAlertJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `SLO_ALERT_ENABLED` is true or `SLO_ALERT_WEBHOOK_URL` and `SLO_ROUTE_CONFIGS` are set) | The SLO burn-rate evaluation tick in progress. |
+| 9 | `anomaly-detector` | `anomalyDetectorJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `USAGE_ANOMALY_DETECTOR_ENABLED` is true) | The usage anomaly scan tick in progress. |
+| 10 | `slow-query-alerter` | `slowQueryAlerterJob` (via `startBackgroundJobs` in `src/lifecycle/jobs.ts` when `SLOW_QUERY_ALERTER_ENABLED` is true or `SLOW_QUERY_ALERT_WEBHOOK_URL` is set) | The slow-query polling tick in progress. |
 
 ### Revenue ledger indexer bootstrap
 
@@ -132,26 +138,17 @@ scheduler or crash the server.
 ### Jobs that are cancelled, not drained
 
 `closeAllDataResources` — passed to the handler as the `closeDatabase` callback —
-calls `stop()` on every background job it can reach. Four of those jobs are
-**not** members of `shutdownSubsystems`, so their `stop()` runs in Phase 6, after
-the drain window, and no `awaitIdle()` is ever performed for them:
+calls `stop()` on every background job it can reach. `settlement-status-sync` is
+**not** a member of `shutdownSubsystems`, so its `stop()` runs in Phase 6, after
+the drain window, and no `awaitIdle()` is ever performed for it:
 
 | Job | Constructed when | Why it is not drained |
 |---|---|---|
 | `settlement-status-sync` | always | `stop()` clears the polling timer. The job type exposes only `stop()` — there is no `beginShutdown()` / `awaitIdle()` pair to register. |
-| `anomaly-detector` | `config.usageAnomalyDetector.enabled` (`USAGE_ANOMALY_DETECTOR_ENABLED`) | Poller whose tick is bounded by DB query timeouts; the job is constructed but never added to `shutdownSubsystems`. |
-| `slo-alert` | `SLO_ALERT_WEBHOOK_URL` is set **and** at least one `SLO_ROUTE_CONFIGS` entry exists | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
-| `slow-query-alerter` | `SLOW_QUERY_ALERT_WEBHOOK_URL` is set | Poller whose tick posts a single webhook; the job is constructed but never added to `shutdownSubsystems`. |
 
-`anomaly-detector`, `slo-alert` and `slow-query-alerter` do
-expose `beginShutdown()` / `awaitIdle()` and could be appended to
-`shutdownSubsystems` without changing the handler. That is a runtime behaviour
-change with its own review, not a documentation fix, so this document records
-the behaviour that is actually shipped today.
-
-`revenue-ledger-indexer`, `idempotency-sweeper` and `settlement-reconciliation`
-appear in both places: they are drained in Phase 4 and then `stop()`ped
-idempotently in Phase 6.
+`revenue-ledger-indexer`, `idempotency-sweeper`, `settlement-reconciliation`,
+`slo-alert`, `anomaly-detector`, and `slow-query-alerter` are drained in Phase 4
+via `beginShutdown()` / `awaitIdle()`.
 
 ### Trackers that exist but are not wired
 
@@ -187,7 +184,8 @@ The shutdown process follows these phases:
 ### Phase 2: Subsystems Stopping
 - Call `beginShutdown()` on all registered subsystems, in array order
   (`gateway-proxy`, `refresh-token`, `revenue-ledger-indexer`,
-  `idempotency-sweeper`, `webhook-dispatcher`, `settlement-reconciliation`)
+  `idempotency-sweeper`, `webhook-dispatcher`, `settlement-reconciliation`,
+  `monthly-invoice`, `slo-alert`, `anomaly-detector`, `slow-query-alerter`)
 - Subsystems stop accepting new work but continue processing in-flight operations
 - Log each subsystem as it stops
 
@@ -207,10 +205,8 @@ The shutdown process follows these phases:
 
 ### Phase 6: Database Closing (with final job cancellation)
 - Cancel every background job this process started, including the ones that are
-  not registered drain subsystems — `settlement-status-sync`,
-  `slow-query-alerter` (conditional), `anomaly-detector` (conditional),
-  `monthly-invoice`, `slo-alert` (conditional) — plus a second, idempotent
-  `stop()` for the jobs already drained in Phase 4
+  not registered drain subsystems — `settlement-status-sync` — plus a second,
+  idempotent `stop()` for the jobs already drained in Phase 4
 - Close all database connection pools:
   - Drizzle ORM connections
   - PostgreSQL connection pool
@@ -266,11 +262,10 @@ The handler resolves with an exit code and `src/index.ts` forwards it to
 | `0` | All registered subsystems stopped and drained within the window, the HTTP server closed without error, and `closeDatabase()` succeeded. |
 | `1` | The HTTP server `close` callback reported an error, **or** a subsystem `beginShutdown()` threw, **or** the subsystem drain timed out / an `awaitIdle()` rejected, **or** `closeDatabase()` threw, **or** an unexpected error escaped the orchestration. |
 
-`0` is a drain guarantee for the six registered subsystems only. The jobs
-listed under
-[Jobs that are cancelled, not drained](#jobs-that-are-cancelled-not-drained) are
-cancelled in Phase 6, after the window, without waiting for their in-flight tick,
-so a `0` exit does not mean those ticks ran to completion.
+`0` is a drain guarantee for the registered subsystems only. The job listed under
+[Jobs that are cancelled, not drained](#jobs-that-are-cancelled-not-drained) is
+cancelled in Phase 6, after the window, without waiting for its in-flight tick,
+so a `0` exit does not mean that tick ran to completion.
 
 ## Usage
 
@@ -408,10 +403,10 @@ The shutdown handler emits structured log messages for each phase:
 
 ```
 [shutdown:signal_received] Received SIGTERM, initiating graceful shutdown
-[shutdown:subsystems_stopping] Stopping 6 subsystem(s): gateway-proxy, refresh-token, revenue-ledger-indexer, idempotency-sweeper, webhook-dispatcher, settlement-reconciliation
+[shutdown:subsystems_stopping] Stopping 10 subsystem(s): gateway-proxy, refresh-token, revenue-ledger-indexer, idempotency-sweeper, webhook-dispatcher, settlement-reconciliation, monthly-invoice, slo-alert, anomaly-detector, slow-query-alerter
 [shutdown:subsystems_stopping] Stopped subsystem: gateway-proxy
 [shutdown:server_closing] Closing HTTP server
-[shutdown:subsystems_draining] Draining 6 subsystem(s) (timeout: 30000ms)
+[shutdown:subsystems_draining] Draining 10 subsystem(s) (timeout: 30000ms)
 [shutdown:subsystems_draining] Drained subsystem: gateway-proxy
 [shutdown:database_closing] Closing database pools
 [shutdown:database_closing] Database pools closed successfully

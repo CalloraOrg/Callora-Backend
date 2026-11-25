@@ -43,6 +43,34 @@ function makeRepo() {
  * Asserts that fn throws an error whose .name matches errorName.
  * We avoid `instanceof` to sidestep CJS/ESM prototype-chain issues in ts-jest.
  */
+async function assertRejectsName(
+  fn: () => Promise<unknown>,
+  errorName: string,
+  msgFragment?: string,
+): Promise<void> {
+  let threw = false;
+  let caught: unknown;
+  try {
+    await fn();
+  } catch (err) {
+    threw = true;
+    caught = err;
+  }
+  assert.ok(threw, `Expected function to reject with ${errorName}, but it did not`);
+  const err = caught as Error;
+  assert.equal(
+    err.name,
+    errorName,
+    `Expected error.name to be "${errorName}", got "${err.name}"`,
+  );
+  if (msgFragment) {
+    assert.ok(
+      err.message.includes(msgFragment),
+      `Expected error.message to include "${msgFragment}", got: "${err.message}"`,
+    );
+  }
+}
+
 function assertThrowsName(fn: () => unknown, errorName: string, msgFragment?: string): void {
   let threw = false;
   let caught: unknown;
@@ -250,10 +278,11 @@ describe('pluginManifestSchema', () => {
 // ---------------------------------------------------------------------------
 
 describe('InMemoryPluginRepository.register', () => {
-  test('registers a new plugin and returns a record with status "available"', () => {
+  test('registers a new plugin and returns a record with status "available"', async () => {
     const repo = makeRepo();
     const manifest = makeManifest();
-    const record = repo.register(manifest);
+    const record = repo.register(manifest, 'owner-1');
+    const record = await repo.register(manifest, 'owner-1');
 
     assert.equal(record.manifest.id, 'test-plugin');
     assert.equal(record.status, 'available');
@@ -262,50 +291,55 @@ describe('InMemoryPluginRepository.register', () => {
     assert.ok(record.created_at);
   });
 
-  test('newly registered plugin is returned by list()', () => {
+  test('newly registered plugin is returned by list()', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'plugin-a' }));
-    repo.register(makeManifest({ id: 'plugin-b' }));
+    repo.register(makeManifest({ id: 'plugin-a' }), 'owner-1');
+    repo.register(makeManifest({ id: 'plugin-b' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'plugin-a' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'plugin-b' }), 'owner-1');
 
-    const list = repo.list();
+    const list = await repo.list();
     assert.equal(list.length, 2);
     assert.ok(list.some((r) => r.manifest.id === 'plugin-a'));
     assert.ok(list.some((r) => r.manifest.id === 'plugin-b'));
   });
 
-  test('findById returns the registered plugin', () => {
+  test('findById returns the registered plugin', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'find-me' }));
-    const found = repo.findById('find-me');
+    repo.register(makeManifest({ id: 'find-me' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'find-me' }), 'owner-1');
+    const found = await repo.findById('find-me');
     assert.ok(found);
     assert.equal(found.manifest.id, 'find-me');
   });
 
-  test('findById returns undefined for unknown id', () => {
+  test('findById returns undefined for unknown id', async () => {
     const repo = makeRepo();
-    const found = repo.findById('does-not-exist');
+    const found = await repo.findById('does-not-exist');
     assert.equal(found, undefined);
   });
 
-  test('throws ConflictError when registering a duplicate id', () => {
+  test('throws ConflictError when registering a duplicate id', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'dup-plugin' }));
-    assertThrowsName(
-      () => repo.register(makeManifest({ id: 'dup-plugin' })),
+    repo.register(makeManifest({ id: 'dup-plugin' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'dup-plugin' }), 'owner-1');
+    await assertRejectsName(
+      () => repo.register(makeManifest({ id: 'dup-plugin' }), 'owner-1'),
       'ConflictError',
       'dup-plugin',
     );
   });
 
-  test('created_at is a valid ISO-8601 string', () => {
+  test('created_at is a valid ISO-8601 string', async () => {
     const repo = makeRepo();
-    const record = repo.register(makeManifest());
+    const record = repo.register(makeManifest(), 'owner-1');
+    const record = await repo.register(makeManifest(), 'owner-1');
     assert.ok(!isNaN(Date.parse(record.created_at)), 'created_at should be valid ISO-8601');
   });
 
-  test('list() returns empty array when no plugins are registered', () => {
+  test('list() returns empty array when no plugins are registered', async () => {
     const repo = makeRepo();
-    assert.deepEqual(repo.list(), []);
+    assert.deepEqual(await repo.list(), []);
   });
 });
 
@@ -314,10 +348,11 @@ describe('InMemoryPluginRepository.register', () => {
 // ---------------------------------------------------------------------------
 
 describe('InMemoryPluginRepository.install', () => {
-  test('transitions plugin status from "available" to "installed"', () => {
+  test('transitions plugin status from "available" to "installed"', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'installable' }));
-    const record = repo.install('installable', 'user-1');
+    repo.register(makeManifest({ id: 'installable' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'installable' }), 'owner-1');
+    const record = await repo.install('installable', 'user-1');
 
     assert.equal(record.status, 'installed');
     assert.equal(record.installed_by, 'user-1');
@@ -325,35 +360,38 @@ describe('InMemoryPluginRepository.install', () => {
     assert.ok(!isNaN(Date.parse(record.installed_at!)));
   });
 
-  test('installed_at is a valid ISO-8601 timestamp', () => {
+  test('installed_at is a valid ISO-8601 timestamp', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'ts-check' }));
-    const record = repo.install('ts-check', 'user-x');
+    repo.register(makeManifest({ id: 'ts-check' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'ts-check' }), 'owner-1');
+    const record = await repo.install('ts-check', 'user-x');
     assert.ok(record.installed_at);
     assert.ok(!isNaN(Date.parse(record.installed_at)));
   });
 
-  test('throws NotFoundError when installing a non-existent plugin', () => {
+  test('throws NotFoundError when installing a non-existent plugin', async () => {
     const repo = makeRepo();
-    assertThrowsName(() => repo.install('ghost-plugin', 'user-1'), 'NotFoundError', 'ghost-plugin');
+    await assertRejectsName(() => repo.install('ghost-plugin', 'user-1'), 'NotFoundError', 'ghost-plugin');
   });
 
-  test('throws ConflictError when installing an already-installed plugin', () => {
+  test('throws ConflictError when installing an already-installed plugin', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'already-installed' }));
-    repo.install('already-installed', 'user-1');
-    assertThrowsName(
+    repo.register(makeManifest({ id: 'already-installed' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'already-installed' }), 'owner-1');
+    await repo.install('already-installed', 'user-1');
+    await assertRejectsName(
       () => repo.install('already-installed', 'user-2'),
       'ConflictError',
     );
   });
 
-  test('state persists — findById reflects installed status after install', () => {
+  test('state persists — findById reflects installed status after install', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'persistent' }));
-    repo.install('persistent', 'user-99');
+    repo.register(makeManifest({ id: 'persistent' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'persistent' }), 'owner-1');
+    await repo.install('persistent', 'user-99');
 
-    const found = repo.findById('persistent')!;
+    const found = (await repo.findById('persistent'))!;
     assert.equal(found.status, 'installed');
     assert.equal(found.installed_by, 'user-99');
   });
@@ -364,49 +402,53 @@ describe('InMemoryPluginRepository.install', () => {
 // ---------------------------------------------------------------------------
 
 describe('InMemoryPluginRepository.uninstall', () => {
-  test('transitions plugin status back to "available" after uninstall', () => {
+  test('transitions plugin status back to "available" after uninstall', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'revert-me' }));
-    repo.install('revert-me', 'user-1');
-    const record = repo.uninstall('revert-me', 'user-1');
+    repo.register(makeManifest({ id: 'revert-me' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'revert-me' }), 'owner-1');
+    await repo.install('revert-me', 'user-1');
+    const record = await repo.uninstall('revert-me', 'user-1');
 
     assert.equal(record.status, 'available');
     assert.equal(record.installed_at, null);
   });
 
-  test('uninstalled plugin is re-installable', () => {
+  test('uninstalled plugin is re-installable', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'reinstallable' }));
-    repo.install('reinstallable', 'user-1');
-    repo.uninstall('reinstallable', 'user-1');
-    const reinstalled = repo.install('reinstallable', 'user-2');
+    repo.register(makeManifest({ id: 'reinstallable' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'reinstallable' }), 'owner-1');
+    await repo.install('reinstallable', 'user-1');
+    await repo.uninstall('reinstallable', 'user-1');
+    const reinstalled = await repo.install('reinstallable', 'user-2');
 
     assert.equal(reinstalled.status, 'installed');
     assert.equal(reinstalled.installed_by, 'user-2');
   });
 
-  test('throws NotFoundError when uninstalling a non-existent plugin', () => {
+  test('throws NotFoundError when uninstalling a non-existent plugin', async () => {
     const repo = makeRepo();
-    assertThrowsName(() => repo.uninstall('phantom', 'user-1'), 'NotFoundError');
+    await assertRejectsName(() => repo.uninstall('phantom', 'user-1'), 'NotFoundError');
   });
 
-  test('throws BadRequestError when uninstalling a plugin that is not installed', () => {
+  test('throws BadRequestError when uninstalling a plugin that is not installed', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'not-installed' }));
-    assertThrowsName(
+    repo.register(makeManifest({ id: 'not-installed' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'not-installed' }), 'owner-1');
+    await assertRejectsName(
       () => repo.uninstall('not-installed', 'user-1'),
       'BadRequestError',
       'not-installed',
     );
   });
 
-  test('findById reflects "available" status after uninstall', () => {
+  test('findById reflects "available" status after uninstall', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'state-check' }));
-    repo.install('state-check', 'user-1');
-    repo.uninstall('state-check', 'user-1');
+    repo.register(makeManifest({ id: 'state-check' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'state-check' }), 'owner-1');
+    await repo.install('state-check', 'user-1');
+    await repo.uninstall('state-check', 'user-1');
 
-    const found = repo.findById('state-check')!;
+    const found = (await repo.findById('state-check'))!;
     assert.equal(found.status, 'available');
     assert.equal(found.installed_at, null);
   });
@@ -417,34 +459,43 @@ describe('InMemoryPluginRepository.uninstall', () => {
 // ---------------------------------------------------------------------------
 
 describe('InMemoryPluginRepository.delete', () => {
-  test('removes plugin from the registry', () => {
+  test('removes plugin from the registry', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'delete-me' }));
-    repo.delete('delete-me');
+    repo.register(makeManifest({ id: 'delete-me' }), 'owner-1');
+    repo.delete('delete-me', 'owner-1');
+    await repo.register(makeManifest({ id: 'delete-me' }), 'owner-1');
+    await repo.delete('delete-me', 'owner-1');
 
-    assert.equal(repo.findById('delete-me'), undefined);
-    assert.equal(repo.list().length, 0);
+    assert.equal(await repo.findById('delete-me'), undefined);
+    assert.equal((await repo.list()).length, 0);
   });
 
-  test('throws NotFoundError when deleting a non-existent plugin', () => {
+  test('throws NotFoundError when deleting a non-existent plugin', async () => {
     const repo = makeRepo();
-    assertThrowsName(() => repo.delete('nowhere'), 'NotFoundError');
+    assertThrowsName(() => repo.delete('nowhere', 'owner-1'), 'NotFoundError');
+    await assertRejectsName(() => repo.delete('nowhere', 'owner-1'), 'NotFoundError');
   });
 
-  test('cannot delete the same plugin twice', () => {
+  test('cannot delete the same plugin twice', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'once-only' }));
-    repo.delete('once-only');
-    assertThrowsName(() => repo.delete('once-only'), 'NotFoundError');
+    repo.register(makeManifest({ id: 'once-only' }), 'owner-1');
+    repo.delete('once-only', 'owner-1');
+    assertThrowsName(() => repo.delete('once-only', 'owner-1'), 'NotFoundError');
+    await repo.register(makeManifest({ id: 'once-only' }), 'owner-1');
+    await repo.delete('once-only', 'owner-1');
+    await assertRejectsName(() => repo.delete('once-only', 'owner-1'), 'NotFoundError');
   });
 
-  test('deleting one plugin does not affect others', () => {
+  test('deleting one plugin does not affect others', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'keep-me' }));
-    repo.register(makeManifest({ id: 'remove-me' }));
-    repo.delete('remove-me');
+    repo.register(makeManifest({ id: 'keep-me' }), 'owner-1');
+    repo.register(makeManifest({ id: 'remove-me' }), 'owner-1');
+    repo.delete('remove-me', 'owner-1');
+    await repo.register(makeManifest({ id: 'keep-me' }), 'owner-1');
+    await repo.register(makeManifest({ id: 'remove-me' }), 'owner-1');
+    await repo.delete('remove-me', 'owner-1');
 
-    const list = repo.list();
+    const list = await repo.list();
     assert.equal(list.length, 1);
     assert.equal(list[0]!.manifest.id, 'keep-me');
   });
@@ -459,6 +510,7 @@ describe('executeHook', () => {
   function makeInstalledRecord(hooks: PluginManifest['hooks'] = ['before_charge']): PluginRecord {
     return {
       manifest: makeManifest({ id: 'hook-plugin', hooks }),
+      owner_id: 'owner-1',
       status: 'installed',
       installed_by: 'user-42',
       installed_at: new Date().toISOString(),
@@ -470,6 +522,7 @@ describe('executeHook', () => {
   function makeAvailableRecord(hooks: PluginManifest['hooks'] = ['before_charge']): PluginRecord {
     return {
       manifest: makeManifest({ id: 'available-plugin', hooks }),
+      owner_id: 'owner-1',
       status: 'available',
       installed_by: null,
       installed_at: null,
@@ -564,6 +617,7 @@ describe('executeHook', () => {
   test('uninstalled plugin with declared hook still throws BadRequestError', () => {
     const record: PluginRecord = {
       manifest: makeManifest({ id: 'order-test', hooks: ['before_charge'] }),
+      owner_id: 'owner-1',
       status: 'available',
       installed_by: null,
       installed_at: null,
@@ -579,33 +633,35 @@ describe('executeHook', () => {
 
   // --- integration: repository round-trip into executeHook ---
 
-  test('executeHook succeeds for installed plugin and fails after uninstall', () => {
+  test('executeHook succeeds for installed plugin and fails after uninstall', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'lifecycle-plugin', hooks: ['before_charge'] }));
-    repo.install('lifecycle-plugin', 'user-1');
+    repo.register(makeManifest({ id: 'lifecycle-plugin', hooks: ['before_charge'] }), 'owner-1');
+    await repo.register(makeManifest({ id: 'lifecycle-plugin', hooks: ['before_charge'] }), 'owner-1');
+    await repo.install('lifecycle-plugin', 'user-1');
 
     // Succeeds while installed
-    const installed = repo.findById('lifecycle-plugin')!;
+    const installed = (await repo.findById('lifecycle-plugin'))!;
     const result = executeHook(installed, 'before_charge', { userId: 'user-1' });
     assert.equal(result.ok, true);
 
     // Uninstall and hook should now throw
-    repo.uninstall('lifecycle-plugin', 'user-1');
-    const uninstalled = repo.findById('lifecycle-plugin')!;
+    await repo.uninstall('lifecycle-plugin', 'user-1');
+    const uninstalled = (await repo.findById('lifecycle-plugin'))!;
     assertThrowsName(
       () => executeHook(uninstalled, 'before_charge', { userId: 'user-1' }),
       'BadRequestError',
     );
   });
 
-  test('executeHook succeeds after re-install following uninstall', () => {
+  test('executeHook succeeds after re-install following uninstall', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'reinstall-hook', hooks: ['after_charge'] }));
-    repo.install('reinstall-hook', 'user-a');
-    repo.uninstall('reinstall-hook', 'user-a');
-    repo.install('reinstall-hook', 'user-b');
+    repo.register(makeManifest({ id: 'reinstall-hook', hooks: ['after_charge'] }), 'owner-1');
+    await repo.register(makeManifest({ id: 'reinstall-hook', hooks: ['after_charge'] }), 'owner-1');
+    await repo.install('reinstall-hook', 'user-a');
+    await repo.uninstall('reinstall-hook', 'user-a');
+    await repo.install('reinstall-hook', 'user-b');
 
-    const record = repo.findById('reinstall-hook')!;
+    const record = (await repo.findById('reinstall-hook'))!;
     const result = executeHook(record, 'after_charge', { userId: 'user-b' });
     assert.equal(result.ok, true);
   });
@@ -643,66 +699,73 @@ describe('executeHook', () => {
 // ---------------------------------------------------------------------------
 
 describe('Plugin full lifecycle state machine', () => {
-  test('register → install → uninstall → re-install cycle', () => {
+  test('register → install → uninstall → re-install cycle', async () => {
     const repo = makeRepo();
 
     // 1. Register
-    const registered = repo.register(makeManifest({ id: 'full-cycle' }));
+    const registered = repo.register(makeManifest({ id: 'full-cycle' }), 'owner-1');
+    const registered = await repo.register(makeManifest({ id: 'full-cycle' }), 'owner-1');
     assert.equal(registered.status, 'available');
 
     // 2. Install
-    const installed = repo.install('full-cycle', 'user-a');
+    const installed = await repo.install('full-cycle', 'user-a');
     assert.equal(installed.status, 'installed');
 
     // 3. Uninstall
-    const uninstalled = repo.uninstall('full-cycle', 'user-a');
+    const uninstalled = await repo.uninstall('full-cycle', 'user-a');
     assert.equal(uninstalled.status, 'available');
     assert.equal(uninstalled.installed_at, null);
 
     // 4. Re-install by a different user
-    const reinstalled = repo.install('full-cycle', 'user-b');
+    const reinstalled = await repo.install('full-cycle', 'user-b');
     assert.equal(reinstalled.status, 'installed');
     assert.equal(reinstalled.installed_by, 'user-b');
   });
 
-  test('register → delete — subsequent operations throw NotFoundError', () => {
+  test('register → delete — subsequent operations throw NotFoundError', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'deletable' }));
-    repo.delete('deletable');
+    repo.register(makeManifest({ id: 'deletable' }), 'owner-1');
+    repo.delete('deletable', 'owner-1');
+    await repo.register(makeManifest({ id: 'deletable' }), 'owner-1');
+    await repo.delete('deletable', 'owner-1');
 
-    assertThrowsName(() => repo.install('deletable', 'u1'), 'NotFoundError');
-    assertThrowsName(() => repo.delete('deletable'), 'NotFoundError');
+    await assertRejectsName(() => repo.install('deletable', 'u1'), 'NotFoundError');
+    await assertRejectsName(() => repo.delete('deletable', 'owner-1'), 'NotFoundError');
+    assertThrowsName(() => repo.delete('deletable', 'owner-1'), 'NotFoundError');
   });
 
-  test('multiple plugins are independently tracked', () => {
+  test('multiple plugins are independently tracked', async () => {
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'plugin-x', hooks: ['before_charge'] }));
-    repo.register(makeManifest({ id: 'plugin-y', hooks: ['on_refund'] }));
+    repo.register(makeManifest({ id: 'plugin-x', hooks: ['before_charge'] }), 'owner-1');
+    repo.register(makeManifest({ id: 'plugin-y', hooks: ['on_refund'] }), 'owner-1');
+    await repo.register(makeManifest({ id: 'plugin-x', hooks: ['before_charge'] }), 'owner-1');
+    await repo.register(makeManifest({ id: 'plugin-y', hooks: ['on_refund'] }), 'owner-1');
 
-    repo.install('plugin-x', 'user-1');
+    await repo.install('plugin-x', 'user-1');
     // plugin-y remains available
 
-    const x = repo.findById('plugin-x')!;
-    const y = repo.findById('plugin-y')!;
+    const x = (await repo.findById('plugin-x'))!;
+    const y = (await repo.findById('plugin-y'))!;
     assert.equal(x.status, 'installed');
     assert.equal(y.status, 'available');
   });
 
-  test('before_charge hook is guarded: only fires when plugin is installed', () => {
+  test('before_charge hook is guarded: only fires when plugin is installed', async () => {
     // Simulates the billing route concern: uninstalled plugins cannot hook billing
     const repo = makeRepo();
-    repo.register(makeManifest({ id: 'billing-guard', hooks: ['before_charge'] }));
+    repo.register(makeManifest({ id: 'billing-guard', hooks: ['before_charge'] }), 'owner-1');
+    await repo.register(makeManifest({ id: 'billing-guard', hooks: ['before_charge'] }), 'owner-1');
 
     // Attempt to fire hook before install — must throw
-    const available = repo.findById('billing-guard')!;
+    const available = (await repo.findById('billing-guard'))!;
     assertThrowsName(
       () => executeHook(available, 'before_charge', { userId: 'u1' }),
       'BadRequestError',
     );
 
     // After install — hook fires correctly
-    repo.install('billing-guard', 'u1');
-    const installed = repo.findById('billing-guard')!;
+    await repo.install('billing-guard', 'u1');
+    const installed = (await repo.findById('billing-guard'))!;
     const result = executeHook(installed, 'before_charge', { userId: 'u1' });
     assert.equal(result.ok, true);
   });

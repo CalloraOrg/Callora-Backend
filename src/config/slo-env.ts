@@ -47,6 +47,10 @@ export const sloEnvironmentFields = {
           ),
       ),
     ),
+  SLO_ALERT_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   SLO_ALERT_WEBHOOK_URL: z.string().url().optional(),
   SLO_ALERT_POLL_INTERVAL_MS: z.coerce
     .number()

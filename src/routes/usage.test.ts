@@ -6,13 +6,13 @@ import { errorHandler } from '../middleware/errorHandler.js';
 import { type UsageEventsRepository } from '../repositories/usageEventsRepository.js';
 import { signTestToken, TEST_JWT_SECRET } from '../../tests/helpers/jwt.js';
 
-const mockUsageEventsRepository: jest.Mocked<UsageEventsRepository> = {
+const mockUsageEventsRepository = {
   record: jest.fn(),
   findByUser: jest.fn().mockResolvedValue([]),
   findByApi: jest.fn().mockResolvedValue([]),
   aggregateByUser: jest.fn().mockResolvedValue({ totalCalls: 0, totalRevenue: 0, breakdownByApi: [] }),
   aggregateByApi: jest.fn().mockResolvedValue({ totalCalls: 0, totalRevenue: 0, breakdownByApi: [] }),
-};
+} as unknown as jest.Mocked<UsageEventsRepository>;
 
 describe('Usage Router Rate Limiting', () => {
   const originalJwtSecret = process.env.JWT_SECRET;

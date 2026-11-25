@@ -3,16 +3,17 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "build": "node init && tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json",
     "prebuild": "npm run error-codes:check && npm run validate:openapi",
-    "start": "node init && node dist/src/index.js",
-    "dev": "node init && tsx watch src/index.ts",
+    "start": "node dist/src/index.js",
+    "dev": "tsx watch src/index.ts",
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate:sqlite",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "seed:dev": "tsx scripts/seed-dev.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "validate:openapi": "node scripts/validate-openapi-contract.mjs",
     "db:check-migrations": "npx tsx scripts/check-migrations.ts",
     "error-codes:generate": "node scripts/generate-error-codes.mjs",
@@ -20,10 +21,11 @@
     "pretest": "npm run error-codes:check",
     "test": "jest --forceExit",
     "test:serial": "jest --runInBand --forceExit",
+    "test:quarantine": "node scripts/run-quarantine.mjs",
     "test:unit": "jest --runInBand --forceExit --testPathIgnorePatterns tests/integration",
     "test:integration": "jest --runInBand --forceExit tests/integration",
     "test:coverage": "jest --runInBand --coverage --forceExit --testPathIgnorePatterns tests/integration",
-    "build:vercel": "node init && node scripts/build-vercel.mjs"
+    "build:vercel": "node scripts/build-vercel.mjs"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

@@ -1,5 +1,9 @@
 import express from "express";
 import request from "supertest";
+import { signTestToken, TEST_JWT_SECRET } from "../../tests/helpers/jwt.js";
+
+process.env.JWT_SECRET = TEST_JWT_SECRET;
+
 import {
   createBillingRateLimitMiddleware,
   InMemoryRateLimiter,
@@ -37,21 +41,21 @@ describe("Per-user billing rate limiting", () => {
     // User makes 3 requests within the limit
     let res = await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     expect(res.body.message).toBe("OK");
 
     res = await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     expect(res.body.message).toBe("OK");
 
     res = await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     expect(res.body.message).toBe("OK");
@@ -63,26 +67,26 @@ describe("Per-user billing rate limiting", () => {
     // Make 3 requests (all succeed)
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     // 4th request exceeds the limit
     const res = await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1");
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`);
 
     expect(res.status).toBe(429);
-    expect(res.body.code).toBe("TOO_MANY_REQUESTS");
+    expect(res.body.error.code).toBe("TOO_MANY_REQUESTS");
     expect(res.headers["retry-after"]).toBeDefined();
   });
 
@@ -92,45 +96,45 @@ describe("Per-user billing rate limiting", () => {
     // User 1 makes 3 requests (all succeed)
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     // User 1's 4th request fails
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(429);
 
     // But user 2 can still make requests
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-2")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-2" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-2")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-2" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-2")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-2" })}`)
       .expect(200);
 
     // User 2's 4th request also fails
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-2")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-2" })}`)
       .expect(429);
   });
 
@@ -156,23 +160,23 @@ describe("Per-user billing rate limiting", () => {
     // Exhaust limit
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200);
 
     // Check Retry-After is present
     const res = await request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1");
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`);
 
     expect(res.status).toBe(429);
     expect(res.headers["retry-after"]).toBeDefined();
@@ -189,22 +193,22 @@ describe("Per-user billing rate limiting", () => {
     // Make 2 requests (both succeed)
     request(app)
       .get("/api/billing/test")
-      .set("x-user-id", "user-1")
+      .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
       .expect(200, () => {
         request(app)
           .get("/api/billing/test")
-          .set("x-user-id", "user-1")
+          .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
           .expect(200, () => {
             // 3rd request fails (window not expired yet)
             request(app)
               .get("/api/billing/test")
-              .set("x-user-id", "user-1")
+              .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
               .expect(429, () => {
                 // Wait for window to expire, then retry
                 setTimeout(() => {
                   request(app)
                     .get("/api/billing/test")
-                    .set("x-user-id", "user-1")
+                    .set("Authorization", `Bearer ${signTestToken({ userId: "user-1" })}`)
                     .expect(200, done);
                 }, 150);
               });

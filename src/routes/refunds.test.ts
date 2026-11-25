@@ -1,10 +1,15 @@
 import express from 'express';
 import request from 'supertest';
-import refundsRouter from './refunds.js';
+import refundsRouter, * as refundsModule from './refunds.js';
 import { defaultDisputeService } from '../services/disputeService.js';
 import { refundsCache } from '../services/refundsCacheWarm.js';
 import { errorHandler } from '../middleware/errorHandler.js';
 import { requestIdMiddleware } from '../middleware/requestId.js';
+
+const { getRefundStore, clearRefundStore } = refundsModule as unknown as {
+  getRefundStore: () => Map<string, Record<string, unknown>>;
+  clearRefundStore: () => void;
+};
 
 function createTestApp() {
   const app = express();
