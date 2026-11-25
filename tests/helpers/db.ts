@@ -119,6 +119,63 @@ export function createTestDb(options?: CreateTestDbOptions) {
   };
 }
 
+export async function createSqliteTestDb() {
+  const originalSqlitePath = process.env.SQLITE_PATH;
+  process.env.SQLITE_PATH = ':memory:';
+
+  try {
+    const [{ db, schema, sqlite, closeDb }, { resetDb }] =
+      await Promise.all([
+        import('../../src/db/index.js'),
+        import('../../scripts/test-db.js'),
+      ]);
+    sqlite.exec(`
+      CREATE TABLE developers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL UNIQUE,
+        name TEXT,
+        website TEXT,
+        description TEXT,
+        category TEXT,
+        plan_overrides TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE TABLE apis (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        developer_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        base_url TEXT NOT NULL,
+        logo_url TEXT,
+        category TEXT,
+        status TEXT NOT NULL DEFAULT 'draft',
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        deleted_at INTEGER
+      );
+      CREATE TABLE api_endpoints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        api_id INTEGER NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        method TEXT NOT NULL DEFAULT 'GET',
+        price_per_call_usdc TEXT NOT NULL DEFAULT '0.01',
+        description TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+    `);
+    sqlite.pragma('foreign_keys = ON');
+    return { db, schema, sqlite, resetDb, closeDb };
+  } finally {
+    if (originalSqlitePath === undefined) {
+      delete process.env.SQLITE_PATH;
+    } else {
+      process.env.SQLITE_PATH = originalSqlitePath;
+    }
+  }
+}
+
 export async function resetTestDb(pool: any) {
   if (pool instanceof Pool) {
     await resetRealDb(pool);

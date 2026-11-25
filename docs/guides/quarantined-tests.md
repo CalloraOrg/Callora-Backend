@@ -8,6 +8,10 @@ from `npm test` and CI so the signal stays trustworthy; the source files are unt
 - Run them anyway: `JEST_RUN_QUARANTINED=1 npx jest <path>`
 - When you fix a suite, delete its line from `jest.quarantine.json`.
 
+`GET /api/openapi.json` intentionally serves the raw OpenAPI document rather than
+the standard API success envelope, so tools such as Swagger UI can consume it
+directly.
+
 ## Running PostgreSQL-dependent suites against real PostgreSQL
 
 Suites that require PostgreSQL features unsupported by `pg-mem` can run against a real PostgreSQL 16 database using the helpers in `tests/helpers/pgReal.ts`:

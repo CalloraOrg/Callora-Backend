@@ -53,6 +53,7 @@ import {
 import { metricsEndpoint } from "./metrics.js";
 import { openApiErrorHandler } from "./middleware/openApiErrorHandler.js";
 import { createPerDevConcurrencyMiddleware } from "./middleware/perDevConcurrency.js";
+import { NotFoundError } from "./errors/index.js";
 import type { RestRateLimitOptions } from "./middleware/restRateLimit.js";
 import {
   InMemoryRestRateLimiter,
@@ -190,6 +191,10 @@ export const createApp = (dependencies?: Partial<AppDependencies>) => {
   registerVaultRoutes(app, vaultRepository, dependencies?.vaultReader);
 
   registerDeveloperRegistrationRoute(app, lookupDeveloper, persistApi);
+
+  app.use((_req, _res, next) => {
+    next(new NotFoundError("Route not found"));
+  });
 
   // OpenAPI validation errors
   app.use(openApiErrorHandler);

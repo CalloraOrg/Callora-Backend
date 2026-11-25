@@ -1,7 +1,4 @@
-import { createTestDb, resetTestDb } from './db.js';
-import { resetDb } from '../../scripts/test-db.js';
-import { db as sqliteDb, schema as sqliteSchema } from '../../src/db/index.js';
-import { sql } from 'drizzle-orm';
+import { createSqliteTestDb, createTestDb, resetTestDb } from './db.js';
 
 describe('Database Reset Robustness', () => {
   describe('resetTestDb (pg-mem)', () => {
@@ -60,13 +57,23 @@ describe('Database Reset Robustness', () => {
   });
 
   describe('resetDb (SQLite)', () => {
+    let sqliteTestDb: Awaited<ReturnType<typeof createSqliteTestDb>>;
+
+    beforeAll(async () => {
+      sqliteTestDb = await createSqliteTestDb();
+    });
+
+    afterAll(async () => {
+      await sqliteTestDb.closeDb();
+    });
+
     it('should reset all tables dynamically', async () => {
       // 1. Insert data into all known tables
-      const [dev] = await sqliteDb.insert(sqliteSchema.developers)
+      const [dev] = await sqliteTestDb.db.insert(sqliteTestDb.schema.developers)
         .values({ user_id: 'dynamic-dev-' + Date.now() })
         .returning();
       
-      const [api] = await sqliteDb.insert(sqliteSchema.apis)
+      const [api] = await sqliteTestDb.db.insert(sqliteTestDb.schema.apis)
         .values({
           developer_id: dev.id,
           name: 'Dynamic API',
@@ -74,7 +81,7 @@ describe('Database Reset Robustness', () => {
         })
         .returning();
 
-      await sqliteDb.insert(sqliteSchema.apiEndpoints)
+      await sqliteTestDb.db.insert(sqliteTestDb.schema.apiEndpoints)
         .values({
           api_id: api.id,
           path: '/dynamic',
@@ -82,12 +89,12 @@ describe('Database Reset Robustness', () => {
         });
 
       // 2. Reset
-      await resetDb();
+      await sqliteTestDb.resetDb();
 
       // 3. Verify all tables are empty
-      const devs = await sqliteDb.select().from(sqliteSchema.developers);
-      const apis = await sqliteDb.select().from(sqliteSchema.apis);
-      const endpoints = await sqliteDb.select().from(sqliteSchema.apiEndpoints);
+      const devs = await sqliteTestDb.db.select().from(sqliteTestDb.schema.developers);
+      const apis = await sqliteTestDb.db.select().from(sqliteTestDb.schema.apis);
+      const endpoints = await sqliteTestDb.db.select().from(sqliteTestDb.schema.apiEndpoints);
 
       expect(devs.length).toBe(0);
       expect(apis.length).toBe(0);
@@ -96,18 +103,18 @@ describe('Database Reset Robustness', () => {
 
     it('should reset auto-increment counters', async () => {
       // 1. Insert and reset to establish state
-      await resetDb();
+      await sqliteTestDb.resetDb();
       
-      const [dev1] = await sqliteDb.insert(sqliteSchema.developers)
+      const [dev1] = await sqliteTestDb.db.insert(sqliteTestDb.schema.developers)
         .values({ user_id: 'counter-dev-1' })
         .returning();
       
       const firstId = dev1.id;
       
-      await resetDb();
+      await sqliteTestDb.resetDb();
       
       // 2. Insert again - should get the same ID if counter was reset
-      const [dev2] = await sqliteDb.insert(sqliteSchema.developers)
+      const [dev2] = await sqliteTestDb.db.insert(sqliteTestDb.schema.developers)
         .values({ user_id: 'counter-dev-2' })
         .returning();
       
@@ -116,39 +123,32 @@ describe('Database Reset Robustness', () => {
 
     it('should handle foreign key constraints correctly during reset', async () => {
       // 1. Setup data with FK
-      const [dev] = await sqliteDb.insert(sqliteSchema.developers)
+      const [dev] = await sqliteTestDb.db.insert(sqliteTestDb.schema.developers)
         .values({ user_id: 'fk-test-dev' })
         .returning();
       
-      await sqliteDb.insert(sqliteSchema.apis)
+      await sqliteTestDb.db.insert(sqliteTestDb.schema.apis)
         .values({
           developer_id: dev.id,
           name: 'FK Test API',
           base_url: 'https://fk.com'
         });
+      await sqliteTestDb.db.insert(sqliteTestDb.schema.apiEndpoints)
+        .values({
+          api_id: 1,
+          path: '/fk-test',
+          method: 'GET'
+        });
 
       // 2. Reset should work without FK violation errors
-      await expect(resetDb()).resolves.not.toThrow();
+      await expect(sqliteTestDb.resetDb()).resolves.not.toThrow();
       
-      // 3. Verify PRAGMA foreign_keys is back ON
-      const fkStatus = await sqliteDb.run(sql.raw('PRAGMA foreign_keys'));
-      // Note: better-sqlite3 returns rows for PRAGMA queries
-      // This is a bit tricky to assert directly via drizzle's db.run without knowing the exact return shape
-      // But we can test by trying to insert a child without a parent
-      
-      try {
-        await sqliteDb.insert(sqliteSchema.apis)
-          .values({
-            developer_id: 999999, // Non-existent
-            name: 'Invalid API',
-            base_url: 'https://invalid.com'
-          });
-        // If we reach here, FKs might be OFF (unless onDelete: 'set null' or similar, but our schema has references)
-        // Wait, SQLite doesn't always enforce FKs unless enabled.
-      } catch (e) {
-        // Expected error if FKs are ON
-        expect((e as Error).message).toContain('FOREIGN KEY constraint failed');
-      }
+      expect(sqliteTestDb.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+      await expect(
+        () => sqliteTestDb.sqlite.prepare(
+          'INSERT INTO api_endpoints (api_id, path, method) VALUES (?, ?, ?)',
+        ).run(999999, '/invalid', 'GET'),
+      ).toThrow(/FOREIGN KEY constraint failed/);
     });
   });
 });
