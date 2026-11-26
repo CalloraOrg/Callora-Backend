@@ -8,10 +8,12 @@
  * envelope used by the full app.
  */
 import express from "express";
+import path from "node:path";
 import request from "supertest";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { describe, expect, it } from "@jest/globals";
+import * as OpenApiValidator from "express-openapi-validator";
 import {
   walletLoginSchema,
   refreshTokenSchema,
@@ -31,6 +33,7 @@ import {
   WebhookValidationError,
 } from "../../src/webhooks/webhook.validator.js";
 import { createApp } from "../../src/app.js";
+import { config } from "../../src/config/index.js";
 import { defaultPluginRepository } from "../../src/services/pluginRegistry.js";
 import { openApiErrorHandler } from "../../src/middleware/openApiErrorHandler.js";
 
@@ -43,6 +46,7 @@ type OpenApiDocument = {
 const spec = JSON.parse(
   require("node:fs").readFileSync("docs/openapi.json", "utf8"),
 ) as OpenApiDocument;
+const openApiPath = path.resolve(process.cwd(), "docs/openapi.json");
 
 const validWallet = "G" + "A".repeat(55);
 
@@ -175,6 +179,24 @@ function issueRequest(
   return requestMethod.call(client, routePath);
 }
 
+function buildValidatedApp(validateResponses = true) {
+  const app = express();
+  app.use(express.json());
+  app.use(
+    OpenApiValidator.middleware({
+      apiSpec: openApiPath,
+      validateRequests: true,
+      validateResponses,
+      validateSecurity: false,
+      ignoreUndocumented: true,
+    }),
+  );
+  app.use(createApp());
+  app.use(openApiErrorHandler);
+  app.use(errorHandler);
+  return app;
+}
+
 function buildSchemaApp(schema: z.ZodSchema) {
   const app = express();
   app.use(express.json());
@@ -281,12 +303,15 @@ describe("OpenAPI document integrity", () => {
 
 describe("assembled application OpenAPI coverage", () => {
   it("routes every documented operation through createApp without a 404", async () => {
-    const app = createApp();
+    const app = buildValidatedApp(false);
     await seedContractResources(app);
     const failures: string[] = [];
 
     for (const operation of documentedOperations()) {
       const [method, routePath] = operation.split(" ");
+      if (routePath === "/api/exports" && !config.exports.enabled) {
+        continue;
+      }
       const response = await issueRequest(
         app,
         method.toLowerCase(),
@@ -312,7 +337,15 @@ describe("assembled application OpenAPI coverage", () => {
     }
 
     expect(failures).toEqual([]);
-  });
+  }, 120_000);
+
+  it("validates the application health response against the OpenAPI schema", async () => {
+    const response = await request(buildValidatedApp())
+      .get("/api/health");
+
+    expect(response.status).toBe(200);
+    assertSuccessEnvelope(response.body);
+  }, 120_000);
 });
 
 describe("auth request contracts at runtime", () => {

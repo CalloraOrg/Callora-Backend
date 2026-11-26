@@ -1,6 +1,4 @@
-import { createTestDb, resetTestDb } from './db.js';
-import { resetDb } from '../../scripts/test-db.js';
-import { db as sqliteDb, schema as sqliteSchema } from '../../src/db/index.js';
+import { createSqliteTestDb, createTestDb, resetTestDb } from './db.js';
 
 describe('Database Reset Helpers', () => {
   describe('resetTestDb (PostgreSQL/pg-mem)', () => {
@@ -38,6 +36,13 @@ describe('Database Reset Helpers', () => {
 
       // 2. Reset
       await resetTestDb(testDb.pool);
+      await resetTestDb(testDb.pool);
+
+      const replacementUser = await testDb.pool.query(
+        "INSERT INTO users (wallet_address) VALUES ('GDRESETINSERT') RETURNING id"
+      );
+      expect(replacementUser.rows).toHaveLength(1);
+      await resetTestDb(testDb.pool);
 
       // 3. Verify data is gone
       const countAfter = await testDb.pool.query('SELECT COUNT(*) FROM usage_logs');
@@ -52,13 +57,23 @@ describe('Database Reset Helpers', () => {
   });
 
   describe('resetDb (SQLite)', () => {
+    let sqliteTestDb: Awaited<ReturnType<typeof createSqliteTestDb>>;
+
+    beforeAll(async () => {
+      sqliteTestDb = await createSqliteTestDb();
+    });
+
+    afterAll(async () => {
+      await sqliteTestDb.closeDb();
+    });
+
     it('should clear data from sqlite tables', async () => {
       // 1. Insert some data
-      const [dev] = await sqliteDb.insert(sqliteSchema.developers)
+      const [dev] = await sqliteTestDb.db.insert(sqliteTestDb.schema.developers)
         .values({ user_id: 'test-user-' + Date.now() })
         .returning();
       
-      const [api] = await sqliteDb.insert(sqliteSchema.apis)
+      const [api] = await sqliteTestDb.db.insert(sqliteTestDb.schema.apis)
         .values({
           developer_id: dev.id,
           name: 'Reset Test API',
@@ -66,7 +81,7 @@ describe('Database Reset Helpers', () => {
         })
         .returning();
 
-      await sqliteDb.insert(sqliteSchema.apiEndpoints)
+      await sqliteTestDb.db.insert(sqliteTestDb.schema.apiEndpoints)
         .values({
           api_id: api.id,
           path: '/test',
@@ -74,20 +89,27 @@ describe('Database Reset Helpers', () => {
         });
 
       // Verify data exists
-      const apisBefore = await sqliteDb.select().from(sqliteSchema.apis);
+      const apisBefore = await sqliteTestDb.db.select().from(sqliteTestDb.schema.apis);
       expect(apisBefore.length).toBeGreaterThan(0);
 
       // 2. Reset
-      await resetDb();
+      await sqliteTestDb.resetDb();
+      await sqliteTestDb.resetDb();
+
+      const [replacementDeveloper] = await sqliteTestDb.db.insert(sqliteTestDb.schema.developers)
+        .values({ user_id: 'reset-insert-' + Date.now() })
+        .returning();
+      expect(replacementDeveloper.id).toBeDefined();
+      await sqliteTestDb.resetDb();
 
       // 3. Verify data is gone
-      const apisAfter = await sqliteDb.select().from(sqliteSchema.apis);
+      const apisAfter = await sqliteTestDb.db.select().from(sqliteTestDb.schema.apis);
       expect(apisAfter.length).toBe(0);
       
-      const endpointsAfter = await sqliteDb.select().from(sqliteSchema.apiEndpoints);
+      const endpointsAfter = await sqliteTestDb.db.select().from(sqliteTestDb.schema.apiEndpoints);
       expect(endpointsAfter.length).toBe(0);
       
-      const devsAfter = await sqliteDb.select().from(sqliteSchema.developers);
+      const devsAfter = await sqliteTestDb.db.select().from(sqliteTestDb.schema.developers);
       expect(devsAfter.length).toBe(0);
     });
   });

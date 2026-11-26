@@ -26,10 +26,7 @@ process.env.METRICS_API_KEY = process.env.METRICS_API_KEY ?? 'test-metrics-key';
 // ran. This suite covers /api/metrics auth, not OpenAPI validation, so the
 // validator is replaced with a pass-through.
 jest.mock('express-openapi-validator', () => ({
-  __esModule: true,
-  default: {
-    middleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
-  },
+  middleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
 jest.mock('better-sqlite3', () => {
