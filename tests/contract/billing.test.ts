@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { z } from 'zod';
+import jwt from 'jsonwebtoken';
 import { createApp } from '../../src/app.js';
 import { envelopeSchema, errorEnvelopeSchema, successEnvelopeSchema } from '../../src/middleware/envelope.js';
 
@@ -53,6 +54,9 @@ const assertErrorEnvelope = (body: unknown, expectedCode?: string) => {
   }
 };
 
+const authHeader = (userId = 'dev-1') =>
+  `Bearer ${jwt.sign({ userId }, process.env.JWT_SECRET ?? 'test-secret-do-not-use-in-prod')}`;
+
 describe('Envelope Contract: All API Responses', () => {
   const app = createApp();
 
@@ -70,15 +74,13 @@ describe('Envelope Contract: All API Responses', () => {
   });
 
   describe('GET /api/openapi.json - contract endpoint', () => {
-    it('wraps 200 response in canonical success envelope', async () => {
+    it('serves the raw OpenAPI document', async () => {
       const res = await request(app).get('/api/openapi.json');
       expect(res.status).toBe(200);
-      assertEnvelope(res.body);
-      assertSuccessEnvelope(res.body);
-      const env = res.body as { success: boolean; data: { openapi?: string } };
-      if (env.success && typeof env.data === 'object' && env.data !== null) {
-        expect(env.data.openapi).toBe('3.1.0');
-      }
+      expect(res.headers['content-type']).toMatch(/application\/json/);
+      expect(res.body.openapi).toBe('3.1.0');
+      expect(res.body.info.title).toBe('Callora API');
+      expect(res.body.paths).toEqual(expect.any(Object));
     });
   });
 
@@ -109,7 +111,7 @@ describe('Envelope Contract: All API Responses', () => {
     it('POST /api/developers/apis with missing name returns VALIDATION_ERROR envelope', async () => {
       const res = await request(app)
         .post('/api/developers/apis')
-        .set('x-user-id', 'dev-1')
+        .set('Authorization', authHeader())
         .set('Content-Type', 'application/json')
         .send({
           base_url: 'https://api.example.com',
@@ -129,7 +131,7 @@ describe('Envelope Contract: All API Responses', () => {
     it('GET /api/developers/analytics with bad dates returns BAD_REQUEST envelope', async () => {
       const res = await request(app)
         .get('/api/developers/analytics?from=bad&to=bad')
-        .set('x-user-id', 'dev-1');
+        .set('Authorization', authHeader());
       expect(res.status).toBe(400);
       assertEnvelope(res.body);
       assertErrorEnvelope(res.body, 'BAD_REQUEST');
@@ -261,7 +263,7 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
     it('returns 200 with analytics inside canonical success envelope', async () => {
       const res = await request(app)
         .get('/api/developers/analytics?from=2026-01-01&to=2026-03-31&groupBy=day')
-        .set('x-user-id', 'dev-1');
+        .set('Authorization', authHeader());
       expect(res.status).toBe(200);
       assertEnvelope(res.body);
       assertSuccessEnvelope(res.body, z.object({
@@ -278,15 +280,15 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
     it('returns 200 with list inside canonical success envelope and meta', async () => {
       const res = await request(app)
         .get('/api/developers/apis?limit=10&offset=0')
-        .set('x-user-id', 'dev-1');
+        .set('Authorization', authHeader());
       expect(res.status).toBe(200);
       assertEnvelope(res.body);
       const env = successEnvelopeSchema.parse(res.body);
       expect(env.success).toBe(true);
-      expect(env.meta).toBeDefined();
-      expect(typeof (env.meta as { limit?: unknown }).limit).toBe('number');
-      expect(typeof (env.meta as { offset?: unknown }).offset).toBe('number');
-      expect(Array.isArray(env.data)).toBe(true);
+      expect(env.data.meta).toBeDefined();
+      expect(typeof env.data.meta.limit).toBe('number');
+      expect(typeof env.data.meta.offset).toBe('number');
+      expect(Array.isArray(env.data.data)).toBe(true);
     });
   });
 
@@ -308,14 +310,26 @@ describe('Envelope Contract: Paginated & Data Responses', () => {
           },
         },
       ]);
-      const detailApp = createApp({ apiRepository: apiRepo });
-      const res = await request(detailApp).get('/api/apis/1');
-      expect(res.status).toBe(200);
-      assertEnvelope(res.body);
-      assertSuccessEnvelope(res.body, z.object({
-        id: z.union([z.number(), z.string()]),
-        name: z.string(),
-      }));
+      const previousAllowedOrigins = process.env.APIS_CORS_ALLOWED_ORIGINS;
+      process.env.APIS_CORS_ALLOWED_ORIGINS = 'http://localhost:5173';
+      try {
+        const detailApp = createApp({ apiRepository: apiRepo });
+        const res = await request(detailApp)
+          .get('/api/apis/1')
+          .set('Origin', 'http://localhost:5173');
+        expect(res.status).toBe(200);
+        assertEnvelope(res.body);
+        assertSuccessEnvelope(res.body, z.object({
+          id: z.union([z.number(), z.string()]),
+          name: z.string(),
+        }));
+      } finally {
+        if (previousAllowedOrigins === undefined) {
+          delete process.env.APIS_CORS_ALLOWED_ORIGINS;
+        } else {
+          process.env.APIS_CORS_ALLOWED_ORIGINS = previousAllowedOrigins;
+        }
+      }
     });
   });
 });
@@ -335,7 +349,7 @@ describe('POST /api/billing/deduct OpenAPI Contract', () => {
   it('returns 400 response matching canonical error envelope for missing fields', async () => {
     const res = await request(app)
       .post('/api/billing/deduct')
-      .set('x-user-id', 'dev-1')
+      .set('Authorization', authHeader())
       .send({});
     expect(res.status).toBe(400);
     assertEnvelope(res.body);

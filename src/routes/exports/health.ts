@@ -15,6 +15,14 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { asyncHandler } from '../../utils/asyncHandler.js';
+import { pool } from '../../db.js';
+import { config } from '../../config/index.js';
+import { validateStorageEndpoint } from '../../lib/storageEndpoint.js';
+import { getReportExporterWorkerStatus } from '../../services/reportExporter.js';
+import {
+  getScheduledExportsWorkerStatus,
+  type ExportWorkerStatus,
+} from '../../services/scheduledExports.js';
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
@@ -86,9 +94,47 @@ export function log(
 // Dependency probes
 // ---------------------------------------------------------------------------
 
+export const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+export const DB_DEGRADED_THRESHOLD_MS = 1_000;
+const MAX_DETAIL_LENGTH = 256;
+
+/**
+ * Strips credentials, bearer tokens, sensitive query parameters, and configured
+ * secrets from a probe detail string so secrets are never leaked in responses
+ * or logs.
+ */
+export function sanitizeDetail(raw: string): string {
+  let sanitized = raw.replace(/[\r\n]+/g, ' ').trim();
+
+  // Redact configured signing secret if present verbatim
+  const signingSecret = config.exports?.signingSecret;
+  if (signingSecret && signingSecret.length > 0) {
+    sanitized = sanitized.split(signingSecret).join('[REDACTED]');
+  }
+
+  // Redact userinfo in URLs (e.g. postgresql://user:pass@host or https://user:pass@host)
+  sanitized = sanitized.replace(/(\/\/)([^/@\s]+):([^/@\s]+)@/g, '$1[REDACTED]@');
+
+  // Redact Bearer / Basic authorization tokens
+  sanitized = sanitized.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]');
+
+  // Redact sensitive query parameter values
+  sanitized = sanitized.replace(
+    /([?&](?:signature|token|secret|key|password|passwd|auth|apikey|api_key|access_token|x-amz-signature|x-amz-credential|x-amz-security-token)=)[^&\s]+/gi,
+    '$1[REDACTED]',
+  );
+
+  if (sanitized.length > MAX_DETAIL_LENGTH) {
+    return `${sanitized.slice(0, MAX_DETAIL_LENGTH - 3)}...`;
+  }
+  return sanitized;
+}
+
 /**
  * Wraps a probe thunk with a timeout so that a slow dependency never
  * blocks the health response indefinitely.
+ *
+ * Also catches synchronous throws from `thunk` and sanitizes error messages.
  *
  * @param name        - Dependency label used in log/error messages.
  * @param thunk       - Async function that resolves to a {@link ProbeResult}.
@@ -98,7 +144,7 @@ export function log(
 async function withTimeout(
   name: string,
   thunk: () => Promise<ProbeResult>,
-  timeoutMs = 5_000,
+  timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
 ): Promise<ProbeResult> {
   return new Promise<ProbeResult>((resolve) => {
     const timer = setTimeout(() => {
@@ -109,7 +155,8 @@ async function withTimeout(
       });
     }, timeoutMs);
 
-    thunk()
+    Promise.resolve()
+      .then(() => thunk())
       .then((result) => {
         clearTimeout(timer);
         resolve(result);
@@ -119,7 +166,7 @@ async function withTimeout(
         resolve({
           name,
           status: 'down',
-          detail: err instanceof Error ? err.message : String(err),
+          detail: sanitizeDetail(err instanceof Error ? err.message : String(err)),
         });
       });
   });
@@ -129,37 +176,303 @@ async function withTimeout(
 // Individual probe implementations
 //
 // Each function is exported so it can be replaced in tests via dependency
-// injection through the `ProbeRegistry` type. The default implementations are
-// no-op stubs that simulate a successful connection; swap them out for real
-// client calls once the corresponding infrastructure clients are introduced.
+// injection through the `ProbeRegistry` type.
 // ---------------------------------------------------------------------------
 
 /** Checks connectivity to the primary relational database used by exports. */
-export async function probeDatabase(): Promise<ProbeResult> {
+export async function probeDatabase(options?: {
+  timeoutMs?: number;
+  degradedThresholdMs?: number;
+}): Promise<ProbeResult> {
   const start = Date.now();
-  // TODO: replace with real DB ping, e.g. `pool.query('SELECT 1')`
-  return { name: 'database', status: 'ok', latencyMs: Date.now() - start };
+  const timeoutMs = options?.timeoutMs ?? config.database?.timeout ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const degradedThresholdMs = options?.degradedThresholdMs ?? DB_DEGRADED_THRESHOLD_MS;
+
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Database probe timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => pool.query('SELECT 1')),
+      timeoutPromise,
+    ]);
+    const latencyMs = Date.now() - start;
+    if (latencyMs > degradedThresholdMs) {
+      return {
+        name: 'database',
+        status: 'degraded',
+        latencyMs,
+        detail: `Database latency ${latencyMs} ms exceeded threshold (${degradedThresholdMs} ms)`,
+      };
+    }
+    return { name: 'database', status: 'ok', latencyMs };
+  } catch (err: unknown) {
+    return {
+      name: 'database',
+      status: 'down',
+      detail: sanitizeDetail(err instanceof Error ? err.message : String(err)),
+    };
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /** Checks connectivity to the object-storage provider (S3 / blob storage). */
-export async function probeStorage(): Promise<ProbeResult> {
+export async function probeStorage(options?: {
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}): Promise<ProbeResult> {
   const start = Date.now();
-  // TODO: replace with real S3/blob head-bucket call
-  return { name: 'storage', status: 'ok', latencyMs: Date.now() - start };
+
+  if (!config.exports?.enabled) {
+    return {
+      name: 'storage',
+      status: 'ok',
+      detail: 'exports disabled',
+      latencyMs: Date.now() - start,
+    };
+  }
+
+  const bucket = config.exports.bucket?.trim();
+  const rawEndpoint = config.exports.endpoint?.trim();
+  if (!bucket || !rawEndpoint) {
+    return {
+      name: 'storage',
+      status: 'down',
+      detail: 'Export storage configuration is incomplete',
+    };
+  }
+
+  let validatedEndpoint: string;
+  try {
+    validatedEndpoint = validateStorageEndpoint(rawEndpoint, {
+      production: config.nodeEnv === 'production',
+      allowedHosts: config.exports.endpointAllowlist,
+    });
+  } catch (err: unknown) {
+    return {
+      name: 'storage',
+      status: 'down',
+      detail: sanitizeDetail(err instanceof Error ? err.message : String(err)),
+    };
+  }
+
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const fetchFn = options?.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const probeUrl = `${validatedEndpoint}/${encodeURIComponent(bucket)}`;
+    const response = await fetchFn(probeUrl, {
+      method: 'HEAD',
+      signal: controller.signal,
+    });
+    const latencyMs = Date.now() - start;
+
+    if (response.ok) {
+      return { name: 'storage', status: 'ok', latencyMs };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return {
+        name: 'storage',
+        status: 'down',
+        detail: `Storage authentication failed (HTTP ${response.status})`,
+      };
+    }
+    if (response.status >= 400 && response.status < 500) {
+      return {
+        name: 'storage',
+        status: 'degraded',
+        latencyMs,
+        detail: `Storage responded with HTTP ${response.status}`,
+      };
+    }
+    return {
+      name: 'storage',
+      status: 'down',
+      detail: `Storage responded with HTTP ${response.status}`,
+    };
+  } catch (err: unknown) {
+    if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+      return {
+        name: 'storage',
+        status: 'down',
+        detail: `Storage probe timed out after ${timeoutMs} ms`,
+      };
+    }
+    return {
+      name: 'storage',
+      status: 'down',
+      detail: sanitizeDetail(err instanceof Error ? err.message : String(err)),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-/** Checks connectivity to the export job queue (e.g. SQS, RabbitMQ, Redis). */
-export async function probeQueue(): Promise<ProbeResult> {
+/** Checks health of the exports worker queue (report & scheduled export workers). */
+export async function probeQueue(options?: {
+  getWorkerStatuses?: () => Array<ExportWorkerStatus | null>;
+  maxStaleMs?: number;
+}): Promise<ProbeResult> {
   const start = Date.now();
-  // TODO: replace with real queue ping
+
+  if (!config.exports?.enabled) {
+    return {
+      name: 'queue',
+      status: 'ok',
+      detail: 'exports disabled',
+      latencyMs: Date.now() - start,
+    };
+  }
+
+  const rawStatuses = options?.getWorkerStatuses
+    ? options.getWorkerStatuses()
+    : [getReportExporterWorkerStatus(), getScheduledExportsWorkerStatus()];
+  const workers = rawStatuses.filter((status): status is ExportWorkerStatus => status !== null);
+
+  if (workers.length === 0) {
+    return {
+      name: 'queue',
+      status: 'down',
+      detail: 'No export workers registered',
+    };
+  }
+
+  const downReasons: string[] = [];
+  const degradedReasons: string[] = [];
+
+  for (const worker of workers) {
+    if (worker.state !== 'running') {
+      downReasons.push(`worker "${worker.name}" is stopped`);
+      continue;
+    }
+
+    const staleThresholdMs = options?.maxStaleMs ?? worker.intervalMs * 2;
+    if (worker.lastTickAgeMs !== null && worker.lastTickAgeMs > staleThresholdMs) {
+      downReasons.push(
+        `worker "${worker.name}" is stale (last tick ${worker.lastTickAgeMs} ms ago)`,
+      );
+      continue;
+    }
+
+    if (worker.lastTickAt === null && worker.startedAt !== null) {
+      const startedAgeMs = Math.max(0, Date.now() - worker.startedAt.getTime());
+      if (startedAgeMs > staleThresholdMs) {
+        downReasons.push(
+          `worker "${worker.name}" has not ticked since start (${startedAgeMs} ms ago)`,
+        );
+        continue;
+      }
+    }
+
+    if (worker.lastError) {
+      degradedReasons.push(
+        `worker "${worker.name}" error: ${sanitizeDetail(worker.lastError)}`,
+      );
+    }
+  }
+
+  if (downReasons.length > 0) {
+    return {
+      name: 'queue',
+      status: 'down',
+      detail: sanitizeDetail(downReasons.join('; ')),
+    };
+  }
+
+  if (degradedReasons.length > 0) {
+    return {
+      name: 'queue',
+      status: 'degraded',
+      latencyMs: Date.now() - start,
+      detail: sanitizeDetail(degradedReasons.join('; ')),
+    };
+  }
+
   return { name: 'queue', status: 'ok', latencyMs: Date.now() - start };
 }
 
 /** Checks connectivity to the third-party notification / delivery API. */
-export async function probeNotificationApi(): Promise<ProbeResult> {
+export async function probeNotificationApi(options?: {
+  url?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}): Promise<ProbeResult> {
   const start = Date.now();
-  // TODO: replace with real HTTP health call to third-party API
-  return { name: 'notificationApi', status: 'ok', latencyMs: Date.now() - start };
+  const rawUrl = options?.url ?? config.exports?.notificationHealthUrl;
+
+  if (!rawUrl || rawUrl.trim() === '') {
+    return {
+      name: 'notificationApi',
+      status: 'ok',
+      detail: 'notification health URL not configured',
+      latencyMs: Date.now() - start,
+    };
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl.trim());
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return {
+        name: 'notificationApi',
+        status: 'down',
+        detail: 'Invalid notification health URL',
+      };
+    }
+  } catch {
+    return {
+      name: 'notificationApi',
+      status: 'down',
+      detail: 'Invalid notification health URL',
+    };
+  }
+
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const fetchFn = options?.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetchFn(parsedUrl.toString(), {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    const latencyMs = Date.now() - start;
+
+    if (response.ok) {
+      return { name: 'notificationApi', status: 'ok', latencyMs };
+    }
+
+    return {
+      name: 'notificationApi',
+      status: 'down',
+      detail: `Notification API responded with HTTP ${response.status}`,
+    };
+  } catch (err: unknown) {
+    if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+      return {
+        name: 'notificationApi',
+        status: 'down',
+        detail: `Notification API probe timed out after ${timeoutMs} ms`,
+      };
+    }
+    return {
+      name: 'notificationApi',
+      status: 'down',
+      detail: sanitizeDetail(err instanceof Error ? err.message : String(err)),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,9 @@ from `npm test` and CI so the signal stays trustworthy; the source files are unt
 - Run them anyway: `JEST_RUN_QUARANTINED=1 npx jest <path>`
 - When you fix a suite, delete its line from `jest.quarantine.json`.
 
-## Running the whole quarantine
+`GET /api/openapi.json` intentionally serves the raw OpenAPI document rather than
+the standard API success envelope, so tools such as Swagger UI can consume it
+directly.
 
 Run every listed suite in a separate Jest process with a 120-second default timeout:
 

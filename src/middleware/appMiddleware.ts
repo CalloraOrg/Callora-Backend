@@ -9,7 +9,7 @@ import {
 } from "../middleware/requestId.js";
 import { createDocsRouter } from '../routes/docs.js';
 //import { envelopeValidator } from '../middleware/envelopeValidator.js';
-import OpenApiValidator from "express-openapi-validator";
+import * as OpenApiValidator from "express-openapi-validator";
 import path from "path";
 import { config } from "../config/index.js";
 import { metricsMiddleware } from "../metrics.js";

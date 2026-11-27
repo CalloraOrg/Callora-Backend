@@ -33,6 +33,11 @@ const noisyThenSpike = (
   return points;
 };
 
+const symmetricSeries = (apiId: string): DailyUsagePoint[] => [
+  { apiId, day: dayString(0), calls: 0, revenue: '0' },
+  { apiId, day: dayString(1), calls: 2, revenue: '0' },
+];
+
 describe('detectUsageAnomalies', () => {
   it('flags a day whose call count exceeds the threshold as a spike', () => {
     const result = detectUsageAnomalies(noisyThenSpike('api-1', 20, 10, 200, { revenue: '5000' }), baseOptions);
@@ -63,10 +68,53 @@ describe('detectUsageAnomalies', () => {
     expect(result.anomalies).toEqual([]);
   });
 
+  it('analyzes exactly minDataPoints and flags z-scores equal to threshold', () => {
+    const result = detectUsageAnomalies(symmetricSeries('api-boundary'), {
+      threshold: 1,
+      minDataPoints: 2,
+      limit: 10,
+    });
+
+    expect(result.seriesAnalyzed).toBe(1);
+    expect(result.anomalies).toHaveLength(2);
+    expect(result.anomalies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ calls: 0, type: 'drop', zScore: -1 }),
+        expect.objectContaining({ calls: 2, type: 'spike', zScore: 1 }),
+      ]),
+    );
+  });
+
+  it('does not flag a z-score just below the threshold', () => {
+    const result = detectUsageAnomalies(symmetricSeries('api-below-threshold'), {
+      threshold: 1.0001,
+      minDataPoints: 2,
+      limit: 10,
+    });
+
+    expect(result.seriesAnalyzed).toBe(1);
+    expect(result.anomalies).toEqual([]);
+  });
+
   it('returns no anomalies for a perfectly flat series (zero variance)', () => {
     const result = detectUsageAnomalies(noisyThenSpike('api-1', 4, 5, 5, { jitter: 0 }), baseOptions);
     expect(result.seriesAnalyzed).toBe(1);
     expect(result.anomalies).toEqual([]);
+  });
+
+  it('counts flat and all-zero series as analyzed', () => {
+    const result = detectUsageAnomalies(
+      [
+        ...noisyThenSpike('api-flat', 2, 5, 5, { jitter: 0 }),
+        ...symmetricSeries('api-all-zero').map((point) => ({
+          ...point,
+          calls: 0,
+        })),
+      ],
+      { threshold: 1, minDataPoints: 2, limit: 10 },
+    );
+
+    expect(result).toEqual({ anomalies: [], seriesAnalyzed: 2 });
   });
 
   it('skips APIs with fewer than minDataPoints days', () => {
@@ -109,6 +157,31 @@ describe('detectUsageAnomalies', () => {
     const capped = detectUsageAnomalies(series, { ...baseOptions, limit: 1 });
     expect(capped.anomalies).toHaveLength(1);
     expect(capped.anomalies[0].apiId).toBe('api-2');
+
+    const noResults = detectUsageAnomalies(series, { ...baseOptions, limit: 0 });
+    expect(noResults).toEqual({ anomalies: [], seriesAnalyzed: 2 });
+  });
+
+  it('keeps equal absolute z-scores tied when limiting across APIs', () => {
+    const series = [
+      ...symmetricSeries('api-1'),
+      ...symmetricSeries('api-2'),
+    ];
+    const options = { threshold: 1, minDataPoints: 2, limit: 4 };
+    const all = detectUsageAnomalies(series, options);
+
+    expect(all.seriesAnalyzed).toBe(2);
+    expect(all.anomalies).toHaveLength(4);
+    expect(all.anomalies.map((anomaly) => Math.abs(anomaly.zScore))).toEqual([
+      1,
+      1,
+      1,
+      1,
+    ]);
+
+    const limited = detectUsageAnomalies(series, { ...options, limit: 2 });
+    expect(limited.anomalies).toHaveLength(2);
+    expect(limited.anomalies.every((anomaly) => Math.abs(anomaly.zScore) === 1)).toBe(true);
   });
 
   it('handles an empty series', () => {
@@ -116,11 +189,21 @@ describe('detectUsageAnomalies', () => {
     expect(result).toEqual({ anomalies: [], seriesAnalyzed: 0 });
   });
 
-  it('rounds baseline statistics to a stable precision', () => {
-    const result = detectUsageAnomalies(noisyThenSpike('api-1', 20, 10, 200), baseOptions);
+  it('rounds baseline statistics and z-score to four decimals', () => {
+    const result = detectUsageAnomalies(
+      [
+        { apiId: 'api-rounding', day: dayString(0), calls: 1, revenue: '0' },
+        { apiId: 'api-rounding', day: dayString(1), calls: 2, revenue: '0' },
+        { apiId: 'api-rounding', day: dayString(2), calls: 4, revenue: '0' },
+      ],
+      { threshold: 1.3, minDataPoints: 3, limit: 10 },
+    );
     const [anomaly] = result.anomalies;
-    // round4 → at most 4 decimal places.
-    expect(anomaly.baselineMean).toBe(Math.round(anomaly.baselineMean * 10_000) / 10_000);
-    expect(anomaly.stdDev).toBe(Math.round(anomaly.stdDev * 10_000) / 10_000);
+
+    expect(anomaly).toMatchObject({
+      baselineMean: 2.3333,
+      stdDev: 1.2472,
+      zScore: 1.3363,
+    });
   });
 });

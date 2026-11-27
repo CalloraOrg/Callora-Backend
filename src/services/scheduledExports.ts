@@ -427,10 +427,28 @@ export class ScheduledExportsService {
   }
 }
 
+export interface ExportWorkerStatus {
+  name: string;
+  state: 'running' | 'stopped';
+  intervalMs: number;
+  inFlight: boolean;
+  startedAt: Date | null;
+  lastTickAt: Date | null;
+  lastTickAgeMs: number | null;
+  lastError: string | null;
+}
+
 export interface ScheduledExportsWorker {
   start(): void;
   stop(): void;
   awaitIdle(): Promise<void>;
+  getWorkerStatus(): ExportWorkerStatus;
+}
+
+let activeScheduledExportsWorker: ScheduledExportsWorker | null = null;
+
+export function getScheduledExportsWorkerStatus(): ExportWorkerStatus | null {
+  return activeScheduledExportsWorker ? activeScheduledExportsWorker.getWorkerStatus() : null;
 }
 
 export function createScheduledExportsWorker(
@@ -441,28 +459,36 @@ export function createScheduledExportsWorker(
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<ExportRunResult[]> | null = null;
   let abortController: AbortController | null = null;
+  let startedAt: Date | null = null;
+  let lastTickAt: Date | null = null;
+  let lastError: string | null = null;
 
   const tick = async (): Promise<void> => {
     if (running) return;
+    lastTickAt = new Date();
     abortController = new AbortController();
     running = service.runDueSchedules(new Date(), abortController.signal);
     try {
       await running;
+      lastError = null;
     } catch (error: any) {
       if (error?.name === 'AbortError') {
         log.info('scheduled export worker canceled');
       } else {
+        lastError = error instanceof Error ? error.message : String(error);
         log.error('scheduled export worker failed', error);
       }
     } finally {
+      lastTickAt = new Date();
       running = null;
       abortController = null;
     }
   };
 
-  return {
+  const worker: ScheduledExportsWorker = {
     start() {
       if (timer) return;
+      startedAt = new Date();
       void tick();
       timer = setInterval(() => void tick(), options.intervalMs);
     },
@@ -477,5 +503,21 @@ export function createScheduledExportsWorker(
     async awaitIdle() {
       if (running) await running.catch(() => undefined);
     },
+    getWorkerStatus(): ExportWorkerStatus {
+      const now = Date.now();
+      return {
+        name: 'scheduledExports',
+        state: timer !== null ? 'running' : 'stopped',
+        intervalMs: options.intervalMs,
+        inFlight: running !== null,
+        startedAt,
+        lastTickAt,
+        lastTickAgeMs: lastTickAt ? Math.max(0, now - lastTickAt.getTime()) : null,
+        lastError,
+      };
+    },
   };
+
+  activeScheduledExportsWorker = worker;
+  return worker;
 }
