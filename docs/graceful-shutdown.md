@@ -96,6 +96,9 @@ between environments:
 5. webhook-dispatcher
 6. settlement-reconciliation
 7. monthly-invoice
+8. slo-alert
+9. anomaly-detector
+10. slow-query-alerter
 ```
 <!-- shutdown-subsystem-order:end -->
 
@@ -181,7 +184,8 @@ The shutdown process follows these phases:
 ### Phase 2: Subsystems Stopping
 - Call `beginShutdown()` on all registered subsystems, in array order
   (`gateway-proxy`, `refresh-token`, `revenue-ledger-indexer`,
-  `idempotency-sweeper`, `webhook-dispatcher`, `settlement-reconciliation`)
+  `idempotency-sweeper`, `webhook-dispatcher`, `settlement-reconciliation`,
+  `monthly-invoice`, `slo-alert`, `anomaly-detector`, `slow-query-alerter`)
 - Subsystems stop accepting new work but continue processing in-flight operations
 - Log each subsystem as it stops
 
@@ -201,10 +205,8 @@ The shutdown process follows these phases:
 
 ### Phase 6: Database Closing (with final job cancellation)
 - Cancel every background job this process started, including the ones that are
-  not registered drain subsystems — `settlement-status-sync`,
-  `slow-query-alerter` (conditional), `anomaly-detector` (conditional),
-  `monthly-invoice`, `slo-alert` (conditional) — plus a second, idempotent
-  `stop()` for the jobs already drained in Phase 4
+  not registered drain subsystems — `settlement-status-sync` — plus a second,
+  idempotent `stop()` for the jobs already drained in Phase 4
 - Close all database connection pools:
   - Drizzle ORM connections
   - PostgreSQL connection pool
@@ -260,11 +262,10 @@ The handler resolves with an exit code and `src/index.ts` forwards it to
 | `0` | All registered subsystems stopped and drained within the window, the HTTP server closed without error, and `closeDatabase()` succeeded. |
 | `1` | The HTTP server `close` callback reported an error, **or** a subsystem `beginShutdown()` threw, **or** the subsystem drain timed out / an `awaitIdle()` rejected, **or** `closeDatabase()` threw, **or** an unexpected error escaped the orchestration. |
 
-`0` is a drain guarantee for the six registered subsystems only. The jobs
-listed under
-[Jobs that are cancelled, not drained](#jobs-that-are-cancelled-not-drained) are
-cancelled in Phase 6, after the window, without waiting for their in-flight tick,
-so a `0` exit does not mean those ticks ran to completion.
+`0` is a drain guarantee for the registered subsystems only. The job listed under
+[Jobs that are cancelled, not drained](#jobs-that-are-cancelled-not-drained) is
+cancelled in Phase 6, after the window, without waiting for its in-flight tick,
+so a `0` exit does not mean that tick ran to completion.
 
 ## Usage
 
@@ -402,10 +403,10 @@ The shutdown handler emits structured log messages for each phase:
 
 ```
 [shutdown:signal_received] Received SIGTERM, initiating graceful shutdown
-[shutdown:subsystems_stopping] Stopping 6 subsystem(s): gateway-proxy, refresh-token, revenue-ledger-indexer, idempotency-sweeper, webhook-dispatcher, settlement-reconciliation
+[shutdown:subsystems_stopping] Stopping 10 subsystem(s): gateway-proxy, refresh-token, revenue-ledger-indexer, idempotency-sweeper, webhook-dispatcher, settlement-reconciliation, monthly-invoice, slo-alert, anomaly-detector, slow-query-alerter
 [shutdown:subsystems_stopping] Stopped subsystem: gateway-proxy
 [shutdown:server_closing] Closing HTTP server
-[shutdown:subsystems_draining] Draining 6 subsystem(s) (timeout: 30000ms)
+[shutdown:subsystems_draining] Draining 10 subsystem(s) (timeout: 30000ms)
 [shutdown:subsystems_draining] Drained subsystem: gateway-proxy
 [shutdown:database_closing] Closing database pools
 [shutdown:database_closing] Database pools closed successfully
